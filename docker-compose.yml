@@ -11,6 +11,37 @@ services:
       - db_data:/var/lib/postgresql/data
       - ./init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
   
+  guardian_service:
+    build: ./services/guardian_service
+    env_file: ./services/guardian_service/.env.staging
+    ports:
+      - "5003:5000"
+    depends_on:
+      - db_service
+    volumes:
+      - ./services/guardian_service:/app
+
+  identity_service:
+    build: ./services/identity_service
+    env_file: ./services/identity_service/.env.staging
+    ports:
+      - "5002:5000"
+    depends_on:
+      - db_service
+      - guardian_service
+    volumes:
+      - ./services/identity_service:/app
+
+  auth_service:
+    build: ./services/auth_service
+    env_file: ./services/auth_service/.env.staging
+    ports:
+      - "5001:5000"
+    depends_on:
+      - db_service
+    volumes:
+      - ./services/auth_service:/app
+
   # pgAdmin
   pgadmin:
     image: dpage/pgadmin4:latest
@@ -23,6 +54,22 @@ services:
       - db_service
     volumes:
       - pgadmin_data:/var/lib/pgadmin
+
+  swagger-ui:
+    image: swaggerapi/swagger-ui
+    environment:
+      URLS: |
+        [
+          {"url": "/openapi/pm-auth-api.yml", "name": "Auth API"},
+          {"url": "/openapi/pm-identity-api.yml", "name": "Identity API"},
+          {"url": "/openapi/pm-guardian-api.yml", "name": "Guardian API"},
+        ]
+    volumes:
+      - ./services/auth_service/openapi.yml:/usr/share/nginx/html/openapi/pm-auth-api.yml
+      - ./services/identity_service/openapi.yml:/usr/share/nginx/html/openapi/pm-identity-api.yml
+      - ./services/guardian_service/openapi.yml:/usr/share/nginx/html/openapi/pm-guardian-api.yml
+    ports:
+      - "8081:8080"
 
 volumes:
   db_data:
