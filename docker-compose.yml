@@ -39,6 +39,7 @@ services:
       - "5001:5000"
     depends_on:
       - db_service
+      - identity_service
     volumes:
       - ./services/auth_service:/app
 
