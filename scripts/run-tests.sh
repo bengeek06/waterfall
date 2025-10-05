@@ -3,20 +3,35 @@ set -e
 
 echo "🚀 Starting integration test suite..."
 
+# Function to detect docker compose command
+get_docker_compose_cmd() {
+    if command -v docker-compose &> /dev/null; then
+        echo "docker-compose"
+    elif docker compose version &> /dev/null; then
+        echo "docker compose"
+    else
+        echo "ERROR: Neither docker-compose nor docker compose found" >&2
+        exit 1
+    fi
+}
+
+DOCKER_COMPOSE=$(get_docker_compose_cmd)
+echo "Using: $DOCKER_COMPOSE"
+
 # Clean up any existing containers to ensure fresh start
 echo "Cleaning up any existing containers..."
-docker-compose down -v --remove-orphans 2>/dev/null || true
+$DOCKER_COMPOSE down -v --remove-orphans 2>/dev/null || true
 
 # Start services with build
 echo "Starting services with fresh build..."
-docker-compose up -d --build
+$DOCKER_COMPOSE up -d --build
 
 # Wait for services to be ready
 echo "Waiting for all services to be ready..."
 if ! ./scripts/wait-for-services.sh; then
     echo "❌ Failed to start services properly"
     echo "Showing service logs for debugging:"
-    docker-compose logs
+    $DOCKER_COMPOSE logs
     exit 1
 fi
 
@@ -83,7 +98,7 @@ cd ..
 
 # Stop services
 echo "Stopping services..."
-docker-compose down
+$DOCKER_COMPOSE down
 
 # Exit with test result
 exit $overall_result
