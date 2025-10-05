@@ -73,7 +73,7 @@ services:
       - "8081:8080"
 
   web_service:
-    build: ./services/web-waterfall
+    build: ./web
     ports:
       - "3000:3000"
     depends_on:
@@ -82,6 +82,12 @@ services:
       - guardian_service
     environment:
       - NODE_ENV=development
+      - LOG_LEVEL=debug
+      - MOCK_API=false
+      - OFFLINE_MODE=false
+      - AUTH_SERVICE_URL=http://auth_service:5000
+      - IDENTITY_SERVICE_URL=http://identity_service:5000
+      - GUARDIAN_SERVICE_URL=http://guardian_service:5000
 
 volumes:
   db_data:
