@@ -10,3 +10,6 @@
 [submodule "services/guardian_service"]
 	path = services/guardian_service
 	url = git@github.com:bengeek06/pm-guardian-api.git
+[submodule "tests"]
+	path = tests
+	url = git@github.com:bengeek06/e2e-waterfall.git
