@@ -21,6 +21,10 @@ services:
     build: ./services/guardian_service
     environment:
       - FLASK_ENV=staging
+      - APP_MODE=staging
+      - IN_DOCKER_CONTAINER=true
+      - WAIT_FOR_DB=true
+      - RUN_MIGRATIONS=true
       - LOG_LEVEL=INFO
       - DATABASE_URL=postgresql://staging:password@db_service/guardian_staging
       - JWT_SECRET=super-secret-jwt-key
@@ -33,9 +37,15 @@ services:
       - ./services/guardian_service:/app
 
   identity_service:
-    build: ./services/identity_service
+    build:
+      context: ./services/identity_service
+      target: development
     environment:
       - FLASK_ENV=staging
+      - APP_MODE=staging
+      - IN_DOCKER_CONTAINER=true
+      - WAIT_FOR_DB=true
+      - RUN_MIGRATIONS=true
       - LOG_LEVEL=INFO
       - DATABASE_URL=postgresql://staging:password@db_service/identity_staging
       - INTERNAL_AUTH_TOKEN=staging-internal-secret
@@ -52,10 +62,16 @@ services:
       - ./services/identity_service:/app
 
   auth_service:
-    build: ./services/auth_service
+    build: 
+      context: ./services/auth_service
+      target: development
     environment:
       - FLASK_ENV=staging
-      - LOG_LEVEL=INFO
+      - APP_MODE=staging
+      - IN_DOCKER_CONTAINER=true
+      - LOG_LEVEL=DEBUG
+      - WAIT_FOR_DB=true
+      - RUN_MIGRATIONS=true
       - DATABASE_URL=postgresql://staging:password@db_service/auth_staging
       - INTERNAL_AUTH_TOKEN=staging-internal-secret
       - JWT_SECRET=super-secret-jwt-key
