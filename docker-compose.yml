@@ -72,6 +72,17 @@ services:
     ports:
       - "8081:8080"
 
+  web_service:
+    build: ./services/web-waterfall
+    ports:
+      - "3000:3000"
+    depends_on:
+      - auth_service
+      - identity_service
+      - guardian_service
+    environment:
+      - NODE_ENV=development
+
 volumes:
   db_data:
   pgadmin_data:
