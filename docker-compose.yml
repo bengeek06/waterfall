@@ -23,7 +23,8 @@ services:
     ports:
       - "5003:5000"
     depends_on:
-      - db_service
+      db_service:
+        condition: service_healthy
     volumes:
       - ./services/guardian_service:/app
 
@@ -33,8 +34,10 @@ services:
     ports:
       - "5002:5000"
     depends_on:
-      - db_service
-      - guardian_service
+      db_service:
+        condition: service_healthy
+      guardian_service:
+        condition: service_started
     volumes:
       - ./services/identity_service:/app
 
@@ -44,8 +47,10 @@ services:
     ports:
       - "5001:5000"
     depends_on:
-      - db_service
-      - identity_service
+      db_service:
+        condition: service_healthy
+      identity_service:
+        condition: service_started
     volumes:
       - ./services/auth_service:/app
 
