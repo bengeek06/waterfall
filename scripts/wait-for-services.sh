@@ -3,6 +3,13 @@ set -e
 
 echo "Waiting for services to be ready..."
 
+# Function to cleanup and exit on failure
+cleanup_and_exit() {
+    echo "🚨 Service startup failed. Cleaning up..."
+    docker-compose down
+    exit 1
+}
+
 # Function to check if a service is responding
 check_service() {
     local url=$1
@@ -45,12 +52,12 @@ done
 
 if [ $db_attempt -gt $max_db_attempts ]; then
     echo "✗ Database failed to start"
-    exit 1
+    cleanup_and_exit
 fi
 
 # Check all services
-check_service "http://localhost:5001/health" "Auth Service" || exit 1
-check_service "http://localhost:5002/health" "Identity Service" || exit 1
-check_service "http://localhost:5003/health" "Guardian Service" || exit 1
+check_service "http://localhost:5001/health" "Auth Service" || cleanup_and_exit
+check_service "http://localhost:5002/health" "Identity Service" || cleanup_and_exit
+check_service "http://localhost:5003/health" "Guardian Service" || cleanup_and_exit
 
 echo "All services are ready! 🚀"
