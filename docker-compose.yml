@@ -16,10 +16,14 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-  
+
   guardian_service:
     build: ./services/guardian_service
-    env_file: ./services/guardian_service/.env.staging
+    environment:
+      - FLASK_ENV=staging
+      - LOG_LEVEL=INFO
+      - DATABASE_URL=postgresql://staging:password@db_service/guardian_staging
+      - JWT_SECRET=super-secret-jwt-key
     ports:
       - "5003:5000"
     depends_on:
@@ -30,7 +34,12 @@ services:
 
   identity_service:
     build: ./services/identity_service
-    env_file: ./services/identity_service/.env.staging
+    environment:
+      - FLASK_ENV=staging
+      - LOG_LEVEL=INFO
+      - DATABASE_URL=postgresql://staging:password@db_service/identity_staging
+      - INTERNAL_AUTH_TOKEN=staging-internal-secret
+      - JWT_SECRET=super-secret-jwt-key
     ports:
       - "5002:5000"
     depends_on:
@@ -43,7 +52,12 @@ services:
 
   auth_service:
     build: ./services/auth_service
-    env_file: ./services/auth_service/.env.staging
+    environment:
+      - FLASK_ENV=staging
+      - LOG_LEVEL=INFO
+      - DATABASE_URL=postgresql://staging:password@db_service/auth_staging
+      - INTERNAL_AUTH_TOKEN=staging-internal-secret
+      - JWT_SECRET=super-secret-jwt-key
     ports:
       - "5001:5000"
     depends_on:
@@ -54,37 +68,8 @@ services:
     volumes:
       - ./services/auth_service:/app
 
-  # pgAdmin
-  pgadmin:
-    image: dpage/pgadmin4:latest
-    environment:
-      PGADMIN_DEFAULT_EMAIL: admin@admin.com
-      PGADMIN_DEFAULT_PASSWORD: admin
-    ports:
-      - "5050:80"
-    depends_on:
-      - db_service
-    volumes:
-      - pgadmin_data:/var/lib/pgadmin
-
-  swagger-ui:
-    image: swaggerapi/swagger-ui
-    environment:
-      URLS: |
-        [
-          {"url": "/openapi/pm-auth-api.yml", "name": "Auth API"},
-          {"url": "/openapi/pm-identity-api.yml", "name": "Identity API"},
-          {"url": "/openapi/pm-guardian-api.yml", "name": "Guardian API"},
-        ]
-    volumes:
-      - ./services/auth_service/openapi.yml:/usr/share/nginx/html/openapi/pm-auth-api.yml
-      - ./services/identity_service/openapi.yml:/usr/share/nginx/html/openapi/pm-identity-api.yml
-      - ./services/guardian_service/openapi.yml:/usr/share/nginx/html/openapi/pm-guardian-api.yml
-    ports:
-      - "8081:8080"
-
   web_service:
-    build: ./web
+    build: ./services/web-waterfall
     ports:
       - "3000:3000"
     depends_on:
@@ -92,13 +77,32 @@ services:
       - identity_service
       - guardian_service
     environment:
-      - NODE_ENV=development
+      - NODE_ENV=production
       - LOG_LEVEL=debug
       - MOCK_API=false
       - OFFLINE_MODE=false
       - AUTH_SERVICE_URL=http://auth_service:5000
       - IDENTITY_SERVICE_URL=http://identity_service:5000
       - GUARDIAN_SERVICE_URL=http://guardian_service:5000
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+
+  swagger-ui:
+    image: swaggerapi/swagger-ui
+    ports:
+      - "8081:8080"
+    environment:
+      SWAGGER_JSON: /foo/swagger.json
+    volumes:
+      - ./swagger.json:/foo/swagger.json
 
 volumes:
   db_data:
