@@ -36,13 +36,46 @@ else
     source venv/bin/activate
 fi
 
-# Run the tests
-if python -m pytest -v --tb=short; then
-    echo "✅ All tests passed!"
-    test_result=0
+# Define test sections to run in order
+test_sections=(
+    "init"
+    "login"
+)
+
+# Run each test section and track results
+overall_result=0
+declare -A section_results
+
+for section in "${test_sections[@]}"; do
+    echo ""
+    echo "🧪 Running $section tests..."
+    
+    if python -m pytest -v --tb=short -k "$section"; then
+        echo "✅ $section tests passed!"
+        section_results[$section]=0
+    else
+        echo "❌ $section tests failed"
+        section_results[$section]=1
+        overall_result=1
+        # Continue running other tests even if one section fails
+    fi
+done
+
+# Summary using stored results
+echo ""
+echo "📋 Test Summary:"
+for section in "${test_sections[@]}"; do
+    if [ "${section_results[$section]}" -eq 0 ]; then
+        echo "  ✅ $section"
+    else
+        echo "  ❌ $section"
+    fi
+done
+
+if [ $overall_result -eq 0 ]; then
+    echo "🎉 All test sections passed!"
 else
-    echo "❌ Some tests failed"
-    test_result=1
+    echo "💥 Some test sections failed"
 fi
 
 # Return to original directory
@@ -53,4 +86,4 @@ echo "Stopping services..."
 docker-compose down
 
 # Exit with test result
-exit $test_result
+exit $overall_result
