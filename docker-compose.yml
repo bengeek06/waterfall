@@ -40,6 +40,7 @@ services:
       - DATABASE_URL=postgresql://staging:password@db_service/identity_staging
       - INTERNAL_AUTH_TOKEN=staging-internal-secret
       - JWT_SECRET=super-secret-jwt-key
+      - GUARDIAN_SERVICE_URL=http://guardian_service:5000
     ports:
       - "5002:5000"
     depends_on:
@@ -58,6 +59,7 @@ services:
       - DATABASE_URL=postgresql://staging:password@db_service/auth_staging
       - INTERNAL_AUTH_TOKEN=staging-internal-secret
       - JWT_SECRET=super-secret-jwt-key
+      - USER_SERVICE_URL=http://identity_service:5000
     ports:
       - "5001:5000"
     depends_on:
