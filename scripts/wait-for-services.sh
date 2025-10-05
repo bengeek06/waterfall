@@ -7,8 +7,31 @@ echo "Waiting for services to be ready..."
 cleanup_and_exit() {
     echo "🚨 Service startup failed. Cleaning up..."
     docker-compose down
+    echo "Showing logs for failed services:"
+    docker-compose logs
     exit 1
 }
+
+# Wait for database with health check
+echo "Waiting for PostgreSQL to be healthy..."
+max_attempts=60
+attempt=1
+
+while [ $attempt -le $max_attempts ]; do
+    if docker-compose exec -T db_service pg_isready -U staging -d staging > /dev/null 2>&1; then
+        echo "✓ Database is ready"
+        break
+    fi
+    
+    echo "Attempt $attempt/$max_attempts: Database not ready yet..."
+    sleep 2
+    attempt=$((attempt + 1))
+done
+
+if [ $attempt -gt $max_attempts ]; then
+    echo "✗ Database failed to start"
+    cleanup_and_exit
+fi
 
 # Function to check if a service is responding
 check_service() {
@@ -26,7 +49,7 @@ check_service() {
         fi
         
         echo "Attempt $attempt/$max_attempts: $service_name not ready yet..."
-        sleep 2
+        sleep 3
         attempt=$((attempt + 1))
     done
     
@@ -34,28 +57,8 @@ check_service() {
     return 1
 }
 
-# Check database
-echo "Checking database connection..."
-max_db_attempts=30
-db_attempt=1
-
-while [ $db_attempt -le $max_db_attempts ]; do
-    if docker-compose exec -T db_service pg_isready -U staging > /dev/null 2>&1; then
-        echo "✓ Database is ready"
-        break
-    fi
-    
-    echo "Attempt $db_attempt/$max_db_attempts: Database not ready yet..."
-    sleep 2
-    db_attempt=$((db_attempt + 1))
-done
-
-if [ $db_attempt -gt $max_db_attempts ]; then
-    echo "✗ Database failed to start"
-    cleanup_and_exit
-fi
-
 # Check all services
+echo "Checking application services..."
 check_service "http://localhost:5001/health" "Auth Service" || cleanup_and_exit
 check_service "http://localhost:5002/health" "Identity Service" || cleanup_and_exit
 check_service "http://localhost:5003/health" "Guardian Service" || cleanup_and_exit
