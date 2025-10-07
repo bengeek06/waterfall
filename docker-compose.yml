@@ -87,7 +87,9 @@ services:
       - ./services/auth_service:/app
 
   web_service:
-    build: ./web
+    build:
+      context: ./web
+      target: runner
     ports:
       - "3000:3000"
     depends_on:
