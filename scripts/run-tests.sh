@@ -54,6 +54,7 @@ fi
 # Define test sections to run in order
 test_sections=(
     "init"
+    "api"
     "login"
 )
 
