@@ -25,7 +25,7 @@ services:
       - IN_DOCKER_CONTAINER=true
       - WAIT_FOR_DB=true
       - RUN_MIGRATIONS=true
-      - LOG_LEVEL=INFO
+      - LOG_LEVEL=DEBUG
       - DATABASE_URL=postgresql://staging:password@db_service/guardian_staging
       - JWT_SECRET=super-secret-jwt-key
     ports:
@@ -117,12 +117,19 @@ services:
 
   swagger-ui:
     image: swaggerapi/swagger-ui
+    environment:
+      URLS: |
+        [
+          {"url": "/openapi/pm-auth-api.yml", "name": "Auth API"},
+          {"url": "/openapi/pm-identity-api.yml", "name": "Identity API"},
+          {"url": "/openapi/pm-guardian-api.yml", "name": "Guardian API"},
+        ]
+    volumes:
+      - ./services/auth_service/openapi.yml:/usr/share/nginx/html/openapi/pm-auth-api.yml
+      - ./services/identity_service/openapi.yml:/usr/share/nginx/html/openapi/pm-identity-api.yml
+      - ./services/guardian_service/openapi.yml:/usr/share/nginx/html/openapi/pm-guardian-api.yml
     ports:
       - "8081:8080"
-    environment:
-      SWAGGER_JSON: /foo/swagger.json
-    volumes:
-      - ./swagger.json:/foo/swagger.json
 
 volumes:
   db_data:
