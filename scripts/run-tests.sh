@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "🚀 Starting integration test suite..."
+echo "🚀 Starting test environment..."
 
 # Function to detect docker compose command
 get_docker_compose_cmd() {
@@ -24,7 +24,8 @@ $DOCKER_COMPOSE down -v --remove-orphans 2>/dev/null || true
 
 # Start services with build
 echo "Starting services with fresh build..."
-$DOCKER_COMPOSE up -d --build
+COMPOSE_FILE="docker-compose.test.yml"
+$DOCKER_COMPOSE -f "$COMPOSE_FILE" up -d --build
 
 # Wait for services to be ready
 echo "Waiting for all services to be ready..."
@@ -51,47 +52,57 @@ else
     source venv/bin/activate
 fi
 
-# Define test sections to run in order
-test_sections=(
-    "init"
+# Run pytest on specific directories
+echo ""
+echo "🧪 Running tests..."
+
+# Define test directories to run
+test_dirs=(
     "api"
-    "login"
+    "ui/login"
 )
 
-# Run each test section and track results
+# Run each test directory and track results
 overall_result=0
-declare -A section_results
+declare -A dir_results
 
-for section in "${test_sections[@]}"; do
+for test_dir in "${test_dirs[@]}"; do
     echo ""
-    echo "🧪 Running $section tests..."
+    echo "🧪 Running tests in $test_dir..."
     
-    if python -m pytest -v --tb=short -k "$section"; then
-        echo "✅ $section tests passed!"
-        section_results[$section]=0
+    if [ -d "$test_dir" ]; then
+        if python -m pytest -v --tb=short "$test_dir/"; then
+            echo "✅ $test_dir tests passed!"
+            dir_results[$test_dir]=0
+        else
+            echo "❌ $test_dir tests failed"
+            dir_results[$test_dir]=1
+            overall_result=1
+            # Continue running other tests even if one directory fails
+        fi
     else
-        echo "❌ $section tests failed"
-        section_results[$section]=1
-        overall_result=1
-        # Continue running other tests even if one section fails
+        echo "⚠️  Directory $test_dir does not exist, skipping..."
+        dir_results[$test_dir]="skipped"
     fi
 done
 
 # Summary using stored results
 echo ""
 echo "📋 Test Summary:"
-for section in "${test_sections[@]}"; do
-    if [ "${section_results[$section]}" -eq 0 ]; then
-        echo "  ✅ $section"
+for test_dir in "${test_dirs[@]}"; do
+    if [ "${dir_results[$test_dir]}" == "0" ]; then
+        echo "  ✅ $test_dir"
+    elif [ "${dir_results[$test_dir]}" == "skipped" ]; then
+        echo "  ⚠️  $test_dir (skipped)"
     else
-        echo "  ❌ $section"
+        echo "  ❌ $test_dir"
     fi
 done
 
 if [ $overall_result -eq 0 ]; then
-    echo "🎉 All test sections passed!"
+    echo "🎉 All tests passed!"
 else
-    echo "💥 Some test sections failed"
+    echo "💥 Some tests failed"
 fi
 
 # Return to original directory

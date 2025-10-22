@@ -1,5 +1,4 @@
 services:
-  # db
   db_service:
     image: postgres:16
     environment:
@@ -18,7 +17,9 @@ services:
       retries: 5
 
   guardian_service:
-    build: ./services/guardian_service
+    build:
+      context: ./services/guardian_service
+      target: development
     environment:
       - FLASK_ENV=staging
       - APP_MODE=staging
@@ -86,25 +87,6 @@ services:
     volumes:
       - ./services/auth_service:/app
 
-#  web_service:
-#    build:
-#      context: ./web
-#      target: runner
-#    ports:
-#      - "3000:3000"
-#    depends_on:
-#      - auth_service
-#      - identity_service
-#      - guardian_service
-#    environment:
-#      - NODE_ENV=production
-#      - LOG_LEVEL=debug
-#      - MOCK_API=false
-#      - OFFLINE_MODE=false
-#      - AUTH_SERVICE_URL=http://auth_service:5000
-#      - IDENTITY_SERVICE_URL=http://identity_service:5000
-#      - GUARDIAN_SERVICE_URL=http://guardian_service:5000
-
   pgadmin:
     image: dpage/pgadmin4:latest
     environment:
@@ -122,7 +104,7 @@ services:
         [
           {"url": "/openapi/pm-auth-api.yml", "name": "Auth API"},
           {"url": "/openapi/pm-identity-api.yml", "name": "Identity API"},
-          {"url": "/openapi/pm-guardian-api.yml", "name": "Guardian API"},
+          {"url": "/openapi/pm-guardian-api.yml", "name": "Guardian API"}
         ]
     volumes:
       - ./services/auth_service/openapi.yml:/usr/share/nginx/html/openapi/pm-auth-api.yml

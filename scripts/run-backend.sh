@@ -1,0 +1,19 @@
+#!/bin/bash
+
+set -e
+
+COMPOSE_FILE="docker-compose.backend.yml"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+cd "$PROJECT_ROOT"
+
+echo "🚀 Starting backend services with development tools..."
+docker compose -f "$COMPOSE_FILE" up --build
+
+echo "✅ Backend services started successfully!"
+echo "📊 PgAdmin: http://localhost:5050"
+echo "📚 Swagger UI: http://localhost:8081"
+echo "🔐 Auth Service: http://localhost:5001"
+echo "👤 Identity Service: http://localhost:5002"
+echo "🛡️ Guardian Service: http://localhost:5003"
