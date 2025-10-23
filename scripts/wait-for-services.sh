@@ -3,12 +3,26 @@ set -e
 
 echo "Waiting for services to be ready..."
 
+# Function to detect docker compose command
+get_docker_compose_cmd() {
+    if command -v docker-compose &> /dev/null; then
+        echo "docker-compose"
+    elif docker compose version &> /dev/null; then
+        echo "docker compose"
+    else
+        echo "ERROR: Neither docker-compose nor docker compose found" >&2
+        exit 1
+    fi
+}
+
+DOCKER_COMPOSE=$(get_docker_compose_cmd)
+
 # Function to cleanup and exit on failure
 cleanup_and_exit() {
     echo "🚨 Service startup failed. Cleaning up..."
-    docker-compose down
+    $DOCKER_COMPOSE down
     echo "Showing logs for failed services:"
-    docker-compose logs
+    $DOCKER_COMPOSE logs
     exit 1
 }
 
@@ -18,7 +32,7 @@ max_attempts=60
 attempt=1
 
 while [ $attempt -le $max_attempts ]; do
-    if docker-compose exec -T db_service pg_isready -U staging -d staging > /dev/null 2>&1; then
+    if $DOCKER_COMPOSE exec -T db_service pg_isready -U staging -d staging > /dev/null 2>&1; then
         echo "✓ Database is ready"
         break
     fi
@@ -62,5 +76,6 @@ echo "Checking application services..."
 check_service "http://localhost:5001/health" "Auth Service" || cleanup_and_exit
 check_service "http://localhost:5002/health" "Identity Service" || cleanup_and_exit
 check_service "http://localhost:5003/health" "Guardian Service" || cleanup_and_exit
+check_service "http://localhost:3000/" "Web Service" || cleanup_and_exit
 
 echo "All services are ready! 🚀"
