@@ -20,19 +20,19 @@ echo "Using: $DOCKER_COMPOSE"
 
 # Clean up any existing containers to ensure fresh start
 echo "Cleaning up any existing containers..."
-$DOCKER_COMPOSE down -v --remove-orphans 2>/dev/null || true
+COMPOSE_FILE="compose/docker-compose.test.yml"
+$DOCKER_COMPOSE -f "$COMPOSE_FILE" down -v --remove-orphans 2>/dev/null || true
 
 # Start services with build
 echo "Starting services with fresh build..."
-COMPOSE_FILE="docker-compose.test.yml"
 $DOCKER_COMPOSE -f "$COMPOSE_FILE" up -d --build
 
 # Wait for services to be ready
 echo "Waiting for all services to be ready..."
-if ! ./scripts/wait-for-services.sh; then
+if ! COMPOSE_FILE="$COMPOSE_FILE" ./scripts/wait-for-services.sh; then
     echo "❌ Failed to start services properly"
     echo "Showing service logs for debugging:"
-    $DOCKER_COMPOSE logs
+    $DOCKER_COMPOSE -f "$COMPOSE_FILE" logs
     exit 1
 fi
 
@@ -110,7 +110,7 @@ cd ..
 
 # Stop services
 echo "Stopping services..."
-$DOCKER_COMPOSE down
+$DOCKER_COMPOSE -f "$COMPOSE_FILE" down
 
 # Exit with test result
 exit $overall_result

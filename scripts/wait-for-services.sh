@@ -17,22 +17,28 @@ get_docker_compose_cmd() {
 
 DOCKER_COMPOSE=$(get_docker_compose_cmd)
 
+# Get compose file from environment or use default
+COMPOSE_FILE_ARG=""
+if [ -n "$COMPOSE_FILE" ]; then
+    COMPOSE_FILE_ARG="-f $COMPOSE_FILE"
+fi
+
 # Function to cleanup and exit on failure
 cleanup_and_exit() {
     echo "🚨 Service startup failed. Cleaning up..."
-    $DOCKER_COMPOSE down
+    $DOCKER_COMPOSE $COMPOSE_FILE_ARG down
     echo "Showing logs for failed services:"
-    $DOCKER_COMPOSE logs
+    $DOCKER_COMPOSE $COMPOSE_FILE_ARG logs
     exit 1
 }
 
 # Wait for database with health check
 echo "Waiting for PostgreSQL to be healthy..."
-max_attempts=60
+max_attempts=30
 attempt=1
 
 while [ $attempt -le $max_attempts ]; do
-    if $DOCKER_COMPOSE exec -T db_service pg_isready -U staging -d staging > /dev/null 2>&1; then
+    if $DOCKER_COMPOSE $COMPOSE_FILE_ARG exec -T db_service pg_isready -U staging -d staging > /dev/null 2>&1; then
         echo "✓ Database is ready"
         break
     fi

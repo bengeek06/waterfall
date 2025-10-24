@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: password
       POSTGRES_DB: staging
     volumes:
-      - ./scripts/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
+      - ../scripts/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U staging -d staging"]
       interval: 10s
@@ -15,7 +15,7 @@ services:
 
   guardian_service:
     build:
-      context: ./services/guardian_service
+      context: ../services/guardian_service
       target: development
     environment:
       - FLASK_ENV=staging
@@ -32,11 +32,11 @@ services:
       db_service:
         condition: service_healthy
     volumes:
-      - ./services/guardian_service:/app
+      - ../services/guardian_service:/app
 
   identity_service:
     build:
-      context: ./services/identity_service
+      context: ../services/identity_service
       target: development
     environment:
       - FLASK_ENV=staging
@@ -57,11 +57,11 @@ services:
       guardian_service:
         condition: service_started
     volumes:
-      - ./services/identity_service:/app
+      - ../services/identity_service:/app
 
   auth_service:
     build: 
-      context: ./services/auth_service
+      context: ../services/auth_service
       target: development
     environment:
       - FLASK_ENV=staging
@@ -82,11 +82,11 @@ services:
       identity_service:
         condition: service_started
     volumes:
-      - ./services/auth_service:/app
+      - ../services/auth_service:/app
 
   web_service:
     build:
-      context: ./web
+      context: ../web
       target: deps
     ports:
       - "3000:3000"
@@ -103,6 +103,6 @@ services:
       - IDENTITY_SERVICE_URL=http://identity_service:5000
       - GUARDIAN_SERVICE_URL=http://guardian_service:5000
     volumes:
-      - ./web:/app
+      - ../web:/app
       - /app/node_modules
     command: npm run dev

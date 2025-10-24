@@ -181,7 +181,10 @@ waterfall/
 │   ├── setup-dev.sh
 │   ├── run-tests.sh
 │   └── wait-for-services.sh
-├── docker-compose.yml         # Multi-service orchestration
+├── compose/                   # Docker compose configurations
+│   ├── docker-compose.yml         # Multi-service orchestration
+│   ├── docker-compose.test.yml    # Test environment
+│   └── docker-compose.backend.yml # Backend services only
 └── init-db.sh                # Database initialization
 ```
 

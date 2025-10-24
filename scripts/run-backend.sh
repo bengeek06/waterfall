@@ -2,11 +2,15 @@
 
 set -e
 
-COMPOSE_FILE="docker-compose.backend.yml"
+COMPOSE_FILE="compose/docker-compose.backend.yml"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 cd "$PROJECT_ROOT"
+
+# Clean up any existing containers to ensure fresh start
+echo "Cleaning up any existing containers..."
+$DOCKER_COMPOSE down --remove-orphans 2>/dev/null || true
 
 echo "🚀 Starting backend services with development tools..."
 docker compose -f "$COMPOSE_FILE" up --build

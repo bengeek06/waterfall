@@ -10,7 +10,7 @@ services:
       - "5432:5432"
     volumes:
       - db_data:/var/lib/postgresql/data
-      - ./scripts/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
+      - ../scripts/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U staging -d staging"]
       interval: 10s
@@ -18,7 +18,7 @@ services:
       retries: 5
 
   guardian_service:
-    build: ./services/guardian_service
+    build: ../services/guardian_service
     environment:
       - FLASK_ENV=staging
       - APP_MODE=staging
@@ -34,11 +34,11 @@ services:
       db_service:
         condition: service_healthy
     volumes:
-      - ./services/guardian_service:/app
+      - ../services/guardian_service:/app
 
   identity_service:
     build:
-      context: ./services/identity_service
+      context: ../services/identity_service
       target: development
     environment:
       - FLASK_ENV=staging
@@ -59,11 +59,11 @@ services:
       guardian_service:
         condition: service_started
     volumes:
-      - ./services/identity_service:/app
+      - ../services/identity_service:/app
 
   auth_service:
     build: 
-      context: ./services/auth_service
+      context: ../services/auth_service
       target: development
     environment:
       - FLASK_ENV=staging
@@ -84,7 +84,7 @@ services:
       identity_service:
         condition: service_started
     volumes:
-      - ./services/auth_service:/app
+      - ../services/auth_service:/app
 
 #  web_service:
 #    build:
@@ -125,9 +125,9 @@ services:
           {"url": "/openapi/pm-guardian-api.yml", "name": "Guardian API"},
         ]
     volumes:
-      - ./services/auth_service/openapi.yml:/usr/share/nginx/html/openapi/pm-auth-api.yml
-      - ./services/identity_service/openapi.yml:/usr/share/nginx/html/openapi/pm-identity-api.yml
-      - ./services/guardian_service/openapi.yml:/usr/share/nginx/html/openapi/pm-guardian-api.yml
+      - ../services/auth_service/openapi.yml:/usr/share/nginx/html/openapi/pm-auth-api.yml
+      - ../services/identity_service/openapi.yml:/usr/share/nginx/html/openapi/pm-identity-api.yml
+      - ../services/guardian_service/openapi.yml:/usr/share/nginx/html/openapi/pm-guardian-api.yml
     ports:
       - "8081:8080"
 
