@@ -3,7 +3,7 @@
 	url = git@github.com:bengeek06/web-waterfall.git
 [submodule "services/auth_service"]
 	path = services/auth_service
-	url = git@github.com:bengeek06/pm-auth-api.git
+	url = git@github.com:bengeek06/auth_api_waterfall.git
 [submodule "services/identity_service"]
 	path = services/identity_service
 	url = git@github.com:bengeek06/pm-identity-api.git
