@@ -1,0 +1,85 @@
+# ==============================================================================
+# .dockerignore pour Waterfall All-in-One
+# ==============================================================================
+
+# Development files
+.env
+.env.*
+node_modules/
+**/.git/
+**/.gitignore
+**/README.md
+
+# Build artifacts
+**/dist/
+**/build/
+**/.next/
+**/coverage/
+
+# Cache directories
+**/.cache/
+**/tmp/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+
+# IDE and editor files
+.vscode/
+.idea/
+**/*.swp
+**/*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Docker files (exclude from build context)
+**/Dockerfile*
+**/.dockerignore
+**/docker-compose*.yml
+
+# Test files
+**/tests/
+**/test/
+**/*.test.*
+**/*.spec.*
+**/pytest_cache/
+**/.coverage
+
+# Logs
+**/logs/
+**/*.log
+
+# Development tools
+**/scripts/
+compose/
+
+# Documentation
+docs/
+**/docs/
+
+# Specific to this build - exclude everything except what we need
+!web/
+!services/
+!docker/allinone/
+
+# But exclude development files from services
+services/**/tests/
+services/**/test/
+services/**/*.test.*
+services/**/__pycache__/
+services/**/migrations/versions/
+
+# Web exclusions
+web/node_modules/
+web/.next/
+web/coverage/
+web/test-results/
+web/playwright-report/
