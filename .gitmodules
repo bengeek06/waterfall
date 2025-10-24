@@ -3,13 +3,13 @@
 	url = git@github.com:bengeek06/web-waterfall.git
 [submodule "services/auth_service"]
 	path = services/auth_service
-	url = git@github.com:bengeek06/auth_api_waterfall.git
+	url = git@github.com:bengeek06/auth-api-waterfall.git
 [submodule "services/identity_service"]
 	path = services/identity_service
-	url = git@github.com:bengeek06/pm-identity-api.git
+	url = git@github.com:bengeek06/identity-api-waterfall.git
 [submodule "services/guardian_service"]
 	path = services/guardian_service
-	url = git@github.com:bengeek06/pm-guardian-api.git
+	url = git@github.com:bengeek06/guardian-api-waterfall.git
 [submodule "tests"]
 	path = tests
 	url = git@github.com:bengeek06/e2e-waterfall.git
