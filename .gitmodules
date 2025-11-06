@@ -13,3 +13,6 @@
 [submodule "tests"]
 	path = tests
 	url = git@github.com:bengeek06/e2e-waterfall.git
+[submodule "services/basic_io_service"]
+	path = services/basic_io_service
+	url = https://github.com/bengeek06/basic-io-api-waterfall.git
