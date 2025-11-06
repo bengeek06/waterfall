@@ -84,6 +84,30 @@ services:
     volumes:
       - ../services/auth_service:/app
 
+  basic_io_service:
+    build:
+      context: ../services/basic_io_service
+      target: development
+    environment:
+      - FLASK_ENV=staging
+      - APP_MODE=staging
+      - IN_DOCKER_CONTAINER=true
+      - WAIT_FOR_DB=true
+      - RUN_MIGRATIONS=true
+      - LOG_LEVEL=INFO
+      - DATABASE_URL=postgresql://staging:password@db_service/basic_io_staging
+      - JWT_SECRET=super-secret-jwt-key
+      - IDENTITY_SERVICE_URL=http://identity_service:5000
+    ports:
+      - "5004:5000"
+    depends_on:
+      db_service:
+        condition: service_healthy
+      identity_service:
+        condition: service_started
+    volumes:
+      - ../services/basic_io_service:/app
+
   web_service:
     build:
       context: ../web

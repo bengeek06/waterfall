@@ -82,6 +82,7 @@ echo "Checking application services..."
 check_service "http://localhost:5001/health" "Auth Service" || cleanup_and_exit
 check_service "http://localhost:5002/health" "Identity Service" || cleanup_and_exit
 check_service "http://localhost:5003/health" "Guardian Service" || cleanup_and_exit
+check_service "http://localhost:5004/health" "Basic IO Service" || cleanup_and_exit
 check_service "http://localhost:3000/" "Web Service" || cleanup_and_exit
 
 echo "All services are ready! 🚀"
