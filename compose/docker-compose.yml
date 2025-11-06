@@ -157,24 +157,24 @@ services:
     volumes:
       - ../services/storage_service:/app
 
-#  web_service:
-#    build:
-#      context: ./web
-#      target: runner
-#    ports:
-#      - "3000:3000"
-#    depends_on:
-#      - auth_service
-#      - identity_service
-#      - guardian_service
-#    environment:
-#      - NODE_ENV=production
-#      - LOG_LEVEL=debug
-#      - MOCK_API=false
-#      - OFFLINE_MODE=false
-#      - AUTH_SERVICE_URL=http://auth_service:5000
-#      - IDENTITY_SERVICE_URL=http://identity_service:5000
-#      - GUARDIAN_SERVICE_URL=http://guardian_service:5000
+  web_service:
+    build:
+      context: ../web
+      target: runner
+    ports:
+      - "3000:3000"
+    depends_on:
+      - auth_service
+      - identity_service
+      - guardian_service
+    environment:
+      - NODE_ENV=production
+      - LOG_LEVEL=debug
+      - MOCK_API=false
+      - OFFLINE_MODE=false
+      - AUTH_SERVICE_URL=http://auth_service:5000
+      - IDENTITY_SERVICE_URL=http://identity_service:5000
+      - GUARDIAN_SERVICE_URL=http://guardian_service:5000
 
   pgadmin:
     image: dpage/pgadmin4:latest
