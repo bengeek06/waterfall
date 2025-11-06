@@ -1,0 +1,5 @@
+# Ignore all backup files
+*
+!.gitignore
+!README.md
+

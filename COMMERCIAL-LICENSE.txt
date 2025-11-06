@@ -1,0 +1,73 @@
+COMMERCIAL LICENSE — NexiPM
+
+Version dated 2025-06-11
+
+1. Purpose of the License
+
+This commercial license grants the client organization (the "Client") a non-exclusive, non-transferable right to use the software [Software Name] for professional purposes, under the terms defined below.
+
+2. Scope of the License
+
+This license allows the Client to:
+
+    Run the software in its internal environment (on-premise or private cloud)
+
+    Use the software in a commercial context, without any obligation to redistribute the source code
+
+    Access professional features and proprietary modules
+
+    Benefit from technical support, updates, and software improvements
+
+The license covers a specific number of users or instances, as specified in the commercial appendix or invoice.
+
+3. Duration and Renewal
+
+The license is valid for a period of [12 months] from the subscription date, and is automatically renewable unless terminated in writing 30 days before expiration.
+
+4. Restrictions
+
+The Client agrees not to:
+
+    Resell, transfer, or redistribute the software to third parties
+
+    Integrate the software into a commercial SaaS offering without explicit agreement
+
+    Bypass or circumvent security or licensing mechanisms
+
+    Access or modify proprietary modules without authorization
+
+5. Intellectual Property
+
+The software, including proprietary components, remains the exclusive property of [Your name or company].
+The Client acquires no intellectual property rights other than those explicitly listed.
+
+6. Support and Services
+
+The Client benefits from the level of support described in their commercial contract:
+
+    Support by email or dedicated platform
+
+    Guaranteed response time according to the chosen offer
+
+    Access to bug fixes, improvements, and new versions during the license period
+
+7. Liability
+
+The software is provided "as is". In no event shall [Your name] be liable for indirect damages, business interruption, or data loss.
+
+Maximum liability is limited to the total amount paid by the Client in the last 12 months.
+
+8. Termination
+
+The license may be terminated in case of non-compliance with the conditions. In case of termination, the Client agrees to immediately cease all use of the software.
+
+9. Governing Law
+
+This contract is governed by French law. In case of dispute, the parties agree to seek an amicable resolution before any legal proceedings.
+
+10. Contact
+
+For any commercial or technical request:
+📧 contact@waterfall-project.pro
+🌐 https://waterfall-project.pro
+
