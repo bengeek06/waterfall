@@ -16,3 +16,6 @@
 [submodule "services/basic_io_service"]
 	path = services/basic_io_service
 	url = https://github.com/bengeek06/basic-io-api-waterfall.git
+[submodule "services/storage_service"]
+	path = services/storage_service
+	url = https://github.com/bengeek06/storage-api-waterfall.git
