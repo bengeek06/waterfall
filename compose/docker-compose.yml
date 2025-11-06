@@ -167,6 +167,8 @@ services:
       - auth_service
       - identity_service
       - guardian_service
+      - storage_service
+      - basic_io_service
     environment:
       - NODE_ENV=production
       - LOG_LEVEL=debug
