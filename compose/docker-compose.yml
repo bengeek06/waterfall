@@ -51,6 +51,7 @@ services:
       - INTERNAL_AUTH_TOKEN=staging-internal-secret
       - JWT_SECRET=super-secret-jwt-key
       - GUARDIAN_SERVICE_URL=http://guardian_service:5000
+      - STORAGE_SERVICE_URL=http://storage_service:5000
     ports:
       - "5002:5000"
     depends_on:
@@ -141,11 +142,12 @@ services:
       - DATABASE_URL=postgresql://staging:password@db_service/storage_staging
       - JWT_SECRET=super-secret-jwt-key
       - IDENTITY_SERVICE_URL=http://identity_service:5000
-      - MINIO_ENDPOINT=minio:9000
       - MINIO_SERVICE_URL=http://minio:9000
+      - MINIO_ENDPOINT=minio:9000
       - MINIO_ACCESS_KEY=minioadmin
       - MINIO_SECRET_KEY=minioadmin
       - MINIO_SECURE=false
+      - MINIO_BUCKET_NAME=staging-storage
     ports:
       - "5005:5000"
     depends_on:
