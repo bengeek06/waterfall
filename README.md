@@ -16,6 +16,7 @@ Waterfall is a comprehensive project management platform featuring:
 - **Authentication & Authorization** - Secure user management with JWT
 - **Identity Management** - User profiles, companies, and organizational units
 - **Guardian Service** - Role-based access control (RBAC) with policies and permissions
+- **Project Management** - Project creation, tracking, and collaboration
 - **Basic IO Service** - Core business operations and data management
 - **Storage Service** - File storage with S3-compatible MinIO backend
 - **Web Interface** - Modern Next.js 16 frontend with Turbopack
@@ -58,8 +59,8 @@ Use the provided scripts to start all backend services:
 ```
 
 This will start:
-- PostgreSQL database with all 5 databases
-- All microservices (Auth, Identity, Guardian, Basic IO, Storage)
+- PostgreSQL database with all 6 databases
+- All microservices (Auth, Identity, Guardian, Project, Basic IO, Storage)
 - MinIO object storage
 - PgAdmin for database management
 - Swagger UI for API documentation
@@ -89,6 +90,13 @@ python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 flask run --port=5003
+
+# Project Service
+cd services/project_service
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+flask run --port=5006
 
 # Basic IO Service
 cd services/basic_io_service
@@ -147,6 +155,7 @@ Once running, access the following services:
 | **Guardian API** | http://localhost:5003 | Resource protection service |
 | **Basic IO API** | http://localhost:5004 | Core business operations |
 | **Storage API** | http://localhost:5005 | File storage service |
+| **Project API** | http://localhost:5006 | Project management service |
 | **Swagger UI** | http://localhost:8081 | Interactive API documentation |
 | **pgAdmin** | http://localhost:5050 | Database administration |
 | **MinIO Console** | http://localhost:9001 | Object storage admin |
@@ -161,7 +170,7 @@ Once running, access the following services:
 - **Port**: 5432
 - **Username**: staging
 - **Password**: password
-- **Databases**: auth_staging, identity_staging, guardian_staging, basic_io_staging, storage_staging
+- **Databases**: auth_staging, identity_staging, guardian_staging, project_staging, basic_io_staging, storage_staging
 
 ### MinIO Access
 - **Username**: minioadmin
@@ -173,6 +182,7 @@ Each service provides OpenAPI 3.0 documentation accessible through Swagger UI at
 - **Auth API**: Authentication and token management
 - **Identity API**: Users, companies, customers, and organizational units
 - **Guardian API**: Roles, policies, permissions, and access control
+- **Project API**: Project creation, tracking, and management
 - **Basic IO API**: Core business operations
 - **Storage API**: File upload, download, and management
 
@@ -234,7 +244,7 @@ docker compose -f compose/docker-compose.test.yml down
 ./scripts/backup-databases.sh /path/to/backup/directory
 ```
 
-Creates timestamped backups of all 5 databases with a manifest file.
+Creates timestamped backups of all 6 databases with a manifest file.
 
 ### Restore Databases
 
@@ -287,6 +297,12 @@ Creates timestamped backups of all 5 databases with a manifest file.
 - Fine-grained access rules
 - User-role assignments
 
+### Project Service
+- Project creation and management
+- Project tracking and collaboration
+- Task organization
+- Team coordination
+
 ### Basic IO Service
 - Core business data operations
 - Data import/export in JSON and CSV formats
@@ -308,6 +324,7 @@ waterfall/
 │   ├── auth_service/          # Authentication microservice (submodule)
 │   ├── identity_service/      # Identity management microservice (submodule)
 │   ├── guardian_service/      # RBAC and access control microservice (submodule)
+│   ├── project_service/       # Project management microservice (submodule)
 │   ├── basic_io_service/      # Core business operations (submodule)
 │   └── storage_service/       # File storage microservice (submodule)
 ├── web/                       # Next.js 16 frontend (submodule)

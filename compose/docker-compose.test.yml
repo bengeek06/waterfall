@@ -110,6 +110,31 @@ services:
     volumes:
       - ../services/basic_io_service:/app
 
+  project_service:
+    build:
+      context: ../services/project_service
+      target: development
+    environment:
+      - FLASK_ENV=staging
+      - APP_MODE=staging
+      - IN_DOCKER_CONTAINER=true
+      - WAIT_FOR_DB=true
+      - RUN_MIGRATIONS=true
+      - LOG_LEVEL=INFO
+      - DATABASE_URL=postgresql://staging:password@db_service/project_staging
+      - JWT_SECRET=super-secret-jwt-key
+      - IDENTITY_SERVICE_URL=http://identity_service:5000
+      - GUARDIAN_SERVICE_URL=http://guardian_service:5000
+    ports:
+      - "5006:5000"
+    depends_on:
+      db_service:
+        condition: service_healthy
+      identity_service:
+        condition: service_started
+    volumes:
+      - ../services/project_service:/app
+
   minio:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
@@ -180,6 +205,7 @@ services:
       - GUARDIAN_SERVICE_URL=http://guardian_service:5000
       - STORAGE_SERVICE_URL=http://storage_service:5000
       - BASIC_IO_SERVICE_URL=http://basic_io_service:5000
+      - PROJECT_SERVICE_URL=http://project_service:5000
     volumes:
       - ../web:/app
       - /app/node_modules

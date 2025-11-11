@@ -19,3 +19,6 @@
 [submodule "services/storage_service"]
 	path = services/storage_service
 	url = https://github.com/bengeek06/storage-api-waterfall.git
+[submodule "services/project_service"]
+	path = services/project_service
+	url = git@github.com:bengeek06/project_api_waterfall.git

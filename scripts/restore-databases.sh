@@ -12,7 +12,7 @@ DEFAULT_BACKUP_DIR="$PROJECT_ROOT/backups/latest"
 DB_CONTAINER="compose-db_service-1"
 DB_USER="staging"
 DB_PASSWORD="password"
-DATABASES=("auth_staging" "identity_staging" "guardian_staging" "basic_io_staging" "storage_staging")
+DATABASES=("auth_staging" "identity_staging" "guardian_staging" "basic_io_staging" "storage_staging" "project_staging")
 
 # Colors for output
 RED='\033[0;31m'
