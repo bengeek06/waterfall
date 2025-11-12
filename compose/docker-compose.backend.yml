@@ -102,6 +102,7 @@ services:
       - DATABASE_URL=postgresql://staging:password@db_service/basic_io_staging
       - JWT_SECRET=super-secret-jwt-key
       - IDENTITY_SERVICE_URL=http://identity_service:5000
+      - GUARDIAN_SERVICE_URL=http://guardian_service:5000
     ports:
       - "5004:5000"
     depends_on:
@@ -174,6 +175,7 @@ services:
       - MINIO_SECRET_KEY=minioadmin
       - MINIO_SECURE=false
       - MINIO_BUCKET_NAME=staging-storage
+      - GUARDIAN_SERVICE_URL=http://guardian_service:5000
     ports:
       - "5005:5000"
     depends_on:
