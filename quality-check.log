@@ -1,0 +1,121 @@
+[0;32m[CHECK][0m 🔍 Vérification de la qualité du code sur toutes les branches
+
+[0;32m[CHECK][0m Checking services/auth_service (branch: fix_issues)
+[0;32m[CHECK][0m   Using existing venv...
+[0;32m[CHECK][0m   Running pylint on app/...
+[0;32m[CHECK][0m   ✓ Pylint: no errors
+
+[0;32m[CHECK][0m   Running tests...
+..........................................                               [100%]
+42 passed in 0.22s
+[0;32m[CHECK][0m   ✓ Tests passed
+
+---
+
+[0;32m[CHECK][0m Checking services/identity_service (branch: fix_issues)
+[0;32m[CHECK][0m   Using existing venv...
+[0;32m[CHECK][0m   Running pylint on app/...
+[0;32m[CHECK][0m   ✓ Pylint: no errors
+
+[0;32m[CHECK][0m   Running tests...
+........................................................................ [ 23%]
+........................................................................ [ 47%]
+........................................................................ [ 71%]
+........................................................................ [ 95%]
+.............                                                            [100%]
+301 passed in 31.67s
+[0;32m[CHECK][0m   ✓ Tests passed
+
+---
+
+[0;32m[CHECK][0m Checking services/project_service (branch: feature/integration-tests)
+[0;32m[CHECK][0m   Using existing venv...
+[0;32m[CHECK][0m   Running pylint on app/...
+[0;32m[CHECK][0m   ✓ Pylint: no errors
+
+[0;32m[CHECK][0m   Running tests...
+........................................................................ [ 31%]
+........................................................................ [ 62%]
+........................................................................ [ 93%]
+...............                                                          [100%]
+231 passed in 6.67s
+[0;32m[CHECK][0m   ✓ Tests passed
+
+---
+
+[0;32m[CHECK][0m Checking services/storage_service (branch: fix_issues)
+[0;32m[CHECK][0m   Using existing venv...
+[0;32m[CHECK][0m   Running pylint on app/...
+[0;32m[CHECK][0m   ✓ Pylint: no errors
+
+[0;32m[CHECK][0m   Running tests...
+WARNING  urllib3.connectionpool:connectionpool.py:868 Retrying (Retry(total=0, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NewConnectionError('<urllib3.connection.HTTPConnection object at 0x78b63812d590>: Failed to establish a new connection: [Errno 111] Connection refused')': /
+WARNING  urllib3.connectionpool:connectionpool.py:868 Retrying (Retry(total=4, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NewConnectionError('<urllib3.connection.HTTPConnection object at 0x78b638161d00>: Failed to establish a new connection: [Errno 111] Connection refused')': /
+WARNING  urllib3.connectionpool:connectionpool.py:868 Retrying (Retry(total=3, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NewConnectionError('<urllib3.connection.HTTPConnection object at 0x78b638160c00>: Failed to establish a new connection: [Errno 111] Connection refused')': /
+WARNING  urllib3.connectionpool:connectionpool.py:868 Retrying (Retry(total=2, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NewConnectionError('<urllib3.connection.HTTPConnection object at 0x78b638163ac0>: Failed to establish a new connection: [Errno 111] Connection refused')': /
+WARNING  urllib3.connectionpool:connectionpool.py:868 Retrying (Retry(total=1, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NewConnectionError('<urllib3.connection.HTTPConnection object at 0x78b638163df0>: Failed to establish a new connection: [Errno 111] Connection refused')': /
+WARNING  urllib3.connectionpool:connectionpool.py:868 Retrying (Retry(total=0, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NewConnectionError('<urllib3.connection.HTTPConnection object at 0x78b638190160>: Failed to establish a new connection: [Errno 111] Connection refused')': /
+WARNING  urllib3.connectionpool:connectionpool.py:868 Retrying (Retry(total=4, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NewConnectionError('<urllib3.connection.HTTPConnection object at 0x78b6381906b0>: Failed to establish a new connection: [Errno 111] Connection refused')': /
+WARNING  urllib3.connectionpool:connectionpool.py:868 Retrying (Retry(total=3, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NewConnectionError('<urllib3.connection.HTTPConnection object at 0x78b6381909e0>: Failed to establish a new connection: [Errno 111] Connection refused')': /
+WARNING  urllib3.connectionpool:connectionpool.py:868 Retrying (Retry(total=2, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NewConnectionError('<urllib3.connection.HTTPConnection object at 0x78b638190d10>: Failed to establish a new connection: [Errno 111] Connection refused')': /
+WARNING  urllib3.connectionpool:connectionpool.py:868 Retrying (Retry(total=1, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NewConnectionError('<urllib3.connection.HTTPConnection object at 0x78b638191040>: Failed to establish a new connection: [Errno 111] Connection refused')': /
+WARNING  urllib3.connectionpool:connectionpool.py:868 Retrying (Retry(total=0, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NewConnectionError('<urllib3.connection.HTTPConnection object at 0x78b638191370>: Failed to establish a new connection: [Errno 111] Connection refused')': /
+WARNING  urllib3.connectionpool:connectionpool.py:868 Retrying (Retry(total=4, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NewConnectionError('<urllib3.connection.HTTPConnection object at 0x78b6381918c0>: Failed to establish a new connection: [Errno 111] Connection refused')': /
+WARNING  urllib3.connectionpool:connectionpool.py:868 Retrying (Retry(total=3, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NewConnectionError('<urllib3.connection.HTTPConnection object at 0x78b638191bf0>: Failed to establish a new connection: [Errno 111] Connection refused')': /
+WARNING  urllib3.connectionpool:connectionpool.py:868 Retrying (Retry(total=2, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NewConnectionError('<urllib3.connection.HTTPConnection object at 0x78b638191f20>: Failed to establish a new connection: [Errno 111] Connection refused')': /
+WARNING  urllib3.connectionpool:connectionpool.py:868 Retrying (Retry(total=1, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NewConnectionError('<urllib3.connection.HTTPConnection object at 0x78b638192250>: Failed to establish a new connection: [Errno 111] Connection refused')': /
+WARNING  urllib3.connectionpool:connectionpool.py:868 Retrying (Retry(total=0, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NewConnectionError('<urllib3.connection.HTTPConnection object at 0x78b638192580>: Failed to establish a new connection: [Errno 111] Connection refused')': /
+=========================== short test summary info ============================
+ERROR tests/integration/test_integration_admin.py::TestFileDelete::test_delete_logical_only
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+1 error in 238.33s (0:03:58)
+[0;32m[CHECK][0m   ✓ Tests passed
+
+---
+
+[0;32m[CHECK][0m Checking services/guardian_service (branch: fix_issues)
+[0;32m[CHECK][0m   Using existing venv...
+[0;32m[CHECK][0m   Running pylint on app/...
+[0;32m[CHECK][0m   ✓ Pylint: no errors
+
+[0;32m[CHECK][0m   Running tests...
+INFO     app.logger:permission.py:247 [2m2025-11-14 20:39:07[0m [[32m[1minfo     [0m] [1mAdded permission              [0m [36mdescription[0m=[35m'User Role association management endpoint'[0m [36moperation[0m=[35mdelete[0m [36mresource_name[0m=[35muser_role[0m [36mservice[0m=[35mguardian[0m
+INFO     app.logger:permission.py:247 [2m2025-11-14 20:39:07[0m [[32m[1minfo     [0m] [1mAdded permission              [0m [36mdescription[0m=[35m'Company management endpoint'[0m [36moperation[0m=[35mupdate[0m [36mresource_name[0m=[35mcompany[0m [36mservice[0m=[35midentity[0m
+INFO     app.logger:permission.py:247 [2m2025-11-14 20:39:07[0m [[32m[1minfo     [0m] [1mAdded permission              [0m [36mdescription[0m=[35m'Subcontractor management endpoint'[0m [36moperation[0m=[35mdelete[0m [36mresource_name[0m=[35msubcontractor[0m [36mservice[0m=[35midentity[0m
+INFO     app.logger:permission.py:247 [2m2025-11-14 20:39:07[0m [[32m[1minfo     [0m] [1mAdded permission              [0m [36mdescription[0m=[35m'Project role resource'[0m [36moperation[0m=[35mcreate[0m [36mresource_name[0m=[35mrole[0m [36mservice[0m=[35mproject[0m
+INFO     app.logger:permission.py:247 [2m2025-11-14 20:39:07[0m [[32m[1minfo     [0m] [1mAdded permission              [0m [36mdescription[0m=[35m'Customer management endpoint'[0m [36moperation[0m=[35mcreate[0m [36mresource_name[0m=[35mcustomer[0m [36mservice[0m=[35midentity[0m
+INFO     app.logger:permission.py:247 [2m2025-11-14 20:39:07[0m [[32m[1minfo     [0m] [1mAdded permission              [0m [36mdescription[0m=[35m'Project version resource'[0m [36moperation[0m=[35mlist[0m [36mresource_name[0m=[35mversion[0m [36mservice[0m=[35mproject[0m
+INFO     app.logger:permission.py:247 [2m2025-11-14 20:39:07[0m [[32m[1minfo     [0m] [1mAdded permission              [0m [36mdescription[0m=[35m'Position management endpoint'[0m [36moperation[0m=[35mupdate[0m [36mresource_name[0m=[35mposition[0m [36mservice[0m=[35midentity[0m
+INFO     app.logger:permission.py:247 [2m2025-11-14 20:39:07[0m [[32m[1minfo     [0m] [1mAdded permission              [0m [36mdescription[0m=[35m'Project member resource'[0m [36moperation[0m=[35mupdate[0m [36mresource_name[0m=[35mmember[0m [36mservice[0m=[35mproject[0m
+INFO     app.logger:permission.py:247 [2m2025-11-14 20:39:07[0m [[32m[1minfo     [0m] [1mAdded permission              [0m [36mdescription[0m=[35m'Permission management endpoint'[0m [36moperation[0m=[35mread[0m [36mresource_name[0m=[35mpermission[0m [36mservice[0m=[35mguardian[0m
+INFO     app.logger:permission.py:247 [2m2025-11-14 20:39:07[0m [[32m[1minfo     [0m] [1mAdded permission              [0m [36mdescription[0m=[35m'Company management endpoint'[0m [36moperation[0m=[35mread[0m [36mresource_name[0m=[35mcompany[0m [36mservice[0m=[35midentity[0m
+INFO     app.logger:permission.py:247 [2m2025-11-14 20:39:07[0m [[32m[1minfo     [0m] [1mAdded permission              [0m [36mdescription[0m=[35m'User management endpoint'[0m [36moperation[0m=[35mupdate[0m [36mresource_name[0m=[35muser[0m [36mservice[0m=[35midentity[0m
+INFO     app.logger:permission.py:247 [2m2025-11-14 20:39:07[0m [[32m[1minfo     [0m] [1mAdded permission              [0m [36mdescription[0m=[35m'Storage version resource'[0m [36moperation[0m=[35mlist[0m [36mresource_name[0m=[35mversion[0m [36mservice[0m=[35mstorage[0m
+INFO     app.logger:permission.py:247 [2m2025-11-14 20:39:07[0m [[32m[1minfo     [0m] [1mAdded permission              [0m [36mdescription[0m=[35m'Position management endpoint'[0m [36moperation[0m=[35mread[0m [36mresource_name[0m=[35mposition[0m [36mservice[0m=[35midentity[0m
+INFO     app.logger:permission.py:247 [2m2025-11-14 20:39:07[0m [[32m[1minfo     [0m] [1mAdded permission              [0m [36mdescription[0m=[35m'Project role resource'[0m [36moperation[0m=[35mdelete[0m [36mresource_name[0m=[35mrole[0m [36mservice[0m=[35mproject[0m
+INFO     app.logger:permission.py:247 [2m2025-11-14 20:39:07[0m [[32m[1minfo     [0m] [1mAdded permission              [0m [36mdescription[0m=[35m'Customer management endpoint'[0m [36moperation[0m=[35mdelete[0m [36mresource_name[0m=[35mcustomer[0m [36mservice[0m=[35midentity[0m
+INFO     app.logger:permission.py:226 [2m2025-11-14 20:39:07[0m [[32m[1minfo     [0m] [1mPermission synchronization completed[0m [36madded[0m=[35m93[0m [36mdeleted[0m=[35m0[0m [36mupdated[0m=[35m0[0m
+=========================== short test summary info ============================
+FAILED tests/test_permission_model.py::TestSyncPermissionsFunction::test_sync_permissions_handles_missing_operations
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+1 failed, 67 passed in 1.25s
+[0;32m[CHECK][0m   ✓ Tests passed
+
+---
+
+[0;32m[CHECK][0m Checking services/basic_io_service (branch: fix/issues)
+[0;32m[CHECK][0m   Using existing venv...
+[0;32m[CHECK][0m   Running pylint on app/...
+[0;32m[CHECK][0m   ✓ Pylint: no errors
+
+[0;32m[CHECK][0m   Running tests...
+......s................................................................. [ 34%]
+........................................................................ [ 68%]
+..................................................................       [100%]
+209 passed, 1 skipped in 1.00s
+[0;32m[CHECK][0m   ✓ Tests passed
+
+---
+
+
+[0;32m[CHECK][0m ✅ Tous les services sont OK! Vous pouvez merger les PRs en toute sécurité.

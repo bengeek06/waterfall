@@ -1,0 +1,21 @@
+[0;32m[MERGE][0m 🚀 Merge automatique de toutes les PRs de migration
+
+[0;32m[MERGE][0m Merging PR in services/auth_service
+[0;32m[MERGE][0m   Found PR #3
+From github.com:bengeek06/auth-api-waterfall
+ * branch            main       -> FETCH_HEAD
+   317ad0c..1fc815f  main       -> origin/main
+Updating 317ad0c..1fc815f
+Fast-forward
+ .dockerignore                      |   1 -
+ .github/workflows/docker-image.yml |  28 +-
+ CONTRIBUTING.md                    | 549 +++++++++++++++++++++++++++++++++++++
+ Dockerfile                         |   8 +-
+ app/__init__.py                    |   5 +-
+ push-docker.sh                     |  48 ++++
+ run.py                             |  30 +-
+ tests/test_run.py                  | 305 +++++++++++++++++++--
+ 8 files changed, 933 insertions(+), 41 deletions(-)
+ create mode 100644 CONTRIBUTING.md
+ create mode 100755 push-docker.sh
+[0;32m[MERGE][0m   ✓ PR #3 merged successfully

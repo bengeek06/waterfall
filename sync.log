@@ -1,0 +1,86 @@
+[0;32m[SYNC][0m 🔄 Synchronisation de staging et develop avec main
+
+[0;32m[SYNC][0m Syncing services/auth_service
+[0;32m[SYNC][0m   Updating main branch...
+Already on 'main'
+Your branch is up to date with 'origin/main'.
+From github.com:bengeek06/auth-api-waterfall
+ * branch            main       -> FETCH_HEAD
+Already up to date.
+[0;32m[SYNC][0m   Syncing staging with main...
+Switched to branch 'staging'
+Your branch is up to date with 'origin/staging'.
+Updating eb5ad4f..1fc815f
+Fast-forward
+ .dockerignore                                      |  22 +
+ .github/workflows/docker-image.yml                 | 141 ++++++
+ .github/workflows/python-app.yml                   |   5 +-
+ CONTRIBUTING.md                                    | 549 +++++++++++++++++++++
+ Dockerfile                                         | 120 ++++-
+ README.md                                          | 163 +++++-
+ app/__init__.py                                    |  27 +-
+ app/config.py                                      |  32 +-
+ app/logger.py                                      |  36 +-
+ app/models/__init__.py                             |   8 +-
+ app/models/refresh_token.py                        |  18 +-
+ app/models/token_blacklist.py                      |  18 +-
+ app/resources/config.py                            |   7 +-
+ app/resources/debug.py                             |  43 ++
+ app/resources/health.py                            |  34 ++
+ app/resources/login.py                             |  67 ++-
+ app/resources/logout.py                            |  68 +--
+ app/resources/refresh.py                           |  66 ++-
+ app/resources/verify.py                            |  48 +-
+ app/resources/version.py                           |   7 +-
+ app/routes.py                                      |  27 +-
+ app/utils.py                                       |  64 +--
+ docker-entrypoint.sh                               |  32 ++
+ env.example                                        |  24 +-
+ format_code.py                                     |  57 +++
+ gunicorn.conf.py                                   |  58 +++
+ ...864d_initialization.py => 385a1e97d791_init.py} |  12 +-
+ openapi.yml                                        | 399 +++++++++++----
+ push-docker.sh                                     |  48 ++
+ pyproject.toml                                     |  18 +
+ requirements-dev.txt                               |  27 +-
+ requirements.txt                                   |   1 +
+ run.py                                             |  89 ++--
+ setup.cfg                                          |  32 ++
+ tests/conftest.py                                  |  25 +-
+ tests/test_config.py                               |  11 +-
+ tests/test_init.py                                 |  24 +-
+ tests/test_login.py                                |  59 +--
+ tests/test_logout.py                               | 111 ++---
+ tests/test_refresh.py                              |  60 +--
+ tests/test_run.py                                  | 358 ++++++++++++--
+ tests/test_utils.py                                | 149 +++---
+ tests/test_verify.py                               |  72 +--
+ tests/test_version.py                              |  16 +-
+ tests/test_wsgi.py                                 |  68 ++-
+ wsgi.py                                            |  35 +-
+ 46 files changed, 2572 insertions(+), 783 deletions(-)
+ create mode 100644 .dockerignore
+ create mode 100644 .github/workflows/docker-image.yml
+ create mode 100644 CONTRIBUTING.md
+ create mode 100644 app/resources/debug.py
+ create mode 100644 app/resources/health.py
+ create mode 100644 docker-entrypoint.sh
+ create mode 100644 format_code.py
+ create mode 100644 gunicorn.conf.py
+ rename migrations/versions/{e81d7948864d_initialization.py => 385a1e97d791_init.py} (85%)
+ create mode 100755 push-docker.sh
+ create mode 100644 pyproject.toml
+ create mode 100644 setup.cfg
+To github.com:bengeek06/auth-api-waterfall.git
+   eb5ad4f..1fc815f  staging -> staging
+[0;32m[SYNC][0m   ✓ staging synced
+[0;32m[SYNC][0m   Syncing develop with main...
+Switched to branch 'develop'
+Updating edcd762..1fc815f
+Fast-forward
+To github.com:bengeek06/auth-api-waterfall.git
+   edcd762..1fc815f  develop -> develop
+[0;32m[SYNC][0m   ✓ develop synced
+Switched to branch 'main'
+Your branch is up to date with 'origin/main'.
+[0;32m[SYNC][0m   ✓ Repository synced
