@@ -10,6 +10,8 @@
 
 A modern project management application built with microservices architecture.
 
+> **Contributing**: Want to contribute? Check out our [Contributing Guide](CONTRIBUTING.md) for development workflow, coding conventions, and branch strategy.
+
 ## Overview
 
 Waterfall is a comprehensive project management platform featuring:
