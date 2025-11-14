@@ -206,6 +206,10 @@ services:
       - STORAGE_SERVICE_URL=http://storage_service:5000
       - BASIC_IO_SERVICE_URL=http://basic_io_service:5000
       - PROJECT_SERVICE_URL=http://project_service:5000
+      - BASIC_IO_IDENTITY_SERVICE_URL=http://identity_service:5000
+      - BASIC_IO_GUARDIAN_SERVICE_URL=http://guardian_service:5000
+      - BASIC_IO_STORAGE_SERVICE_URL=http://storage_service:5000
+      - BASIC_IO_PROJECT_SERVICE_URL=http://project_service:5000
     volumes:
       - ../web:/app
       - /app/node_modules

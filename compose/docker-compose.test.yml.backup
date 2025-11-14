@@ -1,15 +1,11 @@
 services:
-  # db
   db_service:
     image: postgres:16
     environment:
       POSTGRES_USER: staging
       POSTGRES_PASSWORD: password
       POSTGRES_DB: staging
-    ports:
-      - "5432:5432"
     volumes:
-      - db_data:/var/lib/postgresql/data
       - ../scripts/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U staging -d staging"]
@@ -18,14 +14,16 @@ services:
       retries: 5
 
   guardian_service:
-    build: ../services/guardian_service
+    build:
+      context: ../services/guardian_service
+      target: development
     environment:
       - FLASK_ENV=staging
       - APP_MODE=staging
       - IN_DOCKER_CONTAINER=true
       - WAIT_FOR_DB=true
       - RUN_MIGRATIONS=true
-      - LOG_LEVEL=DEBUG
+      - LOG_LEVEL=INFO
       - DATABASE_URL=postgresql://staging:password@db_service/guardian_staging
       - JWT_SECRET=super-secret-jwt-key
     ports:
@@ -70,7 +68,7 @@ services:
       - FLASK_ENV=staging
       - APP_MODE=staging
       - IN_DOCKER_CONTAINER=true
-      - LOG_LEVEL=DEBUG
+      - LOG_LEVEL=INFO
       - WAIT_FOR_DB=true
       - RUN_MIGRATIONS=true
       - DATABASE_URL=postgresql://staging:password@db_service/auth_staging
@@ -97,7 +95,7 @@ services:
       - IN_DOCKER_CONTAINER=true
       - WAIT_FOR_DB=true
       - RUN_MIGRATIONS=true
-      - LOG_LEVEL=DEBUG
+      - LOG_LEVEL=INFO
       - DATABASE_URL=postgresql://staging:password@db_service/basic_io_staging
       - JWT_SECRET=super-secret-jwt-key
       - IDENTITY_SERVICE_URL=http://identity_service:5000
@@ -122,7 +120,7 @@ services:
       - IN_DOCKER_CONTAINER=true
       - WAIT_FOR_DB=true
       - RUN_MIGRATIONS=true
-      - LOG_LEVEL=DEBUG
+      - LOG_LEVEL=INFO
       - DATABASE_URL=postgresql://staging:password@db_service/project_staging
       - JWT_SECRET=super-secret-jwt-key
       - IDENTITY_SERVICE_URL=http://identity_service:5000
@@ -190,18 +188,15 @@ services:
   web_service:
     build:
       context: ../web
-      target: runner
+      target: deps
     ports:
       - "3000:3000"
     depends_on:
       - auth_service
       - identity_service
       - guardian_service
-      - storage_service
-      - basic_io_service
-      - project_service
     environment:
-      - NODE_ENV=production
+      - NODE_ENV=development
       - LOG_LEVEL=debug
       - MOCK_API=false
       - OFFLINE_MODE=false
@@ -211,44 +206,10 @@ services:
       - STORAGE_SERVICE_URL=http://storage_service:5000
       - BASIC_IO_SERVICE_URL=http://basic_io_service:5000
       - PROJECT_SERVICE_URL=http://project_service:5000
-      - BASIC_IO_IDENTITY_SERVICE_URL=http://identity_service:5000
-      - BASIC_IO_GUARDIAN_SERVICE_URL=http://guardian_service:5000
-      - BASIC_IO_STORAGE_SERVICE_URL=http://storage_service:5000
-      - BASIC_IO_PROJECT_SERVICE_URL=http://project_service:5000
-
-  pgadmin:
-    image: dpage/pgadmin4:latest
-    environment:
-      PGADMIN_DEFAULT_EMAIL: admin@admin.com
-      PGADMIN_DEFAULT_PASSWORD: admin
-    ports:
-      - "5050:80"
     volumes:
-      - pgadmin_data:/var/lib/pgadmin
-
-  swagger-ui:
-    image: swaggerapi/swagger-ui
-    environment:
-      URLS: |
-        [
-          {"url": "/openapi/pm-auth-api.yml", "name": "Auth API"},
-          {"url": "/openapi/pm-identity-api.yml", "name": "Identity API"},
-          {"url": "/openapi/pm-guardian-api.yml", "name": "Guardian API"},
-          {"url": "/openapi/pm-basic-io-api.yml", "name": "Basic IO API"},
-          {"url": "/openapi/pm-storage-api.yml", "name": "Storage API"},
-          {"url": "/openapi/pm-project-api.yml", "name": "Project API"}
-        ]
-    volumes:
-      - ../services/auth_service/openapi.yml:/usr/share/nginx/html/openapi/pm-auth-api.yml
-      - ../services/identity_service/openapi.yml:/usr/share/nginx/html/openapi/pm-identity-api.yml
-      - ../services/guardian_service/openapi.yml:/usr/share/nginx/html/openapi/pm-guardian-api.yml
-      - ../services/basic_io_service/openapi.yml:/usr/share/nginx/html/openapi/pm-basic-io-api.yml
-      - ../services/storage_service/openapi.yml:/usr/share/nginx/html/openapi/pm-storage-api.yml
-      - ../services/project_service/openapi.yml:/usr/share/nginx/html/openapi/pm-project-api.yml
-    ports:
-      - "8081:8080"
+      - ../web:/app
+      - /app/node_modules
+    command: npm run dev
 
 volumes:
-  db_data:
-  pgadmin_data:
   minio_data:
