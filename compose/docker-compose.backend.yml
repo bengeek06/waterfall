@@ -220,6 +220,7 @@ services:
       - MINIO_SECURE=false
       - MINIO_BUCKET_NAME=staging-storage
       - GUARDIAN_SERVICE_URL=http://guardian_service:5000
+      - PROJECT_SERVICE_URL=http://project_service:5000
     ports:
       - "5005:5000"
     depends_on:
