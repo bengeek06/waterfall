@@ -180,6 +180,33 @@ services:
     volumes:
       - ../services/project_service:/app
 
+  diagram_service:
+    build:
+      context: ../services/diagram_service
+      target: development
+    environment:
+      - FLASK_ENV=staging
+      - APP_MODE=staging
+      - IN_DOCKER_CONTAINER=true
+      - WAIT_FOR_DB=true
+      - RUN_MIGRATIONS=true
+      - LOG_LEVEL=INFO
+      - DATABASE_URL=postgresql://staging:password@db_service/diagram_staging
+      - JWT_SECRET=super-secret-jwt-key
+      - IDENTITY_SERVICE_URL=http://identity_service:5000
+      - GUARDIAN_SERVICE_URL=http://guardian_service:5000
+      - USE_GUARDIAN_SERVICE=true
+      - GUARDIAN_SERVICE_TIMEOUT=5
+    ports:
+      - "5007:5000"
+    depends_on:
+      db_service:
+        condition: service_healthy
+      identity_service:
+        condition: service_started
+    volumes:
+      - ../services/diagram_service:/app
+
   minio:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
