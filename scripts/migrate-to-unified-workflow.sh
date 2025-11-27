@@ -149,8 +149,8 @@ done
 log "✓ Étape 3 terminée"
 echo ""
 
-# Étape 4: Traiter le repo principal waterfall
-log "📋 Étape 4/4: Migration du repo principal waterfall"
+# Étape 4: Traiter le repo principal waterfall-development
+log "📋 Étape 4/4: Migration du repo principal waterfall-development"
 
 cd "$WATERFALL_ROOT"
 

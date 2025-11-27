@@ -206,10 +206,10 @@ git checkout main
 git pull origin main
 ```
 
-### 2. Mettre à jour le repo principal waterfall
+### 2. Mettre à jour le repo principal waterfall-development
 
 ```bash
-cd /home/benjamin/projects/waterfall
+cd /home/benjamin/projects/waterfall-development
 
 # Créer staging et develop pour waterfall si nécessaire
 git checkout main

@@ -4,7 +4,7 @@
 # Ne pas arrêter sur les erreurs - on veut synchroniser tous les repos possibles
 # set -e
 
-WATERFALL_ROOT="/home/benjamin/projects/waterfall"
+WATERFALL_ROOT="/home/benjamin/projects/waterfall-development"
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'

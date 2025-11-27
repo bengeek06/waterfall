@@ -3,7 +3,7 @@
 
 set -e
 
-WATERFALL_ROOT="/home/benjamin/projects/waterfall"
+WATERFALL_ROOT="/home/benjamin/projects/waterfall-development"
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -34,7 +34,7 @@ Changements inclus:
 
 Fait partie de la migration globale du projet vers un workflow Git standardisé.
 
-Voir: /home/benjamin/projects/waterfall/prs-to-create.md pour plus de détails."
+Voir: /home/benjamin/projects/waterfall-development/prs-to-create.md pour plus de détails."
 
 log "🚀 Création automatique de toutes les PRs de migration"
 echo ""

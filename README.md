@@ -39,8 +39,8 @@ Waterfall is a comprehensive project management platform featuring:
 ### 1. Clone the Repository
 
 ```bash
-git clone git@github.com:bengeek06/waterfall.git
-cd waterfall
+git clone git@github.com:bengeek06/waterfall-development.git
+cd waterfall-development
 ```
 
 ### 2. Initialize Submodules
@@ -321,7 +321,7 @@ Creates timestamped backups of all 6 databases with a manifest file.
 ## Project Structure
 
 ```
-waterfall/
+waterfall-development/
 ├── services/
 │   ├── auth_service/          # Authentication microservice (submodule)
 │   ├── identity_service/      # Identity management microservice (submodule)

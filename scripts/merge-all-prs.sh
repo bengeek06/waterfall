@@ -4,7 +4,7 @@
 # Ne pas arrêter le script sur une erreur - on veut merger toutes les PRs possibles
 # set -e
 
-WATERFALL_ROOT="/home/benjamin/projects/waterfall"
+WATERFALL_ROOT="/home/benjamin/projects/waterfall-development"
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -94,7 +94,7 @@ if [ $MERGED -eq ${#REPOS[@]} ]; then
     echo ""
     log "📋 Prochaines étapes:"
     log "  1. Synchroniser staging et develop"
-    log "  2. Mettre à jour le repo principal waterfall"
+    log "  2. Mettre à jour le repo principal waterfall-development"
     log ""
     log "  Lancez: ./scripts/sync-after-merge.sh"
 else
