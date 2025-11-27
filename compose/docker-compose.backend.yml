@@ -97,6 +97,7 @@ services:
       - RATELIMIT_STRATEGY=fixed-window
       - PASSWORD_RESET_OTP_TTL_MINUTES=15
       - PASSWORD_RESET_OTP_MAX_ATTEMPTS=3
+      - RATELIMIT_ENABLED=false
     ports:
       - "5002:5000"
     depends_on:
