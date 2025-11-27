@@ -125,7 +125,7 @@ All scripts require:
 1. **Regular backups:** Schedule regular backups using cron
    ```bash
    # Example: Daily backup at 2 AM
-   0 2 * * * /path/to/waterfall/scripts/backup-databases.sh
+   0 2 * * * /path/to/waterfall-development/scripts/backup-databases.sh
    ```
 
 2. **Backup retention:** Keep multiple backups and implement a retention policy
@@ -137,7 +137,7 @@ All scripts require:
 3. **Off-site backups:** Copy important backups to remote storage
    ```bash
    # Example: Sync to remote server
-   rsync -avz ./backups/latest/ user@backup-server:/backups/waterfall/
+   rsync -avz ./backups/latest/ user@backup-server:/backups/waterfall-development/
    ```
 
 4. **Test restores:** Regularly test your restore process to ensure backups are valid

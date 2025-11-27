@@ -1,6 +1,6 @@
-# Contributing to Waterfall 🚀
+# Contributing to Waterfall Development 🚀
 
-First off, thank you for considering contributing to Waterfall! It's people like you that make Waterfall such a great tool.
+First off, thank you for considering contributing to Waterfall Development! It's people like you that make Waterfall such a great tool.
 
 ## Table of Contents
 

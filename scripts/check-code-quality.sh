@@ -3,7 +3,7 @@
 
 set +e  # Ne pas arrêter sur erreur
 
-WATERFALL_ROOT="/home/benjamin/projects/waterfall"
+WATERFALL_ROOT="/home/benjamin/projects/waterfall-development"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
