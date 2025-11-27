@@ -181,6 +181,33 @@ services:
     volumes:
       - ../services/project_service:/app
 
+  diagram_service:
+    build:
+      context: ../services/diagram_service
+      target: development
+    environment:
+      - FLASK_ENV=staging
+      - APP_MODE=staging
+      - IN_DOCKER_CONTAINER=true
+      - WAIT_FOR_DB=true
+      - RUN_MIGRATIONS=true
+      - LOG_LEVEL=DEBUG
+      - DATABASE_URL=postgresql://staging:password@db_service/diagram_staging
+      - JWT_SECRET=super-secret-jwt-key
+      - IDENTITY_SERVICE_URL=http://identity_service:5000
+      - GUARDIAN_SERVICE_URL=http://guardian_service:5000
+      - USE_GUARDIAN_SERVICE=true
+      - GUARDIAN_SERVICE_TIMEOUT=5
+    ports:
+      - "5007:5000"
+    depends_on:
+      db_service:
+        condition: service_healthy
+      identity_service:
+        condition: service_started
+    volumes:
+      - ../services/diagram_service:/app
+
   minio:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
@@ -245,6 +272,7 @@ services:
       - storage_service
       - basic_io_service
       - project_service
+      - diagram_service
     environment:
       - NODE_ENV=production
       - LOG_LEVEL=debug
@@ -256,6 +284,7 @@ services:
       - STORAGE_SERVICE_URL=http://storage_service:5000
       - BASIC_IO_SERVICE_URL=http://basic_io_service:5000
       - PROJECT_SERVICE_URL=http://project_service:5000
+      - DIAGRAM_SERVICE_URL=http://diagram_service:5000
       - BASIC_IO_IDENTITY_SERVICE_URL=http://identity_service:5000
       - BASIC_IO_GUARDIAN_SERVICE_URL=http://guardian_service:5000
       - BASIC_IO_STORAGE_SERVICE_URL=http://storage_service:5000
@@ -281,7 +310,8 @@ services:
           {"url": "/openapi/pm-guardian-api.yml", "name": "Guardian API"},
           {"url": "/openapi/pm-basic-io-api.yml", "name": "Basic IO API"},
           {"url": "/openapi/pm-storage-api.yml", "name": "Storage API"},
-          {"url": "/openapi/pm-project-api.yml", "name": "Project API"}
+          {"url": "/openapi/pm-project-api.yml", "name": "Project API"},
+          {"url": "/openapi/pm-diagram-api.yml", "name": "Diagram API"}
         ]
     volumes:
       - ../services/auth_service/openapi.yml:/usr/share/nginx/html/openapi/pm-auth-api.yml
@@ -290,6 +320,7 @@ services:
       - ../services/basic_io_service/openapi.yml:/usr/share/nginx/html/openapi/pm-basic-io-api.yml
       - ../services/storage_service/openapi.yml:/usr/share/nginx/html/openapi/pm-storage-api.yml
       - ../services/project_service/openapi.yml:/usr/share/nginx/html/openapi/pm-project-api.yml
+      - ../services/diagram_service/openapi.yml:/usr/share/nginx/html/openapi/pm-diagram-api.yml
     ports:
       - "8081:8080"
 

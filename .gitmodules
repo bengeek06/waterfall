@@ -22,3 +22,6 @@
 [submodule "services/project_service"]
 	path = services/project_service
 	url = git@github.com:bengeek06/project_api_waterfall.git
+[submodule "services/diagram_service"]
+	path = services/diagram_service
+	url = git@github.com:bengeek06/diagram-api-waterfall.git
