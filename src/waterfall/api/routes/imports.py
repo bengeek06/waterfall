@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
+import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
 from typing import cast
 
@@ -11,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from waterfall.api.dependencies import get_current_user
 from waterfall.db.session import get_db
-from waterfall.models.ms_core import MsTask, MsTaskLink
+from waterfall.models.ms_core import MsProject, MsTask, MsTaskLink
 from waterfall.models.user import User
 from waterfall.models.wf_core import WfImportBatch
 from waterfall.schemas.imports import (
@@ -29,6 +31,109 @@ from waterfall.schemas.imports import (
 )
 
 router = APIRouter(prefix="/imports/v1/batches", tags=["imports-v1"])
+NS = {"ms": "http://schemas.microsoft.com/project"}
+
+
+def _txt(node: ET.Element, path: str) -> str | None:
+    found = node.find(path, NS)
+    if found is None or found.text is None:
+        return None
+    value = found.text.strip()
+    return value if value != "" else None
+
+
+def _as_int(value: str | None) -> int | None:
+    return int(value) if value is not None else None
+
+
+def _as_bool(value: str | None) -> bool:
+    return value == "1"
+
+
+def _as_dt(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    return datetime.fromisoformat(value)
+
+
+def _import_v1_tasks_and_links(
+    db: Session,
+    xml_bytes: bytes,
+    source_name: str,
+) -> tuple[int, int, int]:
+    root = ET.fromstring(xml_bytes)
+
+    save_version = _as_int(_txt(root, "ms:SaveVersion")) or 16
+    source_version_map = {14: 2010, 15: 2013, 16: 2016}
+    source_version = source_version_map.get(save_version, 2016)
+
+    project = MsProject(
+        external_uid=_txt(root, "ms:GUID"),
+        source_version=source_version,
+        save_version_out=save_version if save_version in (14, 15, 16) else 16,
+        name=_txt(root, "ms:Name") or source_name,
+        schedule_from_start=_as_bool(_txt(root, "ms:ScheduleFromStart")),
+        start_date=_as_dt(_txt(root, "ms:StartDate")),
+        finish_date=_as_dt(_txt(root, "ms:FinishDate")),
+        calendar_uid=_as_int(_txt(root, "ms:CalendarUID")),
+        minutes_per_day=_as_int(_txt(root, "ms:MinutesPerDay")) or 480,
+        minutes_per_week=_as_int(_txt(root, "ms:MinutesPerWeek")) or 2400,
+        days_per_month=_as_int(_txt(root, "ms:DaysPerMonth")) or 20,
+        currency_code=_txt(root, "ms:CurrencyCode"),
+    )
+    db.add(project)
+    db.flush()
+
+    tasks: list[MsTask] = []
+    links: list[MsTaskLink] = []
+
+    for task_node in root.findall("ms:Tasks/ms:Task", NS):
+        uid = _as_int(_txt(task_node, "ms:UID"))
+        if uid is None:
+            continue
+
+        tasks.append(
+            MsTask(
+                project_id=project.id,
+                uid=uid,
+                id_display=_as_int(_txt(task_node, "ms:ID")),
+                name=_txt(task_node, "ms:Name") or f"Task {uid}",
+                task_type=_as_int(_txt(task_node, "ms:Type")),
+                outline_number=_txt(task_node, "ms:OutlineNumber"),
+                outline_level=_as_int(_txt(task_node, "ms:OutlineLevel")),
+                wbs=_txt(task_node, "ms:WBS"),
+                start_at=_as_dt(_txt(task_node, "ms:Start")),
+                finish_at=_as_dt(_txt(task_node, "ms:Finish")),
+                duration_format=_as_int(_txt(task_node, "ms:DurationFormat")),
+                percent_complete=_as_int(_txt(task_node, "ms:PercentComplete")),
+                is_summary=_as_bool(_txt(task_node, "ms:Summary")),
+                is_milestone=_as_bool(_txt(task_node, "ms:Milestone")),
+                calendar_uid=_as_int(_txt(task_node, "ms:CalendarUID")),
+            )
+        )
+
+        for pred_node in task_node.findall("ms:PredecessorLink", NS):
+            predecessor_uid = _as_int(_txt(pred_node, "ms:PredecessorUID"))
+            if predecessor_uid is None:
+                continue
+
+            links.append(
+                MsTaskLink(
+                    project_id=project.id,
+                    task_uid=uid,
+                    predecessor_uid=predecessor_uid,
+                    link_type=_as_int(_txt(pred_node, "ms:Type")) or 1,
+                    lag_tenth_minute=_as_int(_txt(pred_node, "ms:LinkLag")),
+                    lag_format=_as_int(_txt(pred_node, "ms:LagFormat")),
+                )
+            )
+
+    db.add_all(tasks)
+    db.flush()
+    db.add_all(links)
+    db.flush()
+
+    return project.id, len(tasks), len(links)
 
 
 def _to_batch_response(batch: WfImportBatch) -> ImportBatchResponse:
@@ -119,10 +224,24 @@ async def upload_xml(
     batch = _get_batch_or_404(db, batch_id)
     content = await file.read()
     source_sha256 = hashlib.sha256(content).hexdigest()
+
+    log_payload: dict[str, object]
+    if batch.log_json:
+        try:
+            loaded = json.loads(batch.log_json)
+            log_payload = loaded if isinstance(loaded, dict) else {}
+        except json.JSONDecodeError:
+            log_payload = {}
+    else:
+        log_payload = {}
+
+    log_payload["uploaded_bytes"] = len(content)
+    log_payload["xml_b64"] = base64.b64encode(content).decode("ascii")
+
     batch.source_filename = filename
     batch.source_sha256 = source_sha256
     batch.status = "pending"
-    batch.log_json = json.dumps({"uploaded_bytes": len(content)})
+    batch.log_json = json.dumps(log_payload)
     db.add(batch)
     db.commit()
     db.refresh(batch)
@@ -150,6 +269,38 @@ def run_batch(
     if batch.status == "running":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Batch is already running")
 
+    if not batch.log_json:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No XML uploaded for this batch",
+        )
+
+    try:
+        payload = json.loads(batch.log_json)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Corrupted batch payload",
+        ) from exc
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Corrupted batch payload")
+
+    xml_b64 = payload.get("xml_b64")
+    if not isinstance(xml_b64, str):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No XML uploaded for this batch",
+        )
+
+    try:
+        xml_bytes = base64.b64decode(xml_b64)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Corrupted XML payload",
+        ) from exc
+
     accepted_at = datetime.now(UTC)
     batch.status = "running"
     batch.started_at = accepted_at
@@ -158,9 +309,41 @@ def run_batch(
     db.commit()
     db.refresh(batch)
 
+    try:
+        project_id, task_count, link_count = _import_v1_tasks_and_links(
+            db,
+            xml_bytes,
+            batch.source_filename,
+        )
+        batch.project_id = project_id
+        batch.status = "success"
+        batch.finished_at = datetime.now(UTC)
+        payload["counters"] = {"tasks": task_count, "links": link_count}
+        payload["errors"] = []
+        batch.log_json = json.dumps(payload)
+        db.add(batch)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        failed_batch = _get_batch_or_404(db, batch_id)
+        failed_batch.status = "failed"
+        failed_batch.finished_at = datetime.now(UTC)
+        failed_batch.log_json = json.dumps(
+            {
+                "error": str(exc),
+                "errors": [{"code": "IMPORT_FAILED", "message": str(exc)}],
+            }
+        )
+        db.add(failed_batch)
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Import failed",
+        ) from exc
+
     return ImportRunAcceptedResponse(
         batchId=batch.id,
-        status=cast(BatchStatus, batch.status),
+        status="running",
         acceptedAt=accepted_at,
     )
 

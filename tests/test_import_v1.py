@@ -4,11 +4,16 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 from waterfall.db.session import get_session_factory
 from waterfall.models.ms_core import MsProject, MsTask, MsTaskLink
 
 NS = {"ms": "http://schemas.microsoft.com/project"}
 EXAMPLE_XML = Path(__file__).resolve().parents[1] / "examples" / "planning_rain.xml"
+EXAMPLE_XML_FILES = sorted(
+    (Path(__file__).resolve().parents[1] / "examples").glob("planning_*.xml")
+)
 
 
 def _txt(node: ET.Element, path: str) -> str | None:
@@ -134,3 +139,14 @@ def test_import_v1_tasks_and_dependencies_from_example() -> None:
         # Every dependency must point to existing tasks in the same imported project.
         assert all(link.task_uid in task_uids for link in links)
         assert all(link.predecessor_uid in task_uids for link in links)
+
+
+@pytest.mark.parametrize("xml_path", EXAMPLE_XML_FILES, ids=lambda p: p.name)
+def test_import_v1_all_real_examples(xml_path: Path) -> None:
+    assert xml_path.exists(), f"XML example not found: {xml_path}"
+
+    project_id, task_count, link_count = _import_v1_tasks_and_links(xml_path)
+
+    assert project_id > 0
+    assert task_count > 0
+    assert link_count >= 0
