@@ -133,10 +133,6 @@ class MsTaskLink(Base):
             name="uq_ms_task_link",
         ),
         CheckConstraint("link_type IN (0, 1, 2, 3)", name="ck_ms_task_link_type"),
-        CheckConstraint(
-            "lag_tenth_minute IS NULL OR lag_tenth_minute >= 0",
-            name="ck_ms_task_link_lag_non_negative",
-        ),
         Index("idx_ms_task_link_task_uid", "project_id", "task_uid"),
         Index("idx_ms_task_link_predecessor_uid", "project_id", "predecessor_uid"),
     )

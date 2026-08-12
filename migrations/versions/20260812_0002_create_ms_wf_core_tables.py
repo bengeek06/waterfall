@@ -115,10 +115,6 @@ def upgrade() -> None:
         sa.Column("lag_tenth_minute", sa.Integer(), nullable=True),
         sa.Column("lag_format", sa.SmallInteger(), nullable=True),
         sa.CheckConstraint("link_type IN (0, 1, 2, 3)", name="ck_ms_task_link_type"),
-        sa.CheckConstraint(
-            "lag_tenth_minute IS NULL OR lag_tenth_minute >= 0",
-            name="ck_ms_task_link_lag_non_negative",
-        ),
         sa.ForeignKeyConstraint(["project_id"], ["ms_project.id"]),
         sa.ForeignKeyConstraint(
             ["project_id", "predecessor_uid"],
