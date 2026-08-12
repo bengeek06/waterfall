@@ -1,0 +1,357 @@
+openapi: 3.1.0
+info:
+  title: Waterfall Import API - V1
+  version: 0.1.0
+  summary: Contrat initial pour l'import MS Project V1
+  description: |
+    Specification OpenAPI de l'etape 3 pour le flux d'import V1.
+    Objectif MVP: importer taches et dependances depuis un XML MS Project,
+    puis suivre le statut via un batch technique.
+servers:
+  - url: http://localhost:8000
+    description: Local development
+
+tags:
+  - name: imports-v1
+    description: Flux d'import XML MS Project (MVP taches + dependances)
+
+paths:
+  /imports/v1/batches:
+    post:
+      tags: [imports-v1]
+      summary: Creer un batch d'import
+      operationId: createImportBatchV1
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImportBatchCreateRequest'
+      responses:
+        '201':
+          description: Batch cree
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportBatchResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /imports/v1/batches/{batchId}/xml:
+    post:
+      tags: [imports-v1]
+      summary: Uploader le fichier XML MS Project
+      operationId: uploadImportSourceXmlV1
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/BatchId'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Fichier .xml source MS Project
+      responses:
+        '202':
+          description: XML recu et associe au batch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportBatchResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/BatchNotFound'
+        '415':
+          description: Media type non supporte
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /imports/v1/batches/{batchId}/run:
+    post:
+      tags: [imports-v1]
+      summary: Executer l'import V1 (taches + dependances)
+      operationId: runImportBatchV1
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/BatchId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImportRunRequest'
+      responses:
+        '202':
+          description: Import lance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportRunAcceptedResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/BatchNotFound'
+        '409':
+          description: Etat du batch incompatible avec l'operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /imports/v1/batches/{batchId}:
+    get:
+      tags: [imports-v1]
+      summary: Lire le statut du batch
+      operationId: getImportBatchV1
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/BatchId'
+      responses:
+        '200':
+          description: Statut du batch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportBatchStatusResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/BatchNotFound'
+
+  /imports/v1/batches/{batchId}/errors:
+    get:
+      tags: [imports-v1]
+      summary: Lister les erreurs d'import
+      operationId: listImportBatchErrorsV1
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/BatchId'
+      responses:
+        '200':
+          description: Liste paginee des erreurs d'import
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportErrorListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/BatchNotFound'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    BatchId:
+      name: batchId
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+      description: Identifiant technique wf_import_batch.id
+
+  responses:
+    BadRequest:
+      description: Requete invalide
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: Authentification requise
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    BatchNotFound:
+      description: Batch introuvable
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    ImportMode:
+      type: string
+      enum: [standard, full]
+      description: |
+        standard: importe uniquement ms_task et ms_task_link.
+        full: reserve a une phase ulterieure (ressources/affectations).
+
+    BatchStatus:
+      type: string
+      enum: [pending, running, success, failed]
+
+    SourceVersion:
+      type: integer
+      enum: [2010, 2013, 2016]
+      description: Version source detectee/annoncee du XML MS Project
+
+    ImportBatchCreateRequest:
+      type: object
+      required: [importMode]
+      properties:
+        importMode:
+          $ref: '#/components/schemas/ImportMode'
+        sourceName:
+          type: string
+          maxLength: 255
+          description: Nom logique de la source ou du planning
+        sourceVersionHint:
+          $ref: '#/components/schemas/SourceVersion'
+
+    ImportBatchResponse:
+      type: object
+      required:
+        - id
+        - importMode
+        - status
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: integer
+          minimum: 1
+        importMode:
+          $ref: '#/components/schemas/ImportMode'
+        status:
+          $ref: '#/components/schemas/BatchStatus'
+        sourceName:
+          type: string
+          nullable: true
+        sourceVersion:
+          $ref: '#/components/schemas/SourceVersion'
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+        endedAt:
+          type: string
+          format: date-time
+          nullable: true
+        errorMessage:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    ImportRunRequest:
+      type: object
+      properties:
+        dryRun:
+          type: boolean
+          default: false
+          description: Valide le fichier sans persister en base (optionnel)
+        failFast:
+          type: boolean
+          default: true
+          description: Arrete l'import a la premiere erreur bloquante
+
+    ImportRunAcceptedResponse:
+      type: object
+      required: [batchId, status, acceptedAt]
+      properties:
+        batchId:
+          type: integer
+          minimum: 1
+        status:
+          $ref: '#/components/schemas/BatchStatus'
+        acceptedAt:
+          type: string
+          format: date-time
+
+    ImportCounters:
+      type: object
+      required: [tasks, links]
+      properties:
+        tasks:
+          type: integer
+          minimum: 0
+        links:
+          type: integer
+          minimum: 0
+
+    ImportBatchStatusResponse:
+      allOf:
+        - $ref: '#/components/schemas/ImportBatchResponse'
+        - type: object
+          properties:
+            projectId:
+              type: integer
+              minimum: 1
+              nullable: true
+              description: ms_project.id cree par l'import
+            counters:
+              $ref: '#/components/schemas/ImportCounters'
+            warnings:
+              type: array
+              items:
+                $ref: '#/components/schemas/ImportIssue'
+
+    ImportIssue:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          example: ORPHAN_PREDECESSOR
+        message:
+          type: string
+        taskUid:
+          type: integer
+          nullable: true
+        predecessorUid:
+          type: integer
+          nullable: true
+
+    ImportErrorListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ImportIssue'
+
+    ErrorResponse:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+          example: INVALID_XML
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true

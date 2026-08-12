@@ -20,7 +20,7 @@ class WfImportBatch(Base):
     __table_args__ = (
         CheckConstraint("import_mode IN ('standard', 'full')", name="ck_wf_import_batch_mode"),
         CheckConstraint(
-            "status IN ('running', 'success', 'failed')",
+            "status IN ('pending', 'running', 'success', 'failed')",
             name="ck_wf_import_batch_status",
         ),
     )

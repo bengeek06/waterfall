@@ -161,7 +161,7 @@ def upgrade() -> None:
         sa.Column("log_json", sa.String(), nullable=True),
         sa.CheckConstraint("import_mode IN ('standard', 'full')", name="ck_wf_import_batch_mode"),
         sa.CheckConstraint(
-            "status IN ('running', 'success', 'failed')",
+            "status IN ('pending', 'running', 'success', 'failed')",
             name="ck_wf_import_batch_status",
         ),
         sa.ForeignKeyConstraint(["project_id"], ["ms_project.id"]),
