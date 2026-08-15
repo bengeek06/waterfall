@@ -6,7 +6,7 @@ on:
   pull_request:
 
 jobs:
-  quality:
+  backend-quality:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -20,6 +20,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+          cache: "pip"
+          cache-dependency-path: apps/backend/pyproject.toml
 
       - name: Install dependencies
         run: |
@@ -37,3 +39,49 @@ jobs:
 
       - name: Pytest
         run: pytest -q
+
+  frontend-quality:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Frontend lint
+        run: npm run frontend:lint
+
+      - name: Frontend build
+        run: npm run frontend:build
+
+  contract-quality:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Regenerate OpenAPI TypeScript client
+        run: npm run api-client:generate
+
+      - name: Verify generated client is committed
+        run: git diff --exit-code -- packages/api-client-ts/src/generated/api-types.ts
