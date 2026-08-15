@@ -14,6 +14,10 @@ class ProjectRead(BaseModel):
     currency_code: str | None
 
 
+class ProjectUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+
+
 class TaskRead(BaseModel):
     id: int
     project_id: int

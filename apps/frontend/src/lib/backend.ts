@@ -46,6 +46,19 @@ export type Task = {
   description: string | null;
 };
 
+export type ImportBatch = {
+  id: number;
+  status: "pending" | "running" | "success" | "failed";
+  sourceName: string | null;
+};
+
+export type ImportBatchStatus = {
+  id: number;
+  status: "pending" | "running" | "success" | "failed";
+  projectId: number | null;
+  errorMessage: string | null;
+};
+
 export type TokenResponse = {
   access_token: string;
   refreshToken: string;
@@ -218,6 +231,111 @@ export function getProjects(
   onSessionRefresh: (next: SessionTokens) => void,
 ) {
   return authRequest<Project[]>("/projects", tokens, { method: "GET" }, onSessionRefresh);
+}
+
+export function updateProjectName(
+  projectId: number,
+  name: string,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<Project>(
+    `/projects/${projectId}`,
+    tokens,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ name }),
+    },
+    onSessionRefresh,
+  );
+}
+
+export function deleteProject(
+  projectId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<void>(
+    `/projects/${projectId}`,
+    tokens,
+    {
+      method: "DELETE",
+    },
+    onSessionRefresh,
+  );
+}
+
+export function createImportBatch(
+  sourceName: string,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<ImportBatch>(
+    "/imports/v1/batches",
+    tokens,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ importMode: "standard", sourceName }),
+    },
+    onSessionRefresh,
+  );
+}
+
+export function uploadImportSourceXml(
+  batchId: number,
+  file: File,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  const form = new FormData();
+  form.append("file", file, file.name);
+  return authRequest<ImportBatch>(
+    `/imports/v1/batches/${batchId}/xml`,
+    tokens,
+    {
+      method: "POST",
+      body: form,
+    },
+    onSessionRefresh,
+  );
+}
+
+export function runImportBatch(
+  batchId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<{ batchId: number }>(
+    `/imports/v1/batches/${batchId}/run`,
+    tokens,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ dryRun: false, failFast: true }),
+    },
+    onSessionRefresh,
+  );
+}
+
+export function getImportBatchStatus(
+  batchId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<ImportBatchStatus>(
+    `/imports/v1/batches/${batchId}`,
+    tokens,
+    { method: "GET" },
+    onSessionRefresh,
+  );
 }
 
 export function getProjectTasks(

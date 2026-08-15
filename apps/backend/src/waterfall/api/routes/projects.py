@@ -9,8 +9,8 @@ from waterfall.api.dependencies import get_current_active_user
 from waterfall.db.session import get_db
 from waterfall.models.ms_core import MsProject, MsTask, MsTaskLink
 from waterfall.models.user import User
-from waterfall.models.wf_core import WfTaskEnrichment
-from waterfall.schemas.projects import ProjectRead, TaskDescriptionUpdate, TaskRead
+from waterfall.models.wf_core import WfChargeLine, WfExcelImport, WfImportBatch, WfTaskEnrichment
+from waterfall.schemas.projects import ProjectRead, ProjectUpdate, TaskDescriptionUpdate, TaskRead
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 MSP_NS = "http://schemas.microsoft.com/project"
@@ -71,6 +71,73 @@ def get_project(
         finish_date=project.finish_date,
         currency_code=project.currency_code,
     )
+
+
+@router.patch("/{project_id}", response_model=ProjectRead)
+def update_project(
+    project_id: int,
+    payload: ProjectUpdate,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_active_user),
+) -> ProjectRead:
+    project = db.query(MsProject).filter(MsProject.id == project_id).first()
+    if project is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
+    new_name = payload.name.strip()
+    if not new_name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Project name is required",
+        )
+
+    project.name = new_name
+    db.add(project)
+    db.commit()
+    db.refresh(project)
+
+    return ProjectRead(
+        id=project.id,
+        name=project.name,
+        source_version=project.source_version,
+        save_version_out=project.save_version_out,
+        schedule_from_start=project.schedule_from_start,
+        start_date=project.start_date,
+        finish_date=project.finish_date,
+        currency_code=project.currency_code,
+    )
+
+
+@router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_project(
+    project_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_active_user),
+) -> Response:
+    project = db.query(MsProject).filter(MsProject.id == project_id).first()
+    if project is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
+    db.query(WfImportBatch).filter(WfImportBatch.project_id == project_id).update(
+        {WfImportBatch.project_id: None}, synchronize_session=False
+    )
+    db.query(WfExcelImport).filter(WfExcelImport.project_id == project_id).delete(
+        synchronize_session=False
+    )
+    db.query(WfChargeLine).filter(WfChargeLine.project_id == project_id).delete(
+        synchronize_session=False
+    )
+    db.query(WfTaskEnrichment).filter(WfTaskEnrichment.project_id == project_id).delete(
+        synchronize_session=False
+    )
+    db.query(MsTaskLink).filter(MsTaskLink.project_id == project_id).delete(
+        synchronize_session=False
+    )
+    db.query(MsTask).filter(MsTask.project_id == project_id).delete(synchronize_session=False)
+    db.delete(project)
+    db.commit()
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/{project_id}/tasks", response_model=list[TaskRead])
