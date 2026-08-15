@@ -6,7 +6,44 @@ on:
   pull_request:
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      contract: ${{ steps.filter.outputs.contract }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect changed paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            backend:
+              - 'apps/backend/**'
+              - '.pre-commit-config.yaml'
+              - '.github/workflows/ci.yml'
+              - 'docker-compose.yml'
+            frontend:
+              - 'apps/frontend/**'
+              - 'packages/api-client-ts/**'
+              - 'openapi/**'
+              - 'package.json'
+              - 'package-lock.json'
+              - '.github/workflows/ci.yml'
+            contract:
+              - 'openapi/**'
+              - 'packages/api-client-ts/**'
+              - 'package.json'
+              - 'package-lock.json'
+              - '.github/workflows/ci.yml'
+
   backend-quality:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -41,6 +78,8 @@ jobs:
         run: pytest -q
 
   frontend-quality:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -64,6 +103,8 @@ jobs:
         run: npm run frontend:build
 
   contract-quality:
+    needs: changes
+    if: needs.changes.outputs.contract == 'true'
     runs-on: ubuntu-latest
 
     steps:
