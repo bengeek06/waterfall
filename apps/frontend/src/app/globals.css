@@ -1,13 +1,13 @@
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --bg: #f7f2e8;
+  --ink: #1f2533;
+  --ink-soft: #5a6477;
+  --card: #fffcf8;
+  --line: #d5cfc0;
+  --accent: #0f7a62;
+  --accent-strong: #0b5e4c;
+  --warn: #b14128;
+  --shadow: 0 12px 30px rgba(31, 37, 51, 0.09);
 }
 
 html {
@@ -24,11 +24,205 @@ body {
   min-height: 100%;
   display: flex;
   flex-direction: column;
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+  font-family: var(--font-text), Georgia, serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+.app-bg {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(circle at 12% 8%, rgba(15, 122, 98, 0.19), transparent 34%),
+    radial-gradient(circle at 88% 0%, rgba(177, 65, 40, 0.13), transparent 40%),
+    linear-gradient(165deg, #fbf7ef, #f5eee2 58%, #efe5d7);
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid var(--line);
+  backdrop-filter: blur(8px);
+  background: color-mix(in srgb, var(--bg) 88%, white);
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+}
+
+.menu {
+  display: flex;
+  gap: 0.7rem;
+  font-family: var(--font-title), sans-serif;
+  font-weight: 600;
+}
+
+.menu a {
+  padding: 0.45rem 0.8rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  color: var(--ink-soft);
+  transition: all 0.2s ease;
+}
+
+.menu a:hover {
+  border-color: var(--line);
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.shell {
+  width: min(1100px, 100% - 2rem);
+  margin: 1.4rem auto 2rem;
+}
+
+.panel {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  box-shadow: var(--shadow);
+  padding: 1.25rem;
+}
+
+.panel + .panel {
+  margin-top: 1rem;
+}
+
+.title {
+  font-family: var(--font-title), sans-serif;
+  font-size: clamp(1.45rem, 2.3vw, 2.1rem);
+  letter-spacing: -0.04em;
+}
+
+.subtitle {
+  margin-top: 0.4rem;
+  color: var(--ink-soft);
+}
+
+.grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.9rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-bottom: 0.8rem;
+}
+
+.field label {
+  font-family: var(--font-title), sans-serif;
+  font-size: 0.93rem;
+  font-weight: 600;
+}
+
+.field input,
+.field textarea,
+.field select {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0.62rem 0.72rem;
+  font: inherit;
+  color: var(--ink);
+  background: #fffcf9;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  align-items: center;
+}
+
+.btn {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0.56rem 0.85rem;
+  font-family: var(--font-title), sans-serif;
+  font-weight: 600;
+  background: white;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.btn:hover {
+  background: #fbf7ef;
+}
+
+.btn-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #f8fbfa;
+}
+
+.btn-primary:hover {
+  background: var(--accent-strong);
+}
+
+.btn-danger {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.tag {
+  font-family: var(--font-title), sans-serif;
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+  padding: 0.26rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+
+.muted {
+  color: var(--ink-soft);
+}
+
+.error {
+  color: var(--warn);
+  font-family: var(--font-title), sans-serif;
+  font-size: 0.92rem;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table th,
+.table td {
+  text-align: left;
+  padding: 0.6rem 0.5rem;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.table th {
+  font-family: var(--font-title), sans-serif;
+  font-size: 0.87rem;
+  color: var(--ink-soft);
+}
+
+@media (max-width: 900px) {
+  .grid-3 {
+    grid-template-columns: 1fr;
+  }
+
+  .menu {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
 }
 
 * {
