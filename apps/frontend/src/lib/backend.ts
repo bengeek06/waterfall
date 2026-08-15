@@ -103,6 +103,48 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
+async function authFetch(
+  path: string,
+  tokens: SessionTokens,
+  init: RequestInit,
+  onSessionRefresh: (next: SessionTokens) => void,
+): Promise<Response> {
+  const headers = new Headers(init.headers ?? {});
+  headers.set("Authorization", `Bearer ${tokens.accessToken}`);
+
+  const firstResponse = await fetch(`${DEFAULT_API_BASE_URL}${path}`, {
+    ...init,
+    headers,
+  });
+
+  if (firstResponse.status !== 401) {
+    if (!firstResponse.ok) {
+      throw new ApiError(firstResponse.status, await parseError(firstResponse));
+    }
+    return firstResponse;
+  }
+
+  const refreshed = await refresh(tokens.refreshToken);
+  const nextSession: SessionTokens = {
+    accessToken: refreshed.access_token,
+    refreshToken: refreshed.refreshToken,
+  };
+  onSessionRefresh(nextSession);
+
+  const retryHeaders = new Headers(init.headers ?? {});
+  retryHeaders.set("Authorization", `Bearer ${nextSession.accessToken}`);
+
+  const secondResponse = await fetch(`${DEFAULT_API_BASE_URL}${path}`, {
+    ...init,
+    headers: retryHeaders,
+  });
+
+  if (!secondResponse.ok) {
+    throw new ApiError(secondResponse.status, await parseError(secondResponse));
+  }
+  return secondResponse;
+}
+
 export async function login(email: string, password: string): Promise<TokenResponse> {
   const body = new URLSearchParams();
   body.set("username", email);
@@ -133,46 +175,21 @@ export async function authRequest<T>(
   init: RequestInit,
   onSessionRefresh: (next: SessionTokens) => void,
 ): Promise<T> {
-  const headers = new Headers(init.headers ?? {});
-  headers.set("Authorization", `Bearer ${tokens.accessToken}`);
-
-  const firstResponse = await fetch(`${DEFAULT_API_BASE_URL}${path}`, {
-    ...init,
-    headers,
-  });
-
-  if (firstResponse.status !== 401) {
-    if (!firstResponse.ok) {
-      throw new ApiError(firstResponse.status, await parseError(firstResponse));
-    }
-    if (firstResponse.status === 204) {
-      return undefined as T;
-    }
-    return (await firstResponse.json()) as T;
-  }
-
-  const refreshed = await refresh(tokens.refreshToken);
-  const nextSession: SessionTokens = {
-    accessToken: refreshed.access_token,
-    refreshToken: refreshed.refreshToken,
-  };
-  onSessionRefresh(nextSession);
-
-  const retryHeaders = new Headers(init.headers ?? {});
-  retryHeaders.set("Authorization", `Bearer ${nextSession.accessToken}`);
-
-  const secondResponse = await fetch(`${DEFAULT_API_BASE_URL}${path}`, {
-    ...init,
-    headers: retryHeaders,
-  });
-
-  if (!secondResponse.ok) {
-    throw new ApiError(secondResponse.status, await parseError(secondResponse));
-  }
-  if (secondResponse.status === 204) {
+  const response = await authFetch(path, tokens, init, onSessionRefresh);
+  if (response.status === 204) {
     return undefined as T;
   }
-  return (await secondResponse.json()) as T;
+  return (await response.json()) as T;
+}
+
+export async function authDownload(
+  path: string,
+  tokens: SessionTokens,
+  init: RequestInit,
+  onSessionRefresh: (next: SessionTokens) => void,
+): Promise<Blob> {
+  const response = await authFetch(path, tokens, init, onSessionRefresh);
+  return await response.blob();
 }
 
 export function getMe(tokens: SessionTokens, onSessionRefresh: (next: SessionTokens) => void) {
@@ -370,4 +387,12 @@ export function updateTaskDescription(
     },
     onSessionRefresh,
   );
+}
+
+export function exportProjectXml(
+  projectId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authDownload(`/projects/${projectId}/export.xml`, tokens, { method: "GET" }, onSessionRefresh);
 }

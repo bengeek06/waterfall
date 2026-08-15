@@ -13,6 +13,7 @@ import {
   getImportBatchStatus,
   getMe,
   getProjects,
+  exportProjectXml,
   runImportBatch,
   updateProjectName,
   uploadImportSourceXml,
@@ -206,6 +207,31 @@ export default function ProjectsPage() {
     }
   }
 
+  async function onExportProject(project: Project) {
+    if (!session) {
+      router.push("/login");
+      return;
+    }
+
+    setError(null);
+    setActionBusy(`Export XML du projet ${project.id}...`);
+    try {
+      const blob = await exportProjectXml(project.id, session, onSessionRefresh);
+      const objectUrl = window.URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = `${project.name || `project-${project.id}`}.xml`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.URL.revokeObjectURL(objectUrl);
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Impossible d'exporter le projet.");
+    } finally {
+      setActionBusy(null);
+    }
+  }
+
   function logout() {
     clearSession();
     router.push("/login");
@@ -364,14 +390,9 @@ export default function ProjectsPage() {
                           Modifier
                         </button>
                       )}
-                      <a
-                        className="btn"
-                        href={`${process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000"}/projects/${project.id}/export.xml`}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
+                      <button className="btn" type="button" onClick={() => void onExportProject(project)}>
                         Export XML
-                      </a>
+                      </button>
                       <button
                         className="btn"
                         type="button"
