@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
+
 from waterfall.db.session import get_session_factory
 from waterfall.models.ms_core import MsProject, MsTask, MsTaskLink
 

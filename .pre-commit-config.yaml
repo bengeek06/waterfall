@@ -1,13 +1,16 @@
 repos:
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.12.8
-    hooks:
-      - id: ruff-check
-        args: [--fix, --config=apps/backend/pyproject.toml]
-      - id: ruff-format
-        args: [--config=apps/backend/pyproject.toml]
   - repo: local
     hooks:
+      - id: ruff-check
+        name: ruff-check
+        entry: bash -c 'cd apps/backend && ruff check --fix .'
+        language: system
+        pass_filenames: false
+      - id: ruff-format
+        name: ruff-format
+        entry: bash -c 'cd apps/backend && ruff format .'
+        language: system
+        pass_filenames: false
       - id: pyright
         name: pyright
         entry: bash -c 'cd apps/backend && pyright'

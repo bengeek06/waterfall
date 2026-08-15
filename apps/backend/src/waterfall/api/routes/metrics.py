@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 from starlette.responses import PlainTextResponse
+
 from waterfall.core.observability import metrics_response
 
 router = APIRouter()
