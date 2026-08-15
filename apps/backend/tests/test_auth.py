@@ -84,7 +84,7 @@ def test_inactive_user_cannot_login() -> None:
         assert login_response.status_code == 403
 
 
-def test_refresh_token_rotation_revokes_previous_refresh_token() -> None:
+def test_refresh_token_does_not_revoke_existing_access_tokens() -> None:
     with TestClient(app) as client:
         register_response: Response = client.post(
             "/auth/register",
@@ -103,17 +103,18 @@ def test_refresh_token_rotation_revokes_previous_refresh_token() -> None:
         assert refresh_response.status_code == 200
         second_tokens: dict[str, Any] = refresh_response.json()
 
-        stale_refresh_response: Response = client.post(
-            "/auth/refresh",
-            json={"refreshToken": first_tokens["refreshToken"]},
-        )
-        assert stale_refresh_response.status_code == 401
-
         me_response: Response = client.get(
             "/auth/me",
             headers=_auth_header(cast(str, second_tokens["access_token"])),
         )
         assert me_response.status_code == 200
+
+        # Previous access token remains valid until explicit revocation events.
+        me_with_first_access_token = client.get(
+            "/auth/me",
+            headers=_auth_header(cast(str, first_tokens["access_token"])),
+        )
+        assert me_with_first_access_token.status_code == 200
 
 
 def test_change_password_invalidates_previous_credentials() -> None:

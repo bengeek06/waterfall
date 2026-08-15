@@ -207,11 +207,6 @@ def refresh_token(payload: RefreshTokenRequest, db: Session = Depends(get_db)) -
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    user.token_version += 1
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-
     logger.info("auth.refresh.success", extra={"email": user.email})
     return _issue_token_pair(user)
 
