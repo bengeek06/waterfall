@@ -6,8 +6,10 @@
     "packages/*"
   ],
   "scripts": {
+    "api-client:generate": "npm --workspace @rebirth/api-client run generate",
+    "api-client:build": "npm --workspace @rebirth/api-client run build",
     "frontend:dev": "npm --workspace frontend run dev",
-    "frontend:build": "npm --workspace frontend run build",
+    "frontend:build": "npm run api-client:build && npm --workspace frontend run build",
     "frontend:lint": "npm --workspace frontend run lint"
   }
 }
