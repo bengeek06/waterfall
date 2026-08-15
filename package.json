@@ -1,0 +1,13 @@
+{
+  "name": "rebirth-root",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "frontend:dev": "npm --workspace frontend run dev",
+    "frontend:build": "npm --workspace frontend run build",
+    "frontend:lint": "npm --workspace frontend run lint"
+  }
+}
