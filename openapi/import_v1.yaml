@@ -14,6 +14,8 @@ servers:
 tags:
   - name: imports-v1
     description: Flux d'import XML MS Project (MVP taches + dependances)
+  - name: projects
+    description: Lecture projets/taches, enrichissement description, export XML
 
 paths:
   /imports/v1/batches:
@@ -159,6 +161,151 @@ paths:
         '404':
           $ref: '#/components/responses/BatchNotFound'
 
+  /projects:
+    get:
+      tags: [projects]
+      summary: Lister les projets importes
+      operationId: listProjects
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 50
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: Liste de projets
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProjectRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /projects/{projectId}:
+    get:
+      tags: [projects]
+      summary: Lire un projet
+      operationId: getProject
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      responses:
+        '200':
+          description: Projet
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+
+  /projects/{projectId}/tasks:
+    get:
+      tags: [projects]
+      summary: Lister les taches d'un projet
+      operationId: listProjectTasks
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 2000
+            default: 200
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: Liste de taches
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TaskRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+
+  /projects/{projectId}/tasks/{taskUid}:
+    patch:
+      tags: [projects]
+      summary: Mettre a jour la description d'une tache
+      operationId: updateTaskDescription
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/TaskUid'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskDescriptionUpdate'
+      responses:
+        '200':
+          description: Tache mise a jour
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/TaskNotFound'
+
+  /projects/{projectId}/export.xml:
+    get:
+      tags: [projects]
+      summary: Exporter un projet au format XML MS Project
+      operationId: exportProjectXml
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      responses:
+        '200':
+          description: XML du projet
+          content:
+            application/xml:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+
 components:
   securitySchemes:
     bearerAuth:
@@ -175,6 +322,22 @@ components:
         type: integer
         minimum: 1
       description: Identifiant technique wf_import_batch.id
+    ProjectId:
+      name: projectId
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+      description: Identifiant technique ms_project.id
+    TaskUid:
+      name: taskUid
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+      description: UID fonctionnel de la tache dans un projet
 
   responses:
     BadRequest:
@@ -191,6 +354,18 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
     BatchNotFound:
       description: Batch introuvable
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ProjectNotFound:
+      description: Projet introuvable
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    TaskNotFound:
+      description: Tache introuvable
       content:
         application/json:
           schema:
@@ -355,3 +530,94 @@ components:
         details:
           type: object
           additionalProperties: true
+
+    ProjectRead:
+      type: object
+      required:
+        - id
+        - name
+        - source_version
+        - save_version_out
+        - schedule_from_start
+      properties:
+        id:
+          type: integer
+          minimum: 1
+        name:
+          type: string
+        source_version:
+          type: integer
+          enum: [2010, 2013, 2016]
+        save_version_out:
+          type: integer
+          enum: [14, 15, 16]
+        schedule_from_start:
+          type: boolean
+        start_date:
+          type: string
+          format: date-time
+          nullable: true
+        finish_date:
+          type: string
+          format: date-time
+          nullable: true
+        currency_code:
+          type: string
+          nullable: true
+
+    TaskRead:
+      type: object
+      required:
+        - id
+        - project_id
+        - uid
+        - name
+        - is_summary
+        - is_milestone
+      properties:
+        id:
+          type: integer
+          minimum: 1
+        project_id:
+          type: integer
+          minimum: 1
+        uid:
+          type: integer
+          minimum: 1
+        id_display:
+          type: integer
+          nullable: true
+        name:
+          type: string
+        outline_number:
+          type: string
+          nullable: true
+        outline_level:
+          type: integer
+          nullable: true
+        start_at:
+          type: string
+          format: date-time
+          nullable: true
+        finish_at:
+          type: string
+          format: date-time
+          nullable: true
+        percent_complete:
+          type: integer
+          nullable: true
+        is_summary:
+          type: boolean
+        is_milestone:
+          type: boolean
+        description:
+          type: string
+          nullable: true
+
+    TaskDescriptionUpdate:
+      type: object
+      properties:
+        description:
+          type: string
+          nullable: true
+          maxLength: 10000
