@@ -8,7 +8,7 @@ import { setSession } from "@/lib/session";
 
 export default function LoginPage() {
   const router = useRouter();
-  const [email, setEmail] = useState("admin@waterfall.local");
+  const [email, setEmail] = useState("admin@example.com");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -28,6 +28,8 @@ export default function LoginPage() {
     } catch (cause) {
       if (cause instanceof ApiError) {
         setError(cause.message);
+      } else if (cause instanceof TypeError) {
+        setError("Backend injoignable (API/CORS). Vérifie que l'API tourne sur http://127.0.0.1:8000.");
       } else {
         setError("Erreur inattendue pendant le login");
       }
