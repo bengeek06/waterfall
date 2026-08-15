@@ -1,4 +1,4 @@
-.PHONY: install-backend lint-backend format-backend typecheck-backend test-backend run-backend hooks migrate-up compose-up install-dev lint format typecheck test run
+.PHONY: install-backend lint-backend format-backend typecheck-backend test-backend run-backend hooks migrate-up compose-up compose-up-dev compose-up-full compose-down install-dev lint format typecheck test run
 
 install-backend:
 	/home/benjamin/projects/rebirth/.venv/bin/python -m pip install -e ./apps/backend[dev]
@@ -24,8 +24,16 @@ hooks:
 migrate-up:
 	cd apps/backend && alembic upgrade head
 
-compose-up:
-	docker compose up --build
+compose-up: compose-up-dev
+
+compose-up-dev:
+	docker compose -f infra/docker/docker-compose.yml up --build
+
+compose-up-full:
+	docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.full.yml up --build
+
+compose-down:
+	docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.full.yml down -v
 
 # Backward-compatible aliases
 install-dev: install-backend

@@ -55,8 +55,33 @@ npm run api-client:generate
 npm run api-client:build
 ```
 
-Docker:
+Docker (dev: API + Postgres):
 
 ```bash
-docker compose up --build
+make compose-up-dev
 ```
+
+Docker (full: API + Postgres + Frontend + DB viewer + Observabilite):
+
+```bash
+make compose-up-full
+```
+
+Arret et nettoyage des volumes docker:
+
+```bash
+make compose-down
+```
+
+Services utiles en mode full:
+
+- Frontend: http://localhost:3000
+- API: http://localhost:8000
+- PgAdmin (DB viewer): http://localhost:5050
+- Prometheus: http://localhost:9090
+- Grafana: http://localhost:3001
+
+Comptes par defaut mode full (a changer en environnement partage):
+
+- PgAdmin: admin@waterfall.local / admin
+- Grafana: admin / admin

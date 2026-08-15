@@ -26,7 +26,7 @@ jobs:
               - 'apps/backend/**'
               - '.pre-commit-config.yaml'
               - '.github/workflows/ci.yml'
-              - 'docker-compose.yml'
+              - 'infra/docker/**'
             frontend:
               - 'apps/frontend/**'
               - 'packages/api-client-ts/**'

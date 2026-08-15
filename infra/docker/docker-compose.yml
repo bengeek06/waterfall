@@ -1,10 +1,8 @@
 services:
   api:
     build:
-      context: ./apps/backend
+      context: ../../apps/backend
       dockerfile: Dockerfile
-    env_file:
-      - .env
     environment:
       DATABASE_URL: postgresql+psycopg://waterfall:waterfall@postgres:5432/waterfall
     ports:
