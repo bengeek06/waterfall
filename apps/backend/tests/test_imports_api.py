@@ -8,8 +8,8 @@ from httpx import Response
 from waterfall.main import app
 
 NS = {"ms": "http://schemas.microsoft.com/project"}
-EXAMPLES_DIR = Path(__file__).resolve().parents[3] / "examples"
-EXAMPLE_XML_FILES = sorted(EXAMPLES_DIR.glob("planning_*.xml"))
+EXAMPLE_XML = Path(__file__).resolve().parent / "planning_test.xml"
+EXAMPLE_XML_FILES = [EXAMPLE_XML]
 
 
 def _xml_expected_counters(xml_path: Path) -> tuple[int, int]:
@@ -85,7 +85,7 @@ def test_import_batch_minimal_flow() -> None:
 
         create_response: Response = client.post(
             "/imports/v1/batches",
-            json={"importMode": "standard", "sourceName": "planning_rain.xml"},
+            json={"importMode": "standard", "sourceName": "planning_test.xml"},
             headers=headers,
         )
         assert create_response.status_code == 201
@@ -97,7 +97,7 @@ def test_import_batch_minimal_flow() -> None:
             f"/imports/v1/batches/{batch_id}/xml",
             files={
                 "file": (
-                    "planning_rain.xml",
+                    "planning_test.xml",
                     minimal_valid_xml,
                     "application/xml",
                 )
@@ -105,7 +105,7 @@ def test_import_batch_minimal_flow() -> None:
             headers=headers,
         )
         assert upload_response.status_code == 202
-        assert upload_response.json()["sourceName"] == "planning_rain.xml"
+        assert upload_response.json()["sourceName"] == "planning_test.xml"
 
         run_response: Response = client.post(
             f"/imports/v1/batches/{batch_id}/run",
