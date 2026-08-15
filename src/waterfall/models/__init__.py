@@ -1,6 +1,11 @@
 from waterfall.models.ms_core import MsProject, MsTask, MsTaskLink
 from waterfall.models.user import User
-from waterfall.models.wf_core import WfChargeLine, WfExcelImport, WfImportBatch
+from waterfall.models.wf_core import (
+    WfChargeLine,
+    WfExcelImport,
+    WfImportBatch,
+    WfTaskEnrichment,
+)
 
 __all__ = [
     "MsProject",
@@ -10,4 +15,5 @@ __all__ = [
     "WfChargeLine",
     "WfExcelImport",
     "WfImportBatch",
+    "WfTaskEnrichment",
 ]

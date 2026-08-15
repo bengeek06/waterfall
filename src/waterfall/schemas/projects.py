@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ProjectRead(BaseModel):
@@ -27,3 +27,8 @@ class TaskRead(BaseModel):
     percent_complete: int | None
     is_summary: bool
     is_milestone: bool
+    description: str | None
+
+
+class TaskDescriptionUpdate(BaseModel):
+    description: str | None = Field(default=None, max_length=10000)

@@ -9,6 +9,8 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -89,6 +91,34 @@ class WfChargeLine(Base):
         nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+
+
+class WfTaskEnrichment(Base):
+    __tablename__ = "wf_task_enrichment"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "task_uid"],
+            ["ms_task.project_id", "ms_task.uid"],
+            name="fk_wf_task_enrichment_task",
+        ),
+        UniqueConstraint("project_id", "task_uid", name="uq_wf_task_enrichment_task"),
+        Index("idx_wf_task_enrichment_task", "project_id", "task_uid"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("ms_project.id"), nullable=False)
+    task_uid: Mapped[int] = mapped_column(Integer, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(UTC),

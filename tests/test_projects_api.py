@@ -123,6 +123,47 @@ def test_get_projects_and_project_tasks() -> None:
         tasks_payload = cast(list[dict[str, Any]], raw_tasks_payload)
         assert len(tasks_payload) == expected_tasks
         assert tasks_payload[0]["project_id"] == project_id
+        assert all("description" in task for task in tasks_payload)
+
+
+def test_patch_task_description_and_read_back() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks()
+
+        patch_response: Response = client.patch(
+            f"/projects/{project_id}/tasks/1001",
+            json={"description": "Description enrichie depuis Waterfall"},
+            headers=headers,
+        )
+        assert patch_response.status_code == 200
+        patch_payload = patch_response.json()
+        assert patch_payload["uid"] == 1001
+        assert patch_payload["description"] == "Description enrichie depuis Waterfall"
+
+        tasks_response: Response = client.get(
+            f"/projects/{project_id}/tasks",
+            headers=headers,
+        )
+        assert tasks_response.status_code == 200
+        tasks_payload = cast(list[dict[str, Any]], tasks_response.json())
+
+        task_by_uid = {task["uid"]: task for task in tasks_payload}
+        assert task_by_uid[1001]["description"] == "Description enrichie depuis Waterfall"
+        assert task_by_uid[1002]["description"] is None
+
+
+def test_patch_task_description_not_found() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks()
+
+        response: Response = client.patch(
+            f"/projects/{project_id}/tasks/999999",
+            json={"description": "X"},
+            headers=headers,
+        )
+        assert response.status_code == 404
 
 
 def test_get_project_not_found() -> None:
