@@ -7,6 +7,7 @@ from httpx import Response
 from waterfall.db.session import get_session_factory
 from waterfall.main import app
 from waterfall.models.ms_core import MsProject, MsTask
+from waterfall.models.wf_core import WfTaskEnrichment
 
 
 def _auth_headers(client: TestClient) -> dict[str, str]:
@@ -177,3 +178,46 @@ def test_get_projects_requires_auth() -> None:
     with TestClient(app) as client:
         response: Response = client.get("/projects")
         assert response.status_code == 401
+
+
+def test_patch_project_name() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks()
+
+        response: Response = client.patch(
+            f"/projects/{project_id}",
+            json={"name": "Projet Renomme"},
+            headers=headers,
+        )
+        assert response.status_code == 200
+        payload = cast(dict[str, Any], response.json())
+        assert payload["id"] == project_id
+        assert payload["name"] == "Projet Renomme"
+
+
+def test_delete_project_cascades_related_data() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks()
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            enrichment = WfTaskEnrichment(
+                project_id=project_id,
+                task_uid=1001,
+                description="A supprimer",
+                created_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
+            )
+            session.add(enrichment)
+            session.commit()
+
+        response: Response = client.delete(f"/projects/{project_id}", headers=headers)
+        assert response.status_code == 204
+
+        project_response: Response = client.get(f"/projects/{project_id}", headers=headers)
+        assert project_response.status_code == 404
+
+        tasks_response: Response = client.get(f"/projects/{project_id}/tasks", headers=headers)
+        assert tasks_response.status_code == 404

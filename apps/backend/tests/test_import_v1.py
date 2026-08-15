@@ -10,9 +10,8 @@ from waterfall.db.session import get_session_factory
 from waterfall.models.ms_core import MsProject, MsTask, MsTaskLink
 
 NS = {"ms": "http://schemas.microsoft.com/project"}
-EXAMPLES_DIR = Path(__file__).resolve().parents[3] / "examples"
-EXAMPLE_XML = EXAMPLES_DIR / "planning_rain.xml"
-EXAMPLE_XML_FILES = sorted(EXAMPLES_DIR.glob("planning_*.xml"))
+EXAMPLE_XML = Path(__file__).resolve().parent / "planning_test.xml"
+EXAMPLE_XML_FILES = [EXAMPLE_XML]
 
 
 def _txt(node: ET.Element, path: str) -> str | None:

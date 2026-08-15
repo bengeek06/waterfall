@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Project xmlns="http://schemas.microsoft.com/project">
+  <SaveVersion>16</SaveVersion>
+  <GUID>TEST-PLANNING-0001</GUID>
+  <Name>planning_test.xml</Name>
+  <ScheduleFromStart>1</ScheduleFromStart>
+  <StartDate>2026-11-30T09:00:00</StartDate>
+  <FinishDate>2027-06-25T18:00:00</FinishDate>
+  <MinutesPerDay>480</MinutesPerDay>
+  <MinutesPerWeek>2400</MinutesPerWeek>
+  <DaysPerMonth>20</DaysPerMonth>
+  <CurrencyCode>EUR</CurrencyCode>
+  <Tasks>
+    <Task>
+      <UID>1</UID>
+      <ID>1</ID>
+      <Name>Etude documentaire</Name>
+      <Type>1</Type>
+      <OutlineNumber>1</OutlineNumber>
+      <OutlineLevel>1</OutlineLevel>
+      <Start>2026-11-30T09:00:00</Start>
+      <Finish>2027-01-15T18:00:00</Finish>
+      <PercentComplete>0</PercentComplete>
+      <Summary>1</Summary>
+      <Milestone>0</Milestone>
+      <Notes>description de l'étude</Notes>
+    </Task>
+    <Task>
+      <UID>2</UID>
+      <ID>2</ID>
+      <Name>Réalisation</Name>
+      <Type>0</Type>
+      <OutlineNumber>2</OutlineNumber>
+      <OutlineLevel>1</OutlineLevel>
+      <Start>2027-01-18T09:00:00</Start>
+      <Finish>2027-06-25T18:00:00</Finish>
+      <PercentComplete>0</PercentComplete>
+      <Summary>0</Summary>
+      <Milestone>0</Milestone>
+      <PredecessorLink>
+        <PredecessorUID>1</PredecessorUID>
+        <Type>1</Type>
+        <LinkLag>0</LinkLag>
+        <LagFormat>7</LagFormat>
+      </PredecessorLink>
+    </Task>
+  </Tasks>
+</Project>

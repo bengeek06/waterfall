@@ -1,55 +1,57 @@
-import Image from "next/image";
+import Link from "next/link";
 import { DEFAULT_API_BASE_URL } from "@rebirth/api-client";
-
-import styles from "./page.module.css";
 
 export default function Home() {
   return (
-    <div className={styles.page}>
-      <main className={styles.main}>
-        <Image
-          className={styles.logo}
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className={styles.intro}>
-          <h1>
-            Frontend Next.js initialise pour Waterfall.
-          </h1>
-          <p>
-            Client OpenAPI type active. Base URL actuelle: {" "}
-            <code className={styles.code}>{DEFAULT_API_BASE_URL}</code>
-          </p>
+    <>
+      <section className="panel">
+        <h1 className="title">Console Waterfall</h1>
+        <p className="subtitle">
+          Interface de pilotage pour auth, utilisateurs et projets MS Project.
+        </p>
+        <div className="row" style={{ marginTop: "1rem" }}>
+          <span className="tag">API</span>
+          <strong>{DEFAULT_API_BASE_URL}</strong>
         </div>
-        <div className={styles.ctas}>
-          <a
-            className={styles.primary}
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className={styles.logo}
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className={styles.secondary}
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+      </section>
+
+      <section className="panel">
+        <div className="grid-3">
+          <article>
+            <h2 className="title" style={{ fontSize: "1.2rem" }}>
+              Login
+            </h2>
+            <p className="subtitle">Authentification JWT avec refresh token.</p>
+            <div className="row" style={{ marginTop: "0.8rem" }}>
+              <Link href="/login" className="btn btn-primary">
+                Ouvrir
+              </Link>
+            </div>
+          </article>
+          <article>
+            <h2 className="title" style={{ fontSize: "1.2rem" }}>
+              Utilisateurs
+            </h2>
+            <p className="subtitle">Administration des comptes et des droits.</p>
+            <div className="row" style={{ marginTop: "0.8rem" }}>
+              <Link href="/users" className="btn">
+                Gérer
+              </Link>
+            </div>
+          </article>
+          <article>
+            <h2 className="title" style={{ fontSize: "1.2rem" }}>
+              Projets
+            </h2>
+            <p className="subtitle">Lecture des projets et édition des descriptions tâches.</p>
+            <div className="row" style={{ marginTop: "0.8rem" }}>
+              <Link href="/projects" className="btn">
+                Parcourir
+              </Link>
+            </div>
+          </article>
         </div>
-      </main>
-    </div>
+      </section>
+    </>
   );
 }

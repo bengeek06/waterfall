@@ -25,7 +25,7 @@ migrate-up:
 	cd apps/backend && alembic upgrade head
 
 seed-admin:
-	cd apps/backend && waterfall-seed-admin
+	cd apps/backend && python -m waterfall.scripts.seed_admin
 
 compose-up: compose-up-dev
 

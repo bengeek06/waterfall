@@ -8,7 +8,7 @@ from httpx import Response
 from waterfall.main import app
 
 NS = {"ms": "http://schemas.microsoft.com/project"}
-EXAMPLE_XML = Path(__file__).resolve().parents[3] / "examples" / "planning_rain.xml"
+EXAMPLE_XML = Path(__file__).resolve().parent / "planning_test.xml"
 
 
 def _auth_headers(client: TestClient) -> dict[str, str]:

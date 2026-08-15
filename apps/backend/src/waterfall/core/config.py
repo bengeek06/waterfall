@@ -27,11 +27,21 @@ class Settings(BaseSettings):
     auth_rate_limit_window_seconds: int = Field(default=60, alias="AUTH_RATE_LIMIT_WINDOW_SECONDS")
     auth_max_failed_attempts: int = Field(default=5, alias="AUTH_MAX_FAILED_ATTEMPTS")
     auth_lockout_minutes: int = Field(default=15, alias="AUTH_LOCKOUT_MINUTES")
+    cors_allow_origins: str | None = Field(default=None, alias="CORS_ALLOW_ORIGINS")
 
     def is_public_registration_enabled(self) -> bool:
         if self.auth_allow_public_register is not None:
             return self.auth_allow_public_register
         return self.app_env in {"dev", "test"}
+
+    def get_cors_allow_origins(self) -> list[str]:
+        if self.cors_allow_origins:
+            return [item.strip() for item in self.cors_allow_origins.split(",") if item.strip()]
+
+        if self.app_env in {"dev", "test"}:
+            return ["http://localhost:3000", "http://127.0.0.1:3000"]
+
+        return []
 
 
 @lru_cache(maxsize=1)
