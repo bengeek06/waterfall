@@ -3,17 +3,18 @@ repos:
     rev: v0.12.8
     hooks:
       - id: ruff-check
-        args: [--fix]
+        args: [--fix, --config=apps/backend/pyproject.toml]
       - id: ruff-format
+        args: [--config=apps/backend/pyproject.toml]
   - repo: local
     hooks:
       - id: pyright
         name: pyright
-        entry: pyright
+        entry: bash -c 'cd apps/backend && pyright'
         language: system
         pass_filenames: false
       - id: pytest
         name: pytest
-        entry: pytest -q
+        entry: bash -c 'cd apps/backend && pytest -q'
         language: system
         pass_filenames: false

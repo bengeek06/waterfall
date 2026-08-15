@@ -5,15 +5,13 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
-
 from waterfall.db.session import get_session_factory
 from waterfall.models.ms_core import MsProject, MsTask, MsTaskLink
 
 NS = {"ms": "http://schemas.microsoft.com/project"}
-EXAMPLE_XML = Path(__file__).resolve().parents[1] / "examples" / "planning_rain.xml"
-EXAMPLE_XML_FILES = sorted(
-    (Path(__file__).resolve().parents[1] / "examples").glob("planning_*.xml")
-)
+EXAMPLES_DIR = Path(__file__).resolve().parents[3] / "examples"
+EXAMPLE_XML = EXAMPLES_DIR / "planning_rain.xml"
+EXAMPLE_XML_FILES = sorted(EXAMPLES_DIR.glob("planning_*.xml"))
 
 
 def _txt(node: ET.Element, path: str) -> str | None:

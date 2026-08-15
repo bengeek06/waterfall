@@ -1,52 +1,61 @@
-# waterfall
+# rebirth
 
-API REST professionnelle avec FastAPI, outillage qualité, et base enterprise.
+Monorepo Waterfall avec backend FastAPI et frontend Next.js.
+
+## Structure
+
+- apps/backend: API Python FastAPI, migrations Alembic, tests.
+- apps/frontend: application web Next.js TypeScript.
+- packages/api-client-ts: client TypeScript genere depuis OpenAPI.
+- openapi: contrat API source de verite.
 
 ## Demarrage rapide
 
-1. Activer l'environnement virtuel:
+1. Activer l'environnement Python:
 
 ```bash
 source .venv/bin/activate
 ```
 
-2. Installer les dependances du projet:
+2. Installer les dependances backend:
 
 ```bash
-python -m pip install -e .[dev]
+make install-backend
 ```
 
-3. Lancer les controles:
+3. Installer les dependances frontend/workspaces:
 
 ```bash
-ruff check .
-ruff format .
-pyright
-pytest
+npm install
 ```
 
-4. Lancer l'API:
+## Commandes utiles
+
+Backend:
 
 ```bash
-uvicorn waterfall.main:app --app-dir src --reload
+make lint-backend
+make typecheck-backend
+make test-backend
+make run-backend
 ```
 
-## Endpoints
-
-- `GET /health`
-- `GET /health/ready`
-- `POST /auth/register`
-- `POST /auth/token`
-- `GET /auth/me`
-- `GET /metrics`
-
-## Migrations
+Frontend:
 
 ```bash
-alembic upgrade head
+npm run frontend:lint
+npm run frontend:build
+npm run frontend:dev
 ```
 
-## Docker Compose
+Client API TypeScript:
+
+```bash
+npm run api-client:generate
+npm run api-client:build
+```
+
+Docker:
 
 ```bash
 docker compose up --build

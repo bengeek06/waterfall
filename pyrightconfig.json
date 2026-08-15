@@ -1,5 +1,5 @@
 {
-  "include": ["src", "tests"],
+  "include": ["apps/backend/src", "apps/backend/tests"],
   "venvPath": ".",
   "venv": ".venv",
   "typeCheckingMode": "strict",
@@ -8,12 +8,12 @@
   "reportMissingTypeStubs": false,
   "executionEnvironments": [
     {
-      "root": "src",
-      "extraPaths": ["src"]
+      "root": "apps/backend/src",
+      "extraPaths": ["apps/backend/src"]
     },
     {
-      "root": "tests",
-      "extraPaths": ["src"]
+      "root": "apps/backend/tests",
+      "extraPaths": ["apps/backend/src"]
     }
   ]
 }

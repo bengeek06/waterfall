@@ -2,7 +2,6 @@ from datetime import UTC, datetime, timedelta
 
 from jose import JWTError, jwt
 from pwdlib import PasswordHash
-
 from waterfall.core.config import get_settings
 
 password_hash = PasswordHash.recommended()

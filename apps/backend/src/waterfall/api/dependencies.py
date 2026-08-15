@@ -1,7 +1,6 @@
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
-
 from waterfall.core.security import decode_access_token
 from waterfall.db.session import get_db
 from waterfall.models.user import User

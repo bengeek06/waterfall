@@ -4,13 +4,11 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 from httpx import Response
-
 from waterfall.main import app
 
 NS = {"ms": "http://schemas.microsoft.com/project"}
-EXAMPLE_XML_FILES = sorted(
-    (Path(__file__).resolve().parents[1] / "examples").glob("planning_*.xml")
-)
+EXAMPLES_DIR = Path(__file__).resolve().parents[3] / "examples"
+EXAMPLE_XML_FILES = sorted(EXAMPLES_DIR.glob("planning_*.xml"))
 
 
 def _xml_expected_counters(xml_path: Path) -> tuple[int, int]:

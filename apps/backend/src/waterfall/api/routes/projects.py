@@ -4,7 +4,6 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
-
 from waterfall.api.dependencies import get_current_user
 from waterfall.db.session import get_db
 from waterfall.models.ms_core import MsProject, MsTask, MsTaskLink

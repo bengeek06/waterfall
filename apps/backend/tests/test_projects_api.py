@@ -3,7 +3,6 @@ from typing import Any, cast
 
 from fastapi.testclient import TestClient
 from httpx import Response
-
 from waterfall.db.session import get_session_factory
 from waterfall.main import app
 from waterfall.models.ms_core import MsProject, MsTask

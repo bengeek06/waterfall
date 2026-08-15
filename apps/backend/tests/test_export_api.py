@@ -4,11 +4,10 @@ from typing import Any, cast
 
 from fastapi.testclient import TestClient
 from httpx import Response
-
 from waterfall.main import app
 
 NS = {"ms": "http://schemas.microsoft.com/project"}
-EXAMPLE_XML = Path(__file__).resolve().parents[1] / "examples" / "planning_rain.xml"
+EXAMPLE_XML = Path(__file__).resolve().parents[3] / "examples" / "planning_rain.xml"
 
 
 def _auth_headers(client: TestClient) -> dict[str, str]:

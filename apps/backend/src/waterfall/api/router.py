@@ -1,5 +1,4 @@
 from fastapi import APIRouter
-
 from waterfall.api.routes.auth import router as auth_router
 from waterfall.api.routes.health import router as health_router
 from waterfall.api.routes.imports import router as imports_router
