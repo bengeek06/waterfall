@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from waterfall.api.dependencies import get_current_user
+from waterfall.api.dependencies import get_current_active_user
 from waterfall.db.session import get_db
 from waterfall.models.ms_core import MsProject, MsTask, MsTaskLink
 from waterfall.models.user import User
@@ -177,7 +177,7 @@ def _get_batch_or_404(db: Session, batch_id: int) -> WfImportBatch:
 def create_batch(
     payload: ImportBatchCreateRequest,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(get_current_active_user),
 ) -> ImportBatchResponse:
     now = datetime.now(UTC)
     source_name = payload.source_name or "pending.xml"
@@ -212,7 +212,7 @@ async def upload_xml(
     batch_id: int,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(get_current_active_user),
 ) -> ImportBatchResponse:
     filename = file.filename or "upload.xml"
     if not filename.lower().endswith(".xml"):
@@ -263,7 +263,7 @@ def run_batch(
     batch_id: int,
     _: ImportRunRequest | None = None,
     db: Session = Depends(get_db),
-    __: User = Depends(get_current_user),
+    __: User = Depends(get_current_active_user),
 ) -> ImportRunAcceptedResponse:
     batch = _get_batch_or_404(db, batch_id)
     if batch.status == "running":
@@ -356,7 +356,7 @@ def run_batch(
 def get_batch(
     batch_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(get_current_active_user),
 ) -> ImportBatchStatusResponse:
     batch = _get_batch_or_404(db, batch_id)
     batch_response = _to_batch_response(batch)
@@ -397,7 +397,7 @@ def get_batch(
 def list_batch_errors(
     batch_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(get_current_active_user),
 ) -> ImportErrorListResponse:
     batch = _get_batch_or_404(db, batch_id)
     if not batch.log_json:

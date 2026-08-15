@@ -42,6 +42,7 @@ where = ["src"]
 
 [project.scripts]
 waterfall = "waterfall.main:app"
+waterfall-seed-admin = "waterfall.scripts.seed_admin:main"
 
 [tool.pytest.ini_options]
 minversion = "8.0"

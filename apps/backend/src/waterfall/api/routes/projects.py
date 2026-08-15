@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
-from waterfall.api.dependencies import get_current_user
+from waterfall.api.dependencies import get_current_active_user
 from waterfall.db.session import get_db
 from waterfall.models.ms_core import MsProject, MsTask, MsTaskLink
 from waterfall.models.user import User
@@ -33,7 +33,7 @@ def list_projects(
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(get_current_active_user),
 ) -> list[ProjectRead]:
     projects = db.query(MsProject).order_by(MsProject.id.asc()).offset(offset).limit(limit).all()
     return [
@@ -55,7 +55,7 @@ def list_projects(
 def get_project(
     project_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(get_current_active_user),
 ) -> ProjectRead:
     project = db.query(MsProject).filter(MsProject.id == project_id).first()
     if project is None:
@@ -79,7 +79,7 @@ def list_project_tasks(
     limit: int = Query(default=200, ge=1, le=2000),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(get_current_active_user),
 ) -> list[TaskRead]:
     project_exists = db.query(MsProject.id).filter(MsProject.id == project_id).first()
     if project_exists is None:
@@ -131,7 +131,7 @@ def update_task_description(
     task_uid: int,
     payload: TaskDescriptionUpdate,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(get_current_active_user),
 ) -> TaskRead:
     task = (
         db.query(MsTask)
@@ -186,7 +186,7 @@ def update_task_description(
 def export_project_xml(
     project_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(get_current_active_user),
 ) -> Response:
     project = db.query(MsProject).filter(MsProject.id == project_id).first()
     if project is None:

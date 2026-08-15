@@ -19,8 +19,24 @@ class Settings(BaseSettings):
     secret_key: str = Field(default="change-me", alias="SECRET_KEY")
     jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
     access_token_expire_minutes: int = Field(default=30, alias="ACCESS_TOKEN_EXPIRE_MINUTES")
+    refresh_token_expire_minutes: int = Field(default=1440, alias="REFRESH_TOKEN_EXPIRE_MINUTES")
+    auth_allow_public_register: bool | None = Field(
+        default=None, alias="AUTH_ALLOW_PUBLIC_REGISTER"
+    )
+    auth_rate_limit_attempts: int = Field(default=10, alias="AUTH_RATE_LIMIT_ATTEMPTS")
+    auth_rate_limit_window_seconds: int = Field(default=60, alias="AUTH_RATE_LIMIT_WINDOW_SECONDS")
+    auth_max_failed_attempts: int = Field(default=5, alias="AUTH_MAX_FAILED_ATTEMPTS")
+    auth_lockout_minutes: int = Field(default=15, alias="AUTH_LOCKOUT_MINUTES")
+
+    def is_public_registration_enabled(self) -> bool:
+        if self.auth_allow_public_register is not None:
+            return self.auth_allow_public_register
+        return self.app_env in {"dev", "test"}
 
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+    if settings.app_env not in {"dev", "test"} and settings.secret_key == "change-me":
+        raise ValueError("SECRET_KEY must be set in non-dev environments")
+    return settings

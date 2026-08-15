@@ -1,0 +1,49 @@
+from __future__ import annotations
+
+import os
+
+from waterfall.core.security import hash_password, normalize_email
+from waterfall.db.session import get_session_factory
+from waterfall.models.user import User
+
+
+def _as_bool(value: str | None, default: bool) -> bool:
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    return normalized in {"1", "true", "yes", "y", "on"}
+
+
+def main() -> None:
+    email = normalize_email(os.getenv("WF_ADMIN_EMAIL", "admin@waterfall.local"))
+    password = os.getenv("WF_ADMIN_PASSWORD", "admin")
+    is_active = _as_bool(os.getenv("WF_ADMIN_IS_ACTIVE"), default=True)
+
+    if len(password) < 8:
+        raise ValueError("WF_ADMIN_PASSWORD must be at least 8 characters long")
+
+    session_factory = get_session_factory()
+    with session_factory() as db:
+        user = db.query(User).filter(User.email == email).first()
+        if user is None:
+            user = User(
+                email=email,
+                hashed_password=hash_password(password),
+                is_active=is_active,
+                is_admin=True,
+            )
+            db.add(user)
+            db.commit()
+            print(f"Created admin user: {email}")
+            return
+
+        user.hashed_password = hash_password(password)
+        user.is_active = is_active
+        user.is_admin = True
+        db.add(user)
+        db.commit()
+        print(f"Updated admin user: {email}")
+
+
+if __name__ == "__main__":
+    main()

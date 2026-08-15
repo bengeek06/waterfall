@@ -1,4 +1,4 @@
-.PHONY: install-backend lint-backend format-backend typecheck-backend test-backend run-backend hooks migrate-up compose-up compose-up-dev compose-up-full compose-down install-dev lint format typecheck test run
+.PHONY: install-backend lint-backend format-backend typecheck-backend test-backend run-backend hooks migrate-up seed-admin compose-up compose-up-dev compose-up-full compose-down install-dev lint format typecheck test run
 
 install-backend:
 	/home/benjamin/projects/rebirth/.venv/bin/python -m pip install -e ./apps/backend[dev]
@@ -23,6 +23,9 @@ hooks:
 
 migrate-up:
 	cd apps/backend && alembic upgrade head
+
+seed-admin:
+	cd apps/backend && waterfall-seed-admin
 
 compose-up: compose-up-dev
 

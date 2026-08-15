@@ -38,6 +38,7 @@ make lint-backend
 make typecheck-backend
 make test-backend
 make run-backend
+make seed-admin
 ```
 
 Frontend:
