@@ -4,28 +4,28 @@
 
 1. Les XSD 2010, 2013 et 2016 utilisent le meme namespace XML:
 - http://schemas.microsoft.com/project/2007
-- Voir [schemas/2010/project_2010_schema.xml](schemas/2010/project_2010_schema.xml#L23), [schemas/2013/project_2013_schema.xml](schemas/2013/project_2013_schema.xml#L23), [schemas/2016/project_2016_schema.xml](schemas/2016/project_2016_schema.xml#L23)
+- Voir [2010/project_2010_schema.xml](2010/project_2010_schema.xml#L23), [2013/project_2013_schema.xml](2013/project_2013_schema.xml#L23), [2016/project_2016_schema.xml](2016/project_2016_schema.xml#L23)
 
 2. Les structures principales sont equivalentes entre versions:
 - Project, Calendars, Tasks, Resources, Assignments, ExtendedAttributes, OutlineCodes, WBSMasks
 
 3. Les durees de planning doivent etre en xsd:duration (ISO 8601), pas en "5d" ou "40h":
-- Voir [schemas/2016/tasks_2016_schema.xml](schemas/2016/tasks_2016_schema.xml#L108)
-- Voir [schemas/2016/assignments_2016_schema.xml](schemas/2016/assignments_2016_schema.xml#L315)
+- Voir [2016/tasks_2016_schema.xml](2016/tasks_2016_schema.xml#L108)
+- Voir [2016/assignments_2016_schema.xml](2016/assignments_2016_schema.xml#L315)
 
 4. Les liens de dependance ont un typage strict:
 - Type: 0=FF, 1=FS, 2=SF, 3=SS
 - LinkLag: dixiemes de minute
-- Voir [schemas/2016/tasks_2016_schema.xml](schemas/2016/tasks_2016_schema.xml#L579)
-- Voir [schemas/2016/tasks_2016_schema.xml](schemas/2016/tasks_2016_schema.xml#L602)
+- Voir [2016/tasks_2016_schema.xml](2016/tasks_2016_schema.xml#L579)
+- Voir [2016/tasks_2016_schema.xml](2016/tasks_2016_schema.xml#L602)
 
 5. Les calendriers ont des DayType stricts:
 - 0=Exception, 1=Sunday, 2=Monday, ..., 7=Saturday
-- Voir [schemas/2016/calendars_2016_schema.xml](schemas/2016/calendars_2016_schema.xml#L53)
+- Voir [2016/calendars_2016_schema.xml](2016/calendars_2016_schema.xml#L53)
 
 ## 2) Analyse de synthese.xml
 
-Fichier analyse: [schemas/synthese.xml](schemas/synthese.xml)
+Fichier analyse: [synthese.xml](synthese.xml)
 
 Points positifs:
 - Bonne granularite fonctionnelle (Calendars, Tasks, Resources, Assignments)
@@ -227,7 +227,7 @@ Note: ce bloc peut etre vide lors du premier import standard. Il devient actif a
 
 6. Couts budgetises
 - Le schema MS Project supporte explicitement BudgetCost et BudgetWork sur Assignment.
-- Voir [schemas/2016/assignments_2016_schema.xml](schemas/2016/assignments_2016_schema.xml#L384)
+- Voir [2016/assignments_2016_schema.xml](2016/assignments_2016_schema.xml#L384)
 - Recommandation: stocker en base le cout budgetise au niveau affectation (wf_charge_line -> ms_assignment.BudgetCost) pour conserver un mapping simple et explicite au reexport.
 
 ## 5) Strategie multi-version
@@ -276,4 +276,4 @@ Note: ce bloc peut etre vide lors du premier import standard. Il devient actif a
 ## 8) Modele SQL detaille
 
 Le detail des tables proposees ms_ / wf_ (colonnes, contraintes, index, workflow) est documente dans:
-- [schemas/modele_donnees_v1_ms_wf.md](schemas/modele_donnees_v1_ms_wf.md)
+- [modele_donnees_v1_ms_wf.md](modele_donnees_v1_ms_wf.md)
