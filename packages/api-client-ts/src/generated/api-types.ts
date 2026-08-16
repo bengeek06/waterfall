@@ -306,7 +306,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** Lister tous les taux horaires */
+        get: operations["listCostRates"];
         put?: never;
         /** Creer un taux horaire annuel */
         post: operations["createCostRate"];
@@ -1363,6 +1364,27 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["ResourceNotFound"];
+        };
+    };
+    listCostRates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Liste des taux horaires annuels */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CostRateRead"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
         };
     };
     createCostRate: {

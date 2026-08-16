@@ -236,7 +236,7 @@ def update_category(
 
 
 @router.get("/categories/{category_id}/rates", response_model=list[CostRateRead])
-def list_rates(
+def list_category_rates(
     category_id: int,
     db: Session = Depends(get_db),
     _: User = Depends(get_current_active_user),
@@ -262,6 +262,14 @@ def create_rate(
     _commit(db, "A cost rate already exists for this category and year")
     db.refresh(rate)
     return rate
+
+
+@router.get("/rates", response_model=list[CostRateRead])
+def list_rates(
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_active_user),
+) -> list[CostRate]:
+    return db.query(CostRate).order_by(CostRate.year, CostRate.cost_category_id).all()
 
 
 @router.patch("/rates/{rate_id}", response_model=CostRateRead)

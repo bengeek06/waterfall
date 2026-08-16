@@ -37,6 +37,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           <nav className="menu">
             <Link href="/login">Login</Link>
             <Link href="/users">Utilisateurs</Link>
+            <Link href="/resources">Ressources</Link>
             <Link href="/projects">Projets</Link>
           </nav>
         </header>

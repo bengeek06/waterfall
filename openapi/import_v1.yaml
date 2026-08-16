@@ -623,6 +623,23 @@ paths:
           $ref: '#/components/responses/ResourceNotFound'
 
   /resources/rates:
+    get:
+      tags: [resources]
+      summary: Lister tous les taux horaires
+      operationId: listCostRates
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Liste des taux horaires annuels
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CostRateRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
     post:
       tags: [resources]
       summary: Creer un taux horaire annuel
