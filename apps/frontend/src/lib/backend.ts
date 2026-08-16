@@ -203,6 +203,39 @@ export function getUsers(
   return authRequest<AuthUserAdmin[]>("/auth/users", tokens, { method: "GET" }, onSessionRefresh);
 }
 
+export function createUser(
+  email: string,
+  password: string,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<AuthUserAdmin>(
+    "/auth/users",
+    tokens,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ email, password }),
+    },
+    onSessionRefresh,
+  );
+}
+
+export function deleteUser(
+  userId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<void>(
+    `/auth/users/${userId}`,
+    tokens,
+    { method: "DELETE" },
+    onSessionRefresh,
+  );
+}
+
 export function setUserStatus(
   userId: number,
   isActive: boolean,

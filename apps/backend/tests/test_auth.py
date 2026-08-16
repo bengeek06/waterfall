@@ -26,6 +26,27 @@ def _auth_header(access_token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {access_token}"}
 
 
+def _admin_headers(client: TestClient) -> dict[str, str]:
+    email = "admin.helper@example.com"
+    password = "SuperSecret123"
+    register_response = client.post(
+        "/auth/register",
+        json={"email": email, "password": password},
+    )
+    assert register_response.status_code == 201
+
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        user = session.query(User).filter(User.email == email).one()
+        user.is_admin = True
+        session.add(user)
+        session.commit()
+
+    login_response = _login(client, email, password)
+    assert login_response.status_code == 200
+    return _auth_header(cast(str, login_response.json()["access_token"]))
+
+
 def test_register_login_and_me() -> None:
     with TestClient(app) as client:
         register_response: Response = client.post(
@@ -195,6 +216,49 @@ def test_admin_can_manage_users() -> None:
         )
         assert role_response.status_code == 200
         assert role_response.json()["is_admin"] is True
+
+
+def test_admin_can_create_and_delete_user() -> None:
+    with TestClient(app) as client:
+        admin_headers = _admin_headers(client)
+
+        create_response = client.post(
+            "/auth/users",
+            json={"email": "new.user@example.com", "password": "NewSecret123!"},
+            headers=admin_headers,
+        )
+        assert create_response.status_code == 201
+        created_user = cast(dict[str, Any], create_response.json())
+        assert created_user["email"] == "new.user@example.com"
+        user_id = cast(int, created_user["id"])
+
+        duplicate_response = client.post(
+            "/auth/users",
+            json={"email": "new.user@example.com", "password": "NewSecret123!"},
+            headers=admin_headers,
+        )
+        assert duplicate_response.status_code == 409
+
+        delete_response = client.delete(f"/auth/users/{user_id}", headers=admin_headers)
+        assert delete_response.status_code == 204
+
+        missing_response = client.delete(f"/auth/users/{user_id}", headers=admin_headers)
+        assert missing_response.status_code == 404
+
+
+def test_admin_cannot_delete_self() -> None:
+    with TestClient(app) as client:
+        admin_headers = _admin_headers(client)
+        me_response = client.get("/auth/me", headers=admin_headers)
+        assert me_response.status_code == 200
+        me_payload = cast(dict[str, Any], me_response.json())
+        me_id = cast(int, me_payload["id"])
+
+        delete_response = client.delete(
+            f"/auth/users/{me_id}",
+            headers=admin_headers,
+        )
+        assert delete_response.status_code == 400
 
 
 def test_non_admin_cannot_manage_users() -> None:
