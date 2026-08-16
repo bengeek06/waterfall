@@ -1,12 +1,12 @@
 openapi: 3.1.0
 info:
-  title: Waterfall Import API - V1
+  title: Waterfall API
   version: 0.1.0
-  summary: Contrat initial pour l'import MS Project V1
+  summary: Contrat API pour l'import MS Project et la gestion des ressources
   description: |
-    Specification OpenAPI de l'etape 3 pour le flux d'import V1.
-    Objectif MVP: importer taches et dependances depuis un XML MS Project,
-    puis suivre le statut via un batch technique.
+    Contrat OpenAPI du backend Waterfall.
+    Le périmètre couvre l'import MS Project, l'enrichissement des tâches,
+    l'export XML et le référentiel des ressources, rôles, coûts et capacités.
 servers:
   - url: http://localhost:8000
     description: Local development
@@ -16,6 +16,8 @@ tags:
     description: Flux d'import XML MS Project (MVP taches + dependances)
   - name: projects
     description: Lecture projets/taches, enrichissement description, export XML
+  - name: resources
+    description: Referentiel des ressources, roles, couts, inflation et capacites
 
 paths:
   /imports/v1/batches:
@@ -306,6 +308,518 @@ paths:
         '404':
           $ref: '#/components/responses/ProjectNotFound'
 
+  /resources/nodes:
+    get:
+      tags: [resources]
+      summary: Lister les noeuds de ressources actifs
+      operationId: listResourceNodes
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Liste des noeuds
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ResourceNodeRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [resources]
+      summary: Creer un noeud de ressources
+      operationId: createResourceNode
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResourceNodeCreate'
+      responses:
+        '201':
+          description: Noeud cree
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResourceNodeRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /resources/nodes/{nodeId}:
+    get:
+      tags: [resources]
+      summary: Lire un noeud de ressources
+      operationId: getResourceNode
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/NodeId'
+      responses:
+        '200':
+          description: Noeud de ressources
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResourceNodeRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
+    patch:
+      tags: [resources]
+      summary: Modifier ou desactiver un noeud
+      operationId: updateResourceNode
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/NodeId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResourceNodeUpdate'
+      responses:
+        '200':
+          description: Noeud modifie
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResourceNodeRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
+
+  /resources/roles:
+    get:
+      tags: [resources]
+      summary: Lister les roles actifs
+      operationId: listResourceRoles
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: node_id
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        '200':
+          description: Liste des roles
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ResourceRoleRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [resources]
+      summary: Creer un role
+      operationId: createResourceRole
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResourceRoleCreate'
+      responses:
+        '201':
+          description: Role cree
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResourceRoleRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /resources/roles/{roleId}:
+    get:
+      tags: [resources]
+      summary: Lire un role
+      operationId: getResourceRole
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RoleId'
+      responses:
+        '200':
+          description: Role
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResourceRoleRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
+    patch:
+      tags: [resources]
+      summary: Modifier ou desactiver un role
+      operationId: updateResourceRole
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RoleId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResourceRoleUpdate'
+      responses:
+        '200':
+          description: Role modifie
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResourceRoleRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
+
+  /resources/categories:
+    get:
+      tags: [resources]
+      summary: Lister les categories de cout actives
+      operationId: listCostCategories
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Liste des categories
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CostCategoryRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [resources]
+      summary: Creer une categorie de cout
+      operationId: createCostCategory
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CostCategoryCreate'
+      responses:
+        '201':
+          description: Categorie creee
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CostCategoryRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /resources/categories/{categoryId}:
+    get:
+      tags: [resources]
+      summary: Lire une categorie de cout
+      operationId: getCostCategory
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CategoryId'
+      responses:
+        '200':
+          description: Categorie
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CostCategoryRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
+    patch:
+      tags: [resources]
+      summary: Modifier ou desactiver une categorie
+      operationId: updateCostCategory
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CategoryId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CostCategoryUpdate'
+      responses:
+        '200':
+          description: Categorie modifiee
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CostCategoryRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
+
+  /resources/categories/{categoryId}/rates:
+    get:
+      tags: [resources]
+      summary: Lister les taux horaires d'une categorie
+      operationId: listCostCategoryRates
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CategoryId'
+      responses:
+        '200':
+          description: Taux horaires annuels
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CostRateRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
+
+  /resources/rates:
+    post:
+      tags: [resources]
+      summary: Creer un taux horaire annuel
+      operationId: createCostRate
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CostRateCreate'
+      responses:
+        '201':
+          description: Taux cree
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CostRateRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /resources/rates/{rateId}:
+    patch:
+      tags: [resources]
+      summary: Modifier un taux horaire annuel
+      operationId: updateCostRate
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RateId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CostRateUpdate'
+      responses:
+        '200':
+          description: Taux modifie
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CostRateRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
+
+  /resources/inflation:
+    get:
+      tags: [resources]
+      summary: Lister les coefficients d'inflation
+      operationId: listInflationRates
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Coefficients annuels
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/InflationRateRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /resources/inflation/{year}:
+    put:
+      tags: [resources]
+      summary: Creer ou modifier un coefficient d'inflation
+      operationId: putInflationRate
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Year'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InflationRateUpdate'
+      responses:
+        '200':
+          description: Coefficient enregistre
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InflationRateRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /resources/capacities:
+    get:
+      tags: [resources]
+      summary: Lister les capacites de roles
+      operationId: listRoleCapacities
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: role_id
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+        - name: period_start
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+        - name: period_end
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Capacites par periode
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RoleCapacityRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [resources]
+      summary: Creer une capacite de role
+      operationId: createRoleCapacity
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoleCapacityCreate'
+      responses:
+        '201':
+          description: Capacite creee
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleCapacityRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
+
+  /resources/capacities/{capacityId}:
+    patch:
+      tags: [resources]
+      summary: Modifier une capacite de role
+      operationId: updateRoleCapacity
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CapacityId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoleCapacityUpdate'
+      responses:
+        '200':
+          description: Capacite modifiee
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleCapacityRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
+
 components:
   securitySchemes:
     bearerAuth:
@@ -338,6 +852,55 @@ components:
         type: integer
         minimum: 1
       description: UID fonctionnel de la tache dans un projet
+    NodeId:
+      name: nodeId
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+      description: Identifiant technique du noeud de ressources
+    RoleId:
+      name: roleId
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+      description: Identifiant technique du role
+    CategoryId:
+      name: categoryId
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+      description: Identifiant technique de la categorie de cout
+    RateId:
+      name: rateId
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+      description: Identifiant technique du taux horaire
+    CapacityId:
+      name: capacityId
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+      description: Identifiant technique de la capacite
+    Year:
+      name: year
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 2000
+        maximum: 9999
+      description: Annee civile
 
   responses:
     BadRequest:
@@ -348,6 +911,18 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
     Unauthorized:
       description: Authentification requise
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: Droits administrateur requis
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Conflict:
+      description: Conflit avec une valeur existante
       content:
         application/json:
           schema:
@@ -366,6 +941,12 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
     TaskNotFound:
       description: Tache introuvable
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ResourceNotFound:
+      description: Ressource introuvable
       content:
         application/json:
           schema:
@@ -621,3 +1202,279 @@ components:
           type: string
           nullable: true
           maxLength: 10000
+
+    ResourceNodeCreate:
+      type: object
+      required: [code, name]
+      properties:
+        code:
+          type: string
+          minLength: 1
+          maxLength: 64
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        parent_id:
+          type: integer
+          minimum: 1
+          nullable: true
+
+    ResourceNodeUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        parent_id:
+          type: integer
+          minimum: 1
+          nullable: true
+        is_active:
+          type: boolean
+
+    ResourceNodeRead:
+      allOf:
+        - $ref: '#/components/schemas/ResourceNodeCreate'
+        - type: object
+          required: [id, is_active, created_at, updated_at]
+          properties:
+            id:
+              type: integer
+              minimum: 1
+            is_active:
+              type: boolean
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+
+    ResourceRoleCreate:
+      type: object
+      required: [node_id, cost_category_id, code, name]
+      properties:
+        node_id:
+          type: integer
+          minimum: 1
+        cost_category_id:
+          type: integer
+          minimum: 1
+        code:
+          type: string
+          minLength: 1
+          maxLength: 64
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+
+    ResourceRoleUpdate:
+      type: object
+      properties:
+        node_id:
+          type: integer
+          minimum: 1
+        cost_category_id:
+          type: integer
+          minimum: 1
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        is_active:
+          type: boolean
+
+    ResourceRoleRead:
+      allOf:
+        - $ref: '#/components/schemas/ResourceRoleCreate'
+        - type: object
+          required: [id, is_active, created_at, updated_at]
+          properties:
+            id:
+              type: integer
+              minimum: 1
+            is_active:
+              type: boolean
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+
+    CostCategoryCreate:
+      type: object
+      required: [code, name]
+      properties:
+        code:
+          type: string
+          minLength: 1
+          maxLength: 64
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        calendar_code:
+          type: string
+          maxLength: 64
+          nullable: true
+
+    CostCategoryUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        calendar_code:
+          type: string
+          maxLength: 64
+          nullable: true
+        is_active:
+          type: boolean
+
+    CostCategoryRead:
+      allOf:
+        - $ref: '#/components/schemas/CostCategoryCreate'
+        - type: object
+          required: [id, is_active, created_at, updated_at]
+          properties:
+            id:
+              type: integer
+              minimum: 1
+            is_active:
+              type: boolean
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+
+    CostRateCreate:
+      type: object
+      required: [cost_category_id, year, hourly_rate, currency_code]
+      properties:
+        cost_category_id:
+          type: integer
+          minimum: 1
+        year:
+          type: integer
+          minimum: 2000
+          maximum: 9999
+        hourly_rate:
+          type: number
+          minimum: 0
+        currency_code:
+          type: string
+          pattern: '^[A-Z]{3}$'
+
+    CostRateUpdate:
+      type: object
+      properties:
+        hourly_rate:
+          type: number
+          minimum: 0
+        currency_code:
+          type: string
+          pattern: '^[A-Z]{3}$'
+
+    CostRateRead:
+      allOf:
+        - $ref: '#/components/schemas/CostRateCreate'
+        - type: object
+          required: [id, created_at, updated_at]
+          properties:
+            id:
+              type: integer
+              minimum: 1
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+
+    InflationRateUpdate:
+      type: object
+      required: [coefficient]
+      properties:
+        coefficient:
+          type: number
+          exclusiveMinimum: 0
+
+    InflationRateRead:
+      type: object
+      required: [id, year, coefficient, created_at, updated_at]
+      properties:
+        id:
+          type: integer
+          minimum: 1
+        year:
+          type: integer
+          minimum: 2000
+          maximum: 9999
+        coefficient:
+          type: number
+          exclusiveMinimum: 0
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    RoleCapacityCreate:
+      type: object
+      required: [role_id, period_start, period_end, person_count, available_hours]
+      properties:
+        role_id:
+          type: integer
+          minimum: 1
+        period_start:
+          type: string
+          format: date
+        period_end:
+          type: string
+          format: date
+        person_count:
+          type: number
+          minimum: 0
+        available_hours:
+          type: number
+          minimum: 0
+
+    RoleCapacityUpdate:
+      type: object
+      properties:
+        period_start:
+          type: string
+          format: date
+        period_end:
+          type: string
+          format: date
+        person_count:
+          type: number
+          minimum: 0
+        available_hours:
+          type: number
+          minimum: 0
+
+    RoleCapacityRead:
+      allOf:
+        - $ref: '#/components/schemas/RoleCapacityCreate'
+        - type: object
+          required: [id, created_at, updated_at]
+          properties:
+            id:
+              type: integer
+              minimum: 1
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time

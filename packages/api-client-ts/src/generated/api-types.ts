@@ -174,6 +174,234 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/resources/nodes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lister les noeuds de ressources actifs */
+        get: operations["listResourceNodes"];
+        put?: never;
+        /** Creer un noeud de ressources */
+        post: operations["createResourceNode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resources/nodes/{nodeId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lire un noeud de ressources */
+        get: operations["getResourceNode"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Modifier ou desactiver un noeud */
+        patch: operations["updateResourceNode"];
+        trace?: never;
+    };
+    "/resources/roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lister les roles actifs */
+        get: operations["listResourceRoles"];
+        put?: never;
+        /** Creer un role */
+        post: operations["createResourceRole"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resources/roles/{roleId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lire un role */
+        get: operations["getResourceRole"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Modifier ou desactiver un role */
+        patch: operations["updateResourceRole"];
+        trace?: never;
+    };
+    "/resources/categories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lister les categories de cout actives */
+        get: operations["listCostCategories"];
+        put?: never;
+        /** Creer une categorie de cout */
+        post: operations["createCostCategory"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resources/categories/{categoryId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lire une categorie de cout */
+        get: operations["getCostCategory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Modifier ou desactiver une categorie */
+        patch: operations["updateCostCategory"];
+        trace?: never;
+    };
+    "/resources/categories/{categoryId}/rates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lister les taux horaires d'une categorie */
+        get: operations["listCostCategoryRates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resources/rates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Creer un taux horaire annuel */
+        post: operations["createCostRate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resources/rates/{rateId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Modifier un taux horaire annuel */
+        patch: operations["updateCostRate"];
+        trace?: never;
+    };
+    "/resources/inflation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lister les coefficients d'inflation */
+        get: operations["listInflationRates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resources/inflation/{year}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Creer ou modifier un coefficient d'inflation */
+        put: operations["putInflationRate"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resources/capacities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lister les capacites de roles */
+        get: operations["listRoleCapacities"];
+        put?: never;
+        /** Creer une capacite de role */
+        post: operations["createRoleCapacity"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resources/capacities/{capacityId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Modifier une capacite de role */
+        patch: operations["updateRoleCapacity"];
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -293,6 +521,115 @@ export interface components {
         TaskDescriptionUpdate: {
             description?: string | null;
         };
+        ResourceNodeCreate: {
+            code: string;
+            name: string;
+            parent_id?: number | null;
+        };
+        ResourceNodeUpdate: {
+            name?: string;
+            parent_id?: number | null;
+            is_active?: boolean;
+        };
+        ResourceNodeRead: components["schemas"]["ResourceNodeCreate"] & {
+            id: number;
+            is_active: boolean;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        ResourceRoleCreate: {
+            node_id: number;
+            cost_category_id: number;
+            code: string;
+            name: string;
+        };
+        ResourceRoleUpdate: {
+            node_id?: number;
+            cost_category_id?: number;
+            name?: string;
+            is_active?: boolean;
+        };
+        ResourceRoleRead: components["schemas"]["ResourceRoleCreate"] & {
+            id: number;
+            is_active: boolean;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        CostCategoryCreate: {
+            code: string;
+            name: string;
+            calendar_code?: string | null;
+        };
+        CostCategoryUpdate: {
+            name?: string;
+            calendar_code?: string | null;
+            is_active?: boolean;
+        };
+        CostCategoryRead: components["schemas"]["CostCategoryCreate"] & {
+            id: number;
+            is_active: boolean;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        CostRateCreate: {
+            cost_category_id: number;
+            year: number;
+            hourly_rate: number;
+            currency_code: string;
+        };
+        CostRateUpdate: {
+            hourly_rate?: number;
+            currency_code?: string;
+        };
+        CostRateRead: components["schemas"]["CostRateCreate"] & {
+            id: number;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        InflationRateUpdate: {
+            coefficient: number;
+        };
+        InflationRateRead: {
+            id: number;
+            year: number;
+            coefficient: number;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        RoleCapacityCreate: {
+            role_id: number;
+            /** Format: date */
+            period_start: string;
+            /** Format: date */
+            period_end: string;
+            person_count: number;
+            available_hours: number;
+        };
+        RoleCapacityUpdate: {
+            /** Format: date */
+            period_start?: string;
+            /** Format: date */
+            period_end?: string;
+            person_count?: number;
+            available_hours?: number;
+        };
+        RoleCapacityRead: components["schemas"]["RoleCapacityCreate"] & {
+            id: number;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
     };
     responses: {
         /** @description Requete invalide */
@@ -306,6 +643,24 @@ export interface components {
         };
         /** @description Authentification requise */
         Unauthorized: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description Droits administrateur requis */
+        Forbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description Conflit avec une valeur existante */
+        Conflict: {
             headers: {
                 [name: string]: unknown;
             };
@@ -340,6 +695,15 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
+        /** @description Ressource introuvable */
+        ResourceNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
     };
     parameters: {
         /** @description Identifiant technique wf_import_batch.id */
@@ -348,6 +712,18 @@ export interface components {
         ProjectId: number;
         /** @description UID fonctionnel de la tache dans un projet */
         TaskUid: number;
+        /** @description Identifiant technique du noeud de ressources */
+        NodeId: number;
+        /** @description Identifiant technique du role */
+        RoleId: number;
+        /** @description Identifiant technique de la categorie de cout */
+        CategoryId: number;
+        /** @description Identifiant technique du taux horaire */
+        RateId: number;
+        /** @description Identifiant technique de la capacite */
+        CapacityId: number;
+        /** @description Annee civile */
+        Year: number;
     };
     requestBodies: never;
     headers: never;
@@ -647,6 +1023,537 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["ProjectNotFound"];
+        };
+    };
+    listResourceNodes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Liste des noeuds */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceNodeRead"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    createResourceNode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResourceNodeCreate"];
+            };
+        };
+        responses: {
+            /** @description Noeud cree */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceNodeRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getResourceNode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique du noeud de ressources */
+                nodeId: components["parameters"]["NodeId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Noeud de ressources */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceNodeRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ResourceNotFound"];
+        };
+    };
+    updateResourceNode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique du noeud de ressources */
+                nodeId: components["parameters"]["NodeId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResourceNodeUpdate"];
+            };
+        };
+        responses: {
+            /** @description Noeud modifie */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceNodeRead"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+        };
+    };
+    listResourceRoles: {
+        parameters: {
+            query?: {
+                node_id?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Liste des roles */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceRoleRead"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    createResourceRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResourceRoleCreate"];
+            };
+        };
+        responses: {
+            /** @description Role cree */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceRoleRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getResourceRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique du role */
+                roleId: components["parameters"]["RoleId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Role */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceRoleRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ResourceNotFound"];
+        };
+    };
+    updateResourceRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique du role */
+                roleId: components["parameters"]["RoleId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResourceRoleUpdate"];
+            };
+        };
+        responses: {
+            /** @description Role modifie */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceRoleRead"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+        };
+    };
+    listCostCategories: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Liste des categories */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CostCategoryRead"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    createCostCategory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CostCategoryCreate"];
+            };
+        };
+        responses: {
+            /** @description Categorie creee */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CostCategoryRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getCostCategory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique de la categorie de cout */
+                categoryId: components["parameters"]["CategoryId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Categorie */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CostCategoryRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ResourceNotFound"];
+        };
+    };
+    updateCostCategory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique de la categorie de cout */
+                categoryId: components["parameters"]["CategoryId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CostCategoryUpdate"];
+            };
+        };
+        responses: {
+            /** @description Categorie modifiee */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CostCategoryRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+        };
+    };
+    listCostCategoryRates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique de la categorie de cout */
+                categoryId: components["parameters"]["CategoryId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Taux horaires annuels */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CostRateRead"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ResourceNotFound"];
+        };
+    };
+    createCostRate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CostRateCreate"];
+            };
+        };
+        responses: {
+            /** @description Taux cree */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CostRateRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    updateCostRate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique du taux horaire */
+                rateId: components["parameters"]["RateId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CostRateUpdate"];
+            };
+        };
+        responses: {
+            /** @description Taux modifie */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CostRateRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+        };
+    };
+    listInflationRates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Coefficients annuels */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InflationRateRead"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    putInflationRate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Annee civile */
+                year: components["parameters"]["Year"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InflationRateUpdate"];
+            };
+        };
+        responses: {
+            /** @description Coefficient enregistre */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InflationRateRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    listRoleCapacities: {
+        parameters: {
+            query?: {
+                role_id?: number;
+                period_start?: string;
+                period_end?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Capacites par periode */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoleCapacityRead"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    createRoleCapacity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoleCapacityCreate"];
+            };
+        };
+        responses: {
+            /** @description Capacite creee */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoleCapacityRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+        };
+    };
+    updateRoleCapacity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique de la capacite */
+                capacityId: components["parameters"]["CapacityId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoleCapacityUpdate"];
+            };
+        };
+        responses: {
+            /** @description Capacite modifiee */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoleCapacityRead"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
         };
     };
 }
