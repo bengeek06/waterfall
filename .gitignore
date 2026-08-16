@@ -21,3 +21,4 @@ node_modules/
 .env
 .DS_Store
 test.db
+apps/backend/waterfall.db
