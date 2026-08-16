@@ -19,6 +19,66 @@ export type AuthUserAdmin = {
   updated_at: string;
 };
 
+export type ResourceNode = {
+  id: number;
+  parent_id: number | null;
+  code: string;
+  name: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ResourceRole = {
+  id: number;
+  node_id: number;
+  cost_category_id: number;
+  code: string;
+  name: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CostCategory = {
+  id: number;
+  code: string;
+  name: string;
+  calendar_code: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CostRate = {
+  id: number;
+  cost_category_id: number;
+  year: number;
+  hourly_rate: string;
+  currency_code: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type InflationRate = {
+  id: number;
+  year: number;
+  coefficient: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type RoleCapacity = {
+  id: number;
+  role_id: number;
+  period_start: string;
+  period_end: string;
+  person_count: string;
+  available_hours: string;
+  created_at: string;
+  updated_at: string;
+};
+
 export type Project = {
   id: number;
   name: string;
@@ -201,6 +261,148 @@ export function getUsers(
   onSessionRefresh: (next: SessionTokens) => void,
 ) {
   return authRequest<AuthUserAdmin[]>("/auth/users", tokens, { method: "GET" }, onSessionRefresh);
+}
+
+export function createUser(
+  email: string,
+  password: string,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<AuthUserAdmin>(
+    "/auth/users",
+    tokens,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ email, password }),
+    },
+    onSessionRefresh,
+  );
+}
+
+export function deleteUser(
+  userId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<void>(
+    `/auth/users/${userId}`,
+    tokens,
+    { method: "DELETE" },
+    onSessionRefresh,
+  );
+}
+
+export function getResourceNodes(tokens: SessionTokens, onSessionRefresh: (next: SessionTokens) => void) {
+  return authRequest<ResourceNode[]>("/resources/nodes", tokens, { method: "GET" }, onSessionRefresh);
+}
+
+export function createResourceNode(
+  payload: { code: string; name: string; parent_id?: number | null },
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<ResourceNode>(
+    "/resources/nodes",
+    tokens,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
+    onSessionRefresh,
+  );
+}
+
+export function getResourceRoles(tokens: SessionTokens, onSessionRefresh: (next: SessionTokens) => void) {
+  return authRequest<ResourceRole[]>("/resources/roles", tokens, { method: "GET" }, onSessionRefresh);
+}
+
+export function createResourceRole(
+  payload: { code: string; name: string; node_id: number; cost_category_id: number },
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<ResourceRole>(
+    "/resources/roles",
+    tokens,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
+    onSessionRefresh,
+  );
+}
+
+export function getCostCategories(tokens: SessionTokens, onSessionRefresh: (next: SessionTokens) => void) {
+  return authRequest<CostCategory[]>("/resources/categories", tokens, { method: "GET" }, onSessionRefresh);
+}
+
+export function createCostCategory(
+  payload: { code: string; name: string; calendar_code?: string | null },
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<CostCategory>(
+    "/resources/categories",
+    tokens,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
+    onSessionRefresh,
+  );
+}
+
+export function getCostRates(tokens: SessionTokens, onSessionRefresh: (next: SessionTokens) => void) {
+  return authRequest<CostRate[]>("/resources/rates", tokens, { method: "GET" }, onSessionRefresh);
+}
+
+export function createCostRate(
+  payload: { cost_category_id: number; year: number; hourly_rate: string; currency_code: string },
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<CostRate>(
+    "/resources/rates",
+    tokens,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
+    onSessionRefresh,
+  );
+}
+
+export function getInflationRates(tokens: SessionTokens, onSessionRefresh: (next: SessionTokens) => void) {
+  return authRequest<InflationRate[]>("/resources/inflation", tokens, { method: "GET" }, onSessionRefresh);
+}
+
+export function setInflationRate(
+  year: number,
+  coefficient: string,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<InflationRate>(
+    `/resources/inflation/${year}`,
+    tokens,
+    { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ coefficient }) },
+    onSessionRefresh,
+  );
+}
+
+export function getRoleCapacities(tokens: SessionTokens, onSessionRefresh: (next: SessionTokens) => void) {
+  return authRequest<RoleCapacity[]>("/resources/capacities", tokens, { method: "GET" }, onSessionRefresh);
+}
+
+export function createRoleCapacity(
+  payload: {
+    role_id: number;
+    period_start: string;
+    period_end: string;
+    person_count: string;
+    available_hours: string;
+  },
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<RoleCapacity>(
+    "/resources/capacities",
+    tokens,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
+    onSessionRefresh,
+  );
 }
 
 export function setUserStatus(

@@ -2,11 +2,14 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import type { FormEvent } from "react";
 
 import {
   ApiError,
   AuthUser,
   AuthUserAdmin,
+  createUser,
+  deleteUser,
   getMe,
   getUsers,
   setUserRole,
@@ -21,6 +24,10 @@ export default function UsersPage() {
   const [users, setUsers] = useState<AuthUserAdmin[]>([]);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [createMode, setCreateMode] = useState(false);
+  const [newEmail, setNewEmail] = useState("");
+  const [newPassword, setNewPassword] = useState("");
 
   const onSessionRefresh = useMemo(
     () => (next: SessionTokens) => {
@@ -66,11 +73,14 @@ export default function UsersPage() {
     if (!session) {
       return;
     }
+    setActionBusy(true);
     try {
       const updated = await setUserStatus(user.id, !user.is_active, session, onSessionRefresh);
       setUsers((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "Impossible de modifier le statut");
+    } finally {
+      setActionBusy(false);
     }
   }
 
@@ -78,11 +88,57 @@ export default function UsersPage() {
     if (!session) {
       return;
     }
+    setActionBusy(true);
     try {
       const updated = await setUserRole(user.id, !user.is_admin, session, onSessionRefresh);
       setUsers((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "Impossible de modifier le role");
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function addUser(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!session) {
+      router.push("/login");
+      return;
+    }
+
+    setError(null);
+    setActionBusy(true);
+    try {
+      const created = await createUser(newEmail, newPassword, session, onSessionRefresh);
+      setUsers((prev) => [...prev, created].sort((left, right) => left.id - right.id));
+      setNewEmail("");
+      setNewPassword("");
+      setCreateMode(false);
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Impossible de créer l'utilisateur");
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function removeUser(user: AuthUserAdmin) {
+    if (!session) {
+      router.push("/login");
+      return;
+    }
+    if (!window.confirm(`Supprimer définitivement ${user.email} ?`)) {
+      return;
+    }
+
+    setError(null);
+    setActionBusy(true);
+    try {
+      await deleteUser(user.id, session, onSessionRefresh);
+      setUsers((prev) => prev.filter((item) => item.id !== user.id));
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Impossible de supprimer l'utilisateur");
+    } finally {
+      setActionBusy(false);
     }
   }
 
@@ -105,6 +161,48 @@ export default function UsersPage() {
             Déconnexion
           </button>
         </div>
+        <div className="row" style={{ marginTop: "1rem" }}>
+          <button className="btn btn-primary" type="button" onClick={() => setCreateMode(true)}>
+            Ajouter un utilisateur
+          </button>
+        </div>
+        {createMode ? (
+          <form onSubmit={addUser} style={{ marginTop: "1rem" }}>
+            <div className="grid-3">
+              <div className="field">
+                <label htmlFor="new-user-email">Email</label>
+                <input
+                  id="new-user-email"
+                  type="email"
+                  value={newEmail}
+                  onChange={(event) => setNewEmail(event.target.value)}
+                  autoComplete="off"
+                  required
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="new-user-password">Mot de passe</label>
+                <input
+                  id="new-user-password"
+                  type="password"
+                  value={newPassword}
+                  onChange={(event) => setNewPassword(event.target.value)}
+                  minLength={8}
+                  autoComplete="new-password"
+                  required
+                />
+              </div>
+            </div>
+            <div className="row">
+              <button className="btn btn-primary" type="submit" disabled={actionBusy}>
+                {actionBusy ? "Création..." : "Créer"}
+              </button>
+              <button className="btn" type="button" onClick={() => setCreateMode(false)}>
+                Annuler
+              </button>
+            </div>
+          </form>
+        ) : null}
       </section>
 
       <section className="panel">
@@ -131,11 +229,19 @@ export default function UsersPage() {
                   <td>{user.is_admin ? "Admin" : "Standard"}</td>
                   <td>
                     <div className="row">
-                      <button className="btn" onClick={() => void toggleStatus(user)} type="button">
+                      <button className="btn" onClick={() => void toggleStatus(user)} type="button" disabled={actionBusy}>
                         {user.is_active ? "Désactiver" : "Activer"}
                       </button>
-                      <button className="btn" onClick={() => void toggleAdmin(user)} type="button">
+                      <button className="btn" onClick={() => void toggleAdmin(user)} type="button" disabled={actionBusy}>
                         {user.is_admin ? "Retirer admin" : "Promouvoir admin"}
+                      </button>
+                      <button
+                        className="btn btn-danger"
+                        onClick={() => void removeUser(user)}
+                        type="button"
+                        disabled={actionBusy}
+                      >
+                        Supprimer
                       </button>
                     </div>
                   </td>

@@ -243,6 +243,27 @@ def list_users(
     return [_to_user_admin_read(item) for item in users]
 
 
+@router.post("/users", response_model=UserAdminRead, status_code=status.HTTP_201_CREATED)
+def create_user(
+    payload: UserCreate,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_admin_user),
+) -> UserAdminRead:
+    normalized_email = normalize_email(payload.email)
+    if _get_user_by_email(db, normalized_email) is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
+
+    user = User(
+        email=normalized_email,
+        hashed_password=hash_password(payload.password),
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    logger.info("auth.admin_user_created", extra={"target_user_id": user.id})
+    return _to_user_admin_read(user)
+
+
 @router.patch("/users/{user_id}/status", response_model=UserAdminRead)
 def update_user_status(
     user_id: int,
@@ -293,3 +314,20 @@ def update_user_role(
         "auth.user_role_updated", extra={"target_user_id": user.id, "is_admin": user.is_admin}
     )
     return _to_user_admin_read(user)
+
+
+@router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_user(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(get_current_admin_user),
+) -> None:
+    user = db.query(User).filter(User.id == user_id).first()
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    if current_admin.id == user.id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot delete self")
+
+    db.delete(user)
+    db.commit()
+    logger.info("auth.admin_user_deleted", extra={"target_user_id": user_id})

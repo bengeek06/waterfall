@@ -98,6 +98,16 @@ body {
   margin-top: 1rem;
 }
 
+.panel-stack {
+  margin-top: 1rem;
+}
+
+.panel h2 {
+  margin-bottom: 0.9rem;
+  font-family: var(--font-title), sans-serif;
+  font-size: 1.2rem;
+}
+
 .title {
   font-family: var(--font-title), sans-serif;
   font-size: clamp(1.45rem, 2.3vw, 2.1rem);
@@ -193,6 +203,32 @@ body {
   color: var(--warn);
   font-family: var(--font-title), sans-serif;
   font-size: 0.92rem;
+}
+
+.success {
+  margin: 0.8rem 0;
+  color: var(--accent-strong);
+  font-family: var(--font-title), sans-serif;
+  font-size: 0.92rem;
+}
+
+.resource-list {
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 1rem;
+  list-style: none;
+}
+
+.resource-list li {
+  display: grid;
+  gap: 0.18rem;
+  padding: 0.55rem 0;
+  border-top: 1px solid var(--line);
+}
+
+.resource-list span {
+  color: var(--ink-soft);
+  font-size: 0.9rem;
 }
 
 .table {
