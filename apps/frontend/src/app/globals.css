@@ -220,6 +220,91 @@ body {
   margin-top: 1rem;
 }
 
+.project-tabs {
+  display: flex;
+  gap: 0.25rem;
+  overflow-x: auto;
+  margin: 1rem 0 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.project-tab {
+  flex: 0 0 auto;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  padding: 0.75rem 0.85rem;
+  color: var(--ink-soft);
+  font-family: var(--font-title), sans-serif;
+  font-size: 0.88rem;
+  font-weight: 600;
+  background: transparent;
+  cursor: pointer;
+}
+
+.project-tab:hover,
+.project-tab-active {
+  border-bottom-color: var(--accent);
+  color: var(--accent-strong);
+}
+
+.tab-content,
+.tab-placeholder {
+  display: grid;
+  gap: 1rem;
+}
+
+.estimate-summary {
+  display: grid;
+  gap: 1rem;
+}
+
+.estimate-metric {
+  display: grid;
+  gap: 0.15rem;
+  width: fit-content;
+  min-width: 150px;
+  padding: 0.8rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f7faf9;
+}
+
+.estimate-metric strong {
+  font-family: var(--font-title), sans-serif;
+  font-size: 1.35rem;
+}
+
+.estimate-metric span,
+.estimate-select-label {
+  color: var(--ink-soft);
+  font-family: var(--font-title), sans-serif;
+  font-size: 0.82rem;
+}
+
+.estimate-select-label {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.estimate-select-label select {
+  min-width: 90px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.45rem;
+  color: var(--ink);
+  background: var(--card);
+}
+
+.tab-placeholder {
+  min-height: 180px;
+  align-content: center;
+  justify-items: start;
+}
+
+.empty-state {
+  padding: 1.5rem 0;
+}
+
 .panel h2 {
   margin-bottom: 0.9rem;
   font-family: var(--font-title), sans-serif;

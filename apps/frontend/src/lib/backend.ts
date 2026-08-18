@@ -12,6 +12,9 @@ export type CostRate = components["schemas"]["CostRateRead"];
 export type InflationRate = components["schemas"]["InflationRateRead"];
 export type RoleCapacity = components["schemas"]["RoleCapacityRead"];
 export type Project = components["schemas"]["ProjectRead"];
+export type ProjectEstimate = components["schemas"]["ProjectEstimateRead"];
+export type EstimateTaskRow = components["schemas"]["EstimateTaskRowRead"];
+export type EstimateCostLine = components["schemas"]["EstimateCostLineRead"];
 export type Task = components["schemas"]["TaskRead"];
 export type TaskRoleAssignment = components["schemas"]["TaskRoleAssignmentRead"];
 export type ImportBatch = components["schemas"]["ImportBatchResponse"];
@@ -412,6 +415,78 @@ export function getProjects(
 ) {
   return authRequest<Project[]>(
     `/projects?limit=${limit}&offset=${offset}`,
+    tokens,
+    { method: "GET" },
+    onSessionRefresh,
+  );
+}
+
+export function getProject(
+  projectId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<Project>(
+    `/projects/${projectId}`,
+    tokens,
+    { method: "GET" },
+    onSessionRefresh,
+  );
+}
+
+export function listProjectEstimates(
+  projectId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<ProjectEstimate[]>(
+    `/projects/${projectId}/estimates`,
+    tokens,
+    { method: "GET" },
+    onSessionRefresh,
+  );
+}
+
+export function createProjectEstimate(
+  projectId: number,
+  payload: { kind: ProjectEstimate["kind"]; currency_code: string; note?: string | null },
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<ProjectEstimate>(
+    `/projects/${projectId}/estimates`,
+    tokens,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    onSessionRefresh,
+  );
+}
+
+export function listEstimateTaskRows(
+  projectId: number,
+  estimateId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<EstimateTaskRow[]>(
+    `/projects/${projectId}/estimates/${estimateId}/task-rows`,
+    tokens,
+    { method: "GET" },
+    onSessionRefresh,
+  );
+}
+
+export function listEstimateCostLines(
+  projectId: number,
+  estimateId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<EstimateCostLine[]>(
+    `/projects/${projectId}/estimates/${estimateId}/cost-lines`,
     tokens,
     { method: "GET" },
     onSessionRefresh,
