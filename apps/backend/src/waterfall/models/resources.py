@@ -280,8 +280,8 @@ class EstimateLine(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     estimate_id: Mapped[int] = mapped_column(ForeignKey("wf_estimate.id"), nullable=False)
-    task_id: Mapped[int] = mapped_column(ForeignKey("ms_task.id"), nullable=False)
-    role_id: Mapped[int] = mapped_column(ForeignKey("wf_resource_role.id"), nullable=False)
+    task_id: Mapped[int | None] = mapped_column(ForeignKey("ms_task.id"), nullable=True)
+    role_id: Mapped[int | None] = mapped_column(ForeignKey("wf_resource_role.id"), nullable=True)
     task_name: Mapped[str] = mapped_column(String(512), nullable=False)
     role_code: Mapped[str] = mapped_column(String(64), nullable=False)
     role_name: Mapped[str] = mapped_column(String(255), nullable=False)

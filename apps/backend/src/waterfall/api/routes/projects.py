@@ -39,6 +39,7 @@ from waterfall.schemas.projects import (
     TaskRoleAssignmentRead,
     TaskRoleAssignmentUpdate,
 )
+from waterfall.services import calculate_estimate_lines
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 MSP_NS = "http://schemas.microsoft.com/project"
@@ -372,6 +373,13 @@ def validate_project_estimate(
     estimate = _get_estimate_or_404(db, project_id, estimate_id)
     if estimate.status != "draft":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Estimate is not a draft")
+
+    # Calculate and snapshot all estimate lines (labor and non-labor)
+    estimate_lines = calculate_estimate_lines(db, estimate_id)
+    db.add_all(estimate_lines)
+    db.flush()
+
+    # Freeze estimate
     estimate.status = "validated"
     estimate.validated_at = datetime.now(UTC)
     db.add(estimate)
