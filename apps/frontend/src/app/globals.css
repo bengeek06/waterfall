@@ -167,7 +167,7 @@ body {
   place-items: center;
   border-radius: 50%;
   color: white;
-  background: var(--accent);
+  background: var(--brand-blue);
   font-size: 0.8rem;
 }
 
@@ -526,6 +526,14 @@ body {
   font-family: var(--font-title), sans-serif;
   font-size: 0.87rem;
   color: var(--ink-soft);
+}
+
+.table-row-clickable {
+  cursor: pointer;
+}
+
+.table-row-clickable:hover {
+  background: #f2f6f9;
 }
 
 @media (max-width: 900px) {

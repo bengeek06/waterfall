@@ -6,7 +6,6 @@ import type { FormEvent } from "react";
 
 import {
   ApiError,
-  AuthUser,
   AuthUserAdmin,
   SessionExpiredError,
   createUser,
@@ -22,7 +21,6 @@ import { clearSession, getSession, setSession, type SessionTokens } from "@/lib/
 export default function UsersPage() {
   const router = useRouter();
   const [session, setSessionState] = useState<SessionTokens | null>(() => getSession());
-  const [me, setMe] = useState<AuthUser | null>(null);
   const [users, setUsers] = useState<AuthUserAdmin[]>([]);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -55,8 +53,7 @@ export default function UsersPage() {
       setBusy(true);
       setError(null);
       try {
-        const meData = await getMe(session, onSessionRefresh);
-        setMe(meData);
+        await getMe(session, onSessionRefresh);
         const usersData = await getUsers(session, onSessionRefresh);
         setUsers(usersData);
       } catch (cause) {
@@ -186,24 +183,13 @@ export default function UsersPage() {
     }
   }
 
-  function logout() {
-    clearSession();
-    router.push("/login");
-  }
-
   return (
     <>
       <section className="panel">
         <div className="row" style={{ justifyContent: "space-between" }}>
           <div>
             <h1 className="title">Gestion des utilisateurs</h1>
-            <p className="subtitle">
-              {me ? `Connecté en tant que ${me.email}` : "Chargement utilisateur..."}
-            </p>
           </div>
-          <button className="btn" onClick={logout} type="button">
-            Déconnexion
-          </button>
         </div>
         <div className="row" style={{ marginTop: "1rem" }}>
           <button className="btn btn-primary" type="button" onClick={() => setCreateMode(true)}>

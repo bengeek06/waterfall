@@ -136,11 +136,6 @@ export default function ResourcesPage() {
     void load();
   }, [onSessionRefresh, router, session]);
 
-  function logout() {
-    clearSession();
-    router.push("/login");
-  }
-
   async function submitAction(action: () => Promise<void>, success: string) {
     setActionBusy(true);
     setNotice(null);
@@ -299,7 +294,6 @@ export default function ResourcesPage() {
             <h1 className="title">Paramétrage des ressources</h1>
             <p className="subtitle">Référentiel entreprise réservé aux administrateurs.</p>
           </div>
-          <button className="btn" onClick={logout} type="button">Déconnexion</button>
         </div>
       </section>
 

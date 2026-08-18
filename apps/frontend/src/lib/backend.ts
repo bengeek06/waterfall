@@ -594,8 +594,11 @@ export function exportEstimateExcel(
   );
 }
 
+export type ProjectCreateInput = components["schemas"]["ProjectCreate"];
+export type ProjectUpdateInput = components["schemas"]["ProjectUpdate"];
+
 export function createProject(
-  name: string,
+  payload: ProjectCreateInput,
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
 ) {
@@ -607,15 +610,15 @@ export function createProject(
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify(payload),
     },
     onSessionRefresh,
   );
 }
 
-export function updateProjectName(
+export function updateProject(
   projectId: number,
-  name: string,
+  payload: ProjectUpdateInput,
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
 ) {
@@ -627,7 +630,7 @@ export function updateProjectName(
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify(payload),
     },
     onSessionRefresh,
   );

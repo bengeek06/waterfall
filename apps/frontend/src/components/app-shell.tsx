@@ -3,14 +3,15 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { FolderKanban, LogOut, Menu, Settings2, Users, X } from "lucide-react";
 
-import { clearSession } from "@/lib/session";
+import { getMe } from "@/lib/backend";
+import { clearSession, getSession, setSession, type SessionTokens } from "@/lib/session";
 
 const navigation = [
   { href: "/projects", label: "Projets", icon: FolderKanban },
-  { href: "/resources", label: "Ressources", icon: Settings2 },
+  { href: "/resources", label: "Paramètres", icon: Settings2 },
   { href: "/users", label: "Utilisateurs", icon: Users },
 ];
 
@@ -18,6 +19,23 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (pathname === "/login") {
+      return;
+    }
+    const session = getSession();
+    if (!session) {
+      return;
+    }
+    const onSessionRefresh = (next: SessionTokens) => setSession(next);
+    getMe(session, onSessionRefresh)
+      .then((me) => setUserEmail(me.email))
+      .catch(() => {
+        // Non-blocking: pages already handle redirecting on session expiry.
+      });
+  }, [pathname]);
 
   if (pathname === "/login") {
     return <main className="auth-shell">{children}</main>;
@@ -61,7 +79,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           })}
         </nav>
         <div className="sidebar-footer">
-          <span className="sidebar-caption">Console Waterfall</span>
           <button className="sidebar-link sidebar-action" type="button" onClick={signOut}>
             <LogOut size={18} aria-hidden="true" />
             <span>Se déconnecter</span>
@@ -78,8 +95,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <strong>Gestion des projets</strong>
           </div>
           <Link href="/projects" className="header-user" aria-label="Retour aux projets">
+            <span className="header-user-name">
+              {userEmail ? `Connecté en tant que ${userEmail}` : "Waterfall"}
+            </span>
             <span className="avatar">W</span>
-            <span className="header-user-name">Waterfall</span>
           </Link>
         </header>
         <main className="shell">{children}</main>

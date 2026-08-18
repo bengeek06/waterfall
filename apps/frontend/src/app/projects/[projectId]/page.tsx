@@ -8,6 +8,7 @@ import {
   ApiError,
   CostCategory,
   createEstimateCostLine,
+  createImportBatch,
   createProjectEstimate,
   createProjectTask,
   deleteEstimateCostLine,
@@ -15,27 +16,33 @@ import {
   EstimateAggregates,
   EstimateCostLine,
   exportEstimateExcel,
+  exportProjectXml,
   getCostCategories,
   getCostTypes,
   getEstimateAggregates,
+  getImportBatchStatus,
   getProject,
   listEstimateCostLines,
   listEstimateTaskRows,
   listProjectEstimates,
   Project,
   ProjectEstimate,
+  runImportBatch,
   SessionExpiredError,
   Task,
   getProjectTasks,
   restoreSession,
   updateEstimateCostLine,
+  updateProject,
   updateTaskDescription,
+  uploadImportSourceXml,
   validateProjectEstimate,
 } from "@/lib/backend";
 import { clearSession, getSession, setSession, type SessionTokens } from "@/lib/session";
 import { ReadOnlyGantt } from "@/components/read-only-gantt";
 
 const TASK_PAGE_SIZE = 200;
+const MAX_IMPORT_FILE_SIZE = 25 * 1024 * 1024;
 type ProjectTab = "planning" | "estimate" | "commitments" | "analytics";
 
 export default function ProjectDetailsPage() {
@@ -46,6 +53,12 @@ export default function ProjectDetailsPage() {
   const [session, setSessionState] = useState<SessionTokens | null>(() => getSession());
   const [tasks, setTasks] = useState<Task[]>([]);
   const [project, setProject] = useState<Project | null>(null);
+  const [editingProjectInfo, setEditingProjectInfo] = useState(false);
+  const [projectInfoDraft, setProjectInfoDraft] = useState({ name: "", shortDescription: "" });
+  const [projectInfoBusy, setProjectInfoBusy] = useState(false);
+  const [planningExportBusy, setPlanningExportBusy] = useState(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importBusy, setImportBusy] = useState(false);
   const [estimates, setEstimates] = useState<ProjectEstimate[]>([]);
   const [selectedEstimateId, setSelectedEstimateId] = useState<number | null>(null);
   const [estimateTaskRowCount, setEstimateTaskRowCount] = useState(0);
@@ -507,13 +520,181 @@ export default function ProjectDetailsPage() {
     }
   }
 
+  function startEditProjectInfo() {
+    if (!project) {
+      return;
+    }
+    setProjectInfoDraft({ name: project.name, shortDescription: project.short_description ?? "" });
+    setEditingProjectInfo(true);
+  }
+
+  async function saveProjectInfo() {
+    if (!session || !project) {
+      return;
+    }
+    if (!projectInfoDraft.name.trim()) {
+      setError("Le nom du projet est obligatoire.");
+      return;
+    }
+
+    setProjectInfoBusy(true);
+    setError(null);
+    try {
+      const updated = await updateProject(
+        projectId,
+        {
+          name: projectInfoDraft.name.trim(),
+          short_description: projectInfoDraft.shortDescription.trim() || null,
+        },
+        session,
+        onSessionRefresh,
+      );
+      setProject(updated);
+      setEditingProjectInfo(false);
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      setError(cause instanceof ApiError ? cause.message : "Impossible de modifier le projet.");
+    } finally {
+      setProjectInfoBusy(false);
+    }
+  }
+
+  async function exportPlanningXml() {
+    if (!session || !project) {
+      return;
+    }
+    setPlanningExportBusy(true);
+    setError(null);
+    try {
+      const blob = await exportProjectXml(projectId, session, onSessionRefresh);
+      const objectUrl = window.URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = `${project.name || `project-${projectId}`}.xml`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.URL.revokeObjectURL(objectUrl);
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      setError(cause instanceof ApiError ? cause.message : "Impossible d'exporter le planning.");
+    } finally {
+      setPlanningExportBusy(false);
+    }
+  }
+
+  async function importPlanningXml() {
+    if (!session || !project || !importFile) {
+      return;
+    }
+    setImportBusy(true);
+    setError(null);
+    try {
+      const batch = await createImportBatch(projectId, project.name, session, onSessionRefresh);
+      await uploadImportSourceXml(batch.id, importFile, session, onSessionRefresh);
+      await runImportBatch(batch.id, session, onSessionRefresh);
+
+      let batchStatus = await getImportBatchStatus(batch.id, session, onSessionRefresh);
+      for (let index = 0; index < 20; index += 1) {
+        if (batchStatus.status === "success" || batchStatus.status === "failed") {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        batchStatus = await getImportBatchStatus(batch.id, session, onSessionRefresh);
+      }
+      if (batchStatus.status !== "success") {
+        throw new Error(batchStatus.errorMessage ?? "Import en échec.");
+      }
+
+      const tasksData = await getProjectTasks(
+        projectId,
+        session,
+        onSessionRefresh,
+        TASK_PAGE_SIZE,
+        taskOffset,
+      );
+      setTasks(tasksData);
+      const refreshedDrafts: Record<number, string> = {};
+      for (const task of tasksData) {
+        refreshedDrafts[task.uid] = task.description ?? "";
+      }
+      setDrafts(refreshedDrafts);
+      setImportFile(null);
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      setError(cause instanceof ApiError ? cause.message : "Impossible d'importer le planning.");
+    } finally {
+      setImportBusy(false);
+    }
+  }
+
   return (
     <>
       <section className="panel">
         <div className="row" style={{ justifyContent: "space-between" }}>
-          <div>
-            <h1 className="title">{project?.name ?? `Projet #${projectId}`}</h1>
-            <p className="subtitle">Pilotage du planning et des versions de devis.</p>
+          <div style={{ flex: 1 }}>
+            {editingProjectInfo ? (
+              <div style={{ maxWidth: "34rem" }}>
+                <div className="field">
+                  <label htmlFor="project-info-name">Nom du projet</label>
+                  <input
+                    id="project-info-name"
+                    value={projectInfoDraft.name}
+                    onChange={(event) =>
+                      setProjectInfoDraft((prev) => ({ ...prev, name: event.target.value }))
+                    }
+                    maxLength={255}
+                  />
+                </div>
+                <div className="field">
+                  <label htmlFor="project-info-description">Description courte</label>
+                  <textarea
+                    id="project-info-description"
+                    rows={2}
+                    value={projectInfoDraft.shortDescription}
+                    onChange={(event) =>
+                      setProjectInfoDraft((prev) => ({ ...prev, shortDescription: event.target.value }))
+                    }
+                    maxLength={500}
+                  />
+                </div>
+                <div className="row">
+                  <button
+                    className="btn btn-primary"
+                    type="button"
+                    disabled={projectInfoBusy}
+                    onClick={() => void saveProjectInfo()}
+                  >
+                    Sauver
+                  </button>
+                  <button className="btn" type="button" onClick={() => setEditingProjectInfo(false)}>
+                    Annuler
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <h1 className="title">{project?.name ?? `Projet #${projectId}`}</h1>
+                <p className="subtitle">
+                  {project?.short_description ?? "Pilotage du planning et des versions de devis."}
+                </p>
+                <button className="btn" type="button" onClick={startEditProjectInfo}>
+                  Modifier
+                </button>
+              </>
+            )}
           </div>
           <Link href="/projects" className="btn">
             Retour projets
@@ -544,6 +725,48 @@ export default function ProjectDetailsPage() {
       <section className="panel">
         {busy ? <p className="muted" role="status">Chargement...</p> : null}
         {error ? <p className="error" role="alert">{error}</p> : null}
+
+        {activeTab === "planning" ? (
+          <div className="row cost-line-form" style={{ marginBottom: "1rem", justifyContent: "space-between" }}>
+            <div className="row">
+              <div className="field" style={{ marginBottom: 0 }}>
+                <label htmlFor="planning-import-file">Importer un planning MS Project (.xml)</label>
+                <input
+                  id="planning-import-file"
+                  type="file"
+                  accept=".xml,application/xml,text/xml"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0] ?? null;
+                    if (file && file.size > MAX_IMPORT_FILE_SIZE) {
+                      setImportFile(null);
+                      setError("Le fichier XML ne doit pas dépasser 25 MiB.");
+                      event.target.value = "";
+                      return;
+                    }
+                    setError(null);
+                    setImportFile(file);
+                  }}
+                />
+              </div>
+              <button
+                className="btn btn-primary"
+                type="button"
+                disabled={!importFile || importBusy}
+                onClick={() => void importPlanningXml()}
+              >
+                {importBusy ? "Import..." : "Importer"}
+              </button>
+            </div>
+            <button
+              className="btn"
+              type="button"
+              disabled={planningExportBusy}
+              onClick={() => void exportPlanningXml()}
+            >
+              {planningExportBusy ? "Export..." : "Export XML"}
+            </button>
+          </div>
+        ) : null}
 
         {activeTab === "planning" ? (
           <div className="row cost-line-form" style={{ marginBottom: "1rem" }}>
