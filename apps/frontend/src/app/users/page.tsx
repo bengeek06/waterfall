@@ -8,6 +8,7 @@ import {
   ApiError,
   AuthUser,
   AuthUserAdmin,
+  SessionExpiredError,
   createUser,
   deleteUser,
   getMe,
@@ -51,6 +52,11 @@ export default function UsersPage() {
         const usersData = await getUsers(session, onSessionRefresh);
         setUsers(usersData);
       } catch (cause) {
+        if (cause instanceof SessionExpiredError) {
+          clearSession();
+          router.push("/login");
+          return;
+        }
         if (cause instanceof ApiError) {
           if (cause.status === 401) {
             clearSession();
@@ -78,6 +84,11 @@ export default function UsersPage() {
       const updated = await setUserStatus(user.id, !user.is_active, session, onSessionRefresh);
       setUsers((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
     } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
       setError(cause instanceof ApiError ? cause.message : "Impossible de modifier le statut");
     } finally {
       setActionBusy(false);
@@ -93,6 +104,11 @@ export default function UsersPage() {
       const updated = await setUserRole(user.id, !user.is_admin, session, onSessionRefresh);
       setUsers((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
     } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
       setError(cause instanceof ApiError ? cause.message : "Impossible de modifier le role");
     } finally {
       setActionBusy(false);
@@ -115,6 +131,11 @@ export default function UsersPage() {
       setNewPassword("");
       setCreateMode(false);
     } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
       setError(cause instanceof ApiError ? cause.message : "Impossible de créer l'utilisateur");
     } finally {
       setActionBusy(false);
@@ -136,6 +157,11 @@ export default function UsersPage() {
       await deleteUser(user.id, session, onSessionRefresh);
       setUsers((prev) => prev.filter((item) => item.id !== user.id));
     } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
       setError(cause instanceof ApiError ? cause.message : "Impossible de supprimer l'utilisateur");
     } finally {
       setActionBusy(false);

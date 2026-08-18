@@ -8,6 +8,7 @@ import {
   ApiError,
   AuthUser,
   Project,
+  SessionExpiredError,
   createImportBatch,
   createProject,
   deleteProject,
@@ -60,6 +61,11 @@ export default function ProjectsPage() {
         const projectsData = await getProjects(session, onSessionRefresh);
         setProjects(projectsData);
       } catch (cause) {
+        if (cause instanceof SessionExpiredError) {
+          clearSession();
+          router.push("/login");
+          return;
+        }
         if (cause instanceof ApiError) {
           if (cause.status === 401) {
             clearSession();
@@ -167,6 +173,11 @@ export default function ProjectsPage() {
       await refreshProjects(session);
       resetCreateFlow();
     } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
       if (cause instanceof ApiError) {
         setError(cause.message);
       } else if (cause instanceof Error) {

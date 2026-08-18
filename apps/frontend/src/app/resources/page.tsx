@@ -11,6 +11,7 @@ import {
   ResourceNode,
   ResourceRole,
   RoleCapacity,
+  SessionExpiredError,
   createCostCategory,
   createCostRate,
   createResourceNode,
@@ -95,6 +96,11 @@ export default function ResourcesPage() {
         setInflation(inflationData);
         setCapacities(capacityData);
       } catch (cause) {
+        if (cause instanceof SessionExpiredError) {
+          clearSession();
+          router.push("/login");
+          return;
+        }
         if (cause instanceof ApiError && cause.status === 401) {
           clearSession();
           router.push("/login");

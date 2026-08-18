@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import {
   ApiError,
+  SessionExpiredError,
   Task,
   getProjectTasks,
   updateTaskDescription,
@@ -50,6 +51,11 @@ export default function ProjectDetailsPage() {
         }
         setDrafts(initialDrafts);
       } catch (cause) {
+        if (cause instanceof SessionExpiredError) {
+          clearSession();
+          router.push("/login");
+          return;
+        }
         if (cause instanceof ApiError) {
           if (cause.status === 401) {
             clearSession();
@@ -87,6 +93,11 @@ export default function ProjectDetailsPage() {
       setTasks((prev) => prev.map((item) => (item.uid === updated.uid ? updated : item)));
       setDrafts((prev) => ({ ...prev, [task.uid]: updated.description ?? "" }));
     } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
       setError(cause instanceof ApiError ? cause.message : "Sauvegarde impossible");
     }
   }

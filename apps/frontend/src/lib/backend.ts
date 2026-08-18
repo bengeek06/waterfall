@@ -135,6 +135,15 @@ export class ApiError extends Error {
   }
 }
 
+export class SessionExpiredError extends Error {
+  constructor() {
+    super("Session expired");
+    this.name = "SessionExpiredError";
+  }
+}
+
+let refreshInFlight: Promise<TokenResponse> | null = null;
+
 async function parseError(response: Response): Promise<string> {
   const text = await response.text();
   if (!text) {
@@ -187,7 +196,15 @@ async function authFetch(
     return firstResponse;
   }
 
-  const refreshed = await refresh();
+  let refreshed: TokenResponse;
+  try {
+    refreshed = await refreshOnce();
+  } catch (cause) {
+    if (cause instanceof ApiError && (cause.status === 401 || cause.status === 403)) {
+      throw new SessionExpiredError();
+    }
+    throw cause;
+  }
   const nextSession: SessionTokens = {
     accessToken: refreshed.access_token,
   };
@@ -226,6 +243,15 @@ export async function refresh(): Promise<TokenResponse> {
   return requestJson<TokenResponse>("/auth/refresh", {
     method: "POST",
   });
+}
+
+function refreshOnce(): Promise<TokenResponse> {
+  if (!refreshInFlight) {
+    refreshInFlight = refresh().finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  return refreshInFlight;
 }
 
 export async function authRequest<T>(
