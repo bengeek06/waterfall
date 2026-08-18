@@ -24,6 +24,7 @@ jobs:
           filters: |
             backend:
               - 'apps/backend/**'
+              - 'openapi/**'
               - '.pre-commit-config.yaml'
               - '.github/workflows/ci.yml'
               - 'infra/docker/**'

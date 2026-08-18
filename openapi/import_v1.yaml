@@ -16,6 +16,8 @@ tags:
     description: Authentification par bearer token et gestion des utilisateurs
   - name: health
     description: Sondes de disponibilité et de préparation
+  - name: observability
+    description: Endpoint de métriques Prometheus
   - name: imports-v1
     description: Flux d'import XML MS Project (MVP taches + dependances)
   - name: projects
@@ -49,6 +51,19 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ReadinessStatus'
+
+  /metrics:
+    get:
+      tags: [observability]
+      summary: Exposer les métriques Prometheus
+      operationId: getMetrics
+      responses:
+        '200':
+          description: Métriques Prometheus
+          content:
+            text/plain:
+              schema:
+                type: string
 
   /auth/register:
     post:
