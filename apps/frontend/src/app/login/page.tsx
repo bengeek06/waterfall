@@ -22,7 +22,6 @@ export default function LoginPage() {
       const tokens = await login(email, password);
       setSession({
         accessToken: tokens.access_token,
-        refreshToken: tokens.refreshToken,
       });
       router.push("/projects");
     } catch (cause) {

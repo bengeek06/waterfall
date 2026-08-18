@@ -121,7 +121,6 @@ export type ImportBatchStatus = {
 
 export type TokenResponse = {
   access_token: string;
-  refreshToken: string;
   token_type: string;
   expiresIn: number;
 };
@@ -151,7 +150,10 @@ async function parseError(response: Response): Promise<string> {
 }
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${DEFAULT_API_BASE_URL}${path}`, init);
+  const response = await fetch(`${DEFAULT_API_BASE_URL}${path}`, {
+    ...init,
+    credentials: "include",
+  });
   if (!response.ok) {
     throw new ApiError(response.status, await parseError(response));
   }
@@ -175,6 +177,7 @@ async function authFetch(
   const firstResponse = await fetch(`${DEFAULT_API_BASE_URL}${path}`, {
     ...init,
     headers,
+    credentials: "include",
   });
 
   if (firstResponse.status !== 401) {
@@ -184,10 +187,9 @@ async function authFetch(
     return firstResponse;
   }
 
-  const refreshed = await refresh(tokens.refreshToken);
+  const refreshed = await refresh();
   const nextSession: SessionTokens = {
     accessToken: refreshed.access_token,
-    refreshToken: refreshed.refreshToken,
   };
   onSessionRefresh(nextSession);
 
@@ -197,6 +199,7 @@ async function authFetch(
   const secondResponse = await fetch(`${DEFAULT_API_BASE_URL}${path}`, {
     ...init,
     headers: retryHeaders,
+    credentials: "include",
   });
 
   if (!secondResponse.ok) {
@@ -219,13 +222,9 @@ export async function login(email: string, password: string): Promise<TokenRespo
   });
 }
 
-export async function refresh(refreshToken: string): Promise<TokenResponse> {
+export async function refresh(): Promise<TokenResponse> {
   return requestJson<TokenResponse>("/auth/refresh", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ refreshToken }),
   });
 }
 

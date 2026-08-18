@@ -59,8 +59,9 @@ def test_register_login_and_me() -> None:
         assert token_response.status_code == 200
         token_payload: dict[str, Any] = token_response.json()
         token = cast(str, token_payload["access_token"])
-        assert "refreshToken" in token_payload
+        assert "refreshToken" not in token_payload
         assert token_payload["token_type"] == "bearer"
+        assert "HttpOnly" in token_response.headers["set-cookie"]
 
         me_response: Response = client.get(
             "/auth/me",
@@ -152,10 +153,7 @@ def test_refresh_token_does_not_revoke_existing_access_tokens() -> None:
         assert login_response.status_code == 200
         first_tokens: dict[str, Any] = login_response.json()
 
-        refresh_response: Response = client.post(
-            "/auth/refresh",
-            json={"refreshToken": first_tokens["refreshToken"]},
-        )
+        refresh_response: Response = client.post("/auth/refresh")
         assert refresh_response.status_code == 200
         second_tokens: dict[str, Any] = refresh_response.json()
 
@@ -171,6 +169,24 @@ def test_refresh_token_does_not_revoke_existing_access_tokens() -> None:
             headers=_auth_header(cast(str, first_tokens["access_token"])),
         )
         assert me_with_first_access_token.status_code == 200
+
+
+def test_logout_clears_refresh_cookie() -> None:
+    with TestClient(app) as client:
+        register_response = client.post(
+            "/auth/register",
+            json={"email": "logout@example.com", "password": "SuperSecret123"},
+        )
+        assert register_response.status_code == 201
+        login_response = _login(client, "logout@example.com", "SuperSecret123")
+        assert login_response.status_code == 200
+
+        logout_response = client.post("/auth/logout")
+        assert logout_response.status_code == 204
+        assert "Max-Age=0" in logout_response.headers["set-cookie"]
+
+        refresh_response = client.post("/auth/refresh")
+        assert refresh_response.status_code == 401
 
 
 def test_change_password_invalidates_previous_credentials() -> None:
