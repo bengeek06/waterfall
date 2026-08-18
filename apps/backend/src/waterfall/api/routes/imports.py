@@ -52,7 +52,7 @@ async def _save_source_xml(file: UploadFile, batch_id: int) -> tuple[Path, int, 
                 byte_count += len(chunk)
                 if byte_count > settings.import_max_upload_bytes:
                     raise HTTPException(
-                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
                         detail="XML file exceeds the configured size limit",
                     )
                 digest.update(chunk)
