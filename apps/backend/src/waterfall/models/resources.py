@@ -185,7 +185,7 @@ class Estimate(Base):
         UniqueConstraint("project_id", "version_number", name="uq_wf_estimate_project_version"),
         CheckConstraint("version_number > 0", name="ck_wf_estimate_version"),
         CheckConstraint(
-            "kind IN ('initial', 'remaining')",
+            "kind IN ('initial', 'contract_reference', 'forecast_remaining')",
             name="ck_wf_estimate_kind",
         ),
         CheckConstraint(
@@ -196,6 +196,9 @@ class Estimate(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("ms_project.id"), nullable=False)
+    reference_estimate_id: Mapped[int | None] = mapped_column(
+        ForeignKey("wf_estimate.id"), nullable=True
+    )
     version_number: Mapped[int] = mapped_column(Integer, nullable=False)
     kind: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft")
@@ -205,6 +208,24 @@ class Estimate(Base):
     )
     validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class EstimateTaskRow(Base):
+    __tablename__ = "wf_estimate_task_row"
+    __table_args__ = (
+        UniqueConstraint("estimate_id", "task_id", name="uq_wf_estimate_task_row"),
+        Index("idx_wf_estimate_task_row_estimate_position", "estimate_id", "position"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    estimate_id: Mapped[int] = mapped_column(ForeignKey("wf_estimate.id"), nullable=False)
+    task_id: Mapped[int] = mapped_column(ForeignKey("ms_task.id"), nullable=False)
+    parent_task_id: Mapped[int | None] = mapped_column(ForeignKey("ms_task.id"), nullable=True)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    task_name: Mapped[str] = mapped_column(String(512), nullable=False)
+    outline_number: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    outline_level: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_milestone: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class EstimateLine(Base):

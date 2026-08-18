@@ -3,17 +3,28 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from waterfall.api.dependencies import get_current_active_user
 from waterfall.db.session import get_db
 from waterfall.models.ms_core import MsProject, MsTask, MsTaskLink
-from waterfall.models.resources import CostCategory, CostType, ResourceRole, TaskRoleAssignment
+from waterfall.models.resources import (
+    CostCategory,
+    CostType,
+    Estimate,
+    EstimateTaskRow,
+    ResourceRole,
+    TaskRoleAssignment,
+)
 from waterfall.models.user import User
 from waterfall.models.wf_core import WfChargeLine, WfExcelImport, WfImportBatch, WfTaskEnrichment
 from waterfall.schemas.projects import (
+    EstimateTaskRowRead,
     ProjectCreate,
+    ProjectEstimateCreate,
+    ProjectEstimateRead,
     ProjectRead,
     ProjectUpdate,
     TaskDescriptionUpdate,
@@ -61,6 +72,47 @@ def _to_project_read(project: MsProject) -> ProjectRead:
         start_date=project.start_date,
         finish_date=project.finish_date,
         currency_code=project.currency_code,
+    )
+
+
+def _get_estimate_or_404(db: Session, project_id: int, estimate_id: int) -> Estimate:
+    estimate = (
+        db.query(Estimate)
+        .filter(Estimate.id == estimate_id)
+        .filter(Estimate.project_id == project_id)
+        .first()
+    )
+    if estimate is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Estimate not found")
+    return estimate
+
+
+def _to_project_estimate_read(estimate: Estimate) -> ProjectEstimateRead:
+    return ProjectEstimateRead(
+        id=estimate.id,
+        project_id=estimate.project_id,
+        reference_estimate_id=estimate.reference_estimate_id,
+        version_number=estimate.version_number,
+        kind=estimate.kind,
+        status=estimate.status,
+        currency_code=estimate.currency_code,
+        created_at=estimate.created_at,
+        validated_at=estimate.validated_at,
+        note=estimate.note,
+    )
+
+
+def _to_estimate_task_row_read(row: EstimateTaskRow) -> EstimateTaskRowRead:
+    return EstimateTaskRowRead(
+        id=row.id,
+        estimate_id=row.estimate_id,
+        task_id=row.task_id,
+        parent_task_id=row.parent_task_id,
+        position=row.position,
+        task_name=row.task_name,
+        outline_number=row.outline_number,
+        outline_level=row.outline_level,
+        is_milestone=row.is_milestone,
     )
 
 
@@ -141,6 +193,138 @@ def create_project(
     db.commit()
     db.refresh(project)
     return _to_project_read(project)
+
+
+@router.get("/{project_id}/estimates", response_model=list[ProjectEstimateRead])
+def list_project_estimates(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> list[ProjectEstimateRead]:
+    _get_project_or_404(db, project_id, current_user.id)
+    estimates = (
+        db.query(Estimate)
+        .filter(Estimate.project_id == project_id)
+        .order_by(Estimate.version_number)
+        .all()
+    )
+    return [_to_project_estimate_read(estimate) for estimate in estimates]
+
+
+@router.post(
+    "/{project_id}/estimates",
+    response_model=ProjectEstimateRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_project_estimate(
+    project_id: int,
+    payload: ProjectEstimateCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> ProjectEstimateRead:
+    _get_project_or_404(db, project_id, current_user.id)
+    if payload.kind == "forecast_remaining" and payload.reference_estimate_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Forecast remaining estimate requires a reference estimate",
+        )
+    if payload.reference_estimate_id is not None:
+        _get_estimate_or_404(db, project_id, payload.reference_estimate_id)
+
+    current_version = (
+        db.query(func.max(Estimate.version_number))
+        .filter(Estimate.project_id == project_id)
+        .scalar()
+    )
+    next_version = (current_version or 0) + 1
+    estimate = Estimate(
+        project_id=project_id,
+        reference_estimate_id=payload.reference_estimate_id,
+        version_number=next_version,
+        kind=payload.kind,
+        status="draft",
+        currency_code=payload.currency_code.upper(),
+        note=payload.note,
+    )
+    db.add(estimate)
+    db.flush()
+
+    tasks = db.query(MsTask).filter(MsTask.project_id == project_id).order_by(MsTask.id).all()
+    task_id_by_outline = {task.outline_number: task.id for task in tasks if task.outline_number}
+    rows: list[EstimateTaskRow] = []
+    for position, task in enumerate(tasks, start=1):
+        parent_outline = (
+            task.outline_number.rsplit(".", 1)[0]
+            if task.outline_number and "." in task.outline_number
+            else None
+        )
+        rows.append(
+            EstimateTaskRow(
+                estimate_id=estimate.id,
+                task_id=task.id,
+                parent_task_id=task_id_by_outline.get(parent_outline) if parent_outline else None,
+                position=position,
+                task_name=task.name,
+                outline_number=task.outline_number,
+                outline_level=task.outline_level,
+                is_milestone=task.is_milestone,
+            )
+        )
+    db.add_all(rows)
+    db.commit()
+    db.refresh(estimate)
+    return _to_project_estimate_read(estimate)
+
+
+@router.get("/{project_id}/estimates/{estimate_id}", response_model=ProjectEstimateRead)
+def get_project_estimate(
+    project_id: int,
+    estimate_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> ProjectEstimateRead:
+    _get_project_or_404(db, project_id, current_user.id)
+    return _to_project_estimate_read(_get_estimate_or_404(db, project_id, estimate_id))
+
+
+@router.get(
+    "/{project_id}/estimates/{estimate_id}/task-rows",
+    response_model=list[EstimateTaskRowRead],
+)
+def list_estimate_task_rows(
+    project_id: int,
+    estimate_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> list[EstimateTaskRowRead]:
+    _get_project_or_404(db, project_id, current_user.id)
+    _get_estimate_or_404(db, project_id, estimate_id)
+    rows = (
+        db.query(EstimateTaskRow)
+        .filter(EstimateTaskRow.estimate_id == estimate_id)
+        .order_by(EstimateTaskRow.position)
+        .all()
+    )
+    return [_to_estimate_task_row_read(row) for row in rows]
+
+
+@router.post("/{project_id}/estimates/{estimate_id}/validate", response_model=ProjectEstimateRead)
+def validate_project_estimate(
+    project_id: int,
+    estimate_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> ProjectEstimateRead:
+    _get_project_or_404(db, project_id, current_user.id)
+    estimate = _get_estimate_or_404(db, project_id, estimate_id)
+    if estimate.status != "draft":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Estimate is not a draft")
+    estimate.status = "validated"
+    estimate.validated_at = datetime.now(UTC)
+    db.add(estimate)
+    db.commit()
+    db.refresh(estimate)
+    return _to_project_estimate_read(estimate)
 
 
 @router.get("/{project_id}", response_model=ProjectRead)

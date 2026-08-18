@@ -770,6 +770,125 @@ paths:
         '404':
           $ref: '#/components/responses/TaskNotFound'
 
+  /projects/{projectId}/estimates:
+    get:
+      tags: [projects]
+      summary: Lister les versions de devis d'un projet
+      operationId: listProjectEstimates
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      responses:
+        '200':
+          description: Versions de devis
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProjectEstimateRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+    post:
+      tags: [projects]
+      summary: Créer un brouillon de devis et son snapshot de tâches
+      operationId: createProjectEstimate
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectEstimateCreate'
+      responses:
+        '201':
+          description: Brouillon de devis créé
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectEstimateRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+
+  /projects/{projectId}/estimates/{estimateId}:
+    get:
+      tags: [projects]
+      summary: Lire une version de devis
+      operationId: getProjectEstimate
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/EstimateId'
+      responses:
+        '200':
+          description: Version de devis
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectEstimateRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+
+  /projects/{projectId}/estimates/{estimateId}/task-rows:
+    get:
+      tags: [projects]
+      summary: Lister les lignes de tâches snapshotées dans un devis
+      operationId: listEstimateTaskRows
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/EstimateId'
+      responses:
+        '200':
+          description: Lignes de tâches du devis
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/EstimateTaskRowRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+
+  /projects/{projectId}/estimates/{estimateId}/validate:
+    post:
+      tags: [projects]
+      summary: Valider et figer un brouillon de devis
+      operationId: validateProjectEstimate
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/EstimateId'
+      responses:
+        '200':
+          description: Devis validé
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectEstimateRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
   /projects/{projectId}/export.xml:
     get:
       tags: [projects]
@@ -1439,6 +1558,14 @@ components:
         type: integer
         minimum: 1
       description: Identifiant technique de l'affectation de rôle
+    EstimateId:
+      name: estimateId
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+      description: Identifiant technique de la version de devis
     NodeId:
       name: nodeId
       in: path
@@ -2020,6 +2147,106 @@ components:
         updated_at:
           type: string
           format: date-time
+
+    ProjectEstimateCreate:
+      type: object
+      required: [kind, currency_code]
+      properties:
+        kind:
+          type: string
+          enum: [initial, contract_reference, forecast_remaining]
+        currency_code:
+          type: string
+          minLength: 3
+          maxLength: 3
+        reference_estimate_id:
+          type: integer
+          minimum: 1
+          nullable: true
+        note:
+          type: string
+          maxLength: 10000
+          nullable: true
+
+    ProjectEstimateRead:
+      type: object
+      required:
+        - id
+        - project_id
+        - version_number
+        - kind
+        - status
+        - currency_code
+        - created_at
+      properties:
+        id:
+          type: integer
+          minimum: 1
+        project_id:
+          type: integer
+          minimum: 1
+        reference_estimate_id:
+          type: integer
+          minimum: 1
+          nullable: true
+        version_number:
+          type: integer
+          minimum: 1
+        kind:
+          type: string
+          enum: [initial, contract_reference, forecast_remaining]
+        status:
+          type: string
+          enum: [draft, validated, superseded, archived]
+        currency_code:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        validated_at:
+          type: string
+          format: date-time
+          nullable: true
+        note:
+          type: string
+          nullable: true
+
+    EstimateTaskRowRead:
+      type: object
+      required:
+        - id
+        - estimate_id
+        - task_id
+        - position
+        - task_name
+        - is_milestone
+      properties:
+        id:
+          type: integer
+          minimum: 1
+        estimate_id:
+          type: integer
+          minimum: 1
+        task_id:
+          type: integer
+          minimum: 1
+        parent_task_id:
+          type: integer
+          minimum: 1
+          nullable: true
+        position:
+          type: integer
+          minimum: 1
+        task_name:
+          type: string
+        outline_number:
+          type: string
+          nullable: true
+        outline_level:
+          type: integer
+          nullable: true
+        is_milestone:
+          type: boolean
 
     ResourceNodeCreate:
       type: object

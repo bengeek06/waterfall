@@ -351,6 +351,87 @@ def test_project_and_task_pagination() -> None:
         assert first_project_id != second_project_id
 
 
+def test_project_estimate_snapshots_tasks_and_validates() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        create_response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR", "note": "Chiffrage initial"},
+            headers=headers,
+        )
+        assert create_response.status_code == 201
+        estimate = cast(dict[str, Any], create_response.json())
+        estimate_id = cast(int, estimate["id"])
+        assert estimate["version_number"] == 1
+        assert estimate["status"] == "draft"
+
+        rows_response = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/task-rows",
+            headers=headers,
+        )
+        assert rows_response.status_code == 200
+        rows = cast(list[dict[str, Any]], rows_response.json())
+        assert [row["task_name"] for row in rows] == ["Task One", "Task Two"]
+        assert [row["position"] for row in rows] == [1, 2]
+
+        validate_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/validate",
+            headers=headers,
+        )
+        assert validate_response.status_code == 200
+        assert validate_response.json()["status"] == "validated"
+        assert validate_response.json()["validated_at"] is not None
+
+        validate_again_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/validate",
+            headers=headers,
+        )
+        assert validate_again_response.status_code == 409
+
+
+def test_forecast_estimate_requires_same_project_reference() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        missing_reference_response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "forecast_remaining", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert missing_reference_response.status_code == 400
+
+        initial_response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert initial_response.status_code == 201
+        initial_id = initial_response.json()["id"]
+
+        forecast_response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={
+                "kind": "forecast_remaining",
+                "currency_code": "EUR",
+                "reference_estimate_id": initial_id,
+            },
+            headers=headers,
+        )
+        assert forecast_response.status_code == 201
+        assert forecast_response.json()["reference_estimate_id"] == initial_id
+        assert forecast_response.json()["version_number"] == 2
+
+        other_headers = _auth_headers(client, "estimate.other@example.com")
+        hidden_response = client.get(
+            f"/projects/{project_id}/estimates/{initial_id}",
+            headers=other_headers,
+        )
+        assert hidden_response.status_code == 404
+
+
 def test_task_role_assignment_lifecycle_and_labor_validation() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)

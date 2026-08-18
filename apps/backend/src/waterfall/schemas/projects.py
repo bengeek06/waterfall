@@ -70,3 +70,35 @@ class TaskRoleAssignmentRead(BaseModel):
     comment: str | None
     created_at: datetime
     updated_at: datetime
+
+
+class ProjectEstimateCreate(BaseModel):
+    kind: str = Field(pattern="^(initial|contract_reference|forecast_remaining)$")
+    currency_code: str = Field(min_length=3, max_length=3)
+    reference_estimate_id: int | None = Field(default=None, gt=0)
+    note: str | None = Field(default=None, max_length=10000)
+
+
+class ProjectEstimateRead(BaseModel):
+    id: int
+    project_id: int
+    reference_estimate_id: int | None
+    version_number: int
+    kind: str
+    status: str
+    currency_code: str
+    created_at: datetime
+    validated_at: datetime | None
+    note: str | None
+
+
+class EstimateTaskRowRead(BaseModel):
+    id: int
+    estimate_id: int
+    task_id: int
+    parent_task_id: int | None
+    position: int
+    task_name: str
+    outline_number: str | None
+    outline_level: int | None
+    is_milestone: bool

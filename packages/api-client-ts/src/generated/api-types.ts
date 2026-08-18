@@ -418,6 +418,75 @@ export interface paths {
         patch: operations["updateTaskRoleAssignment"];
         trace?: never;
     };
+    "/projects/{projectId}/estimates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lister les versions de devis d'un projet */
+        get: operations["listProjectEstimates"];
+        put?: never;
+        /** Créer un brouillon de devis et son snapshot de tâches */
+        post: operations["createProjectEstimate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{projectId}/estimates/{estimateId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lire une version de devis */
+        get: operations["getProjectEstimate"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{projectId}/estimates/{estimateId}/task-rows": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lister les lignes de tâches snapshotées dans un devis */
+        get: operations["listEstimateTaskRows"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{projectId}/estimates/{estimateId}/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Valider et figer un brouillon de devis */
+        post: operations["validateProjectEstimate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/projects/{projectId}/export.xml": {
         parameters: {
             query?: never;
@@ -898,6 +967,40 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
         };
+        ProjectEstimateCreate: {
+            /** @enum {string} */
+            kind: "initial" | "contract_reference" | "forecast_remaining";
+            currency_code: string;
+            reference_estimate_id?: number | null;
+            note?: string | null;
+        };
+        ProjectEstimateRead: {
+            id: number;
+            project_id: number;
+            reference_estimate_id?: number | null;
+            version_number: number;
+            /** @enum {string} */
+            kind: "initial" | "contract_reference" | "forecast_remaining";
+            /** @enum {string} */
+            status: "draft" | "validated" | "superseded" | "archived";
+            currency_code: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            validated_at?: string | null;
+            note?: string | null;
+        };
+        EstimateTaskRowRead: {
+            id: number;
+            estimate_id: number;
+            task_id: number;
+            parent_task_id?: number | null;
+            position: number;
+            task_name: string;
+            outline_number?: string | null;
+            outline_level?: number | null;
+            is_milestone: boolean;
+        };
         ResourceNodeCreate: {
             code: string;
             name: string;
@@ -1120,6 +1223,8 @@ export interface components {
         TaskUid: number;
         /** @description Identifiant technique de l'affectation de rôle */
         AssignmentId: number;
+        /** @description Identifiant technique de la version de devis */
+        EstimateId: number;
         /** @description Identifiant technique du noeud de ressources */
         NodeId: number;
         /** @description Identifiant technique du role */
@@ -1976,6 +2081,143 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["TaskNotFound"];
+        };
+    };
+    listProjectEstimates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Versions de devis */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectEstimateRead"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+        };
+    };
+    createProjectEstimate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectEstimateCreate"];
+            };
+        };
+        responses: {
+            /** @description Brouillon de devis créé */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectEstimateRead"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+        };
+    };
+    getProjectEstimate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de devis */
+                estimateId: components["parameters"]["EstimateId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Version de devis */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectEstimateRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+        };
+    };
+    listEstimateTaskRows: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de devis */
+                estimateId: components["parameters"]["EstimateId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Lignes de tâches du devis */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EstimateTaskRowRead"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+        };
+    };
+    validateProjectEstimate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de devis */
+                estimateId: components["parameters"]["EstimateId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Devis validé */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectEstimateRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     exportProjectXml: {
