@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
-import Image from "next/image";
-import Link from "next/link";
 import { Space_Grotesk, Source_Serif_4 } from "next/font/google";
+import { AppShell } from "@/components/app-shell";
 import "./globals.css";
 
 const titleFont = Space_Grotesk({
@@ -24,24 +23,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html lang="fr" className={`${titleFont.variable} ${textFont.variable}`}>
       <body>
         <div className="app-bg" />
-        <header className="topbar">
-          <Link href="/" className="brand" aria-label="Accueil Waterfall">
-            <Image
-              src="/waterfall_logo.svg"
-              alt="Waterfall"
-              width={154}
-              height={36}
-              priority
-            />
-          </Link>
-          <nav className="menu">
-            <Link href="/login">Login</Link>
-            <Link href="/users">Utilisateurs</Link>
-            <Link href="/resources">Ressources</Link>
-            <Link href="/projects">Projets</Link>
-          </nav>
-        </header>
-        <main className="shell">{children}</main>
+        <AppShell>{children}</AppShell>
       </body>
     </html>
   );
