@@ -16,7 +16,7 @@ from waterfall.core.config import get_settings
 from waterfall.db.session import get_db
 from waterfall.models.ms_core import MsProject, MsTask, MsTaskLink
 from waterfall.models.user import User
-from waterfall.models.wf_core import WfImportBatch
+from waterfall.models.wf_core import WfImportBatch, WfTaskEnrichment
 from waterfall.schemas.imports import (
     BatchStatus,
     ErrorResponse,
@@ -133,6 +133,8 @@ def _import_v1_tasks_and_links(
 
     tasks: list[MsTask] = []
     links: list[MsTaskLink] = []
+    enrichments: list[WfTaskEnrichment] = []
+    now = datetime.now(UTC)
 
     for task_node in root.findall("ms:Tasks/ms:Task", NS):
         uid = _as_int(_txt(task_node, "ms:UID"))
@@ -159,6 +161,18 @@ def _import_v1_tasks_and_links(
             )
         )
 
+        notes = _txt(task_node, "ms:Notes")
+        if notes is not None:
+            enrichments.append(
+                WfTaskEnrichment(
+                    project_id=project.id,
+                    task_uid=uid,
+                    description=notes,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+
         for pred_node in task_node.findall("ms:PredecessorLink", NS):
             predecessor_uid = _as_int(_txt(pred_node, "ms:PredecessorUID"))
             if predecessor_uid is None:
@@ -176,6 +190,8 @@ def _import_v1_tasks_and_links(
             )
 
     db.add_all(tasks)
+    db.flush()
+    db.add_all(enrichments)
     db.flush()
     db.add_all(links)
     db.flush()

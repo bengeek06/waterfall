@@ -94,6 +94,18 @@ def test_export_xml_contains_task_notes_from_description() -> None:
         tasks_payload = cast(list[dict[str, Any]], raw_tasks_payload)
         assert len(tasks_payload) > 0
         task_uid = cast(int, tasks_payload[0]["uid"])
+        source_description = tasks_payload[0]["description"]
+        assert source_description == "description de l'étude"
+
+        source_export_response: Response = client.get(
+            f"/projects/{project_id}/export.xml",
+            headers=headers,
+        )
+        assert source_export_response.status_code == 200
+        source_root = ET.fromstring(cast(bytes, source_export_response.content))
+        source_notes = source_root.find("ms:Tasks/ms:Task/ms:Notes", NS)
+        assert source_notes is not None
+        assert source_notes.text == source_description
 
         description = "Description E2E export notes"
         patch_response: Response = client.patch(
