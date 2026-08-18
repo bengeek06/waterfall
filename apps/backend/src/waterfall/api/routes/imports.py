@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -16,7 +15,7 @@ from waterfall.core.config import get_settings
 from waterfall.db.session import get_db
 from waterfall.models.ms_core import MsProject, MsTask, MsTaskLink
 from waterfall.models.user import User
-from waterfall.models.wf_core import WfImportBatch, WfTaskEnrichment
+from waterfall.models.wf_core import WfImportBatch
 from waterfall.schemas.imports import (
     BatchStatus,
     ErrorResponse,
@@ -30,32 +29,10 @@ from waterfall.schemas.imports import (
     ImportRunAcceptedResponse,
     ImportRunRequest,
 )
+from waterfall.services.import_v1 import import_tasks_and_links
 
 router = APIRouter(prefix="/imports/v1/batches", tags=["imports-v1"])
-NS = {"ms": "http://schemas.microsoft.com/project"}
 UPLOAD_CHUNK_SIZE = 1024 * 1024
-
-
-def _txt(node: ET.Element, path: str) -> str | None:
-    found = node.find(path, NS)
-    if found is None or found.text is None:
-        return None
-    value = found.text.strip()
-    return value if value != "" else None
-
-
-def _as_int(value: str | None) -> int | None:
-    return int(value) if value is not None else None
-
-
-def _as_bool(value: str | None) -> bool:
-    return value == "1"
-
-
-def _as_dt(value: str | None) -> datetime | None:
-    if value is None:
-        return None
-    return datetime.fromisoformat(value)
 
 
 def _source_path(batch_id: int) -> Path:
@@ -101,102 +78,6 @@ def _read_source_xml(batch: WfImportBatch) -> bytes:
             detail="Uploaded XML is unavailable",
         )
     return source_path.read_bytes()
-
-
-def _import_v1_tasks_and_links(
-    db: Session,
-    xml_bytes: bytes,
-    project: MsProject,
-) -> tuple[int, int]:
-    root = ET.fromstring(xml_bytes)
-
-    save_version = _as_int(_txt(root, "ms:SaveVersion")) or 16
-    source_version_map = {14: 2010, 15: 2013, 16: 2016}
-    source_version = source_version_map.get(save_version, 2016)
-
-    if db.query(MsTask.id).filter(MsTask.project_id == project.id).first() is not None:
-        raise ValueError("Project already contains tasks")
-
-    project.external_uid = _txt(root, "ms:GUID")
-    project.source_version = source_version
-    project.save_version_out = save_version if save_version in (14, 15, 16) else 16
-    project.schedule_from_start = _as_bool(_txt(root, "ms:ScheduleFromStart"))
-    project.start_date = _as_dt(_txt(root, "ms:StartDate"))
-    project.finish_date = _as_dt(_txt(root, "ms:FinishDate"))
-    project.calendar_uid = _as_int(_txt(root, "ms:CalendarUID"))
-    project.minutes_per_day = _as_int(_txt(root, "ms:MinutesPerDay")) or 480
-    project.minutes_per_week = _as_int(_txt(root, "ms:MinutesPerWeek")) or 2400
-    project.days_per_month = _as_int(_txt(root, "ms:DaysPerMonth")) or 20
-    project.currency_code = _txt(root, "ms:CurrencyCode")
-    db.add(project)
-    db.flush()
-
-    tasks: list[MsTask] = []
-    links: list[MsTaskLink] = []
-    enrichments: list[WfTaskEnrichment] = []
-    now = datetime.now(UTC)
-
-    for task_node in root.findall("ms:Tasks/ms:Task", NS):
-        uid = _as_int(_txt(task_node, "ms:UID"))
-        if uid is None:
-            continue
-
-        tasks.append(
-            MsTask(
-                project_id=project.id,
-                uid=uid,
-                id_display=_as_int(_txt(task_node, "ms:ID")),
-                name=_txt(task_node, "ms:Name") or f"Task {uid}",
-                task_type=_as_int(_txt(task_node, "ms:Type")),
-                outline_number=_txt(task_node, "ms:OutlineNumber"),
-                outline_level=_as_int(_txt(task_node, "ms:OutlineLevel")),
-                wbs=_txt(task_node, "ms:WBS"),
-                start_at=_as_dt(_txt(task_node, "ms:Start")),
-                finish_at=_as_dt(_txt(task_node, "ms:Finish")),
-                duration_format=_as_int(_txt(task_node, "ms:DurationFormat")),
-                percent_complete=_as_int(_txt(task_node, "ms:PercentComplete")),
-                is_summary=_as_bool(_txt(task_node, "ms:Summary")),
-                is_milestone=_as_bool(_txt(task_node, "ms:Milestone")),
-                calendar_uid=_as_int(_txt(task_node, "ms:CalendarUID")),
-            )
-        )
-
-        notes = _txt(task_node, "ms:Notes")
-        if notes is not None:
-            enrichments.append(
-                WfTaskEnrichment(
-                    project_id=project.id,
-                    task_uid=uid,
-                    description=notes,
-                    created_at=now,
-                    updated_at=now,
-                )
-            )
-
-        for pred_node in task_node.findall("ms:PredecessorLink", NS):
-            predecessor_uid = _as_int(_txt(pred_node, "ms:PredecessorUID"))
-            if predecessor_uid is None:
-                continue
-
-            links.append(
-                MsTaskLink(
-                    project_id=project.id,
-                    task_uid=uid,
-                    predecessor_uid=predecessor_uid,
-                    link_type=_as_int(_txt(pred_node, "ms:Type")) or 1,
-                    lag_tenth_minute=_as_int(_txt(pred_node, "ms:LinkLag")),
-                    lag_format=_as_int(_txt(pred_node, "ms:LagFormat")),
-                )
-            )
-
-    db.add_all(tasks)
-    db.flush()
-    db.add_all(enrichments)
-    db.flush()
-    db.add_all(links)
-    db.flush()
-
-    return len(tasks), len(links)
 
 
 def _to_batch_response(batch: WfImportBatch) -> ImportBatchResponse:
@@ -396,7 +277,7 @@ def run_batch(
         if run_request.dry_run:
             savepoint = db.begin_nested()
             try:
-                task_count, link_count = _import_v1_tasks_and_links(
+                task_count, link_count = import_tasks_and_links(
                     db,
                     xml_bytes,
                     project,
@@ -405,7 +286,7 @@ def run_batch(
                 savepoint.rollback()
                 db.expire_all()
         else:
-            task_count, link_count = _import_v1_tasks_and_links(
+            task_count, link_count = import_tasks_and_links(
                 db,
                 xml_bytes,
                 project,
