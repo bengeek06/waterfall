@@ -424,6 +424,8 @@ export interface components {
          */
         SourceVersion: 2010 | 2013 | 2016;
         ImportBatchCreateRequest: {
+            /** @description Projet cible, appartenant à l'utilisateur authentifié */
+            projectId: number;
             importMode: components["schemas"]["ImportMode"];
             /** @description Nom logique de la source ou du planning */
             sourceName?: string;

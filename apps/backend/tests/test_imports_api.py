@@ -34,8 +34,7 @@ def _xml_expected_counters(xml_path: Path) -> tuple[int, int]:
     return task_count, link_count
 
 
-def _auth_headers(client: TestClient) -> dict[str, str]:
-    email = "import.tester@example.com"
+def _auth_headers(client: TestClient, email: str = "import.tester@example.com") -> dict[str, str]:
     password = "SuperSecret123!"
 
     register_response: Response = client.post(
@@ -52,6 +51,16 @@ def _auth_headers(client: TestClient) -> dict[str, str]:
     token = token_response.json()["access_token"]
 
     return {"Authorization": f"Bearer {token}"}
+
+
+def _create_project(client: TestClient, headers: dict[str, str]) -> int:
+    response: Response = client.post(
+        "/projects",
+        json={"name": "Import target"},
+        headers=headers,
+    )
+    assert response.status_code == 201
+    return response.json()["id"]
 
 
 def test_import_batch_minimal_flow() -> None:
@@ -82,10 +91,15 @@ def test_import_batch_minimal_flow() -> None:
 
     with TestClient(app) as client:
         headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
 
         create_response: Response = client.post(
             "/imports/v1/batches",
-            json={"importMode": "standard", "sourceName": "planning_test.xml"},
+            json={
+                "projectId": project_id,
+                "importMode": "standard",
+                "sourceName": "planning_test.xml",
+            },
             headers=headers,
         )
         assert create_response.status_code == 201
@@ -139,10 +153,11 @@ def test_import_batch_real_examples_via_api_with_counters(xml_path: Path) -> Non
 
     with TestClient(app) as client:
         headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
 
         create_response: Response = client.post(
             "/imports/v1/batches",
-            json={"importMode": "standard", "sourceName": xml_path.name},
+            json={"projectId": project_id, "importMode": "standard", "sourceName": xml_path.name},
             headers=headers,
         )
         assert create_response.status_code == 201
@@ -177,3 +192,21 @@ def test_import_batch_real_examples_via_api_with_counters(xml_path: Path) -> Non
         assert status_payload["status"] == "success"
         assert status_payload["counters"]["tasks"] == expected_tasks
         assert status_payload["counters"]["links"] == expected_links
+
+
+def test_import_batch_isolated_by_project_owner() -> None:
+    with TestClient(app) as client:
+        owner_headers = _auth_headers(client)
+        project_id = _create_project(client, owner_headers)
+        create_response = client.post(
+            "/imports/v1/batches",
+            json={"projectId": project_id, "importMode": "standard"},
+            headers=owner_headers,
+        )
+        assert create_response.status_code == 201
+        batch_id = create_response.json()["id"]
+
+        other_headers = _auth_headers(client, "import.other@example.com")
+        for path in (f"/imports/v1/batches/{batch_id}", f"/imports/v1/batches/{batch_id}/errors"):
+            response: Response = client.get(path, headers=other_headers)
+            assert response.status_code == 404

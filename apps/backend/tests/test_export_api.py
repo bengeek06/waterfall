@@ -34,10 +34,21 @@ def _auth_headers(client: TestClient) -> dict[str, str]:
 def test_export_xml_contains_task_notes_from_description() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)
+        project_response: Response = client.post(
+            "/projects",
+            json={"name": "Export target"},
+            headers=headers,
+        )
+        assert project_response.status_code == 201
+        project_id = project_response.json()["id"]
 
         create_response: Response = client.post(
             "/imports/v1/batches",
-            json={"importMode": "standard", "sourceName": EXAMPLE_XML.name},
+            json={
+                "projectId": project_id,
+                "importMode": "standard",
+                "sourceName": EXAMPLE_XML.name,
+            },
             headers=headers,
         )
         assert create_response.status_code == 201

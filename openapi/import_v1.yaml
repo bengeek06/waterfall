@@ -1051,8 +1051,12 @@ components:
 
     ImportBatchCreateRequest:
       type: object
-      required: [importMode]
+      required: [projectId, importMode]
       properties:
+        projectId:
+          type: integer
+          minimum: 1
+          description: Projet cible, appartenant à l'utilisateur authentifié
         importMode:
           $ref: '#/components/schemas/ImportMode'
         sourceName:

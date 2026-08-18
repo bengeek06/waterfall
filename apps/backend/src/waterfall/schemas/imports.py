@@ -10,6 +10,7 @@ BatchStatus = Literal["pending", "running", "success", "failed"]
 class ImportBatchCreateRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
+    project_id: int = Field(alias="projectId", gt=0)
     import_mode: ImportMode = Field(alias="importMode")
     source_name: str | None = Field(default=None, alias="sourceName", max_length=255)
     source_version_hint: int | None = Field(default=None, alias="sourceVersionHint")

@@ -507,6 +507,7 @@ export function deleteProject(
 }
 
 export function createImportBatch(
+  projectId: number,
   sourceName: string,
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
@@ -519,7 +520,7 @@ export function createImportBatch(
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ importMode: "standard", sourceName }),
+      body: JSON.stringify({ projectId, importMode: "standard", sourceName }),
     },
     onSessionRefresh,
   );

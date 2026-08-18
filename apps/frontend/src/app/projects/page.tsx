@@ -136,7 +136,13 @@ export default function ProjectsPage() {
     setError(null);
     setActionBusy("Import du projet en cours...");
     try {
-      const batch = await createImportBatch(createName.trim(), session, onSessionRefresh);
+      const project = await createProject(createName.trim(), session, onSessionRefresh);
+      const batch = await createImportBatch(
+        project.id,
+        createName.trim(),
+        session,
+        onSessionRefresh,
+      );
       await uploadImportSourceXml(batch.id, createFile, session, onSessionRefresh);
       await runImportBatch(batch.id, session, onSessionRefresh);
 
@@ -156,7 +162,6 @@ export default function ProjectsPage() {
         throw new Error("Import terminé sans identifiant de projet.");
       }
 
-      await updateProjectName(status.projectId, createName.trim(), session, onSessionRefresh);
       await refreshProjects(session);
       resetCreateFlow();
     } catch (cause) {
