@@ -18,6 +18,12 @@ REQUEST_DURATION = Histogram(
 )
 
 
+def _metric_path(request: Request) -> str:
+    route = request.scope.get("route")
+    route_path = getattr(route, "path", None)
+    return route_path if isinstance(route_path, str) else "<unmatched>"
+
+
 async def request_metrics_middleware(
     request: Request,
     call_next: Callable[[Request], Awaitable[Response]],
@@ -28,7 +34,7 @@ async def request_metrics_middleware(
     response = await call_next(request)
 
     duration = perf_counter() - start
-    path = request.url.path
+    path = _metric_path(request)
     REQUEST_COUNT.labels(request.method, path, str(response.status_code)).inc()
     REQUEST_DURATION.labels(request.method, path).observe(duration)
     response.headers["x-request-id"] = request_id
