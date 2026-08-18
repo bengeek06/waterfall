@@ -79,9 +79,14 @@ export default function UsersPage() {
     if (!session) {
       return;
     }
+    const nextStatus = !user.is_active;
+    const action = nextStatus ? "activer" : "désactiver";
+    if (!window.confirm(`${action[0].toUpperCase()}${action.slice(1)} le compte ${user.email} ?`)) {
+      return;
+    }
     setActionBusy(true);
     try {
-      const updated = await setUserStatus(user.id, !user.is_active, session, onSessionRefresh);
+      const updated = await setUserStatus(user.id, nextStatus, session, onSessionRefresh);
       setUsers((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
     } catch (cause) {
       if (cause instanceof SessionExpiredError) {
@@ -99,9 +104,14 @@ export default function UsersPage() {
     if (!session) {
       return;
     }
+    const nextAdmin = !user.is_admin;
+    const action = nextAdmin ? "promouvoir administrateur" : "retirer les droits administrateur";
+    if (!window.confirm(`${action[0].toUpperCase()}${action.slice(1)} pour ${user.email} ?`)) {
+      return;
+    }
     setActionBusy(true);
     try {
-      const updated = await setUserRole(user.id, !user.is_admin, session, onSessionRefresh);
+      const updated = await setUserRole(user.id, nextAdmin, session, onSessionRefresh);
       setUsers((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
     } catch (cause) {
       if (cause instanceof SessionExpiredError) {
