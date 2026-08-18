@@ -42,8 +42,8 @@ async function parseError(response: Response): Promise<string> {
   }
 
   try {
-    const payload = JSON.parse(text) as { detail?: string; message?: string };
-    return payload.detail ?? payload.message ?? text;
+    const payload = JSON.parse(text) as { detail?: string; message?: string; error?: string };
+    return payload.detail ?? payload.message ?? payload.error ?? text;
   } catch {
     return text;
   }
