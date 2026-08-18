@@ -85,6 +85,41 @@ def test_register_duplicate_email() -> None:
         assert second.status_code == 409
 
 
+def test_user_creation_rejects_password_outside_policy() -> None:
+    with TestClient(app) as client:
+        register_response = client.post(
+            "/auth/register",
+            json={"email": "short@example.com", "password": "short"},
+        )
+        assert register_response.status_code == 422
+
+        admin_headers = _admin_headers(client)
+        admin_create_response = client.post(
+            "/auth/users",
+            json={"email": "admin-short@example.com", "password": "short"},
+            headers=admin_headers,
+        )
+        assert admin_create_response.status_code == 422
+
+
+def test_password_change_rejects_password_outside_policy() -> None:
+    with TestClient(app) as client:
+        register_response = client.post(
+            "/auth/register",
+            json={"email": "password-policy@example.com", "password": "SuperSecret123"},
+        )
+        assert register_response.status_code == 201
+        login_response = _login(client, "password-policy@example.com", "SuperSecret123")
+        assert login_response.status_code == 200
+
+        response = client.post(
+            "/auth/me/password",
+            json={"current_password": "SuperSecret123", "new_password": "short"},
+            headers=_auth_header(cast(str, login_response.json()["access_token"])),
+        )
+        assert response.status_code == 422
+
+
 def test_inactive_user_cannot_login() -> None:
     with TestClient(app) as client:
         register_response: Response = client.post(

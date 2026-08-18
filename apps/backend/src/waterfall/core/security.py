@@ -7,6 +7,17 @@ from pwdlib import PasswordHash
 from waterfall.core.config import get_settings
 
 password_hash = PasswordHash.recommended()
+MIN_PASSWORD_LENGTH = 8
+MAX_PASSWORD_LENGTH = 256
+
+
+def validate_password(password: str) -> str:
+    if not MIN_PASSWORD_LENGTH <= len(password) <= MAX_PASSWORD_LENGTH:
+        raise ValueError(
+            "Password must be between "
+            f"{MIN_PASSWORD_LENGTH} and {MAX_PASSWORD_LENGTH} characters long"
+        )
+    return password
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:

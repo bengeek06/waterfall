@@ -2,10 +2,12 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
+from waterfall.core.security import MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH
+
 
 class UserCreate(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(min_length=MIN_PASSWORD_LENGTH, max_length=MAX_PASSWORD_LENGTH)
 
 
 class UserRead(BaseModel):
@@ -34,8 +36,8 @@ class UserRoleUpdate(BaseModel):
 
 
 class PasswordChangeRequest(BaseModel):
-    current_password: str = Field(min_length=8, max_length=256)
-    new_password: str = Field(min_length=8, max_length=256)
+    current_password: str = Field(min_length=MIN_PASSWORD_LENGTH, max_length=MAX_PASSWORD_LENGTH)
+    new_password: str = Field(min_length=MIN_PASSWORD_LENGTH, max_length=MAX_PASSWORD_LENGTH)
 
 
 class RefreshTokenRequest(BaseModel):
