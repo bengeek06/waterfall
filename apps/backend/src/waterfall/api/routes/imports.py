@@ -237,6 +237,11 @@ async def upload_xml(
         )
 
     batch = _get_batch_or_404(db, batch_id, current_user.id)
+    if batch.status != "pending":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Batch is no longer pending",
+        )
     content = await file.read()
     source_sha256 = hashlib.sha256(content).hexdigest()
 
@@ -276,13 +281,15 @@ async def upload_xml(
 )
 def run_batch(
     batch_id: int,
-    _: ImportRunRequest | None = None,
+    payload: ImportRunRequest | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> ImportRunAcceptedResponse:
     batch = _get_batch_or_404(db, batch_id, current_user.id)
-    if batch.status == "running":
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Batch is already running")
+    if batch.status != "pending":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Batch is not pending")
+
+    run_request = payload or ImportRunRequest()
 
     if not batch.log_json:
         raise HTTPException(
@@ -317,24 +324,49 @@ def run_batch(
         ) from exc
 
     accepted_at = datetime.now(UTC)
-    batch.status = "running"
-    batch.started_at = accepted_at
-    batch.finished_at = None
-    db.add(batch)
+    updated = (
+        db.query(WfImportBatch)
+        .filter(WfImportBatch.id == batch.id)
+        .filter(WfImportBatch.status == "pending")
+        .update(
+            {
+                WfImportBatch.status: "running",
+                WfImportBatch.started_at: accepted_at,
+                WfImportBatch.finished_at: None,
+            },
+            synchronize_session=False,
+        )
+    )
     db.commit()
+    if updated != 1:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Batch is not pending")
     db.refresh(batch)
 
     try:
         project = db.query(MsProject).filter(MsProject.id == batch.project_id).one()
-        task_count, link_count = _import_v1_tasks_and_links(
-            db,
-            xml_bytes,
-            project,
-        )
+        if run_request.dry_run:
+            savepoint = db.begin_nested()
+            try:
+                task_count, link_count = _import_v1_tasks_and_links(
+                    db,
+                    xml_bytes,
+                    project,
+                )
+            finally:
+                savepoint.rollback()
+                db.expire_all()
+        else:
+            task_count, link_count = _import_v1_tasks_and_links(
+                db,
+                xml_bytes,
+                project,
+            )
         batch.status = "success"
         batch.finished_at = datetime.now(UTC)
         payload["counters"] = {"tasks": task_count, "links": link_count}
         payload["errors"] = []
+        payload["dry_run"] = run_request.dry_run
+        payload["fail_fast"] = run_request.fail_fast
         batch.log_json = json.dumps(payload)
         db.add(batch)
         db.commit()
@@ -358,7 +390,7 @@ def run_batch(
 
     return ImportRunAcceptedResponse(
         batchId=batch.id,
-        status="running",
+        status="success",
         acceptedAt=accepted_at,
     )
 
@@ -378,7 +410,23 @@ def get_batch(
 
     task_count = 0
     link_count = 0
-    if batch.project_id is not None:
+    log_payload: dict[str, object] = {}
+    if batch.log_json:
+        try:
+            loaded_payload = json.loads(batch.log_json)
+            if isinstance(loaded_payload, dict):
+                log_payload = loaded_payload
+        except json.JSONDecodeError:
+            pass
+
+    is_dry_run = log_payload.get("dry_run") is True
+    saved_counters = log_payload.get("counters")
+    if is_dry_run and isinstance(saved_counters, dict):
+        task_value = saved_counters.get("tasks")
+        link_value = saved_counters.get("links")
+        task_count = task_value if isinstance(task_value, int) else 0
+        link_count = link_value if isinstance(link_value, int) else 0
+    elif batch.project_id is not None:
         task_count = (
             db.scalar(
                 select(func.count())
