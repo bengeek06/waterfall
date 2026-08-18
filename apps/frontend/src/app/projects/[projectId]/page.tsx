@@ -9,6 +9,7 @@ import {
   SessionExpiredError,
   Task,
   getProjectTasks,
+  restoreSession,
   updateTaskDescription,
 } from "@/lib/backend";
 import { clearSession, getSession, setSession, type SessionTokens } from "@/lib/session";
@@ -40,7 +41,14 @@ export default function ProjectDetailsPage() {
     async function load() {
       if (!session || Number.isNaN(projectId)) {
         if (!session) {
-          router.push("/login");
+          try {
+            const restoredSession = await restoreSession();
+            setSession(restoredSession);
+            setSessionState(restoredSession);
+          } catch {
+            clearSession();
+            router.push("/login");
+          }
         }
         return;
       }

@@ -13,6 +13,7 @@ import {
   deleteUser,
   getMe,
   getUsers,
+  restoreSession,
   setUserRole,
   setUserStatus,
 } from "@/lib/backend";
@@ -41,7 +42,14 @@ export default function UsersPage() {
   useEffect(() => {
     async function load() {
       if (!session) {
-        router.push("/login");
+        try {
+          const restoredSession = await restoreSession();
+          setSession(restoredSession);
+          setSessionState(restoredSession);
+        } catch {
+          clearSession();
+          router.push("/login");
+        }
         return;
       }
       setBusy(true);

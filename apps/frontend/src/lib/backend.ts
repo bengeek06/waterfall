@@ -136,6 +136,11 @@ export async function refresh(): Promise<TokenResponse> {
   });
 }
 
+export async function restoreSession(): Promise<SessionTokens> {
+  const tokens = await refreshOnce();
+  return { accessToken: tokens.access_token };
+}
+
 function refreshOnce(): Promise<TokenResponse> {
   if (!refreshInFlight) {
     refreshInFlight = refresh().finally(() => {

@@ -23,6 +23,7 @@ import {
   getResourceNodes,
   getResourceRoles,
   getRoleCapacities,
+  restoreSession,
   setInflationRate,
 } from "@/lib/backend";
 import { clearSession, getSession, setSession, type SessionTokens } from "@/lib/session";
@@ -75,7 +76,14 @@ export default function ResourcesPage() {
   useEffect(() => {
     async function load() {
       if (!session) {
-        router.push("/login");
+        try {
+          const restoredSession = await restoreSession();
+          setSession(restoredSession);
+          setSessionState(restoredSession);
+        } catch {
+          clearSession();
+          router.push("/login");
+        }
         return;
       }
       setBusy(true);

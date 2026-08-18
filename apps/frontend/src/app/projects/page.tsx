@@ -15,6 +15,7 @@ import {
   getImportBatchStatus,
   getMe,
   getProjects,
+  restoreSession,
   exportProjectXml,
   runImportBatch,
   updateProjectName,
@@ -52,7 +53,14 @@ export default function ProjectsPage() {
   useEffect(() => {
     async function load() {
       if (!session) {
-        router.push("/login");
+        try {
+          const restoredSession = await restoreSession();
+          setSession(restoredSession);
+          setSessionState(restoredSession);
+        } catch {
+          clearSession();
+          router.push("/login");
+        }
         return;
       }
       setBusy(true);
