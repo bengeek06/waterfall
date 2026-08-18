@@ -24,6 +24,7 @@ export default function ProjectDetailsPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [taskOffset, setTaskOffset] = useState(0);
   const [drafts, setDrafts] = useState<Record<number, string>>({});
+  const [savingTaskUid, setSavingTaskUid] = useState<number | null>(null);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -87,10 +88,14 @@ export default function ProjectDetailsPage() {
     if (!session) {
       return;
     }
+    if (savingTaskUid === task.uid) {
+      return;
+    }
 
     const draft = (drafts[task.uid] ?? "").trim();
     const description = draft.length ? draft : null;
 
+    setSavingTaskUid(task.uid);
     try {
       const updated = await updateTaskDescription(
         projectId,
@@ -108,6 +113,8 @@ export default function ProjectDetailsPage() {
         return;
       }
       setError(cause instanceof ApiError ? cause.message : "Sauvegarde impossible");
+    } finally {
+      setSavingTaskUid(null);
     }
   }
 
@@ -161,8 +168,12 @@ export default function ProjectDetailsPage() {
                     />
                   </td>
                   <td>
-                    <button className="btn btn-primary" onClick={() => void saveDescription(task)}>
-                      Sauver
+                    <button
+                      className="btn btn-primary"
+                      disabled={savingTaskUid === task.uid}
+                      onClick={() => void saveDescription(task)}
+                    >
+                      {savingTaskUid === task.uid ? "Sauvegarde..." : "Sauver"}
                     </button>
                   </td>
                 </tr>
