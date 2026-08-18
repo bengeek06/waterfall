@@ -133,20 +133,21 @@ export default function ProjectDetailsPage() {
       </section>
 
       <section className="panel">
-        {busy ? <p className="muted">Chargement...</p> : null}
-        {error ? <p className="error">{error}</p> : null}
+        {busy ? <p className="muted" role="status">Chargement...</p> : null}
+        {error ? <p className="error" role="alert">{error}</p> : null}
 
         {!busy && !tasks.length ? <p className="muted">Aucune tâche.</p> : null}
 
         {!busy && tasks.length ? (
+          <div className="table-scroll">
           <table className="table">
             <thead>
               <tr>
-                <th>UID</th>
-                <th>Nom</th>
-                <th>Avancement</th>
-                <th>Description</th>
-                <th>Action</th>
+                <th scope="col">UID</th>
+                <th scope="col">Nom</th>
+                <th scope="col">Avancement</th>
+                <th scope="col">Description</th>
+                <th scope="col">Action</th>
               </tr>
             </thead>
             <tbody>
@@ -180,6 +181,7 @@ export default function ProjectDetailsPage() {
               ))}
             </tbody>
           </table>
+          </div>
         ) : null}
 
         {!busy ? (

@@ -262,8 +262,8 @@ export default function ResourcesPage() {
         </div>
       </section>
 
-      {notice ? <p className={notice.kind === "error" ? "error" : "success"}>{notice.message}</p> : null}
-      {busy ? <section className="panel"><p className="muted">Chargement...</p></section> : null}
+      {notice ? <p className={notice.kind === "error" ? "error" : "success"} role={notice.kind === "error" ? "alert" : "status"}>{notice.message}</p> : null}
+      {busy ? <section className="panel"><p className="muted" role="status">Chargement...</p></section> : null}
 
       {!busy ? (
         <>
@@ -312,7 +312,7 @@ export default function ResourcesPage() {
               <div className="field"><label htmlFor="rate-currency">Devise</label><input id="rate-currency" maxLength={3} value={rateCurrency} onChange={(event) => setRateCurrency(event.target.value)} required /></div>
               <div className="row"><button className="btn btn-primary" disabled={actionBusy} type="submit">Enregistrer le taux</button></div>
             </form>
-            <table className="table"><thead><tr><th>Année</th><th>Catégorie</th><th>Taux</th><th>Devise</th></tr></thead><tbody>{rates.map((rate) => <tr key={rate.id}><td>{rate.year}</td><td>{categoryNameById.get(rate.cost_category_id) ?? "?"}</td><td>{rate.hourly_rate}</td><td>{rate.currency_code}</td></tr>)}</tbody></table>
+            <div className="table-scroll"><table className="table"><thead><tr><th scope="col">Année</th><th scope="col">Catégorie</th><th scope="col">Taux</th><th scope="col">Devise</th></tr></thead><tbody>{rates.map((rate) => <tr key={rate.id}><td>{rate.year}</td><td>{categoryNameById.get(rate.cost_category_id) ?? "?"}</td><td>{rate.hourly_rate}</td><td>{rate.currency_code}</td></tr>)}</tbody></table></div>
           </section>
 
           <section className="grid-3">

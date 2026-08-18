@@ -242,18 +242,19 @@ export default function UsersPage() {
       </section>
 
       <section className="panel">
-        {busy ? <p className="muted">Chargement...</p> : null}
-        {error ? <p className="error">{error}</p> : null}
+        {busy ? <p className="muted" role="status">Chargement...</p> : null}
+        {error ? <p className="error" role="alert">{error}</p> : null}
 
         {!busy ? (
+          <div className="table-scroll">
           <table className="table">
             <thead>
               <tr>
-                <th>ID</th>
-                <th>Email</th>
-                <th>Statut</th>
-                <th>Role</th>
-                <th>Actions</th>
+                <th scope="col">ID</th>
+                <th scope="col">Email</th>
+                <th scope="col">Statut</th>
+                <th scope="col">Role</th>
+                <th scope="col">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -285,6 +286,7 @@ export default function UsersPage() {
               ))}
             </tbody>
           </table>
+          </div>
         ) : null}
       </section>
     </>

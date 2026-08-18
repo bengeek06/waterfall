@@ -236,6 +236,11 @@ body {
   border-collapse: collapse;
 }
 
+.table-scroll {
+  overflow-x: auto;
+  width: 100%;
+}
+
 .table th,
 .table td {
   text-align: left;

@@ -397,21 +397,22 @@ export default function ProjectsPage() {
       </section>
 
       <section className="panel">
-        {busy ? <p className="muted">Chargement...</p> : null}
-        {actionBusy ? <p className="muted">{actionBusy}</p> : null}
-        {error ? <p className="error">{error}</p> : null}
+        {busy ? <p className="muted" role="status">Chargement...</p> : null}
+        {actionBusy ? <p className="muted" role="status">{actionBusy}</p> : null}
+        {error ? <p className="error" role="alert">{error}</p> : null}
 
         {!busy && !projects.length ? <p className="muted">Aucun projet importé.</p> : null}
 
         {!busy && projects.length ? (
+          <div className="table-scroll">
           <table className="table">
             <thead>
               <tr>
-                <th>ID</th>
-                <th>Nom</th>
-                <th>Version source</th>
-                <th>Version export</th>
-                <th>Actions</th>
+                <th scope="col">ID</th>
+                <th scope="col">Nom</th>
+                <th scope="col">Version source</th>
+                <th scope="col">Version export</th>
+                <th scope="col">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -478,6 +479,7 @@ export default function ProjectsPage() {
               ))}
             </tbody>
           </table>
+          </div>
         ) : null}
 
         {!busy ? (
