@@ -1,11 +1,15 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Resolve the repo-root .env regardless of the process's current working directory.
+_ENV_FILE = Path(__file__).resolve().parents[5] / ".env"
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_file_encoding="utf-8", extra="ignore")
 
     app_name: str = Field(default="waterfall", alias="APP_NAME")
     app_env: str = Field(default="dev", alias="APP_ENV")

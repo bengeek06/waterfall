@@ -45,8 +45,8 @@ def upgrade() -> None:
             name="ck_ms_project_save_version_out",
         ),
         sa.CheckConstraint(
-            "(schedule_from_start = 1 AND start_date IS NOT NULL) OR "
-            "(schedule_from_start = 0 AND finish_date IS NOT NULL)",
+            "(schedule_from_start = true AND start_date IS NOT NULL) OR "
+            "(schedule_from_start = false AND finish_date IS NOT NULL)",
             name="ck_ms_project_schedule_dates",
         ),
         sa.PrimaryKeyConstraint("id"),

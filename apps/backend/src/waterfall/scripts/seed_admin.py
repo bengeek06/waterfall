@@ -20,7 +20,7 @@ def _as_bool(value: str | None, default: bool) -> bool:
 
 def main() -> None:
     email = normalize_email(os.getenv("WF_ADMIN_EMAIL", "admin@example.com"))
-    password = os.getenv("WF_ADMIN_PASSWORD", "admin")
+    password = os.getenv("WF_ADMIN_PASSWORD", "admin1234")
     is_active = _as_bool(os.getenv("WF_ADMIN_IS_ACTIVE"), default=True)
 
     try:
@@ -52,6 +52,9 @@ def main() -> None:
         user.hashed_password = hash_password(password)
         user.is_active = is_active
         user.is_admin = True
+        # Reseeding must also clear any prior lockout so the account is usable again.
+        user.failed_login_attempts = 0
+        user.locked_until = None
         db.add(user)
         db.commit()
         print(f"Updated admin user: {email}")

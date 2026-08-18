@@ -18,6 +18,8 @@ depends_on = None
 
 
 def upgrade() -> None:
+    with op.batch_alter_table("wf_estimate") as batch_op:
+        batch_op.alter_column("kind", type_=sa.String(length=32), existing_nullable=False)
     op.execute("UPDATE wf_estimate SET kind = 'forecast_remaining' WHERE kind = 'remaining'")
     with op.batch_alter_table("wf_estimate") as batch_op:
         batch_op.add_column(sa.Column("reference_estimate_id", sa.Integer(), nullable=True))
