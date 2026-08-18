@@ -197,6 +197,27 @@ paths:
                   $ref: '#/components/schemas/ProjectRead'
         '401':
           $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [projects]
+      summary: Creer un projet sans import
+      operationId: createProject
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectCreate'
+      responses:
+        '201':
+          description: Projet cree
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
 
   /projects/{projectId}:
     get:
@@ -214,6 +235,48 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProjectRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+    patch:
+      tags: [projects]
+      summary: Renommer un projet
+      operationId: updateProject
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectUpdate'
+      responses:
+        '200':
+          description: Projet modifie
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+    delete:
+      tags: [projects]
+      summary: Supprimer un projet
+      operationId: deleteProject
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      responses:
+        '204':
+          description: Projet supprime
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -1162,6 +1225,29 @@ components:
         currency_code:
           type: string
           nullable: true
+
+    ProjectCreate:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        currency_code:
+          type: string
+          minLength: 3
+          maxLength: 3
+          nullable: true
+
+    ProjectUpdate:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
 
     TaskRead:
       type: object

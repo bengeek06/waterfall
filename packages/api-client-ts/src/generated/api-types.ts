@@ -99,7 +99,8 @@ export interface paths {
         /** Lister les projets importes */
         get: operations["listProjects"];
         put?: never;
-        post?: never;
+        /** Creer un projet sans import */
+        post: operations["createProject"];
         delete?: never;
         options?: never;
         head?: never;
@@ -117,10 +118,12 @@ export interface paths {
         get: operations["getProject"];
         put?: never;
         post?: never;
-        delete?: never;
+        /** Supprimer un projet */
+        delete: operations["deleteProject"];
         options?: never;
         head?: never;
-        patch?: never;
+        /** Renommer un projet */
+        patch: operations["updateProject"];
         trace?: never;
     };
     "/projects/{projectId}/tasks": {
@@ -501,6 +504,13 @@ export interface components {
             /** Format: date-time */
             finish_date?: string | null;
             currency_code?: string | null;
+        };
+        ProjectCreate: {
+            name: string;
+            currency_code?: string | null;
+        };
+        ProjectUpdate: {
+            name: string;
         };
         TaskRead: {
             id: number;
@@ -916,6 +926,31 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
         };
     };
+    createProject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectCreate"];
+            };
+        };
+        responses: {
+            /** @description Projet cree */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
     getProject: {
         parameters: {
             query?: never;
@@ -937,6 +972,59 @@ export interface operations {
                     "application/json": components["schemas"]["ProjectRead"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+        };
+    };
+    deleteProject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Projet supprime */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+        };
+    };
+    updateProject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectUpdate"];
+            };
+        };
+        responses: {
+            /** @description Projet modifie */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectRead"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["ProjectNotFound"];
         };

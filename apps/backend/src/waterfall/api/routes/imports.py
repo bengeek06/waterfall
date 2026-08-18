@@ -60,6 +60,7 @@ def _import_v1_tasks_and_links(
     db: Session,
     xml_bytes: bytes,
     source_name: str,
+    owner_id: int,
 ) -> tuple[int, int, int]:
     root = ET.fromstring(xml_bytes)
 
@@ -68,6 +69,7 @@ def _import_v1_tasks_and_links(
     source_version = source_version_map.get(save_version, 2016)
 
     project = MsProject(
+        owner_id=owner_id,
         external_uid=_txt(root, "ms:GUID"),
         source_version=source_version,
         save_version_out=save_version if save_version in (14, 15, 16) else 16,
@@ -263,7 +265,7 @@ def run_batch(
     batch_id: int,
     _: ImportRunRequest | None = None,
     db: Session = Depends(get_db),
-    __: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
 ) -> ImportRunAcceptedResponse:
     batch = _get_batch_or_404(db, batch_id)
     if batch.status == "running":
@@ -314,6 +316,7 @@ def run_batch(
             db,
             xml_bytes,
             batch.source_filename,
+            current_user.id,
         )
         batch.project_id = project_id
         batch.status = "success"

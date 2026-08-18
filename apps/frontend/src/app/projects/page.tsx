@@ -9,6 +9,7 @@ import {
   AuthUser,
   Project,
   createImportBatch,
+  createProject,
   deleteProject,
   getImportBatchStatus,
   getMe,
@@ -93,6 +94,29 @@ export default function ProjectsPage() {
       return;
     }
     setCreateStep("file");
+  }
+
+  async function onCreateManualProject() {
+    if (!session) {
+      router.push("/login");
+      return;
+    }
+    if (!createName.trim()) {
+      setError("Le nom du projet est obligatoire.");
+      return;
+    }
+
+    setError(null);
+    setActionBusy("Création du projet en cours...");
+    try {
+      const project = await createProject(createName.trim(), session, onSessionRefresh);
+      setProjects((prev) => [...prev, project].sort((left, right) => left.id - right.id));
+      resetCreateFlow();
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Impossible de créer le projet.");
+    } finally {
+      setActionBusy(null);
+    }
   }
 
   async function onCreateProjectFromImport() {
@@ -273,13 +297,21 @@ export default function ProjectsPage() {
                     type="text"
                     value={createName}
                     onChange={(event) => setCreateName(event.target.value)}
-                    placeholder="Ex: Planning Baguera"
+                    placeholder="Ex: Projet pilote"
                     maxLength={255}
                   />
                 </div>
                 <div className="row" style={{ marginTop: "0.8rem" }}>
                   <button className="btn btn-primary" type="button" onClick={() => void onCreateContinue()}>
-                    Continuer
+                    Importer un fichier
+                  </button>
+                  <button
+                    className="btn"
+                    type="button"
+                    disabled={Boolean(actionBusy)}
+                    onClick={() => void onCreateManualProject()}
+                  >
+                    Créer sans import
                   </button>
                   <button className="btn" type="button" onClick={resetCreateFlow}>
                     Annuler

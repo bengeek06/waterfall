@@ -452,6 +452,25 @@ export function getProjects(
   return authRequest<Project[]>("/projects", tokens, { method: "GET" }, onSessionRefresh);
 }
 
+export function createProject(
+  name: string,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<Project>(
+    "/projects",
+    tokens,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ name }),
+    },
+    onSessionRefresh,
+  );
+}
+
 export function updateProjectName(
   projectId: number,
   name: string,
