@@ -12,6 +12,10 @@ servers:
     description: Local development
 
 tags:
+  - name: auth
+    description: Authentification par bearer token et gestion des utilisateurs
+  - name: health
+    description: Sondes de disponibilité et de préparation
   - name: imports-v1
     description: Flux d'import XML MS Project (MVP taches + dependances)
   - name: projects
@@ -20,6 +24,301 @@ tags:
     description: Referentiel des ressources, roles, couts, inflation et capacites
 
 paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Vérifier la disponibilité de l'API
+      operationId: getHealth
+      responses:
+        '200':
+          description: API disponible
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+
+  /health/ready:
+    get:
+      tags: [health]
+      summary: Vérifier que l'API est prête
+      operationId: getReadiness
+      responses:
+        '200':
+          description: API prête
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessStatus'
+
+  /auth/register:
+    post:
+      tags: [auth]
+      summary: Créer un utilisateur public lorsque l'inscription est activée
+      operationId: registerUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserCreate'
+      responses:
+        '201':
+          description: Utilisateur créé
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserRead'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /auth/token:
+    post:
+      tags: [auth]
+      summary: Obtenir un access token et définir le cookie de refresh HttpOnly
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  format: password
+      responses:
+        '200':
+          description: Authentification réussie; le refresh token est défini par cookie HttpOnly
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Token'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '423':
+          description: Compte temporairement verrouillé
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Trop de tentatives de connexion
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/refresh:
+    post:
+      tags: [auth]
+      summary: Renouveler l'access token depuis le cookie de refresh HttpOnly
+      operationId: refreshAccessToken
+      responses:
+        '200':
+          description: Access token renouvelé et cookie de refresh renouvelé
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Token'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /auth/logout:
+    post:
+      tags: [auth]
+      summary: Effacer le cookie de refresh
+      operationId: logout
+      responses:
+        '204':
+          description: Session de refresh effacée
+
+  /auth/me:
+    get:
+      tags: [auth]
+      summary: Lire l'utilisateur courant
+      operationId: getCurrentUser
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Utilisateur courant
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /auth/me/password:
+    post:
+      tags: [auth]
+      summary: Modifier le mot de passe de l'utilisateur courant
+      operationId: changeCurrentUserPassword
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordChangeRequest'
+      responses:
+        '204':
+          description: Mot de passe modifié
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /auth/users:
+    get:
+      tags: [auth]
+      summary: Lister les utilisateurs
+      operationId: listUsers
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Utilisateurs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/UserAdminRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [auth]
+      summary: Créer un utilisateur administrativement
+      operationId: createUser
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserCreate'
+      responses:
+        '201':
+          description: Utilisateur créé
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserAdminRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /auth/users/{userId}:
+    delete:
+      tags: [auth]
+      summary: Supprimer un utilisateur
+      operationId: deleteUser
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '204':
+          description: Utilisateur supprimé
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UserNotFound'
+
+  /auth/users/{userId}/status:
+    patch:
+      tags: [auth]
+      summary: Activer ou désactiver un utilisateur
+      operationId: updateUserStatus
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserStatusUpdate'
+      responses:
+        '200':
+          description: Utilisateur modifié
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserAdminRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UserNotFound'
+
+  /auth/users/{userId}/role:
+    patch:
+      tags: [auth]
+      summary: Modifier le rôle administrateur d'un utilisateur
+      operationId: updateUserRole
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserRoleUpdate'
+      responses:
+        '200':
+          description: Utilisateur modifié
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserAdminRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UserNotFound'
+
   /imports/v1/batches:
     post:
       tags: [imports-v1]
@@ -987,6 +1286,14 @@ components:
         minimum: 2000
         maximum: 9999
       description: Annee civile
+    UserId:
+      name: userId
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+      description: Identifiant technique de l'utilisateur
 
   responses:
     BadRequest:
@@ -1037,8 +1344,123 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
+    UserNotFound:
+      description: Utilisateur introuvable
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
 
   schemas:
+    HealthStatus:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          example: ok
+
+    ReadinessStatus:
+      type: object
+      required: [status, timestamp]
+      properties:
+        status:
+          type: string
+          example: ready
+        timestamp:
+          type: string
+          format: date-time
+
+    UserCreate:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+          minLength: 8
+          maxLength: 256
+
+    UserRead:
+      type: object
+      required: [id, email, is_active]
+      properties:
+        id:
+          type: integer
+          minimum: 1
+        email:
+          type: string
+          format: email
+        is_active:
+          type: boolean
+
+    UserAdminRead:
+      allOf:
+        - $ref: '#/components/schemas/UserRead'
+        - type: object
+          required: [is_admin, failed_login_attempts, created_at, updated_at]
+          properties:
+            is_admin:
+              type: boolean
+            failed_login_attempts:
+              type: integer
+              minimum: 0
+            locked_until:
+              type: string
+              format: date-time
+              nullable: true
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+
+    UserStatusUpdate:
+      type: object
+      required: [is_active]
+      properties:
+        is_active:
+          type: boolean
+
+    UserRoleUpdate:
+      type: object
+      required: [is_admin]
+      properties:
+        is_admin:
+          type: boolean
+
+    PasswordChangeRequest:
+      type: object
+      required: [current_password, new_password]
+      properties:
+        current_password:
+          type: string
+          format: password
+          minLength: 8
+          maxLength: 256
+        new_password:
+          type: string
+          format: password
+          minLength: 8
+          maxLength: 256
+
+    Token:
+      type: object
+      required: [access_token, token_type, expiresIn]
+      properties:
+        access_token:
+          type: string
+        token_type:
+          type: string
+          default: bearer
+        expiresIn:
+          type: integer
+          minimum: 1
+
     ImportMode:
       type: string
       enum: [standard, full]
