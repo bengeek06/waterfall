@@ -16,6 +16,7 @@ from waterfall.models.resources import (
     CostType,
     Estimate,
     EstimateCostLine,
+    EstimateLine,
     EstimateTaskRow,
     ResourceRole,
     TaskRoleAssignment,
@@ -593,6 +594,32 @@ def delete_project(
     current_user: User = Depends(get_current_active_user),
 ) -> Response:
     project = _get_project_or_404(db, project_id, current_user.id)
+
+    estimate_ids = [
+        row[0] for row in db.query(Estimate.id).filter(Estimate.project_id == project_id).all()
+    ]
+    if estimate_ids:
+        db.query(EstimateCostLine).filter(EstimateCostLine.estimate_id.in_(estimate_ids)).delete(
+            synchronize_session=False
+        )
+        db.query(EstimateLine).filter(EstimateLine.estimate_id.in_(estimate_ids)).delete(
+            synchronize_session=False
+        )
+        db.query(EstimateTaskRow).filter(EstimateTaskRow.estimate_id.in_(estimate_ids)).delete(
+            synchronize_session=False
+        )
+        # Clear self-references before deleting, since a validated estimate may be
+        # the reference_estimate_id of a later forecast/contract version.
+        db.query(Estimate).filter(Estimate.id.in_(estimate_ids)).update(
+            {Estimate.reference_estimate_id: None}, synchronize_session=False
+        )
+        db.query(Estimate).filter(Estimate.id.in_(estimate_ids)).delete(synchronize_session=False)
+
+    db.query(TaskRoleAssignment).filter(
+        TaskRoleAssignment.task_id.in_(
+            db.query(MsTask.id).filter(MsTask.project_id == project_id).scalar_subquery()
+        )
+    ).delete(synchronize_session=False)
 
     db.query(WfImportBatch).filter(WfImportBatch.project_id == project_id).update(
         {WfImportBatch.project_id: None}, synchronize_session=False

@@ -493,6 +493,77 @@ export function listEstimateCostLines(
   );
 }
 
+export type EstimateCostLineCreate = components["schemas"]["EstimateCostLineCreate"];
+export type EstimateCostLineUpdate = components["schemas"]["EstimateCostLineUpdate"];
+
+export function createEstimateCostLine(
+  projectId: number,
+  estimateId: number,
+  payload: EstimateCostLineCreate,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<EstimateCostLine>(
+    `/projects/${projectId}/estimates/${estimateId}/cost-lines`,
+    tokens,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    onSessionRefresh,
+  );
+}
+
+export function updateEstimateCostLine(
+  projectId: number,
+  estimateId: number,
+  lineId: number,
+  payload: EstimateCostLineUpdate,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<EstimateCostLine>(
+    `/projects/${projectId}/estimates/${estimateId}/cost-lines/${lineId}`,
+    tokens,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    onSessionRefresh,
+  );
+}
+
+export function deleteEstimateCostLine(
+  projectId: number,
+  estimateId: number,
+  lineId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<void>(
+    `/projects/${projectId}/estimates/${estimateId}/cost-lines/${lineId}`,
+    tokens,
+    { method: "DELETE" },
+    onSessionRefresh,
+  );
+}
+
+export function validateProjectEstimate(
+  projectId: number,
+  estimateId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<ProjectEstimate>(
+    `/projects/${projectId}/estimates/${estimateId}/validate`,
+    tokens,
+    { method: "POST" },
+    onSessionRefresh,
+  );
+}
+
 export function createProject(
   name: string,
   tokens: SessionTokens,

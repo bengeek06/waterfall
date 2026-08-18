@@ -6,7 +6,13 @@ import { useEffect, useMemo, useState } from "react";
 
 import {
   ApiError,
+  CostCategory,
+  createEstimateCostLine,
   createProjectEstimate,
+  deleteEstimateCostLine,
+  EstimateCostLine,
+  getCostCategories,
+  getCostTypes,
   getProject,
   listEstimateCostLines,
   listEstimateTaskRows,
@@ -17,7 +23,9 @@ import {
   Task,
   getProjectTasks,
   restoreSession,
+  updateEstimateCostLine,
   updateTaskDescription,
+  validateProjectEstimate,
 } from "@/lib/backend";
 import { clearSession, getSession, setSession, type SessionTokens } from "@/lib/session";
 
@@ -35,7 +43,17 @@ export default function ProjectDetailsPage() {
   const [estimates, setEstimates] = useState<ProjectEstimate[]>([]);
   const [selectedEstimateId, setSelectedEstimateId] = useState<number | null>(null);
   const [estimateTaskRowCount, setEstimateTaskRowCount] = useState(0);
-  const [estimateCostLineCount, setEstimateCostLineCount] = useState(0);
+  const [costLines, setCostLines] = useState<EstimateCostLine[]>([]);
+  const [costCategories, setCostCategories] = useState<CostCategory[]>([]);
+  const [costLineDraft, setCostLineDraft] = useState({
+    categoryId: "",
+    label: "",
+    quantity: "1",
+    unitCost: "0",
+  });
+  const [editingLineId, setEditingLineId] = useState<number | null>(null);
+  const [editingLineDraft, setEditingLineDraft] = useState({ label: "", quantity: "", unitCost: "" });
+  const [estimateBusy, setEstimateBusy] = useState(false);
   const [activeTab, setActiveTab] = useState<ProjectTab>("planning");
   const [taskOffset, setTaskOffset] = useState(0);
   const [drafts, setDrafts] = useState<Record<number, string>>({});
@@ -117,16 +135,16 @@ export default function ProjectDetailsPage() {
     async function loadEstimateDetails() {
       if (!session || selectedEstimateId === null) {
         setEstimateTaskRowCount(0);
-        setEstimateCostLineCount(0);
+        setCostLines([]);
         return;
       }
       try {
-        const [taskRows, costLines] = await Promise.all([
+        const [taskRows, lines] = await Promise.all([
           listEstimateTaskRows(projectId, selectedEstimateId, session, onSessionRefresh),
           listEstimateCostLines(projectId, selectedEstimateId, session, onSessionRefresh),
         ]);
         setEstimateTaskRowCount(taskRows.length);
-        setEstimateCostLineCount(costLines.length);
+        setCostLines(lines);
       } catch (cause) {
         if (cause instanceof SessionExpiredError) {
           clearSession();
@@ -139,6 +157,29 @@ export default function ProjectDetailsPage() {
 
     void loadEstimateDetails();
   }, [onSessionRefresh, projectId, router, selectedEstimateId, session]);
+
+  useEffect(() => {
+    async function loadCostCategories() {
+      if (!session) {
+        return;
+      }
+      try {
+        const [categories, types] = await Promise.all([
+          getCostCategories(session, onSessionRefresh),
+          getCostTypes(session, onSessionRefresh),
+        ]);
+        const laborTypeIds = new Set(types.filter((type) => type.code === "MO").map((type) => type.id));
+        setCostCategories(categories.filter((category) => !laborTypeIds.has(category.cost_type_id)));
+      } catch {
+        // Non-blocking: the add-line form simply stays disabled without categories.
+      }
+    }
+
+    void loadCostCategories();
+  }, [onSessionRefresh, session]);
+
+  const selectedEstimate = estimates.find((estimate) => estimate.id === selectedEstimateId) ?? null;
+  const canEditEstimate = selectedEstimate?.status === "draft";
 
   async function createDraftEstimate() {
     if (!session) {
@@ -163,6 +204,149 @@ export default function ProjectDetailsPage() {
         return;
       }
       setError(cause instanceof ApiError ? cause.message : "Impossible de créer le devis.");
+    }
+  }
+
+  async function addCostLine() {
+    if (!session || selectedEstimateId === null) {
+      return;
+    }
+    const categoryId = Number(costLineDraft.categoryId);
+    const quantity = Number(costLineDraft.quantity);
+    const unitCost = Number(costLineDraft.unitCost);
+    if (!categoryId || !costLineDraft.label.trim() || !(quantity > 0) || unitCost < 0) {
+      setError("Renseigne une catégorie, un libellé, une quantité et un coût unitaire valides.");
+      return;
+    }
+
+    setEstimateBusy(true);
+    setError(null);
+    try {
+      const line = await createEstimateCostLine(
+        projectId,
+        selectedEstimateId,
+        {
+          cost_category_id: categoryId,
+          label: costLineDraft.label.trim(),
+          quantity,
+          unit_cost: unitCost,
+        },
+        session,
+        onSessionRefresh,
+      );
+      setCostLines((previous) => [...previous, line]);
+      setCostLineDraft({ categoryId: "", label: "", quantity: "1", unitCost: "0" });
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      setError(cause instanceof ApiError ? cause.message : "Impossible d'ajouter la ligne de coût.");
+    } finally {
+      setEstimateBusy(false);
+    }
+  }
+
+  function startEditCostLine(line: EstimateCostLine) {
+    setEditingLineId(line.id);
+    setEditingLineDraft({
+      label: line.label,
+      quantity: String(line.quantity),
+      unitCost: String(line.unit_cost),
+    });
+  }
+
+  async function saveCostLine(line: EstimateCostLine) {
+    if (!session || selectedEstimateId === null) {
+      return;
+    }
+    const quantity = Number(editingLineDraft.quantity);
+    const unitCost = Number(editingLineDraft.unitCost);
+    if (!editingLineDraft.label.trim() || !(quantity > 0) || unitCost < 0) {
+      setError("Libellé, quantité et coût unitaire doivent être valides.");
+      return;
+    }
+
+    setEstimateBusy(true);
+    setError(null);
+    try {
+      const updated = await updateEstimateCostLine(
+        projectId,
+        selectedEstimateId,
+        line.id,
+        { label: editingLineDraft.label.trim(), quantity, unit_cost: unitCost },
+        session,
+        onSessionRefresh,
+      );
+      setCostLines((previous) => previous.map((item) => (item.id === updated.id ? updated : item)));
+      setEditingLineId(null);
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      setError(cause instanceof ApiError ? cause.message : "Impossible de modifier la ligne de coût.");
+    } finally {
+      setEstimateBusy(false);
+    }
+  }
+
+  async function removeCostLine(line: EstimateCostLine) {
+    if (!session || selectedEstimateId === null) {
+      return;
+    }
+    const confirmed = window.confirm(`Supprimer la ligne "${line.label}" ?`);
+    if (!confirmed) {
+      return;
+    }
+
+    setEstimateBusy(true);
+    setError(null);
+    try {
+      await deleteEstimateCostLine(projectId, selectedEstimateId, line.id, session, onSessionRefresh);
+      setCostLines((previous) => previous.filter((item) => item.id !== line.id));
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      setError(cause instanceof ApiError ? cause.message : "Impossible de supprimer la ligne de coût.");
+    } finally {
+      setEstimateBusy(false);
+    }
+  }
+
+  async function validateEstimate() {
+    if (!session || selectedEstimateId === null) {
+      return;
+    }
+    const confirmed = window.confirm("Valider ce devis ? Il deviendra immuable.");
+    if (!confirmed) {
+      return;
+    }
+
+    setEstimateBusy(true);
+    setError(null);
+    try {
+      const validated = await validateProjectEstimate(
+        projectId,
+        selectedEstimateId,
+        session,
+        onSessionRefresh,
+      );
+      setEstimates((previous) => previous.map((item) => (item.id === validated.id ? validated : item)));
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      setError(cause instanceof ApiError ? cause.message : "Impossible de valider le devis.");
+    } finally {
+      setEstimateBusy(false);
     }
   }
 
@@ -317,7 +501,11 @@ export default function ProjectDetailsPage() {
             <div className="row" style={{ justifyContent: "space-between" }}>
               <div>
                 <h2>Versions de devis</h2>
-                <p className="muted">Les versions sont préparées par l’API et seront éditables dans le jalon 7.</p>
+                <p className="muted">
+                  {canEditEstimate
+                    ? "Le brouillon sélectionné est éditable."
+                    : "Cette version n'est plus modifiable."}
+                </p>
               </div>
               <div className="row">
                 {estimates.length ? (
@@ -328,7 +516,9 @@ export default function ProjectDetailsPage() {
                       onChange={(event) => setSelectedEstimateId(Number(event.target.value))}
                     >
                       {estimates.map((estimate) => (
-                        <option key={estimate.id} value={estimate.id}>V{estimate.version_number}</option>
+                        <option key={estimate.id} value={estimate.id}>
+                          V{estimate.version_number} ({estimate.status})
+                        </option>
                       ))}
                     </select>
                   </label>
@@ -336,27 +526,195 @@ export default function ProjectDetailsPage() {
                 <button className="btn btn-primary" type="button" onClick={() => void createDraftEstimate()}>
                   Nouveau brouillon
                 </button>
+                {canEditEstimate ? (
+                  <button
+                    className="btn"
+                    type="button"
+                    disabled={estimateBusy}
+                    onClick={() => void validateEstimate()}
+                  >
+                    Valider le devis
+                  </button>
+                ) : null}
               </div>
             </div>
             {!estimates.length ? <p className="muted empty-state">Aucune version de devis.</p> : null}
+
             {estimates.length ? (
               <div className="estimate-summary">
-                <div className="estimate-metric"><strong>{estimateTaskRowCount}</strong><span>tâches snapshotées</span></div>
-                <div className="estimate-metric"><strong>{estimateCostLineCount}</strong><span>lignes de coût</span></div>
+                <div className="estimate-metric">
+                  <strong>{estimateTaskRowCount}</strong>
+                  <span>tâches snapshotées</span>
+                </div>
+                <div className="estimate-metric">
+                  <strong>{costLines.length}</strong>
+                  <span>lignes de coût</span>
+                </div>
+
+                {canEditEstimate ? (
+                  <div className="cost-line-form row">
+                    <label className="estimate-select-label">
+                      Catégorie
+                      <select
+                        value={costLineDraft.categoryId}
+                        onChange={(event) =>
+                          setCostLineDraft((prev) => ({ ...prev, categoryId: event.target.value }))
+                        }
+                      >
+                        <option value="">Choisir...</option>
+                        {costCategories.map((category) => (
+                          <option key={category.id} value={category.id}>
+                            {category.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <div className="field">
+                      <label htmlFor="cost-line-label">Libellé</label>
+                      <input
+                        id="cost-line-label"
+                        value={costLineDraft.label}
+                        onChange={(event) =>
+                          setCostLineDraft((prev) => ({ ...prev, label: event.target.value }))
+                        }
+                      />
+                    </div>
+                    <div className="field">
+                      <label htmlFor="cost-line-quantity">Quantité</label>
+                      <input
+                        id="cost-line-quantity"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={costLineDraft.quantity}
+                        onChange={(event) =>
+                          setCostLineDraft((prev) => ({ ...prev, quantity: event.target.value }))
+                        }
+                      />
+                    </div>
+                    <div className="field">
+                      <label htmlFor="cost-line-unit-cost">Coût unitaire</label>
+                      <input
+                        id="cost-line-unit-cost"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={costLineDraft.unitCost}
+                        onChange={(event) =>
+                          setCostLineDraft((prev) => ({ ...prev, unitCost: event.target.value }))
+                        }
+                      />
+                    </div>
+                    <button
+                      className="btn btn-primary"
+                      type="button"
+                      disabled={estimateBusy}
+                      onClick={() => void addCostLine()}
+                    >
+                      Ajouter la ligne
+                    </button>
+                  </div>
+                ) : null}
+
                 <div className="table-scroll">
                   <table className="table">
                     <thead>
-                      <tr><th scope="col">Version</th><th scope="col">Nature</th><th scope="col">Statut</th><th scope="col">Devise</th></tr>
+                      <tr>
+                        <th scope="col">Catégorie</th>
+                        <th scope="col">Libellé</th>
+                        <th scope="col">Quantité</th>
+                        <th scope="col">Coût unitaire</th>
+                        <th scope="col">Montant</th>
+                        {canEditEstimate ? <th scope="col">Action</th> : null}
+                      </tr>
                     </thead>
                     <tbody>
-                      {estimates.map((estimate) => (
-                        <tr key={estimate.id}>
-                          <td>V{estimate.version_number}</td>
-                          <td>{estimate.kind}</td>
-                          <td><span className="tag">{estimate.status}</span></td>
-                          <td>{estimate.currency_code}</td>
+                      {costLines.map((line) => {
+                        const editing = editingLineId === line.id;
+                        return (
+                          <tr key={line.id}>
+                            <td>{line.cost_category_code}</td>
+                            <td>
+                              {editing ? (
+                                <input
+                                  value={editingLineDraft.label}
+                                  onChange={(event) =>
+                                    setEditingLineDraft((prev) => ({ ...prev, label: event.target.value }))
+                                  }
+                                />
+                              ) : (
+                                line.label
+                              )}
+                            </td>
+                            <td>
+                              {editing ? (
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  value={editingLineDraft.quantity}
+                                  onChange={(event) =>
+                                    setEditingLineDraft((prev) => ({ ...prev, quantity: event.target.value }))
+                                  }
+                                />
+                              ) : (
+                                line.quantity
+                              )}
+                            </td>
+                            <td>
+                              {editing ? (
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  value={editingLineDraft.unitCost}
+                                  onChange={(event) =>
+                                    setEditingLineDraft((prev) => ({ ...prev, unitCost: event.target.value }))
+                                  }
+                                />
+                              ) : (
+                                line.unit_cost
+                              )}
+                            </td>
+                            <td>{line.purchase_cost}</td>
+                            {canEditEstimate ? (
+                              <td>
+                                <div className="row">
+                                  {editing ? (
+                                    <button
+                                      className="btn btn-primary"
+                                      type="button"
+                                      disabled={estimateBusy}
+                                      onClick={() => void saveCostLine(line)}
+                                    >
+                                      Sauver
+                                    </button>
+                                  ) : (
+                                    <button className="btn" type="button" onClick={() => startEditCostLine(line)}>
+                                      Modifier
+                                    </button>
+                                  )}
+                                  <button
+                                    className="btn btn-danger"
+                                    type="button"
+                                    disabled={estimateBusy}
+                                    onClick={() => void removeCostLine(line)}
+                                  >
+                                    Supprimer
+                                  </button>
+                                </div>
+                              </td>
+                            ) : null}
+                          </tr>
+                        );
+                      })}
+                      {!costLines.length ? (
+                        <tr>
+                          <td colSpan={canEditEstimate ? 6 : 5} className="muted">
+                            Aucune ligne de coût.
+                          </td>
                         </tr>
-                      ))}
+                      ) : null}
                     </tbody>
                   </table>
                 </div>

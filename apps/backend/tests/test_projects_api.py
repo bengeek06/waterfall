@@ -267,6 +267,38 @@ def test_delete_project_cascades_related_data() -> None:
             session.add(enrichment)
             session.commit()
 
+            cost_type = CostType(code=f"MAT-{uuid4().hex[:8]}", name="Materiel")
+            session.add(cost_type)
+            session.flush()
+            cost_category = CostCategory(
+                cost_type_id=cost_type.id,
+                code=f"MATCAT-{uuid4().hex[:8]}",
+                name="Materiel",
+            )
+            session.add(cost_category)
+            session.commit()
+            cost_category_id = cost_category.id
+
+        estimate_response: Response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate_response.status_code == 201
+        estimate_id = estimate_response.json()["id"]
+
+        cost_line_response: Response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "cost_category_id": cost_category_id,
+                "label": "Ordinateurs",
+                "quantity": 2,
+                "unit_cost": 900,
+            },
+            headers=headers,
+        )
+        assert cost_line_response.status_code == 201
+
         response: Response = client.delete(f"/projects/{project_id}", headers=headers)
         assert response.status_code == 204
 

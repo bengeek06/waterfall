@@ -258,6 +258,19 @@ body {
   gap: 1rem;
 }
 
+.cost-line-form {
+  align-items: flex-end;
+  padding: 0.9rem;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: #f7faf9;
+}
+
+.cost-line-form .field {
+  margin-bottom: 0;
+  min-width: 140px;
+}
+
 .estimate-metric {
   display: grid;
   gap: 0.15rem;
