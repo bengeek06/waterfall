@@ -499,6 +499,48 @@ def test_patch_project_name() -> None:
         assert payload["name"] == "Projet Renomme"
 
 
+def test_create_project_with_code_and_description() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+
+        response: Response = client.post(
+            "/projects",
+            json={"name": "Projet Code", "code": "PRJ-001", "short_description": "Résumé court"},
+            headers=headers,
+        )
+        assert response.status_code == 201
+        payload = cast(dict[str, Any], response.json())
+        assert payload["code"] == "PRJ-001"
+        assert payload["short_description"] == "Résumé court"
+
+
+def test_patch_project_code_and_description_partially() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        first_response: Response = client.patch(
+            f"/projects/{project_id}",
+            json={"code": "PRJ-042"},
+            headers=headers,
+        )
+        assert first_response.status_code == 200
+        first_payload = cast(dict[str, Any], first_response.json())
+        assert first_payload["code"] == "PRJ-042"
+        assert first_payload["short_description"] is None
+        assert first_payload["name"] == "Project API Test"
+
+        second_response: Response = client.patch(
+            f"/projects/{project_id}",
+            json={"short_description": "Nouvelle description"},
+            headers=headers,
+        )
+        assert second_response.status_code == 200
+        second_payload = cast(dict[str, Any], second_response.json())
+        assert second_payload["code"] == "PRJ-042"
+        assert second_payload["short_description"] == "Nouvelle description"
+
+
 def test_delete_project_cascades_related_data() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)

@@ -80,6 +80,8 @@ def _to_project_read(project: MsProject) -> ProjectRead:
     return ProjectRead(
         id=project.id,
         name=project.name,
+        code=project.code,
+        short_description=project.short_description,
         source_version=project.source_version,
         save_version_out=project.save_version_out,
         schedule_from_start=project.schedule_from_start,
@@ -256,6 +258,8 @@ def create_project(
     project = MsProject(
         owner_id=current_user.id,
         external_uid=None,
+        code=payload.code.strip() if payload.code else None,
+        short_description=payload.short_description.strip() if payload.short_description else None,
         source_version=2016,
         save_version_out=16,
         name=payload.name.strip(),
@@ -630,14 +634,22 @@ def update_project(
 ) -> ProjectRead:
     project = _get_project_or_404(db, project_id, current_user.id)
 
-    new_name = payload.name.strip()
-    if not new_name:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Project name is required",
+    values = payload.model_dump(exclude_unset=True)
+    if "name" in values:
+        new_name = (values["name"] or "").strip()
+        if not new_name:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Project name is required",
+            )
+        project.name = new_name
+    if "code" in values:
+        project.code = values["code"].strip() if values["code"] else None
+    if "short_description" in values:
+        project.short_description = (
+            values["short_description"].strip() if values["short_description"] else None
         )
 
-    project.name = new_name
     db.add(project)
     db.commit()
     db.refresh(project)

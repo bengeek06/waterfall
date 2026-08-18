@@ -974,6 +974,8 @@ export interface components {
         ProjectRead: {
             id: number;
             name: string;
+            code?: string | null;
+            short_description?: string | null;
             /** @enum {integer} */
             source_version: 2010 | 2013 | 2016;
             /** @enum {integer} */
@@ -987,10 +989,14 @@ export interface components {
         };
         ProjectCreate: {
             name: string;
+            code?: string | null;
+            short_description?: string | null;
             currency_code?: string | null;
         };
         ProjectUpdate: {
-            name: string;
+            name?: string;
+            code?: string | null;
+            short_description?: string | null;
         };
         TaskRead: {
             id: number;

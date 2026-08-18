@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field
 class ProjectRead(BaseModel):
     id: int
     name: str
+    code: str | None
+    short_description: str | None
     source_version: int
     save_version_out: int
     schedule_from_start: bool
@@ -18,11 +20,15 @@ class ProjectRead(BaseModel):
 
 class ProjectCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
+    code: str | None = Field(default=None, max_length=64)
+    short_description: str | None = Field(default=None, max_length=500)
     currency_code: str | None = Field(default=None, min_length=3, max_length=3)
 
 
 class ProjectUpdate(BaseModel):
-    name: str = Field(min_length=1, max_length=255)
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    code: str | None = Field(default=None, max_length=64)
+    short_description: str | None = Field(default=None, max_length=500)
 
 
 class TaskRead(BaseModel):

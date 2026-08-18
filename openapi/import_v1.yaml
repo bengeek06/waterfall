@@ -2174,6 +2174,12 @@ components:
           minimum: 1
         name:
           type: string
+        code:
+          type: string
+          nullable: true
+        short_description:
+          type: string
+          nullable: true
         source_version:
           type: integer
           enum: [2010, 2013, 2016]
@@ -2202,6 +2208,14 @@ components:
           type: string
           minLength: 1
           maxLength: 255
+        code:
+          type: string
+          maxLength: 64
+          nullable: true
+        short_description:
+          type: string
+          maxLength: 500
+          nullable: true
         currency_code:
           type: string
           minLength: 3
@@ -2210,12 +2224,19 @@ components:
 
     ProjectUpdate:
       type: object
-      required: [name]
       properties:
         name:
           type: string
           minLength: 1
           maxLength: 255
+        code:
+          type: string
+          maxLength: 64
+          nullable: true
+        short_description:
+          type: string
+          maxLength: 500
+          nullable: true
 
     TaskRead:
       type: object
