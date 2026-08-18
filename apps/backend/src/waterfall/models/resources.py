@@ -60,11 +60,28 @@ class ResourceRole(Base):
     )
 
 
+class CostType(Base):
+    __tablename__ = "wf_cost_type"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    code: Mapped[str] = mapped_column(String(32), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+
 class CostCategory(Base):
     __tablename__ = "wf_cost_category"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    cost_type_id: Mapped[int] = mapped_column(ForeignKey("wf_cost_type.id"), nullable=False)
     code: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    accounting_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     calendar_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)

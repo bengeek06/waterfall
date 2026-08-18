@@ -7,6 +7,7 @@ import {
   ApiError,
   CostCategory,
   CostRate,
+  CostType,
   InflationRate,
   ResourceNode,
   ResourceRole,
@@ -14,11 +15,13 @@ import {
   SessionExpiredError,
   createCostCategory,
   createCostRate,
+  createCostType,
   createResourceNode,
   createResourceRole,
   createRoleCapacity,
   getCostCategories,
   getCostRates,
+  getCostTypes,
   getInflationRates,
   getResourceNodes,
   getResourceRoles,
@@ -35,6 +38,7 @@ export default function ResourcesPage() {
   const [session, setSessionState] = useState<SessionTokens | null>(() => getSession());
   const [nodes, setNodes] = useState<ResourceNode[]>([]);
   const [roles, setRoles] = useState<ResourceRole[]>([]);
+  const [costTypes, setCostTypes] = useState<CostType[]>([]);
   const [categories, setCategories] = useState<CostCategory[]>([]);
   const [rates, setRates] = useState<CostRate[]>([]);
   const [inflation, setInflation] = useState<InflationRate[]>([]);
@@ -48,7 +52,11 @@ export default function ResourcesPage() {
   const [nodeParentId, setNodeParentId] = useState("");
   const [categoryCode, setCategoryCode] = useState("");
   const [categoryName, setCategoryName] = useState("");
+  const [categoryCostTypeId, setCategoryCostTypeId] = useState("");
+  const [accountingCode, setAccountingCode] = useState("");
   const [calendarCode, setCalendarCode] = useState("");
+  const [costTypeCode, setCostTypeCode] = useState("");
+  const [costTypeName, setCostTypeName] = useState("");
   const [roleCode, setRoleCode] = useState("");
   const [roleName, setRoleName] = useState("");
   const [roleNodeId, setRoleNodeId] = useState("");
@@ -88,10 +96,11 @@ export default function ResourcesPage() {
       }
       setBusy(true);
       try {
-        const [nodeData, roleData, categoryData, rateData, inflationData, capacityData] =
+        const [nodeData, roleData, costTypeData, categoryData, rateData, inflationData, capacityData] =
           await Promise.all([
             getResourceNodes(session, onSessionRefresh),
             getResourceRoles(session, onSessionRefresh),
+            getCostTypes(session, onSessionRefresh),
             getCostCategories(session, onSessionRefresh),
             getCostRates(session, onSessionRefresh),
             getInflationRates(session, onSessionRefresh),
@@ -99,6 +108,7 @@ export default function ResourcesPage() {
           ]);
         setNodes(nodeData);
         setRoles(roleData);
+        setCostTypes(costTypeData);
         setCategories(categoryData);
         setRates(rateData);
         setInflation(inflationData);
@@ -168,15 +178,37 @@ export default function ResourcesPage() {
     if (!session) return;
     await submitAction(async () => {
       const created = await createCostCategory(
-        { code: categoryCode, name: categoryName, calendar_code: calendarCode || null },
+        {
+          cost_type_id: Number(categoryCostTypeId),
+          code: categoryCode,
+          accounting_code: accountingCode || null,
+          name: categoryName,
+          calendar_code: calendarCode || null,
+        },
         session,
         onSessionRefresh,
       );
       setCategories((prev) => [...prev, created].sort((left, right) => left.code.localeCompare(right.code)));
       setCategoryCode("");
       setCategoryName("");
+      setAccountingCode("");
       setCalendarCode("");
     }, "Catégorie créée.");
+  }
+
+  async function addCostType(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!session) return;
+    await submitAction(async () => {
+      const created = await createCostType(
+        { code: costTypeCode, name: costTypeName },
+        session,
+        onSessionRefresh,
+      );
+      setCostTypes((prev) => [...prev, created].sort((left, right) => left.code.localeCompare(right.code)));
+      setCostTypeCode("");
+      setCostTypeName("");
+    }, "Type de coût créé.");
   }
 
   async function addRole(event: FormEvent<HTMLFormElement>) {
@@ -255,6 +287,7 @@ export default function ResourcesPage() {
   }
 
   const nodeNameById = new Map(nodes.map((node) => [node.id, node.name]));
+  const costTypeNameById = new Map(costTypes.map((costType) => [costType.id, costType.name]));
   const categoryNameById = new Map(categories.map((category) => [category.id, category.name]));
   const roleNameById = new Map(roles.map((role) => [role.id, role.name]));
 
@@ -288,14 +321,26 @@ export default function ResourcesPage() {
             </div>
 
             <div className="panel">
+              <h2>Types de coût</h2>
+              <form onSubmit={addCostType}>
+                <div className="field"><label htmlFor="cost-type-code">Code</label><input id="cost-type-code" value={costTypeCode} onChange={(event) => setCostTypeCode(event.target.value)} required /></div>
+                <div className="field"><label htmlFor="cost-type-name">Nom</label><input id="cost-type-name" value={costTypeName} onChange={(event) => setCostTypeName(event.target.value)} required /></div>
+                <button className="btn btn-primary" disabled={actionBusy} type="submit">Ajouter</button>
+              </form>
+              <ul className="resource-list">{costTypes.map((costType) => <li key={costType.id}><strong>{costType.code}</strong> {costType.name}</li>)}</ul>
+            </div>
+
+            <div className="panel">
               <h2>Catégories de coût</h2>
               <form onSubmit={addCategory}>
+                <div className="field"><label htmlFor="category-type">Type</label><select id="category-type" value={categoryCostTypeId} onChange={(event) => setCategoryCostTypeId(event.target.value)} required><option value="">Sélectionner</option>{costTypes.map((costType) => <option key={costType.id} value={costType.id}>{costType.code} - {costType.name}</option>)}</select></div>
                 <div className="field"><label htmlFor="category-code">Code</label><input id="category-code" value={categoryCode} onChange={(event) => setCategoryCode(event.target.value)} required /></div>
+                <div className="field"><label htmlFor="accounting-code">Code comptable</label><input id="accounting-code" value={accountingCode} onChange={(event) => setAccountingCode(event.target.value)} /></div>
                 <div className="field"><label htmlFor="category-name">Nom</label><input id="category-name" value={categoryName} onChange={(event) => setCategoryName(event.target.value)} required /></div>
                 <div className="field"><label htmlFor="calendar-code">Calendrier</label><input id="calendar-code" value={calendarCode} onChange={(event) => setCalendarCode(event.target.value)} /></div>
                 <button className="btn btn-primary" disabled={actionBusy} type="submit">Ajouter</button>
               </form>
-              <ul className="resource-list">{categories.map((category) => <li key={category.id}><strong>{category.code}</strong> {category.name}<span>{category.calendar_code ?? "Sans calendrier"}</span></li>)}</ul>
+              <ul className="resource-list">{categories.map((category) => <li key={category.id}><strong>{category.code}</strong> {category.name}<span>{costTypeNameById.get(category.cost_type_id) ?? "?"} / {category.accounting_code ?? "Sans code comptable"}</span><span>{category.calendar_code ?? "Sans calendrier"}</span></li>)}</ul>
             </div>
 
             <div className="panel">

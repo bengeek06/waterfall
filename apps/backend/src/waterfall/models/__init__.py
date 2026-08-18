@@ -2,6 +2,7 @@ from waterfall.models.ms_core import MsProject, MsTask, MsTaskLink
 from waterfall.models.resources import (
     CostCategory,
     CostRate,
+    CostType,
     Estimate,
     EstimateLine,
     InflationRate,
@@ -26,6 +27,7 @@ __all__ = [
     "ResourceRole",
     "CostCategory",
     "CostRate",
+    "CostType",
     "InflationRate",
     "RoleCapacity",
     "TaskRoleAssignment",

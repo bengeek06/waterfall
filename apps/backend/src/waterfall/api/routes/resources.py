@@ -12,6 +12,7 @@ from waterfall.db.session import get_db
 from waterfall.models.resources import (
     CostCategory,
     CostRate,
+    CostType,
     InflationRate,
     ResourceNode,
     ResourceRole,
@@ -25,6 +26,9 @@ from waterfall.schemas.resources import (
     CostRateCreate,
     CostRateRead,
     CostRateUpdate,
+    CostTypeCreate,
+    CostTypeRead,
+    CostTypeUpdate,
     InflationRateRead,
     InflationRateUpdate,
     ResourceNodeCreate,
@@ -214,12 +218,50 @@ def list_categories(
     )
 
 
+@router.get("/cost-types", response_model=list[CostTypeRead])
+def list_cost_types(
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_active_user),
+) -> list[CostType]:
+    return db.query(CostType).filter(CostType.is_active.is_(True)).order_by(CostType.code).all()
+
+
+@router.post("/cost-types", response_model=CostTypeRead, status_code=status.HTTP_201_CREATED)
+def create_cost_type(
+    payload: CostTypeCreate,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_admin_user),
+) -> CostType:
+    cost_type = CostType(**payload.model_dump())
+    db.add(cost_type)
+    _commit(db, "Cost type code already exists")
+    db.refresh(cost_type)
+    return cost_type
+
+
+@router.patch("/cost-types/{cost_type_id}", response_model=CostTypeRead)
+def update_cost_type(
+    cost_type_id: int,
+    payload: CostTypeUpdate,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_admin_user),
+) -> CostType:
+    cost_type = _get_or_404(db, CostType, cost_type_id, "Cost type")
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(cost_type, field, value)
+    db.add(cost_type)
+    _commit(db, "Cost type update conflicts with existing data")
+    db.refresh(cost_type)
+    return cost_type
+
+
 @router.post("/categories", response_model=CostCategoryRead, status_code=status.HTTP_201_CREATED)
 def create_category(
     payload: CostCategoryCreate,
     db: Session = Depends(get_db),
     _: User = Depends(get_current_admin_user),
 ) -> CostCategory:
+    _get_or_404(db, CostType, payload.cost_type_id, "Cost type")
     category = CostCategory(**payload.model_dump())
     db.add(category)
     _commit(db, "Cost category code already exists")
@@ -244,7 +286,10 @@ def update_category(
     _: User = Depends(get_current_admin_user),
 ) -> CostCategory:
     category = _get_or_404(db, CostCategory, category_id, "Cost category")
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    values = payload.model_dump(exclude_unset=True)
+    if "cost_type_id" in values:
+        _get_or_404(db, CostType, values["cost_type_id"], "Cost type")
+    for field, value in values.items():
         setattr(category, field, value)
     db.add(category)
     _commit(db, "Cost category update conflicts with existing data")

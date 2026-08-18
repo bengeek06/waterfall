@@ -6,6 +6,7 @@ export type AuthUser = components["schemas"]["UserRead"];
 export type AuthUserAdmin = components["schemas"]["UserAdminRead"];
 export type ResourceNode = components["schemas"]["ResourceNodeRead"];
 export type ResourceRole = components["schemas"]["ResourceRoleRead"];
+export type CostType = components["schemas"]["CostTypeRead"];
 export type CostCategory = components["schemas"]["CostCategoryRead"];
 export type CostRate = components["schemas"]["CostRateRead"];
 export type InflationRate = components["schemas"]["InflationRateRead"];
@@ -255,8 +256,31 @@ export function getCostCategories(tokens: SessionTokens, onSessionRefresh: (next
   return authRequest<CostCategory[]>("/resources/categories", tokens, { method: "GET" }, onSessionRefresh);
 }
 
+export function getCostTypes(tokens: SessionTokens, onSessionRefresh: (next: SessionTokens) => void) {
+  return authRequest<CostType[]>("/resources/cost-types", tokens, { method: "GET" }, onSessionRefresh);
+}
+
+export function createCostType(
+  payload: { code: string; name: string },
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<CostType>(
+    "/resources/cost-types",
+    tokens,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
+    onSessionRefresh,
+  );
+}
+
 export function createCostCategory(
-  payload: { code: string; name: string; calendar_code?: string | null },
+  payload: {
+    cost_type_id: number;
+    code: string;
+    accounting_code?: string | null;
+    name: string;
+    calendar_code?: string | null;
+  },
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
 ) {

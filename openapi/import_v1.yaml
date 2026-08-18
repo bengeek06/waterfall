@@ -934,6 +934,79 @@ paths:
         '409':
           $ref: '#/components/responses/Conflict'
 
+  /resources/cost-types:
+    get:
+      tags: [resources]
+      summary: Lister les types de coût actifs
+      operationId: listCostTypes
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Liste des types de coût
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CostTypeRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [resources]
+      summary: Créer un type de coût
+      operationId: createCostType
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CostTypeCreate'
+      responses:
+        '201':
+          description: Type de coût créé
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CostTypeRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /resources/cost-types/{costTypeId}:
+    patch:
+      tags: [resources]
+      summary: Modifier ou désactiver un type de coût
+      operationId: updateCostType
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CostTypeId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CostTypeUpdate'
+      responses:
+        '200':
+          description: Type de coût modifié
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CostTypeRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
+
   /resources/categories/{categoryId}:
     get:
       tags: [resources]
@@ -1276,6 +1349,14 @@ components:
         type: integer
         minimum: 1
       description: Identifiant technique de la categorie de cout
+    CostTypeId:
+      name: costTypeId
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+      description: Identifiant technique du type de coût
     RateId:
       name: rateId
       in: path
@@ -1849,14 +1930,62 @@ components:
               type: string
               format: date-time
 
-    CostCategoryCreate:
+    CostTypeCreate:
       type: object
       required: [code, name]
       properties:
         code:
           type: string
           minLength: 1
+          maxLength: 32
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+
+    CostTypeUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        is_active:
+          type: boolean
+
+    CostTypeRead:
+      allOf:
+        - $ref: '#/components/schemas/CostTypeCreate'
+        - type: object
+          required: [id, is_active, created_at, updated_at]
+          properties:
+            id:
+              type: integer
+              minimum: 1
+            is_active:
+              type: boolean
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+
+    CostCategoryCreate:
+      type: object
+      required: [cost_type_id, code, name]
+      properties:
+        cost_type_id:
+          type: integer
+          minimum: 1
+        code:
+          type: string
+          minLength: 1
           maxLength: 64
+        accounting_code:
+          type: string
+          maxLength: 64
+          nullable: true
         name:
           type: string
           minLength: 1
@@ -1869,6 +1998,13 @@ components:
     CostCategoryUpdate:
       type: object
       properties:
+        cost_type_id:
+          type: integer
+          minimum: 1
+        accounting_code:
+          type: string
+          maxLength: 64
+          nullable: true
         name:
           type: string
           minLength: 1

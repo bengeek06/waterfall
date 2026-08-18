@@ -40,9 +40,24 @@ def test_admin_can_manage_resource_reference_data() -> None:
     with TestClient(app) as client:
         headers = _admin_headers(client)
 
+        cost_type_response = client.post(
+            "/resources/cost-types",
+            json={"code": "MO", "name": "Main d'oeuvre"},
+            headers=headers,
+        )
+        assert cost_type_response.status_code == 201
+        cost_type_payload = cast(dict[str, Any], cost_type_response.json())
+        cost_type_id = cast(int, cost_type_payload["id"])
+
         category_response = client.post(
             "/resources/categories",
-            json={"code": "DEV", "name": "Developpement", "calendar_code": "STANDARD"},
+            json={
+                "cost_type_id": cost_type_id,
+                "code": "DEV",
+                "accounting_code": "IDEX",
+                "name": "Developpement",
+                "calendar_code": "STANDARD",
+            },
             headers=headers,
         )
         assert category_response.status_code == 201

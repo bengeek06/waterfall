@@ -8,6 +8,7 @@ from waterfall.models.ms_core import MsProject, MsTask
 from waterfall.models.resources import (
     CostCategory,
     CostRate,
+    CostType,
     Estimate,
     EstimateLine,
     InflationRate,
@@ -21,7 +22,16 @@ from waterfall.models.resources import (
 def _seed_resource_graph() -> tuple[int, int, int]:
     session_factory = get_session_factory()
     with session_factory() as session:
-        category = CostCategory(code="DEV", name="Developpement")
+        cost_type = CostType(code="MO", name="Main d'oeuvre")
+        session.add(cost_type)
+        session.flush()
+
+        category = CostCategory(
+            cost_type_id=cost_type.id,
+            code="DEV",
+            accounting_code="IDEX",
+            name="Developpement",
+        )
         session.add(category)
         session.flush()
 

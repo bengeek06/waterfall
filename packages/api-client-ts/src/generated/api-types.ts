@@ -489,6 +489,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/resources/cost-types": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lister les types de coût actifs */
+        get: operations["listCostTypes"];
+        put?: never;
+        /** Créer un type de coût */
+        post: operations["createCostType"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resources/cost-types/{costTypeId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Modifier ou désactiver un type de coût */
+        patch: operations["updateCostType"];
+        trace?: never;
+    };
     "/resources/categories/{categoryId}": {
         parameters: {
             query?: never;
@@ -838,12 +873,32 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
         };
-        CostCategoryCreate: {
+        CostTypeCreate: {
             code: string;
+            name: string;
+        };
+        CostTypeUpdate: {
+            name?: string;
+            is_active?: boolean;
+        };
+        CostTypeRead: components["schemas"]["CostTypeCreate"] & {
+            id: number;
+            is_active: boolean;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        CostCategoryCreate: {
+            cost_type_id: number;
+            code: string;
+            accounting_code?: string | null;
             name: string;
             calendar_code?: string | null;
         };
         CostCategoryUpdate: {
+            cost_type_id?: number;
+            accounting_code?: string | null;
             name?: string;
             calendar_code?: string | null;
             is_active?: boolean;
@@ -1006,6 +1061,8 @@ export interface components {
         RoleId: number;
         /** @description Identifiant technique de la categorie de cout */
         CategoryId: number;
+        /** @description Identifiant technique du type de coût */
+        CostTypeId: number;
         /** @description Identifiant technique du taux horaire */
         RateId: number;
         /** @description Identifiant technique de la capacite */
@@ -2019,6 +2076,84 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
+        };
+    };
+    listCostTypes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Liste des types de coût */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CostTypeRead"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    createCostType: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CostTypeCreate"];
+            };
+        };
+        responses: {
+            /** @description Type de coût créé */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CostTypeRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    updateCostType: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique du type de coût */
+                costTypeId: components["parameters"]["CostTypeId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CostTypeUpdate"];
+            };
+        };
+        responses: {
+            /** @description Type de coût modifié */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CostTypeRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
         };
     };
     getCostCategory: {

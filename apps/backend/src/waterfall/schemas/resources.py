@@ -78,8 +78,38 @@ class ResourceRoleRead(ResourceRoleBase):
     updated_at: datetime
 
 
+class CostTypeBase(BaseModel):
+    code: str = Field(min_length=1, max_length=32)
+    name: str = Field(min_length=1, max_length=255)
+
+    _normalize_code = field_validator("code")(_required_text)
+    _normalize_name = field_validator("name")(_required_text)
+
+
+class CostTypeCreate(CostTypeBase):
+    pass
+
+
+class CostTypeUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    is_active: bool | None = None
+
+    _normalize_name = field_validator("name")(_required_text)
+
+
+class CostTypeRead(CostTypeBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
 class CostCategoryBase(BaseModel):
+    cost_type_id: int = Field(gt=0)
     code: str = Field(min_length=1, max_length=64)
+    accounting_code: str | None = Field(default=None, max_length=64)
     name: str = Field(min_length=1, max_length=255)
     calendar_code: str | None = Field(default=None, max_length=64)
 
@@ -92,6 +122,8 @@ class CostCategoryCreate(CostCategoryBase):
 
 
 class CostCategoryUpdate(BaseModel):
+    cost_type_id: int | None = Field(default=None, gt=0)
+    accounting_code: str | None = Field(default=None, max_length=64)
     name: str | None = Field(default=None, min_length=1, max_length=255)
     calendar_code: str | None = Field(default=None, max_length=64)
     is_active: bool | None = None
