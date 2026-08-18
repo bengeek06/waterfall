@@ -4,7 +4,7 @@ import os
 
 from pydantic import EmailStr, TypeAdapter, ValidationError
 
-from waterfall.core.security import hash_password, normalize_email
+from waterfall.core.security import hash_password, normalize_email, validate_password
 from waterfall.db.session import get_session_factory
 from waterfall.models.user import User
 
@@ -32,8 +32,7 @@ def main() -> None:
         raise ValueError(f"WF_ADMIN_EMAIL is invalid: {email}")
     email = validated_email
 
-    if len(password) < 8:
-        raise ValueError("WF_ADMIN_PASSWORD must be at least 8 characters long")
+    validate_password(password)
 
     session_factory = get_session_factory()
     with session_factory() as db:

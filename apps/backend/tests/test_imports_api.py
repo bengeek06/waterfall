@@ -1,11 +1,15 @@
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from fastapi.testclient import TestClient
 from httpx import Response
 
+from waterfall.core.config import get_settings
+from waterfall.db.session import get_session_factory
 from waterfall.main import app
+from waterfall.models.wf_core import WfImportBatch
 
 NS = {"ms": "http://schemas.microsoft.com/project"}
 EXAMPLE_XML = Path(__file__).resolve().parent / "planning_test.xml"
@@ -34,8 +38,7 @@ def _xml_expected_counters(xml_path: Path) -> tuple[int, int]:
     return task_count, link_count
 
 
-def _auth_headers(client: TestClient) -> dict[str, str]:
-    email = "import.tester@example.com"
+def _auth_headers(client: TestClient, email: str = "import.tester@example.com") -> dict[str, str]:
     password = "SuperSecret123!"
 
     register_response: Response = client.post(
@@ -52,6 +55,17 @@ def _auth_headers(client: TestClient) -> dict[str, str]:
     token = token_response.json()["access_token"]
 
     return {"Authorization": f"Bearer {token}"}
+
+
+def _create_project(client: TestClient, headers: dict[str, str]) -> int:
+    response: Response = client.post(
+        "/projects",
+        json={"name": "Import target"},
+        headers=headers,
+    )
+    assert response.status_code == 201
+    payload = cast(dict[str, Any], response.json())
+    return cast(int, payload["id"])
 
 
 def test_import_batch_minimal_flow() -> None:
@@ -82,16 +96,21 @@ def test_import_batch_minimal_flow() -> None:
 
     with TestClient(app) as client:
         headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
 
         create_response: Response = client.post(
             "/imports/v1/batches",
-            json={"importMode": "standard", "sourceName": "planning_test.xml"},
+            json={
+                "projectId": project_id,
+                "importMode": "standard",
+                "sourceName": "planning_test.xml",
+            },
             headers=headers,
         )
         assert create_response.status_code == 201
-        batch = create_response.json()
+        batch = cast(dict[str, Any], create_response.json())
         assert batch["status"] == "pending"
-        batch_id = batch["id"]
+        batch_id = cast(int, batch["id"])
 
         upload_response: Response = client.post(
             f"/imports/v1/batches/{batch_id}/xml",
@@ -107,13 +126,25 @@ def test_import_batch_minimal_flow() -> None:
         assert upload_response.status_code == 202
         assert upload_response.json()["sourceName"] == "planning_test.xml"
 
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            stored_batch = session.query(WfImportBatch).filter(WfImportBatch.id == batch_id).one()
+            assert stored_batch.source_storage_path is not None
+            assert Path(stored_batch.source_storage_path).is_file()
+            assert stored_batch.log_json is not None
+            assert "xml_b64" not in stored_batch.log_json
+
         run_response: Response = client.post(
             f"/imports/v1/batches/{batch_id}/run",
-            json={"dryRun": True, "failFast": True},
+            json={"dryRun": True},
             headers=headers,
         )
-        assert run_response.status_code == 202
-        assert run_response.json()["status"] == "running"
+        errors_response: Response = client.get(
+            f"/imports/v1/batches/{batch_id}/errors",
+            headers=headers,
+        )
+        assert run_response.status_code == 202, errors_response.text
+        assert run_response.json()["status"] == "success"
 
         status_response: Response = client.get(
             f"/imports/v1/batches/{batch_id}",
@@ -122,13 +153,29 @@ def test_import_batch_minimal_flow() -> None:
         assert status_response.status_code == 200
         status_payload = status_response.json()
         assert status_payload["id"] == batch_id
+        assert status_payload["status"] == "success"
+        assert status_payload["counters"]["tasks"] == 1
         assert "counters" in status_payload
         assert "warnings" in status_payload
 
-        errors_response: Response = client.get(
-            f"/imports/v1/batches/{batch_id}/errors",
+        tasks_response: Response = client.get(f"/projects/{project_id}/tasks", headers=headers)
+        assert tasks_response.status_code == 200
+        assert tasks_response.json() == []
+
+        rerun_response: Response = client.post(
+            f"/imports/v1/batches/{batch_id}/run",
+            json={"dryRun": True},
             headers=headers,
         )
+        assert rerun_response.status_code == 409
+
+        reupload_response: Response = client.post(
+            f"/imports/v1/batches/{batch_id}/xml",
+            files={"file": ("planning_test.xml", minimal_valid_xml, "application/xml")},
+            headers=headers,
+        )
+        assert reupload_response.status_code == 409
+
         assert errors_response.status_code == 200
         assert isinstance(errors_response.json()["items"], list)
 
@@ -139,10 +186,11 @@ def test_import_batch_real_examples_via_api_with_counters(xml_path: Path) -> Non
 
     with TestClient(app) as client:
         headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
 
         create_response: Response = client.post(
             "/imports/v1/batches",
-            json={"importMode": "standard", "sourceName": xml_path.name},
+            json={"projectId": project_id, "importMode": "standard", "sourceName": xml_path.name},
             headers=headers,
         )
         assert create_response.status_code == 201
@@ -163,7 +211,7 @@ def test_import_batch_real_examples_via_api_with_counters(xml_path: Path) -> Non
 
         run_response: Response = client.post(
             f"/imports/v1/batches/{batch_id}/run",
-            json={"dryRun": False, "failFast": True},
+            json={"dryRun": False},
             headers=headers,
         )
         assert run_response.status_code == 202
@@ -177,3 +225,46 @@ def test_import_batch_real_examples_via_api_with_counters(xml_path: Path) -> Non
         assert status_payload["status"] == "success"
         assert status_payload["counters"]["tasks"] == expected_tasks
         assert status_payload["counters"]["links"] == expected_links
+
+
+def test_import_batch_isolated_by_project_owner() -> None:
+    with TestClient(app) as client:
+        owner_headers = _auth_headers(client)
+        project_id = _create_project(client, owner_headers)
+        create_response = client.post(
+            "/imports/v1/batches",
+            json={"projectId": project_id, "importMode": "standard"},
+            headers=owner_headers,
+        )
+        assert create_response.status_code == 201
+        batch_id = create_response.json()["id"]
+
+        other_headers = _auth_headers(client, "import.other@example.com")
+        for path in (f"/imports/v1/batches/{batch_id}", f"/imports/v1/batches/{batch_id}/errors"):
+            response: Response = client.get(path, headers=other_headers)
+            assert response.status_code == 404
+
+
+def test_upload_rejects_files_over_configured_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("IMPORT_MAX_UPLOAD_BYTES", "8")
+    get_settings.cache_clear()
+    try:
+        with TestClient(app) as client:
+            headers = _auth_headers(client)
+            project_id = _create_project(client, headers)
+            create_response = client.post(
+                "/imports/v1/batches",
+                json={"projectId": project_id, "importMode": "standard"},
+                headers=headers,
+            )
+            assert create_response.status_code == 201
+            batch_id = create_response.json()["id"]
+
+            upload_response = client.post(
+                f"/imports/v1/batches/{batch_id}/xml",
+                files={"file": ("too-large.xml", b"123456789", "application/xml")},
+                headers=headers,
+            )
+            assert upload_response.status_code == 413
+    finally:
+        get_settings.cache_clear()

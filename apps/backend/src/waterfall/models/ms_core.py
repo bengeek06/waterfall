@@ -37,6 +37,7 @@ class MsProject(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    owner_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     external_uid: Mapped[str | None] = mapped_column(String(16), nullable=True)
     source_version: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     save_version_out: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=16)

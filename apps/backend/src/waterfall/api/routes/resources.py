@@ -66,6 +66,28 @@ def _get_or_404(
     return item
 
 
+def _validate_node_parent(db: Session, node_id: int, parent_id: int | None) -> None:
+    if parent_id is None:
+        return
+
+    visited: set[int] = set()
+    current_id: int | None = parent_id
+    while current_id is not None:
+        if current_id == node_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Node cannot be assigned below its descendant",
+            )
+        if current_id in visited:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Resource hierarchy contains a cycle",
+            )
+        visited.add(current_id)
+        current_node = _get_or_404(db, ResourceNode, current_id, "Parent node")
+        current_id = current_node.parent_id
+
+
 @router.get("/nodes", response_model=list[ResourceNodeRead])
 def list_nodes(
     db: Session = Depends(get_db),
@@ -112,13 +134,8 @@ def update_node(
     _: User = Depends(get_current_admin_user),
 ) -> ResourceNode:
     node = _get_or_404(db, ResourceNode, node_id, "Resource node")
-    if payload.parent_id == node.id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Node cannot parent itself",
-        )
     if payload.parent_id is not None:
-        _get_or_404(db, ResourceNode, payload.parent_id, "Parent node")
+        _validate_node_parent(db, node.id, payload.parent_id)
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(node, field, value)
     db.add(node)

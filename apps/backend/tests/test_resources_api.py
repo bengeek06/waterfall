@@ -120,3 +120,32 @@ def test_resource_writes_require_admin() -> None:
             headers=headers,
         )
         assert response.status_code == 403
+
+
+def test_resource_nodes_reject_indirect_cycles() -> None:
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        root_response = client.post(
+            "/resources/nodes",
+            json={"code": "ROOT", "name": "Racine"},
+            headers=headers,
+        )
+        assert root_response.status_code == 201
+        root_payload = cast(dict[str, Any], root_response.json())
+        root_id = cast(int, root_payload["id"])
+
+        child_response = client.post(
+            "/resources/nodes",
+            json={"code": "CHILD", "name": "Enfant", "parent_id": root_id},
+            headers=headers,
+        )
+        assert child_response.status_code == 201
+        child_payload = cast(dict[str, Any], child_response.json())
+        child_id = cast(int, child_payload["id"])
+
+        cycle_response = client.patch(
+            f"/resources/nodes/{root_id}",
+            json={"parent_id": child_id},
+            headers=headers,
+        )
+        assert cycle_response.status_code == 400

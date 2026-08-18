@@ -1,8 +1,8 @@
 import createClient from "openapi-fetch";
 
-import type { paths } from "./generated/api-types.js";
+import type { components, paths } from "./generated/api-types.js";
 
-export type { paths };
+export type { components, paths };
 
 export const DEFAULT_API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";

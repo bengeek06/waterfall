@@ -1,130 +1,20 @@
-import { DEFAULT_API_BASE_URL } from "@rebirth/api-client";
+import { DEFAULT_API_BASE_URL, type components } from "@rebirth/api-client";
 
 import type { SessionTokens } from "./session";
 
-export type AuthUser = {
-  id: number;
-  email: string;
-  is_active: boolean;
-};
-
-export type AuthUserAdmin = {
-  id: number;
-  email: string;
-  is_active: boolean;
-  is_admin: boolean;
-  failed_login_attempts: number;
-  locked_until: string | null;
-  created_at: string;
-  updated_at: string;
-};
-
-export type ResourceNode = {
-  id: number;
-  parent_id: number | null;
-  code: string;
-  name: string;
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
-};
-
-export type ResourceRole = {
-  id: number;
-  node_id: number;
-  cost_category_id: number;
-  code: string;
-  name: string;
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
-};
-
-export type CostCategory = {
-  id: number;
-  code: string;
-  name: string;
-  calendar_code: string | null;
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
-};
-
-export type CostRate = {
-  id: number;
-  cost_category_id: number;
-  year: number;
-  hourly_rate: string;
-  currency_code: string;
-  created_at: string;
-  updated_at: string;
-};
-
-export type InflationRate = {
-  id: number;
-  year: number;
-  coefficient: string;
-  created_at: string;
-  updated_at: string;
-};
-
-export type RoleCapacity = {
-  id: number;
-  role_id: number;
-  period_start: string;
-  period_end: string;
-  person_count: string;
-  available_hours: string;
-  created_at: string;
-  updated_at: string;
-};
-
-export type Project = {
-  id: number;
-  name: string;
-  source_version: number;
-  save_version_out: number;
-  schedule_from_start: boolean;
-  start_date: string | null;
-  finish_date: string | null;
-  currency_code: string | null;
-};
-
-export type Task = {
-  id: number;
-  project_id: number;
-  uid: number;
-  id_display: number | null;
-  name: string;
-  outline_number: string | null;
-  outline_level: number | null;
-  start_at: string | null;
-  finish_at: string | null;
-  percent_complete: number | null;
-  is_summary: boolean;
-  is_milestone: boolean;
-  description: string | null;
-};
-
-export type ImportBatch = {
-  id: number;
-  status: "pending" | "running" | "success" | "failed";
-  sourceName: string | null;
-};
-
-export type ImportBatchStatus = {
-  id: number;
-  status: "pending" | "running" | "success" | "failed";
-  projectId: number | null;
-  errorMessage: string | null;
-};
-
-export type TokenResponse = {
-  access_token: string;
-  refreshToken: string;
-  token_type: string;
-  expiresIn: number;
-};
+export type AuthUser = components["schemas"]["UserRead"];
+export type AuthUserAdmin = components["schemas"]["UserAdminRead"];
+export type ResourceNode = components["schemas"]["ResourceNodeRead"];
+export type ResourceRole = components["schemas"]["ResourceRoleRead"];
+export type CostCategory = components["schemas"]["CostCategoryRead"];
+export type CostRate = components["schemas"]["CostRateRead"];
+export type InflationRate = components["schemas"]["InflationRateRead"];
+export type RoleCapacity = components["schemas"]["RoleCapacityRead"];
+export type Project = components["schemas"]["ProjectRead"];
+export type Task = components["schemas"]["TaskRead"];
+export type ImportBatch = components["schemas"]["ImportBatchResponse"];
+export type ImportBatchStatus = components["schemas"]["ImportBatchStatusResponse"];
+export type TokenResponse = components["schemas"]["Token"];
 
 export class ApiError extends Error {
   constructor(
@@ -136,6 +26,15 @@ export class ApiError extends Error {
   }
 }
 
+export class SessionExpiredError extends Error {
+  constructor() {
+    super("Session expired");
+    this.name = "SessionExpiredError";
+  }
+}
+
+let refreshInFlight: Promise<TokenResponse> | null = null;
+
 async function parseError(response: Response): Promise<string> {
   const text = await response.text();
   if (!text) {
@@ -143,15 +42,18 @@ async function parseError(response: Response): Promise<string> {
   }
 
   try {
-    const payload = JSON.parse(text) as { detail?: string; message?: string };
-    return payload.detail ?? payload.message ?? text;
+    const payload = JSON.parse(text) as { detail?: string; message?: string; error?: string };
+    return payload.detail ?? payload.message ?? payload.error ?? text;
   } catch {
     return text;
   }
 }
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${DEFAULT_API_BASE_URL}${path}`, init);
+  const response = await fetch(`${DEFAULT_API_BASE_URL}${path}`, {
+    ...init,
+    credentials: "include",
+  });
   if (!response.ok) {
     throw new ApiError(response.status, await parseError(response));
   }
@@ -175,6 +77,7 @@ async function authFetch(
   const firstResponse = await fetch(`${DEFAULT_API_BASE_URL}${path}`, {
     ...init,
     headers,
+    credentials: "include",
   });
 
   if (firstResponse.status !== 401) {
@@ -184,10 +87,17 @@ async function authFetch(
     return firstResponse;
   }
 
-  const refreshed = await refresh(tokens.refreshToken);
+  let refreshed: TokenResponse;
+  try {
+    refreshed = await refreshOnce();
+  } catch (cause) {
+    if (cause instanceof ApiError && (cause.status === 401 || cause.status === 403)) {
+      throw new SessionExpiredError();
+    }
+    throw cause;
+  }
   const nextSession: SessionTokens = {
     accessToken: refreshed.access_token,
-    refreshToken: refreshed.refreshToken,
   };
   onSessionRefresh(nextSession);
 
@@ -197,6 +107,7 @@ async function authFetch(
   const secondResponse = await fetch(`${DEFAULT_API_BASE_URL}${path}`, {
     ...init,
     headers: retryHeaders,
+    credentials: "include",
   });
 
   if (!secondResponse.ok) {
@@ -219,14 +130,24 @@ export async function login(email: string, password: string): Promise<TokenRespo
   });
 }
 
-export async function refresh(refreshToken: string): Promise<TokenResponse> {
+export async function refresh(): Promise<TokenResponse> {
   return requestJson<TokenResponse>("/auth/refresh", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ refreshToken }),
   });
+}
+
+export async function restoreSession(): Promise<SessionTokens> {
+  const tokens = await refreshOnce();
+  return { accessToken: tokens.access_token };
+}
+
+function refreshOnce(): Promise<TokenResponse> {
+  if (!refreshInFlight) {
+    refreshInFlight = refresh().finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  return refreshInFlight;
 }
 
 export async function authRequest<T>(
@@ -448,8 +369,34 @@ export function setUserRole(
 export function getProjects(
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
+  limit = 50,
+  offset = 0,
 ) {
-  return authRequest<Project[]>("/projects", tokens, { method: "GET" }, onSessionRefresh);
+  return authRequest<Project[]>(
+    `/projects?limit=${limit}&offset=${offset}`,
+    tokens,
+    { method: "GET" },
+    onSessionRefresh,
+  );
+}
+
+export function createProject(
+  name: string,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<Project>(
+    "/projects",
+    tokens,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ name }),
+    },
+    onSessionRefresh,
+  );
 }
 
 export function updateProjectName(
@@ -488,6 +435,7 @@ export function deleteProject(
 }
 
 export function createImportBatch(
+  projectId: number,
   sourceName: string,
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
@@ -500,7 +448,7 @@ export function createImportBatch(
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ importMode: "standard", sourceName }),
+      body: JSON.stringify({ projectId, importMode: "standard", sourceName }),
     },
     onSessionRefresh,
   );
@@ -538,7 +486,7 @@ export function runImportBatch(
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ dryRun: false, failFast: true }),
+      body: JSON.stringify({ dryRun: false }),
     },
     onSessionRefresh,
   );
@@ -561,9 +509,11 @@ export function getProjectTasks(
   projectId: number,
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
+  limit = 200,
+  offset = 0,
 ) {
   return authRequest<Task[]>(
-    `/projects/${projectId}/tasks`,
+    `/projects/${projectId}/tasks?limit=${limit}&offset=${offset}`,
     tokens,
     { method: "GET" },
     onSessionRefresh,

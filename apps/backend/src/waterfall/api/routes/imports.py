@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import base64
 import hashlib
 import json
-import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import cast
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
@@ -12,6 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from waterfall.api.dependencies import get_current_active_user
+from waterfall.core.config import get_settings
 from waterfall.db.session import get_db
 from waterfall.models.ms_core import MsProject, MsTask, MsTaskLink
 from waterfall.models.user import User
@@ -29,111 +29,55 @@ from waterfall.schemas.imports import (
     ImportRunAcceptedResponse,
     ImportRunRequest,
 )
+from waterfall.services.import_v1 import import_tasks_and_links
 
 router = APIRouter(prefix="/imports/v1/batches", tags=["imports-v1"])
-NS = {"ms": "http://schemas.microsoft.com/project"}
+UPLOAD_CHUNK_SIZE = 1024 * 1024
 
 
-def _txt(node: ET.Element, path: str) -> str | None:
-    found = node.find(path, NS)
-    if found is None or found.text is None:
-        return None
-    value = found.text.strip()
-    return value if value != "" else None
+def _source_path(batch_id: int) -> Path:
+    return Path(get_settings().import_storage_path) / f"batch-{batch_id}.xml"
 
 
-def _as_int(value: str | None) -> int | None:
-    return int(value) if value is not None else None
+async def _save_source_xml(file: UploadFile, batch_id: int) -> tuple[Path, int, str]:
+    settings = get_settings()
+    storage_path = _source_path(batch_id)
+    storage_path.parent.mkdir(parents=True, exist_ok=True)
+
+    byte_count = 0
+    digest = hashlib.sha256()
+    try:
+        with storage_path.open("wb") as destination:
+            while chunk := await file.read(UPLOAD_CHUNK_SIZE):
+                byte_count += len(chunk)
+                if byte_count > settings.import_max_upload_bytes:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                        detail="XML file exceeds the configured size limit",
+                    )
+                digest.update(chunk)
+                destination.write(chunk)
+    except Exception:
+        storage_path.unlink(missing_ok=True)
+        raise
+
+    return storage_path, byte_count, digest.hexdigest()
 
 
-def _as_bool(value: str | None) -> bool:
-    return value == "1"
-
-
-def _as_dt(value: str | None) -> datetime | None:
-    if value is None:
-        return None
-    return datetime.fromisoformat(value)
-
-
-def _import_v1_tasks_and_links(
-    db: Session,
-    xml_bytes: bytes,
-    source_name: str,
-) -> tuple[int, int, int]:
-    root = ET.fromstring(xml_bytes)
-
-    save_version = _as_int(_txt(root, "ms:SaveVersion")) or 16
-    source_version_map = {14: 2010, 15: 2013, 16: 2016}
-    source_version = source_version_map.get(save_version, 2016)
-
-    project = MsProject(
-        external_uid=_txt(root, "ms:GUID"),
-        source_version=source_version,
-        save_version_out=save_version if save_version in (14, 15, 16) else 16,
-        name=_txt(root, "ms:Name") or source_name,
-        schedule_from_start=_as_bool(_txt(root, "ms:ScheduleFromStart")),
-        start_date=_as_dt(_txt(root, "ms:StartDate")),
-        finish_date=_as_dt(_txt(root, "ms:FinishDate")),
-        calendar_uid=_as_int(_txt(root, "ms:CalendarUID")),
-        minutes_per_day=_as_int(_txt(root, "ms:MinutesPerDay")) or 480,
-        minutes_per_week=_as_int(_txt(root, "ms:MinutesPerWeek")) or 2400,
-        days_per_month=_as_int(_txt(root, "ms:DaysPerMonth")) or 20,
-        currency_code=_txt(root, "ms:CurrencyCode"),
-    )
-    db.add(project)
-    db.flush()
-
-    tasks: list[MsTask] = []
-    links: list[MsTaskLink] = []
-
-    for task_node in root.findall("ms:Tasks/ms:Task", NS):
-        uid = _as_int(_txt(task_node, "ms:UID"))
-        if uid is None:
-            continue
-
-        tasks.append(
-            MsTask(
-                project_id=project.id,
-                uid=uid,
-                id_display=_as_int(_txt(task_node, "ms:ID")),
-                name=_txt(task_node, "ms:Name") or f"Task {uid}",
-                task_type=_as_int(_txt(task_node, "ms:Type")),
-                outline_number=_txt(task_node, "ms:OutlineNumber"),
-                outline_level=_as_int(_txt(task_node, "ms:OutlineLevel")),
-                wbs=_txt(task_node, "ms:WBS"),
-                start_at=_as_dt(_txt(task_node, "ms:Start")),
-                finish_at=_as_dt(_txt(task_node, "ms:Finish")),
-                duration_format=_as_int(_txt(task_node, "ms:DurationFormat")),
-                percent_complete=_as_int(_txt(task_node, "ms:PercentComplete")),
-                is_summary=_as_bool(_txt(task_node, "ms:Summary")),
-                is_milestone=_as_bool(_txt(task_node, "ms:Milestone")),
-                calendar_uid=_as_int(_txt(task_node, "ms:CalendarUID")),
-            )
+def _read_source_xml(batch: WfImportBatch) -> bytes:
+    if not batch.source_storage_path:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No XML uploaded for this batch",
         )
 
-        for pred_node in task_node.findall("ms:PredecessorLink", NS):
-            predecessor_uid = _as_int(_txt(pred_node, "ms:PredecessorUID"))
-            if predecessor_uid is None:
-                continue
-
-            links.append(
-                MsTaskLink(
-                    project_id=project.id,
-                    task_uid=uid,
-                    predecessor_uid=predecessor_uid,
-                    link_type=_as_int(_txt(pred_node, "ms:Type")) or 1,
-                    lag_tenth_minute=_as_int(_txt(pred_node, "ms:LinkLag")),
-                    lag_format=_as_int(_txt(pred_node, "ms:LagFormat")),
-                )
-            )
-
-    db.add_all(tasks)
-    db.flush()
-    db.add_all(links)
-    db.flush()
-
-    return project.id, len(tasks), len(links)
+    source_path = Path(batch.source_storage_path)
+    if not source_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Uploaded XML is unavailable",
+        )
+    return source_path.read_bytes()
 
 
 def _to_batch_response(batch: WfImportBatch) -> ImportBatchResponse:
@@ -161,8 +105,14 @@ def _to_batch_response(batch: WfImportBatch) -> ImportBatchResponse:
     )
 
 
-def _get_batch_or_404(db: Session, batch_id: int) -> WfImportBatch:
-    batch = db.query(WfImportBatch).filter(WfImportBatch.id == batch_id).first()
+def _get_batch_or_404(db: Session, batch_id: int, owner_id: int) -> WfImportBatch:
+    batch = (
+        db.query(WfImportBatch)
+        .join(MsProject, WfImportBatch.project_id == MsProject.id)
+        .filter(WfImportBatch.id == batch_id)
+        .filter(MsProject.owner_id == owner_id)
+        .first()
+    )
     if batch is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found")
     return batch
@@ -177,13 +127,22 @@ def _get_batch_or_404(db: Session, batch_id: int) -> WfImportBatch:
 def create_batch(
     payload: ImportBatchCreateRequest,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
 ) -> ImportBatchResponse:
     now = datetime.now(UTC)
     source_name = payload.source_name or "pending.xml"
 
+    project = (
+        db.query(MsProject)
+        .filter(MsProject.id == payload.project_id)
+        .filter(MsProject.owner_id == current_user.id)
+        .first()
+    )
+    if project is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
     batch = WfImportBatch(
-        project_id=None,
+        project_id=project.id,
         import_mode=payload.import_mode,
         source_filename=source_name,
         source_sha256=None,
@@ -212,7 +171,7 @@ async def upload_xml(
     batch_id: int,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
 ) -> ImportBatchResponse:
     filename = file.filename or "upload.xml"
     if not filename.lower().endswith(".xml"):
@@ -221,9 +180,13 @@ async def upload_xml(
             detail="Only .xml files are accepted",
         )
 
-    batch = _get_batch_or_404(db, batch_id)
-    content = await file.read()
-    source_sha256 = hashlib.sha256(content).hexdigest()
+    batch = _get_batch_or_404(db, batch_id, current_user.id)
+    if batch.status != "pending":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Batch is no longer pending",
+        )
+    storage_path, byte_count, source_sha256 = await _save_source_xml(file, batch.id)
 
     log_payload: dict[str, object]
     if batch.log_json:
@@ -235,10 +198,10 @@ async def upload_xml(
     else:
         log_payload = {}
 
-    log_payload["uploaded_bytes"] = len(content)
-    log_payload["xml_b64"] = base64.b64encode(content).decode("ascii")
+    log_payload["uploaded_bytes"] = byte_count
 
     batch.source_filename = filename
+    batch.source_storage_path = str(storage_path)
     batch.source_sha256 = source_sha256
     batch.status = "pending"
     batch.log_json = json.dumps(log_payload)
@@ -261,13 +224,15 @@ async def upload_xml(
 )
 def run_batch(
     batch_id: int,
-    _: ImportRunRequest | None = None,
+    payload: ImportRunRequest | None = None,
     db: Session = Depends(get_db),
-    __: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
 ) -> ImportRunAcceptedResponse:
-    batch = _get_batch_or_404(db, batch_id)
-    if batch.status == "running":
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Batch is already running")
+    batch = _get_batch_or_404(db, batch_id, current_user.id)
+    if batch.status != "pending":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Batch is not pending")
+
+    run_request = payload or ImportRunRequest()
 
     if not batch.log_json:
         raise HTTPException(
@@ -286,46 +251,57 @@ def run_batch(
     if not isinstance(payload, dict):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Corrupted batch payload")
 
-    xml_b64 = payload.get("xml_b64")
-    if not isinstance(xml_b64, str):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="No XML uploaded for this batch",
-        )
-
-    try:
-        xml_bytes = base64.b64decode(xml_b64)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Corrupted XML payload",
-        ) from exc
+    xml_bytes = _read_source_xml(batch)
 
     accepted_at = datetime.now(UTC)
-    batch.status = "running"
-    batch.started_at = accepted_at
-    batch.finished_at = None
-    db.add(batch)
+    updated = (
+        db.query(WfImportBatch)
+        .filter(WfImportBatch.id == batch.id)
+        .filter(WfImportBatch.status == "pending")
+        .update(
+            {
+                WfImportBatch.status: "running",
+                WfImportBatch.started_at: accepted_at,
+                WfImportBatch.finished_at: None,
+            },
+            synchronize_session=False,
+        )
+    )
     db.commit()
+    if updated != 1:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Batch is not pending")
     db.refresh(batch)
 
     try:
-        project_id, task_count, link_count = _import_v1_tasks_and_links(
-            db,
-            xml_bytes,
-            batch.source_filename,
-        )
-        batch.project_id = project_id
+        project = db.query(MsProject).filter(MsProject.id == batch.project_id).one()
+        if run_request.dry_run:
+            savepoint = db.begin_nested()
+            try:
+                task_count, link_count = import_tasks_and_links(
+                    db,
+                    xml_bytes,
+                    project,
+                )
+            finally:
+                savepoint.rollback()
+                db.expire_all()
+        else:
+            task_count, link_count = import_tasks_and_links(
+                db,
+                xml_bytes,
+                project,
+            )
         batch.status = "success"
         batch.finished_at = datetime.now(UTC)
         payload["counters"] = {"tasks": task_count, "links": link_count}
         payload["errors"] = []
+        payload["dry_run"] = run_request.dry_run
         batch.log_json = json.dumps(payload)
         db.add(batch)
         db.commit()
     except Exception as exc:
         db.rollback()
-        failed_batch = _get_batch_or_404(db, batch_id)
+        failed_batch = _get_batch_or_404(db, batch_id, current_user.id)
         failed_batch.status = "failed"
         failed_batch.finished_at = datetime.now(UTC)
         failed_batch.log_json = json.dumps(
@@ -343,7 +319,7 @@ def run_batch(
 
     return ImportRunAcceptedResponse(
         batchId=batch.id,
-        status="running",
+        status="success",
         acceptedAt=accepted_at,
     )
 
@@ -356,14 +332,30 @@ def run_batch(
 def get_batch(
     batch_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
 ) -> ImportBatchStatusResponse:
-    batch = _get_batch_or_404(db, batch_id)
+    batch = _get_batch_or_404(db, batch_id, current_user.id)
     batch_response = _to_batch_response(batch)
 
     task_count = 0
     link_count = 0
-    if batch.project_id is not None:
+    log_payload: dict[str, object] = {}
+    if batch.log_json:
+        try:
+            loaded_payload = json.loads(batch.log_json)
+            if isinstance(loaded_payload, dict):
+                log_payload = loaded_payload
+        except json.JSONDecodeError:
+            pass
+
+    is_dry_run = log_payload.get("dry_run") is True
+    saved_counters = log_payload.get("counters")
+    if is_dry_run and isinstance(saved_counters, dict):
+        task_value = saved_counters.get("tasks")
+        link_value = saved_counters.get("links")
+        task_count = task_value if isinstance(task_value, int) else 0
+        link_count = link_value if isinstance(link_value, int) else 0
+    elif batch.project_id is not None:
         task_count = (
             db.scalar(
                 select(func.count())
@@ -397,9 +389,9 @@ def get_batch(
 def list_batch_errors(
     batch_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
 ) -> ImportErrorListResponse:
-    batch = _get_batch_or_404(db, batch_id)
+    batch = _get_batch_or_404(db, batch_id, current_user.id)
     if not batch.log_json:
         return ImportErrorListResponse(items=[])
 

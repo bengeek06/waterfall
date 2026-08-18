@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     auth_max_failed_attempts: int = Field(default=5, alias="AUTH_MAX_FAILED_ATTEMPTS")
     auth_lockout_minutes: int = Field(default=15, alias="AUTH_LOCKOUT_MINUTES")
     cors_allow_origins: str | None = Field(default=None, alias="CORS_ALLOW_ORIGINS")
+    import_storage_path: str = Field(default=".waterfall-imports", alias="IMPORT_STORAGE_PATH")
+    import_max_upload_bytes: int = Field(
+        default=25 * 1024 * 1024,
+        alias="IMPORT_MAX_UPLOAD_BYTES",
+        ge=1,
+    )
 
     def is_public_registration_enabled(self) -> bool:
         if self.auth_allow_public_register is not None:

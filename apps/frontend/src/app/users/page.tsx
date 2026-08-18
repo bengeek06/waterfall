@@ -8,10 +8,12 @@ import {
   ApiError,
   AuthUser,
   AuthUserAdmin,
+  SessionExpiredError,
   createUser,
   deleteUser,
   getMe,
   getUsers,
+  restoreSession,
   setUserRole,
   setUserStatus,
 } from "@/lib/backend";
@@ -40,7 +42,14 @@ export default function UsersPage() {
   useEffect(() => {
     async function load() {
       if (!session) {
-        router.push("/login");
+        try {
+          const restoredSession = await restoreSession();
+          setSession(restoredSession);
+          setSessionState(restoredSession);
+        } catch {
+          clearSession();
+          router.push("/login");
+        }
         return;
       }
       setBusy(true);
@@ -51,6 +60,11 @@ export default function UsersPage() {
         const usersData = await getUsers(session, onSessionRefresh);
         setUsers(usersData);
       } catch (cause) {
+        if (cause instanceof SessionExpiredError) {
+          clearSession();
+          router.push("/login");
+          return;
+        }
         if (cause instanceof ApiError) {
           if (cause.status === 401) {
             clearSession();
@@ -73,11 +87,21 @@ export default function UsersPage() {
     if (!session) {
       return;
     }
+    const nextStatus = !user.is_active;
+    const action = nextStatus ? "activer" : "désactiver";
+    if (!window.confirm(`${action[0].toUpperCase()}${action.slice(1)} le compte ${user.email} ?`)) {
+      return;
+    }
     setActionBusy(true);
     try {
-      const updated = await setUserStatus(user.id, !user.is_active, session, onSessionRefresh);
+      const updated = await setUserStatus(user.id, nextStatus, session, onSessionRefresh);
       setUsers((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
     } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
       setError(cause instanceof ApiError ? cause.message : "Impossible de modifier le statut");
     } finally {
       setActionBusy(false);
@@ -88,11 +112,21 @@ export default function UsersPage() {
     if (!session) {
       return;
     }
+    const nextAdmin = !user.is_admin;
+    const action = nextAdmin ? "promouvoir administrateur" : "retirer les droits administrateur";
+    if (!window.confirm(`${action[0].toUpperCase()}${action.slice(1)} pour ${user.email} ?`)) {
+      return;
+    }
     setActionBusy(true);
     try {
-      const updated = await setUserRole(user.id, !user.is_admin, session, onSessionRefresh);
+      const updated = await setUserRole(user.id, nextAdmin, session, onSessionRefresh);
       setUsers((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
     } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
       setError(cause instanceof ApiError ? cause.message : "Impossible de modifier le role");
     } finally {
       setActionBusy(false);
@@ -115,6 +149,11 @@ export default function UsersPage() {
       setNewPassword("");
       setCreateMode(false);
     } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
       setError(cause instanceof ApiError ? cause.message : "Impossible de créer l'utilisateur");
     } finally {
       setActionBusy(false);
@@ -136,6 +175,11 @@ export default function UsersPage() {
       await deleteUser(user.id, session, onSessionRefresh);
       setUsers((prev) => prev.filter((item) => item.id !== user.id));
     } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
       setError(cause instanceof ApiError ? cause.message : "Impossible de supprimer l'utilisateur");
     } finally {
       setActionBusy(false);
@@ -206,18 +250,19 @@ export default function UsersPage() {
       </section>
 
       <section className="panel">
-        {busy ? <p className="muted">Chargement...</p> : null}
-        {error ? <p className="error">{error}</p> : null}
+        {busy ? <p className="muted" role="status">Chargement...</p> : null}
+        {error ? <p className="error" role="alert">{error}</p> : null}
 
         {!busy ? (
+          <div className="table-scroll">
           <table className="table">
             <thead>
               <tr>
-                <th>ID</th>
-                <th>Email</th>
-                <th>Statut</th>
-                <th>Role</th>
-                <th>Actions</th>
+                <th scope="col">ID</th>
+                <th scope="col">Email</th>
+                <th scope="col">Statut</th>
+                <th scope="col">Role</th>
+                <th scope="col">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -249,6 +294,7 @@ export default function UsersPage() {
               ))}
             </tbody>
           </table>
+          </div>
         ) : null}
       </section>
     </>

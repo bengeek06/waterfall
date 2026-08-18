@@ -2,7 +2,7 @@ import logging
 from collections import defaultdict, deque
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
@@ -20,7 +20,6 @@ from waterfall.db.session import get_db
 from waterfall.models.user import User
 from waterfall.schemas.auth import (
     PasswordChangeRequest,
-    RefreshTokenRequest,
     Token,
     UserAdminRead,
     UserCreate,
@@ -31,6 +30,7 @@ from waterfall.schemas.auth import (
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
+REFRESH_COOKIE_NAME = "waterfall_refresh"
 
 
 class LoginRateLimiter:
@@ -72,12 +72,23 @@ def _to_user_admin_read(user: User) -> UserAdminRead:
     )
 
 
-def _issue_token_pair(user: User) -> Token:
+def _issue_access_token(user: User) -> Token:
     settings = get_settings()
     return Token(
         access_token=create_access_token(user.email, token_version=user.token_version),
-        refreshToken=create_refresh_token(user.email, token_version=user.token_version),
         expiresIn=settings.access_token_expire_minutes * 60,
+    )
+
+
+def _set_refresh_cookie(response: Response, user: User) -> None:
+    settings = get_settings()
+    response.set_cookie(
+        key=REFRESH_COOKIE_NAME,
+        value=create_refresh_token(user.email, token_version=user.token_version),
+        httponly=True,
+        secure=settings.app_env not in {"dev", "test"},
+        samesite="lax",
+        path="/auth",
     )
 
 
@@ -118,6 +129,7 @@ def register(payload: UserCreate, db: Session = Depends(get_db)) -> UserRead:
 @router.post("/token", response_model=Token)
 def login(
     request: Request,
+    response: Response,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
 ) -> Token:
@@ -177,12 +189,14 @@ def login(
     db.commit()
 
     logger.info("auth.login.success", extra={"email": user.email})
-    return _issue_token_pair(user)
+    _set_refresh_cookie(response, user)
+    return _issue_access_token(user)
 
 
 @router.post("/refresh", response_model=Token)
-def refresh_token(payload: RefreshTokenRequest, db: Session = Depends(get_db)) -> Token:
-    decoded = decode_refresh_token(payload.refresh_token)
+def refresh_token(request: Request, response: Response, db: Session = Depends(get_db)) -> Token:
+    refresh_token_value = request.cookies.get(REFRESH_COOKIE_NAME)
+    decoded = decode_refresh_token(refresh_token_value) if refresh_token_value else None
     if decoded is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -208,7 +222,13 @@ def refresh_token(payload: RefreshTokenRequest, db: Session = Depends(get_db)) -
         )
 
     logger.info("auth.refresh.success", extra={"email": user.email})
-    return _issue_token_pair(user)
+    _set_refresh_cookie(response, user)
+    return _issue_access_token(user)
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+def logout(response: Response) -> None:
+    response.delete_cookie(key=REFRESH_COOKIE_NAME, path="/auth")
 
 
 @router.get("/me", response_model=UserRead)

@@ -10,8 +10,7 @@ from waterfall.models.ms_core import MsProject, MsTask
 from waterfall.models.wf_core import WfTaskEnrichment
 
 
-def _auth_headers(client: TestClient) -> dict[str, str]:
-    email = "projects.tester@example.com"
+def _auth_headers(client: TestClient, email: str = "projects.tester@example.com") -> dict[str, str]:
     password = "SuperSecret123!"
 
     register_response: Response = client.post(
@@ -30,10 +29,18 @@ def _auth_headers(client: TestClient) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-def _seed_projects_and_tasks() -> tuple[int, int]:
+def _current_user_id(client: TestClient, headers: dict[str, str]) -> int:
+    response: Response = client.get("/auth/me", headers=headers)
+    assert response.status_code == 200
+    payload = cast(dict[str, Any], response.json())
+    return cast(int, payload["id"])
+
+
+def _seed_projects_and_tasks(owner_id: int) -> tuple[int, int]:
     session_factory = get_session_factory()
     with session_factory() as session:
         project = MsProject(
+            owner_id=owner_id,
             external_uid=None,
             source_version=2016,
             save_version_out=16,
@@ -96,7 +103,7 @@ def _seed_projects_and_tasks() -> tuple[int, int]:
 def test_get_projects_and_project_tasks() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)
-        project_id, expected_tasks = _seed_projects_and_tasks()
+        project_id, expected_tasks = _seed_projects_and_tasks(_current_user_id(client, headers))
 
         projects_response: Response = client.get("/projects", headers=headers)
         assert projects_response.status_code == 200
@@ -130,7 +137,7 @@ def test_get_projects_and_project_tasks() -> None:
 def test_patch_task_description_and_read_back() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)
-        project_id, _ = _seed_projects_and_tasks()
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
 
         patch_response: Response = client.patch(
             f"/projects/{project_id}/tasks/1001",
@@ -157,7 +164,7 @@ def test_patch_task_description_and_read_back() -> None:
 def test_patch_task_description_not_found() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)
-        project_id, _ = _seed_projects_and_tasks()
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
 
         response: Response = client.patch(
             f"/projects/{project_id}/tasks/999999",
@@ -183,7 +190,7 @@ def test_get_projects_requires_auth() -> None:
 def test_patch_project_name() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)
-        project_id, _ = _seed_projects_and_tasks()
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
 
         response: Response = client.patch(
             f"/projects/{project_id}",
@@ -199,7 +206,7 @@ def test_patch_project_name() -> None:
 def test_delete_project_cascades_related_data() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)
-        project_id, _ = _seed_projects_and_tasks()
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
 
         session_factory = get_session_factory()
         with session_factory() as session:
@@ -221,3 +228,77 @@ def test_delete_project_cascades_related_data() -> None:
 
         tasks_response: Response = client.get(f"/projects/{project_id}/tasks", headers=headers)
         assert tasks_response.status_code == 404
+
+
+def test_projects_are_isolated_by_owner() -> None:
+    with TestClient(app) as client:
+        owner_headers = _auth_headers(client)
+        owner_id = _current_user_id(client, owner_headers)
+        project_id, _ = _seed_projects_and_tasks(owner_id)
+
+        other_headers = _auth_headers(client, "projects.other@example.com")
+        list_response: Response = client.get("/projects", headers=other_headers)
+        assert list_response.status_code == 200
+        other_projects = cast(list[dict[str, Any]], list_response.json())
+        assert all(item["id"] != project_id for item in other_projects)
+
+        for path in (
+            f"/projects/{project_id}",
+            f"/projects/{project_id}/tasks",
+            f"/projects/{project_id}/export.xml",
+        ):
+            response: Response = client.get(path, headers=other_headers)
+            assert response.status_code == 404
+
+        update_response: Response = client.patch(
+            f"/projects/{project_id}",
+            json={"name": "Unauthorized"},
+            headers=other_headers,
+        )
+        assert update_response.status_code == 404
+
+        delete_response: Response = client.delete(f"/projects/{project_id}", headers=other_headers)
+        assert delete_response.status_code == 404
+
+
+def test_user_can_create_manual_project() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        response: Response = client.post(
+            "/projects",
+            json={"name": "Projet manuel", "currency_code": "eur"},
+            headers=headers,
+        )
+        assert response.status_code == 201
+        payload = cast(dict[str, Any], response.json())
+        assert payload["name"] == "Projet manuel"
+        assert payload["currency_code"] == "EUR"
+
+
+def test_project_and_task_pagination() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        owner_id = _current_user_id(client, headers)
+        first_project_id, _ = _seed_projects_and_tasks(owner_id)
+        second_project_id, _ = _seed_projects_and_tasks(owner_id)
+
+        first_page = client.get("/projects?limit=1&offset=0", headers=headers)
+        second_page = client.get("/projects?limit=1&offset=1", headers=headers)
+        assert first_page.status_code == 200
+        assert second_page.status_code == 200
+        first_projects = cast(list[dict[str, Any]], first_page.json())
+        second_projects = cast(list[dict[str, Any]], second_page.json())
+        assert len(first_projects) == 1
+        assert len(second_projects) == 1
+        assert first_projects[0]["id"] != second_projects[0]["id"]
+
+        task_page = client.get(
+            f"/projects/{first_project_id}/tasks?limit=1&offset=1",
+            headers=headers,
+        )
+        assert task_page.status_code == 200
+        tasks = cast(list[dict[str, Any]], task_page.json())
+        assert len(tasks) == 1
+        assert tasks[0]["uid"] == 1002
+
+        assert first_project_id != second_project_id

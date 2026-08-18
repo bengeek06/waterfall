@@ -8,11 +8,14 @@ import {
   ApiError,
   AuthUser,
   Project,
+  SessionExpiredError,
   createImportBatch,
+  createProject,
   deleteProject,
   getImportBatchStatus,
   getMe,
   getProjects,
+  restoreSession,
   exportProjectXml,
   runImportBatch,
   updateProjectName,
@@ -20,11 +23,15 @@ import {
 } from "@/lib/backend";
 import { clearSession, getSession, setSession, type SessionTokens } from "@/lib/session";
 
+const MAX_IMPORT_FILE_SIZE = 25 * 1024 * 1024;
+const PROJECT_PAGE_SIZE = 50;
+
 export default function ProjectsPage() {
   const router = useRouter();
   const [session, setSessionState] = useState<SessionTokens | null>(() => getSession());
   const [me, setMe] = useState<AuthUser | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [projectOffset, setProjectOffset] = useState(0);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState<string | null>(null);
@@ -46,7 +53,14 @@ export default function ProjectsPage() {
   useEffect(() => {
     async function load() {
       if (!session) {
-        router.push("/login");
+        try {
+          const restoredSession = await restoreSession();
+          setSession(restoredSession);
+          setSessionState(restoredSession);
+        } catch {
+          clearSession();
+          router.push("/login");
+        }
         return;
       }
       setBusy(true);
@@ -54,9 +68,19 @@ export default function ProjectsPage() {
       try {
         const meData = await getMe(session, onSessionRefresh);
         setMe(meData);
-        const projectsData = await getProjects(session, onSessionRefresh);
+        const projectsData = await getProjects(
+          session,
+          onSessionRefresh,
+          PROJECT_PAGE_SIZE,
+          projectOffset,
+        );
         setProjects(projectsData);
       } catch (cause) {
+        if (cause instanceof SessionExpiredError) {
+          clearSession();
+          router.push("/login");
+          return;
+        }
         if (cause instanceof ApiError) {
           if (cause.status === 401) {
             clearSession();
@@ -73,10 +97,15 @@ export default function ProjectsPage() {
     }
 
     void load();
-  }, [onSessionRefresh, router, session]);
+  }, [onSessionRefresh, projectOffset, router, session]);
 
   async function refreshProjects(activeSession: SessionTokens) {
-    const projectsData = await getProjects(activeSession, onSessionRefresh);
+    const projectsData = await getProjects(
+      activeSession,
+      onSessionRefresh,
+      PROJECT_PAGE_SIZE,
+      projectOffset,
+    );
     setProjects(projectsData);
   }
 
@@ -93,6 +122,29 @@ export default function ProjectsPage() {
       return;
     }
     setCreateStep("file");
+  }
+
+  async function onCreateManualProject() {
+    if (!session) {
+      router.push("/login");
+      return;
+    }
+    if (!createName.trim()) {
+      setError("Le nom du projet est obligatoire.");
+      return;
+    }
+
+    setError(null);
+    setActionBusy("Création du projet en cours...");
+    try {
+      const project = await createProject(createName.trim(), session, onSessionRefresh);
+      setProjects((prev) => [...prev, project].sort((left, right) => left.id - right.id));
+      resetCreateFlow();
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Impossible de créer le projet.");
+    } finally {
+      setActionBusy(null);
+    }
   }
 
   async function onCreateProjectFromImport() {
@@ -112,7 +164,13 @@ export default function ProjectsPage() {
     setError(null);
     setActionBusy("Import du projet en cours...");
     try {
-      const batch = await createImportBatch(createName.trim(), session, onSessionRefresh);
+      const project = await createProject(createName.trim(), session, onSessionRefresh);
+      const batch = await createImportBatch(
+        project.id,
+        createName.trim(),
+        session,
+        onSessionRefresh,
+      );
       await uploadImportSourceXml(batch.id, createFile, session, onSessionRefresh);
       await runImportBatch(batch.id, session, onSessionRefresh);
 
@@ -132,10 +190,14 @@ export default function ProjectsPage() {
         throw new Error("Import terminé sans identifiant de projet.");
       }
 
-      await updateProjectName(status.projectId, createName.trim(), session, onSessionRefresh);
       await refreshProjects(session);
       resetCreateFlow();
     } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
       if (cause instanceof ApiError) {
         setError(cause.message);
       } else if (cause instanceof Error) {
@@ -273,13 +335,21 @@ export default function ProjectsPage() {
                     type="text"
                     value={createName}
                     onChange={(event) => setCreateName(event.target.value)}
-                    placeholder="Ex: Planning Baguera"
+                    placeholder="Ex: Projet pilote"
                     maxLength={255}
                   />
                 </div>
                 <div className="row" style={{ marginTop: "0.8rem" }}>
                   <button className="btn btn-primary" type="button" onClick={() => void onCreateContinue()}>
-                    Continuer
+                    Importer un fichier
+                  </button>
+                  <button
+                    className="btn"
+                    type="button"
+                    disabled={Boolean(actionBusy)}
+                    onClick={() => void onCreateManualProject()}
+                  >
+                    Créer sans import
                   </button>
                   <button className="btn" type="button" onClick={resetCreateFlow}>
                     Annuler
@@ -299,7 +369,17 @@ export default function ProjectsPage() {
                     id="project-file"
                     type="file"
                     accept=".xml,application/xml,text/xml"
-                    onChange={(event) => setCreateFile(event.target.files?.[0] ?? null)}
+                    onChange={(event) => {
+                      const file = event.target.files?.[0] ?? null;
+                      if (file && file.size > MAX_IMPORT_FILE_SIZE) {
+                        setCreateFile(null);
+                        setError("Le fichier XML ne doit pas dépasser 25 MiB.");
+                        event.target.value = "";
+                        return;
+                      }
+                      setError(null);
+                      setCreateFile(file);
+                    }}
                   />
                 </div>
                 <div className="row" style={{ marginTop: "0.8rem" }}>
@@ -325,21 +405,22 @@ export default function ProjectsPage() {
       </section>
 
       <section className="panel">
-        {busy ? <p className="muted">Chargement...</p> : null}
-        {actionBusy ? <p className="muted">{actionBusy}</p> : null}
-        {error ? <p className="error">{error}</p> : null}
+        {busy ? <p className="muted" role="status">Chargement...</p> : null}
+        {actionBusy ? <p className="muted" role="status">{actionBusy}</p> : null}
+        {error ? <p className="error" role="alert">{error}</p> : null}
 
         {!busy && !projects.length ? <p className="muted">Aucun projet importé.</p> : null}
 
         {!busy && projects.length ? (
+          <div className="table-scroll">
           <table className="table">
             <thead>
               <tr>
-                <th>ID</th>
-                <th>Nom</th>
-                <th>Version source</th>
-                <th>Version export</th>
-                <th>Actions</th>
+                <th scope="col">ID</th>
+                <th scope="col">Nom</th>
+                <th scope="col">Version source</th>
+                <th scope="col">Version export</th>
+                <th scope="col">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -406,6 +487,33 @@ export default function ProjectsPage() {
               ))}
             </tbody>
           </table>
+          </div>
+        ) : null}
+
+        {!busy ? (
+          <div className="row" style={{ marginTop: "1rem", justifyContent: "space-between" }}>
+            <span className="muted">
+              {projects.length ? `Projets ${projectOffset + 1} à ${projectOffset + projects.length}` : ""}
+            </span>
+            <div className="row">
+              <button
+                className="btn"
+                type="button"
+                disabled={projectOffset === 0}
+                onClick={() => setProjectOffset((current) => Math.max(0, current - PROJECT_PAGE_SIZE))}
+              >
+                Précédent
+              </button>
+              <button
+                className="btn"
+                type="button"
+                disabled={projects.length < PROJECT_PAGE_SIZE}
+                onClick={() => setProjectOffset((current) => current + PROJECT_PAGE_SIZE)}
+              >
+                Suivant
+              </button>
+            </div>
+          </div>
         ) : null}
       </section>
     </>

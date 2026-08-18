@@ -31,6 +31,7 @@ class WfImportBatch(Base):
     project_id: Mapped[int | None] = mapped_column(ForeignKey("ms_project.id"), nullable=True)
     import_mode: Mapped[str] = mapped_column(String(16), nullable=False)
     source_filename: Mapped[str] = mapped_column(String(512), nullable=False)
+    source_storage_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     source_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

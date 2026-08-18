@@ -14,6 +14,11 @@ class ProjectRead(BaseModel):
     currency_code: str | None
 
 
+class ProjectCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    currency_code: str | None = Field(default=None, min_length=3, max_length=3)
+
+
 class ProjectUpdate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
 

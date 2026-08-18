@@ -59,8 +59,9 @@ def test_register_login_and_me() -> None:
         assert token_response.status_code == 200
         token_payload: dict[str, Any] = token_response.json()
         token = cast(str, token_payload["access_token"])
-        assert "refreshToken" in token_payload
+        assert "refreshToken" not in token_payload
         assert token_payload["token_type"] == "bearer"
+        assert "HttpOnly" in token_response.headers["set-cookie"]
 
         me_response: Response = client.get(
             "/auth/me",
@@ -83,6 +84,41 @@ def test_register_duplicate_email() -> None:
             json={"email": "bob@example.com", "password": "SuperSecret123"},
         )
         assert second.status_code == 409
+
+
+def test_user_creation_rejects_password_outside_policy() -> None:
+    with TestClient(app) as client:
+        register_response = client.post(
+            "/auth/register",
+            json={"email": "short@example.com", "password": "short"},
+        )
+        assert register_response.status_code == 422
+
+        admin_headers = _admin_headers(client)
+        admin_create_response = client.post(
+            "/auth/users",
+            json={"email": "admin-short@example.com", "password": "short"},
+            headers=admin_headers,
+        )
+        assert admin_create_response.status_code == 422
+
+
+def test_password_change_rejects_password_outside_policy() -> None:
+    with TestClient(app) as client:
+        register_response = client.post(
+            "/auth/register",
+            json={"email": "password-policy@example.com", "password": "SuperSecret123"},
+        )
+        assert register_response.status_code == 201
+        login_response = _login(client, "password-policy@example.com", "SuperSecret123")
+        assert login_response.status_code == 200
+
+        response = client.post(
+            "/auth/me/password",
+            json={"current_password": "SuperSecret123", "new_password": "short"},
+            headers=_auth_header(cast(str, login_response.json()["access_token"])),
+        )
+        assert response.status_code == 422
 
 
 def test_inactive_user_cannot_login() -> None:
@@ -117,10 +153,7 @@ def test_refresh_token_does_not_revoke_existing_access_tokens() -> None:
         assert login_response.status_code == 200
         first_tokens: dict[str, Any] = login_response.json()
 
-        refresh_response: Response = client.post(
-            "/auth/refresh",
-            json={"refreshToken": first_tokens["refreshToken"]},
-        )
+        refresh_response: Response = client.post("/auth/refresh")
         assert refresh_response.status_code == 200
         second_tokens: dict[str, Any] = refresh_response.json()
 
@@ -136,6 +169,24 @@ def test_refresh_token_does_not_revoke_existing_access_tokens() -> None:
             headers=_auth_header(cast(str, first_tokens["access_token"])),
         )
         assert me_with_first_access_token.status_code == 200
+
+
+def test_logout_clears_refresh_cookie() -> None:
+    with TestClient(app) as client:
+        register_response = client.post(
+            "/auth/register",
+            json={"email": "logout@example.com", "password": "SuperSecret123"},
+        )
+        assert register_response.status_code == 201
+        login_response = _login(client, "logout@example.com", "SuperSecret123")
+        assert login_response.status_code == 200
+
+        logout_response = client.post("/auth/logout")
+        assert logout_response.status_code == 204
+        assert "Max-Age=0" in logout_response.headers["set-cookie"]
+
+        refresh_response = client.post("/auth/refresh")
+        assert refresh_response.status_code == 401
 
 
 def test_change_password_invalidates_previous_credentials() -> None:

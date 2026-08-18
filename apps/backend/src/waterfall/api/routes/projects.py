@@ -10,7 +10,13 @@ from waterfall.db.session import get_db
 from waterfall.models.ms_core import MsProject, MsTask, MsTaskLink
 from waterfall.models.user import User
 from waterfall.models.wf_core import WfChargeLine, WfExcelImport, WfImportBatch, WfTaskEnrichment
-from waterfall.schemas.projects import ProjectRead, ProjectUpdate, TaskDescriptionUpdate, TaskRead
+from waterfall.schemas.projects import (
+    ProjectCreate,
+    ProjectRead,
+    ProjectUpdate,
+    TaskDescriptionUpdate,
+    TaskRead,
+)
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 MSP_NS = "http://schemas.microsoft.com/project"
@@ -28,39 +34,19 @@ def _dt_to_msp_text(value: datetime | None) -> str | None:
     return value.isoformat(timespec="seconds")
 
 
-@router.get("", response_model=list[ProjectRead])
-def list_projects(
-    limit: int = Query(default=50, ge=1, le=500),
-    offset: int = Query(default=0, ge=0),
-    db: Session = Depends(get_db),
-    _: User = Depends(get_current_active_user),
-) -> list[ProjectRead]:
-    projects = db.query(MsProject).order_by(MsProject.id.asc()).offset(offset).limit(limit).all()
-    return [
-        ProjectRead(
-            id=project.id,
-            name=project.name,
-            source_version=project.source_version,
-            save_version_out=project.save_version_out,
-            schedule_from_start=project.schedule_from_start,
-            start_date=project.start_date,
-            finish_date=project.finish_date,
-            currency_code=project.currency_code,
-        )
-        for project in projects
-    ]
-
-
-@router.get("/{project_id}", response_model=ProjectRead)
-def get_project(
-    project_id: int,
-    db: Session = Depends(get_db),
-    _: User = Depends(get_current_active_user),
-) -> ProjectRead:
-    project = db.query(MsProject).filter(MsProject.id == project_id).first()
+def _get_project_or_404(db: Session, project_id: int, owner_id: int) -> MsProject:
+    project = (
+        db.query(MsProject)
+        .filter(MsProject.id == project_id)
+        .filter(MsProject.owner_id == owner_id)
+        .first()
+    )
     if project is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    return project
 
+
+def _to_project_read(project: MsProject) -> ProjectRead:
     return ProjectRead(
         id=project.id,
         name=project.name,
@@ -73,16 +59,69 @@ def get_project(
     )
 
 
+@router.get("", response_model=list[ProjectRead])
+def list_projects(
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> list[ProjectRead]:
+    projects = (
+        db.query(MsProject)
+        .filter(MsProject.owner_id == current_user.id)
+        .order_by(MsProject.id.asc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    return [_to_project_read(project) for project in projects]
+
+
+@router.post("", response_model=ProjectRead, status_code=status.HTTP_201_CREATED)
+def create_project(
+    payload: ProjectCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> ProjectRead:
+    now = datetime.now(UTC)
+    project = MsProject(
+        owner_id=current_user.id,
+        external_uid=None,
+        source_version=2016,
+        save_version_out=16,
+        name=payload.name.strip(),
+        schedule_from_start=True,
+        start_date=now,
+        finish_date=now,
+        calendar_uid=None,
+        minutes_per_day=480,
+        minutes_per_week=2400,
+        days_per_month=20,
+        currency_code=payload.currency_code.upper() if payload.currency_code else None,
+    )
+    db.add(project)
+    db.commit()
+    db.refresh(project)
+    return _to_project_read(project)
+
+
+@router.get("/{project_id}", response_model=ProjectRead)
+def get_project(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> ProjectRead:
+    return _to_project_read(_get_project_or_404(db, project_id, current_user.id))
+
+
 @router.patch("/{project_id}", response_model=ProjectRead)
 def update_project(
     project_id: int,
     payload: ProjectUpdate,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
 ) -> ProjectRead:
-    project = db.query(MsProject).filter(MsProject.id == project_id).first()
-    if project is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    project = _get_project_or_404(db, project_id, current_user.id)
 
     new_name = payload.name.strip()
     if not new_name:
@@ -96,27 +135,16 @@ def update_project(
     db.commit()
     db.refresh(project)
 
-    return ProjectRead(
-        id=project.id,
-        name=project.name,
-        source_version=project.source_version,
-        save_version_out=project.save_version_out,
-        schedule_from_start=project.schedule_from_start,
-        start_date=project.start_date,
-        finish_date=project.finish_date,
-        currency_code=project.currency_code,
-    )
+    return _to_project_read(project)
 
 
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_project(
     project_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
 ) -> Response:
-    project = db.query(MsProject).filter(MsProject.id == project_id).first()
-    if project is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    project = _get_project_or_404(db, project_id, current_user.id)
 
     db.query(WfImportBatch).filter(WfImportBatch.project_id == project_id).update(
         {WfImportBatch.project_id: None}, synchronize_session=False
@@ -146,11 +174,9 @@ def list_project_tasks(
     limit: int = Query(default=200, ge=1, le=2000),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
 ) -> list[TaskRead]:
-    project_exists = db.query(MsProject.id).filter(MsProject.id == project_id).first()
-    if project_exists is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    _get_project_or_404(db, project_id, current_user.id)
 
     tasks = (
         db.query(MsTask)
@@ -198,8 +224,9 @@ def update_task_description(
     task_uid: int,
     payload: TaskDescriptionUpdate,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
 ) -> TaskRead:
+    _get_project_or_404(db, project_id, current_user.id)
     task = (
         db.query(MsTask)
         .filter(MsTask.project_id == project_id)
@@ -253,11 +280,9 @@ def update_task_description(
 def export_project_xml(
     project_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
 ) -> Response:
-    project = db.query(MsProject).filter(MsProject.id == project_id).first()
-    if project is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    project = _get_project_or_404(db, project_id, current_user.id)
 
     tasks = db.query(MsTask).filter(MsTask.project_id == project_id).order_by(MsTask.id.asc()).all()
     links = (
