@@ -4,7 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { FolderKanban, LogOut, Menu, Settings2, Users, X } from "lucide-react";
+import { FolderKanban, LogOut, Menu, Settings2, X } from "lucide-react";
 
 import { getMe } from "@/lib/backend";
 import { clearSession, getSession, setSession, type SessionTokens } from "@/lib/session";
@@ -12,7 +12,6 @@ import { clearSession, getSession, setSession, type SessionTokens } from "@/lib/
 const navigation = [
   { href: "/projects", label: "Projets", icon: FolderKanban },
   { href: "/resources", label: "Paramètres", icon: Settings2 },
-  { href: "/users", label: "Utilisateurs", icon: Users },
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
