@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 
@@ -38,43 +39,48 @@ export default function LoginPage() {
   }
 
   return (
-    <section className="panel" style={{ maxWidth: "530px", margin: "0 auto" }}>
-      <h1 className="title">Connexion</h1>
-      <p className="subtitle">Accès à la console Waterfall.</p>
+    <div style={{ maxWidth: "46rem", margin: "0 auto" }}>
+      <div className="row" style={{ justifyContent: "center", marginBottom: "1.5rem" }}>
+        <Image src="/waterfall_logo.svg" alt="Waterfall" width={172} height={40} priority />
+      </div>
+      <section className="panel">
+        <h1 className="title">Connexion</h1>
+        <p className="subtitle">Accès à la console Waterfall.</p>
 
-      <form onSubmit={onSubmit} style={{ marginTop: "1rem" }}>
-        <div className="field">
-          <label htmlFor="email">Email</label>
-          <input
-            id="email"
-            type="email"
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-            autoComplete="email"
-            required
-          />
-        </div>
+        <form onSubmit={onSubmit} style={{ marginTop: "1rem" }}>
+          <div className="field">
+            <label htmlFor="email">Email</label>
+            <input
+              id="email"
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              autoComplete="email"
+              required
+            />
+          </div>
 
-        <div className="field">
-          <label htmlFor="password">Mot de passe</label>
-          <input
-            id="password"
-            type="password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            autoComplete="current-password"
-            required
-          />
-        </div>
+          <div className="field">
+            <label htmlFor="password">Mot de passe</label>
+            <input
+              id="password"
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              autoComplete="current-password"
+              required
+            />
+          </div>
 
-        {error ? <p className="error">{error}</p> : null}
+          {error ? <p className="error">{error}</p> : null}
 
-        <div className="row" style={{ marginTop: "0.8rem" }}>
-          <button className="btn btn-primary" type="submit" disabled={busy}>
-            {busy ? "Connexion..." : "Se connecter"}
-          </button>
-        </div>
-      </form>
-    </section>
+          <div className="row" style={{ marginTop: "0.8rem" }}>
+            <button className="btn btn-primary" type="submit" disabled={busy}>
+              {busy ? "Connexion..." : "Se connecter"}
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
   );
 }

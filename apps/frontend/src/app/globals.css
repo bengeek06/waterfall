@@ -1,11 +1,13 @@
 :root {
-  --bg: #eef2f1;
+  --bg: #eef1f4;
   --ink: #172321;
   --ink-soft: #61706d;
   --card: #ffffff;
-  --line: #d8e1de;
+  --line: #d7e0e6;
   --accent: #176b5d;
   --accent-strong: #0f5147;
+  --brand-blue: #027dc6;
+  --brand-blue-strong: #045e94;
   --warn: #b14128;
   --shadow: 0 12px 30px rgba(31, 37, 51, 0.09);
 }
@@ -36,8 +38,9 @@ body {
   inset: 0;
   z-index: -1;
   background:
-    radial-gradient(circle at 12% 8%, rgba(23, 107, 93, 0.14), transparent 34%),
-    linear-gradient(145deg, #f7faf9, #e7eeec 62%, #dfe9e5);
+    radial-gradient(circle at 12% 8%, rgba(2, 125, 198, 0.12), transparent 36%),
+    radial-gradient(circle at 88% 92%, rgba(17, 149, 225, 0.08), transparent 40%),
+    linear-gradient(145deg, #f8fafc, #e9eff4 62%, #dde6ee);
 }
 
 .workspace-shell {
@@ -53,8 +56,8 @@ body {
   width: 248px;
   height: 100vh;
   padding: 1.35rem 1rem;
-  border-right: 1px solid #d3dfdb;
-  background: rgba(247, 250, 249, 0.94);
+  border-right: 1px solid #d2dee6;
+  background: rgba(248, 250, 252, 0.94);
 }
 
 .sidebar-brand {
@@ -193,7 +196,7 @@ body {
 
 .auth-shell {
   display: grid;
-  width: min(100% - 2rem, 540px);
+  width: min(100% - 2rem, 48rem);
   min-height: 100vh;
   margin: 0 auto;
   align-items: center;
@@ -442,13 +445,13 @@ body {
 }
 
 .btn-primary {
-  border-color: var(--accent);
-  background: var(--accent);
+  border-color: var(--brand-blue);
+  background: var(--brand-blue);
   color: #f8fbfa;
 }
 
 .btn-primary:hover {
-  background: var(--accent-strong);
+  background: var(--brand-blue-strong);
 }
 
 .btn-danger {
