@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import base64
 import hashlib
 import json
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import cast
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from waterfall.api.dependencies import get_current_active_user
+from waterfall.core.config import get_settings
 from waterfall.db.session import get_db
 from waterfall.models.ms_core import MsProject, MsTask, MsTaskLink
 from waterfall.models.user import User
@@ -32,6 +33,7 @@ from waterfall.schemas.imports import (
 
 router = APIRouter(prefix="/imports/v1/batches", tags=["imports-v1"])
 NS = {"ms": "http://schemas.microsoft.com/project"}
+UPLOAD_CHUNK_SIZE = 1024 * 1024
 
 
 def _txt(node: ET.Element, path: str) -> str | None:
@@ -54,6 +56,51 @@ def _as_dt(value: str | None) -> datetime | None:
     if value is None:
         return None
     return datetime.fromisoformat(value)
+
+
+def _source_path(batch_id: int) -> Path:
+    return Path(get_settings().import_storage_path) / f"batch-{batch_id}.xml"
+
+
+async def _save_source_xml(file: UploadFile, batch_id: int) -> tuple[Path, int, str]:
+    settings = get_settings()
+    storage_path = _source_path(batch_id)
+    storage_path.parent.mkdir(parents=True, exist_ok=True)
+
+    byte_count = 0
+    digest = hashlib.sha256()
+    try:
+        with storage_path.open("wb") as destination:
+            while chunk := await file.read(UPLOAD_CHUNK_SIZE):
+                byte_count += len(chunk)
+                if byte_count > settings.import_max_upload_bytes:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail="XML file exceeds the configured size limit",
+                    )
+                digest.update(chunk)
+                destination.write(chunk)
+    except Exception:
+        storage_path.unlink(missing_ok=True)
+        raise
+
+    return storage_path, byte_count, digest.hexdigest()
+
+
+def _read_source_xml(batch: WfImportBatch) -> bytes:
+    if not batch.source_storage_path:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No XML uploaded for this batch",
+        )
+
+    source_path = Path(batch.source_storage_path)
+    if not source_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Uploaded XML is unavailable",
+        )
+    return source_path.read_bytes()
 
 
 def _import_v1_tasks_and_links(
@@ -242,8 +289,7 @@ async def upload_xml(
             status_code=status.HTTP_409_CONFLICT,
             detail="Batch is no longer pending",
         )
-    content = await file.read()
-    source_sha256 = hashlib.sha256(content).hexdigest()
+    storage_path, byte_count, source_sha256 = await _save_source_xml(file, batch.id)
 
     log_payload: dict[str, object]
     if batch.log_json:
@@ -255,10 +301,10 @@ async def upload_xml(
     else:
         log_payload = {}
 
-    log_payload["uploaded_bytes"] = len(content)
-    log_payload["xml_b64"] = base64.b64encode(content).decode("ascii")
+    log_payload["uploaded_bytes"] = byte_count
 
     batch.source_filename = filename
+    batch.source_storage_path = str(storage_path)
     batch.source_sha256 = source_sha256
     batch.status = "pending"
     batch.log_json = json.dumps(log_payload)
@@ -308,20 +354,7 @@ def run_batch(
     if not isinstance(payload, dict):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Corrupted batch payload")
 
-    xml_b64 = payload.get("xml_b64")
-    if not isinstance(xml_b64, str):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="No XML uploaded for this batch",
-        )
-
-    try:
-        xml_bytes = base64.b64decode(xml_b64)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Corrupted XML payload",
-        ) from exc
+    xml_bytes = _read_source_xml(batch)
 
     accepted_at = datetime.now(UTC)
     updated = (

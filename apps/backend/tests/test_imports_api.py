@@ -1,11 +1,15 @@
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from fastapi.testclient import TestClient
 from httpx import Response
 
+from waterfall.core.config import get_settings
+from waterfall.db.session import get_session_factory
 from waterfall.main import app
+from waterfall.models.wf_core import WfImportBatch
 
 NS = {"ms": "http://schemas.microsoft.com/project"}
 EXAMPLE_XML = Path(__file__).resolve().parent / "planning_test.xml"
@@ -60,7 +64,8 @@ def _create_project(client: TestClient, headers: dict[str, str]) -> int:
         headers=headers,
     )
     assert response.status_code == 201
-    return response.json()["id"]
+    payload = cast(dict[str, Any], response.json())
+    return cast(int, payload["id"])
 
 
 def test_import_batch_minimal_flow() -> None:
@@ -103,9 +108,9 @@ def test_import_batch_minimal_flow() -> None:
             headers=headers,
         )
         assert create_response.status_code == 201
-        batch = create_response.json()
+        batch = cast(dict[str, Any], create_response.json())
         assert batch["status"] == "pending"
-        batch_id = batch["id"]
+        batch_id = cast(int, batch["id"])
 
         upload_response: Response = client.post(
             f"/imports/v1/batches/{batch_id}/xml",
@@ -120,6 +125,14 @@ def test_import_batch_minimal_flow() -> None:
         )
         assert upload_response.status_code == 202
         assert upload_response.json()["sourceName"] == "planning_test.xml"
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            stored_batch = session.query(WfImportBatch).filter(WfImportBatch.id == batch_id).one()
+            assert stored_batch.source_storage_path is not None
+            assert Path(stored_batch.source_storage_path).is_file()
+            assert stored_batch.log_json is not None
+            assert "xml_b64" not in stored_batch.log_json
 
         run_response: Response = client.post(
             f"/imports/v1/batches/{batch_id}/run",
@@ -230,3 +243,28 @@ def test_import_batch_isolated_by_project_owner() -> None:
         for path in (f"/imports/v1/batches/{batch_id}", f"/imports/v1/batches/{batch_id}/errors"):
             response: Response = client.get(path, headers=other_headers)
             assert response.status_code == 404
+
+
+def test_upload_rejects_files_over_configured_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("IMPORT_MAX_UPLOAD_BYTES", "8")
+    get_settings.cache_clear()
+    try:
+        with TestClient(app) as client:
+            headers = _auth_headers(client)
+            project_id = _create_project(client, headers)
+            create_response = client.post(
+                "/imports/v1/batches",
+                json={"projectId": project_id, "importMode": "standard"},
+                headers=headers,
+            )
+            assert create_response.status_code == 201
+            batch_id = create_response.json()["id"]
+
+            upload_response = client.post(
+                f"/imports/v1/batches/{batch_id}/xml",
+                files={"file": ("too-large.xml", b"123456789", "application/xml")},
+                headers=headers,
+            )
+            assert upload_response.status_code == 413
+    finally:
+        get_settings.cache_clear()

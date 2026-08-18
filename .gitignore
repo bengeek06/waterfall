@@ -22,3 +22,4 @@ node_modules/
 .DS_Store
 test.db
 apps/backend/waterfall.db
+.waterfall-imports/

@@ -21,6 +21,8 @@ import {
 } from "@/lib/backend";
 import { clearSession, getSession, setSession, type SessionTokens } from "@/lib/session";
 
+const MAX_IMPORT_FILE_SIZE = 25 * 1024 * 1024;
+
 export default function ProjectsPage() {
   const router = useRouter();
   const [session, setSessionState] = useState<SessionTokens | null>(() => getSession());
@@ -336,7 +338,17 @@ export default function ProjectsPage() {
                     id="project-file"
                     type="file"
                     accept=".xml,application/xml,text/xml"
-                    onChange={(event) => setCreateFile(event.target.files?.[0] ?? null)}
+                    onChange={(event) => {
+                      const file = event.target.files?.[0] ?? null;
+                      if (file && file.size > MAX_IMPORT_FILE_SIZE) {
+                        setCreateFile(null);
+                        setError("Le fichier XML ne doit pas dépasser 25 MiB.");
+                        event.target.value = "";
+                        return;
+                      }
+                      setError(null);
+                      setCreateFile(file);
+                    }}
                   />
                 </div>
                 <div className="row" style={{ marginTop: "0.8rem" }}>
