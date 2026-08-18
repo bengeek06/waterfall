@@ -1,5 +1,6 @@
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
+from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
@@ -14,6 +15,7 @@ from waterfall.models.resources import (
     CostCategory,
     CostType,
     Estimate,
+    EstimateCostLine,
     EstimateTaskRow,
     ResourceRole,
     TaskRoleAssignment,
@@ -21,12 +23,16 @@ from waterfall.models.resources import (
 from waterfall.models.user import User
 from waterfall.models.wf_core import WfChargeLine, WfExcelImport, WfImportBatch, WfTaskEnrichment
 from waterfall.schemas.projects import (
+    EstimateCostLineCreate,
+    EstimateCostLineRead,
+    EstimateCostLineUpdate,
     EstimateTaskRowRead,
     ProjectCreate,
     ProjectEstimateCreate,
     ProjectEstimateRead,
     ProjectRead,
     ProjectUpdate,
+    SupplyStatus,
     TaskDescriptionUpdate,
     TaskRead,
     TaskRoleAssignmentCreate,
@@ -114,6 +120,53 @@ def _to_estimate_task_row_read(row: EstimateTaskRow) -> EstimateTaskRowRead:
         outline_level=row.outline_level,
         is_milestone=row.is_milestone,
     )
+
+
+def _to_estimate_cost_line_read(line: EstimateCostLine) -> EstimateCostLineRead:
+    return EstimateCostLineRead(
+        id=line.id,
+        estimate_id=line.estimate_id,
+        task_id=line.task_id,
+        cost_type_id=line.cost_type_id,
+        cost_category_id=line.cost_category_id,
+        cost_type_code=line.cost_type_code,
+        cost_category_code=line.cost_category_code,
+        accounting_code=line.accounting_code,
+        label=line.label,
+        quantity=line.quantity,
+        unit_cost=line.unit_cost,
+        purchase_cost=line.purchase_cost,
+        supply_status=cast(SupplyStatus | None, line.supply_status),
+    )
+
+
+def _get_draft_estimate_or_409(db: Session, project_id: int, estimate_id: int) -> Estimate:
+    estimate = _get_estimate_or_404(db, project_id, estimate_id)
+    if estimate.status != "draft":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Estimate is not a draft")
+    return estimate
+
+
+def _get_non_labor_category_or_400(
+    db: Session,
+    cost_category_id: int,
+) -> tuple[CostCategory, CostType]:
+    row = (
+        db.query(CostCategory, CostType)
+        .join(CostType, CostCategory.cost_type_id == CostType.id)
+        .filter(CostCategory.id == cost_category_id)
+        .filter(CostCategory.is_active.is_(True))
+        .filter(CostType.is_active.is_(True))
+        .filter(CostType.code != "MO")
+        .first()
+    )
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cost category must belong to an active non-labor cost type",
+        )
+    category, cost_type = row
+    return category, cost_type
 
 
 def _get_task_or_404(db: Session, project_id: int, task_uid: int) -> MsTask:
@@ -325,6 +378,171 @@ def validate_project_estimate(
     db.commit()
     db.refresh(estimate)
     return _to_project_estimate_read(estimate)
+
+
+@router.get(
+    "/{project_id}/estimates/{estimate_id}/cost-lines",
+    response_model=list[EstimateCostLineRead],
+)
+def list_estimate_cost_lines(
+    project_id: int,
+    estimate_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> list[EstimateCostLineRead]:
+    _get_project_or_404(db, project_id, current_user.id)
+    _get_estimate_or_404(db, project_id, estimate_id)
+    lines = (
+        db.query(EstimateCostLine)
+        .filter(EstimateCostLine.estimate_id == estimate_id)
+        .order_by(EstimateCostLine.id)
+        .all()
+    )
+    return [_to_estimate_cost_line_read(line) for line in lines]
+
+
+@router.post(
+    "/{project_id}/estimates/{estimate_id}/cost-lines",
+    response_model=EstimateCostLineRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_estimate_cost_line(
+    project_id: int,
+    estimate_id: int,
+    payload: EstimateCostLineCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> EstimateCostLineRead:
+    _get_project_or_404(db, project_id, current_user.id)
+    _get_draft_estimate_or_409(db, project_id, estimate_id)
+    if payload.task_id is not None:
+        task = db.query(MsTask).filter(MsTask.id == payload.task_id).first()
+        if task is None or task.project_id != project_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Task does not belong to project",
+            )
+    category, cost_type = _get_non_labor_category_or_400(db, payload.cost_category_id)
+    supply_status = "planned" if cost_type.code == "FOURNITURE" else None
+    if payload.supply_status is not None:
+        if cost_type.code != "FOURNITURE":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Supply status is only valid for supplies",
+            )
+        supply_status = payload.supply_status
+
+    line = EstimateCostLine(
+        estimate_id=estimate_id,
+        task_id=payload.task_id,
+        cost_type_id=cost_type.id,
+        cost_category_id=category.id,
+        cost_type_code=cost_type.code,
+        cost_category_code=category.code,
+        accounting_code=category.accounting_code,
+        label=payload.label,
+        quantity=payload.quantity,
+        unit_cost=payload.unit_cost,
+        purchase_cost=payload.quantity * payload.unit_cost,
+        supply_status=supply_status,
+    )
+    db.add(line)
+    db.commit()
+    db.refresh(line)
+    return _to_estimate_cost_line_read(line)
+
+
+@router.patch(
+    "/{project_id}/estimates/{estimate_id}/cost-lines/{line_id}",
+    response_model=EstimateCostLineRead,
+)
+def update_estimate_cost_line(
+    project_id: int,
+    estimate_id: int,
+    line_id: int,
+    payload: EstimateCostLineUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> EstimateCostLineRead:
+    _get_project_or_404(db, project_id, current_user.id)
+    _get_draft_estimate_or_409(db, project_id, estimate_id)
+    line = (
+        db.query(EstimateCostLine)
+        .filter(EstimateCostLine.id == line_id)
+        .filter(EstimateCostLine.estimate_id == estimate_id)
+        .first()
+    )
+    if line is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Estimate cost line not found",
+        )
+
+    values = payload.model_dump(exclude_unset=True)
+    if "task_id" in values and values["task_id"] is not None:
+        task = db.query(MsTask).filter(MsTask.id == values["task_id"]).first()
+        if task is None or task.project_id != project_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Task does not belong to project",
+            )
+
+    category, cost_type = _get_non_labor_category_or_400(
+        db,
+        values.get("cost_category_id", line.cost_category_id),
+    )
+    supply_status = values.get("supply_status", line.supply_status)
+    if cost_type.code == "FOURNITURE":
+        supply_status = supply_status or "planned"
+    else:
+        if values.get("supply_status") is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Supply status is only valid for supplies",
+            )
+        supply_status = None
+
+    for field, value in values.items():
+        setattr(line, field, value)
+    line.cost_type_id = cost_type.id
+    line.cost_category_id = category.id
+    line.cost_type_code = cost_type.code
+    line.cost_category_code = category.code
+    line.accounting_code = category.accounting_code
+    line.supply_status = supply_status
+    line.purchase_cost = line.quantity * line.unit_cost
+    db.add(line)
+    db.commit()
+    db.refresh(line)
+    return _to_estimate_cost_line_read(line)
+
+
+@router.delete(
+    "/{project_id}/estimates/{estimate_id}/cost-lines/{line_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_estimate_cost_line(
+    project_id: int,
+    estimate_id: int,
+    line_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> None:
+    _get_project_or_404(db, project_id, current_user.id)
+    _get_draft_estimate_or_409(db, project_id, estimate_id)
+    line = (
+        db.query(EstimateCostLine)
+        .filter(EstimateCostLine.id == line_id)
+        .filter(EstimateCostLine.estimate_id == estimate_id)
+        .first()
+    )
+    if line is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Estimate cost line not found",
+        )
+    db.delete(line)
+    db.commit()
 
 
 @router.get("/{project_id}", response_model=ProjectRead)

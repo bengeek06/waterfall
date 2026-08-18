@@ -1,5 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -102,3 +103,40 @@ class EstimateTaskRowRead(BaseModel):
     outline_number: str | None
     outline_level: int | None
     is_milestone: bool
+
+
+SupplyStatus = Literal["planned", "ordered", "received", "cancelled"]
+
+
+class EstimateCostLineCreate(BaseModel):
+    task_id: int | None = Field(default=None, gt=0)
+    cost_category_id: int = Field(gt=0)
+    label: str = Field(min_length=1, max_length=512)
+    quantity: Decimal = Field(gt=0, max_digits=14, decimal_places=2)
+    unit_cost: Decimal = Field(ge=0, max_digits=16, decimal_places=2)
+    supply_status: SupplyStatus | None = None
+
+
+class EstimateCostLineUpdate(BaseModel):
+    task_id: int | None = Field(default=None, gt=0)
+    cost_category_id: int | None = Field(default=None, gt=0)
+    label: str | None = Field(default=None, min_length=1, max_length=512)
+    quantity: Decimal | None = Field(default=None, gt=0, max_digits=14, decimal_places=2)
+    unit_cost: Decimal | None = Field(default=None, ge=0, max_digits=16, decimal_places=2)
+    supply_status: SupplyStatus | None = None
+
+
+class EstimateCostLineRead(BaseModel):
+    id: int
+    estimate_id: int
+    task_id: int | None
+    cost_type_id: int
+    cost_category_id: int
+    cost_type_code: str
+    cost_category_code: str
+    accounting_code: str | None
+    label: str
+    quantity: Decimal
+    unit_cost: Decimal
+    purchase_cost: Decimal
+    supply_status: SupplyStatus | None

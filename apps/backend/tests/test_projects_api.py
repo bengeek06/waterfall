@@ -391,6 +391,170 @@ def test_project_estimate_snapshots_tasks_and_validates() -> None:
         assert validate_again_response.status_code == 409
 
 
+def test_estimate_cost_lines_support_non_labor_costs_and_draft_locking() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        labor_role_id, supply_role_id = _seed_roles()
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            labor_category_id = (
+                session.query(ResourceRole)
+                .filter(ResourceRole.id == labor_role_id)
+                .one()
+                .cost_category_id
+            )
+            supply_category_id = (
+                session.query(ResourceRole)
+                .filter(ResourceRole.id == supply_role_id)
+                .one()
+                .cost_category_id
+            )
+            fee_type = CostType(code="FRAIS", name="Frais")
+            work_unit_type = CostType(code="UO", name="Unité d'oeuvre")
+            session.add_all([fee_type, work_unit_type])
+            session.flush()
+            fee_category = CostCategory(
+                cost_type_id=fee_type.id,
+                code="FR-TRAVEL",
+                accounting_code="FRAIS",
+                name="Déplacement",
+            )
+            work_unit_category = CostCategory(
+                cost_type_id=work_unit_type.id,
+                code="UO-TEST",
+                accounting_code="UO",
+                name="Essais",
+            )
+            session.add_all([fee_category, work_unit_category])
+            session.commit()
+            fee_category_id = fee_category.id
+            work_unit_category_id = work_unit_category.id
+
+        estimate_response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate_response.status_code == 201
+        estimate_id = estimate_response.json()["id"]
+
+        create_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "task_id": 1,
+                "cost_category_id": supply_category_id,
+                "label": "Câble réseau",
+                "quantity": "3",
+                "unit_cost": "12.50",
+                "supply_status": "ordered",
+            },
+            headers=headers,
+        )
+        assert create_response.status_code == 201
+        cost_line = cast(dict[str, Any], create_response.json())
+        cost_line_id = cast(int, cost_line["id"])
+        assert cost_line["cost_type_code"] == "FOURNITURE"
+        assert cost_line["cost_category_code"] == "FO-CABLE"
+        assert cost_line["accounting_code"] == "ACHAT"
+        assert cost_line["purchase_cost"] == "37.50"
+        assert cost_line["supply_status"] == "ordered"
+
+        other_headers = _auth_headers(client, "cost-line.other@example.com")
+        other_response = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            headers=other_headers,
+        )
+        assert other_response.status_code == 404
+
+        fee_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "cost_category_id": fee_category_id,
+                "label": "Déplacement",
+                "quantity": "2",
+                "unit_cost": "120",
+            },
+            headers=headers,
+        )
+        assert fee_response.status_code == 201
+        assert fee_response.json()["cost_type_code"] == "FRAIS"
+        assert fee_response.json()["task_id"] is None
+        assert fee_response.json()["supply_status"] is None
+
+        work_unit_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "cost_category_id": work_unit_category_id,
+                "label": "Essais laboratoire",
+                "quantity": "4",
+                "unit_cost": "80",
+            },
+            headers=headers,
+        )
+        assert work_unit_response.status_code == 201
+        assert work_unit_response.json()["cost_type_code"] == "UO"
+
+        status_for_fee_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "cost_category_id": fee_category_id,
+                "label": "Statut non valide",
+                "quantity": "1",
+                "unit_cost": "1",
+                "supply_status": "ordered",
+            },
+            headers=headers,
+        )
+        assert status_for_fee_response.status_code == 400
+
+        labor_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "cost_category_id": labor_category_id,
+                "label": "Non autorisé",
+                "quantity": "1",
+                "unit_cost": "1",
+            },
+            headers=headers,
+        )
+        assert labor_response.status_code == 400
+
+        invalid_task_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "task_id": 999999,
+                "cost_category_id": supply_category_id,
+                "label": "Tâche absente",
+                "quantity": "1",
+                "unit_cost": "1",
+            },
+            headers=headers,
+        )
+        assert invalid_task_response.status_code == 400
+
+        invalid_status_response = client.patch(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines/{cost_line_id}",
+            json={"supply_status": "received", "unit_cost": "15"},
+            headers=headers,
+        )
+        assert invalid_status_response.status_code == 200
+        assert invalid_status_response.json()["purchase_cost"] == "45.00"
+
+        validate_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/validate",
+            headers=headers,
+        )
+        assert validate_response.status_code == 200
+
+        locked_response = client.delete(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines/{cost_line_id}",
+            headers=headers,
+        )
+        assert locked_response.status_code == 409
+
+
 def test_forecast_estimate_requires_same_project_reference() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)

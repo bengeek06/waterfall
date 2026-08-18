@@ -866,6 +866,112 @@ paths:
         '404':
           $ref: '#/components/responses/ProjectNotFound'
 
+  /projects/{projectId}/estimates/{estimateId}/cost-lines:
+    get:
+      tags: [projects]
+      summary: Lister les lignes de coût hors main-d'oeuvre d'un devis
+      operationId: listEstimateCostLines
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/EstimateId'
+      responses:
+        '200':
+          description: Lignes de coût du devis
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/EstimateCostLineRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+    post:
+      tags: [projects]
+      summary: Ajouter une ligne Fourniture, Frais ou UO à un brouillon
+      operationId: createEstimateCostLine
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/EstimateId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EstimateCostLineCreate'
+      responses:
+        '201':
+          description: Ligne de coût créée
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EstimateCostLineRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /projects/{projectId}/estimates/{estimateId}/cost-lines/{costLineId}:
+    patch:
+      tags: [projects]
+      summary: Modifier une ligne de coût d'un brouillon
+      operationId: updateEstimateCostLine
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/EstimateId'
+        - $ref: '#/components/parameters/CostLineId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EstimateCostLineUpdate'
+      responses:
+        '200':
+          description: Ligne de coût modifiée
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EstimateCostLineRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    delete:
+      tags: [projects]
+      summary: Supprimer une ligne de coût d'un brouillon
+      operationId: deleteEstimateCostLine
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/EstimateId'
+        - $ref: '#/components/parameters/CostLineId'
+      responses:
+        '204':
+          description: Ligne de coût supprimée
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
   /projects/{projectId}/estimates/{estimateId}/validate:
     post:
       tags: [projects]
@@ -1566,6 +1672,14 @@ components:
         type: integer
         minimum: 1
       description: Identifiant technique de la version de devis
+    CostLineId:
+      name: costLineId
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+      description: Identifiant technique de la ligne de coût du devis
     NodeId:
       name: nodeId
       in: path
@@ -2247,6 +2361,111 @@ components:
           nullable: true
         is_milestone:
           type: boolean
+
+    SupplyStatus:
+      type: string
+      enum: [planned, ordered, received, cancelled]
+
+    EstimateCostLineCreate:
+      type: object
+      required: [cost_category_id, label, quantity, unit_cost]
+      properties:
+        task_id:
+          type: integer
+          minimum: 1
+          nullable: true
+        cost_category_id:
+          type: integer
+          minimum: 1
+        label:
+          type: string
+          minLength: 1
+          maxLength: 512
+        quantity:
+          type: number
+          exclusiveMinimum: 0
+        unit_cost:
+          type: number
+          minimum: 0
+        supply_status:
+          allOf:
+            - $ref: '#/components/schemas/SupplyStatus'
+          nullable: true
+
+    EstimateCostLineUpdate:
+      type: object
+      properties:
+        task_id:
+          type: integer
+          minimum: 1
+          nullable: true
+        cost_category_id:
+          type: integer
+          minimum: 1
+        label:
+          type: string
+          minLength: 1
+          maxLength: 512
+        quantity:
+          type: number
+          exclusiveMinimum: 0
+        unit_cost:
+          type: number
+          minimum: 0
+        supply_status:
+          allOf:
+            - $ref: '#/components/schemas/SupplyStatus'
+          nullable: true
+
+    EstimateCostLineRead:
+      type: object
+      required:
+        - id
+        - estimate_id
+        - cost_type_id
+        - cost_category_id
+        - cost_type_code
+        - cost_category_code
+        - label
+        - quantity
+        - unit_cost
+        - purchase_cost
+      properties:
+        id:
+          type: integer
+          minimum: 1
+        estimate_id:
+          type: integer
+          minimum: 1
+        task_id:
+          type: integer
+          minimum: 1
+          nullable: true
+        cost_type_id:
+          type: integer
+          minimum: 1
+        cost_category_id:
+          type: integer
+          minimum: 1
+        cost_type_code:
+          type: string
+        cost_category_code:
+          type: string
+        accounting_code:
+          type: string
+          nullable: true
+        label:
+          type: string
+        quantity:
+          type: number
+        unit_cost:
+          type: number
+        purchase_cost:
+          type: number
+        supply_status:
+          allOf:
+            - $ref: '#/components/schemas/SupplyStatus'
+          nullable: true
 
     ResourceNodeCreate:
       type: object

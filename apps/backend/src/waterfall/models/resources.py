@@ -228,6 +228,43 @@ class EstimateTaskRow(Base):
     is_milestone: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
+class EstimateCostLine(Base):
+    __tablename__ = "wf_estimate_cost_line"
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="ck_wf_estimate_cost_line_quantity"),
+        CheckConstraint("unit_cost >= 0", name="ck_wf_estimate_cost_line_unit_cost"),
+        CheckConstraint("purchase_cost >= 0", name="ck_wf_estimate_cost_line_purchase_cost"),
+        CheckConstraint(
+            "supply_status IN ('planned', 'ordered', 'received', 'cancelled') "
+            "OR supply_status IS NULL",
+            name="ck_wf_estimate_cost_line_supply_status",
+        ),
+        Index("idx_wf_estimate_cost_line_estimate", "estimate_id"),
+        Index("idx_wf_estimate_cost_line_task", "task_id"),
+        Index("idx_wf_estimate_cost_line_category", "cost_category_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    estimate_id: Mapped[int] = mapped_column(ForeignKey("wf_estimate.id"), nullable=False)
+    task_id: Mapped[int | None] = mapped_column(ForeignKey("ms_task.id"), nullable=True)
+    cost_type_id: Mapped[int] = mapped_column(ForeignKey("wf_cost_type.id"), nullable=False)
+    cost_category_id: Mapped[int] = mapped_column(ForeignKey("wf_cost_category.id"), nullable=False)
+    cost_type_code: Mapped[str] = mapped_column(String(32), nullable=False)
+    cost_category_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    accounting_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    label: Mapped[str] = mapped_column(String(512), nullable=False)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    unit_cost: Mapped[Decimal] = mapped_column(Numeric(16, 2), nullable=False)
+    purchase_cost: Mapped[Decimal] = mapped_column(Numeric(16, 2), nullable=False)
+    supply_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+
 class EstimateLine(Base):
     __tablename__ = "wf_estimate_line"
     __table_args__ = (

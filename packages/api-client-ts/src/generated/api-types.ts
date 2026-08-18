@@ -470,6 +470,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{projectId}/estimates/{estimateId}/cost-lines": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lister les lignes de coût hors main-d'oeuvre d'un devis */
+        get: operations["listEstimateCostLines"];
+        put?: never;
+        /** Ajouter une ligne Fourniture, Frais ou UO à un brouillon */
+        post: operations["createEstimateCostLine"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{projectId}/estimates/{estimateId}/cost-lines/{costLineId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Supprimer une ligne de coût d'un brouillon */
+        delete: operations["deleteEstimateCostLine"];
+        options?: never;
+        head?: never;
+        /** Modifier une ligne de coût d'un brouillon */
+        patch: operations["updateEstimateCostLine"];
+        trace?: never;
+    };
     "/projects/{projectId}/estimates/{estimateId}/validate": {
         parameters: {
             query?: never;
@@ -1001,6 +1037,39 @@ export interface components {
             outline_level?: number | null;
             is_milestone: boolean;
         };
+        /** @enum {string} */
+        SupplyStatus: "planned" | "ordered" | "received" | "cancelled";
+        EstimateCostLineCreate: {
+            task_id?: number | null;
+            cost_category_id: number;
+            label: string;
+            quantity: number;
+            unit_cost: number;
+            supply_status?: components["schemas"]["SupplyStatus"] | null;
+        };
+        EstimateCostLineUpdate: {
+            task_id?: number | null;
+            cost_category_id?: number;
+            label?: string;
+            quantity?: number;
+            unit_cost?: number;
+            supply_status?: components["schemas"]["SupplyStatus"] | null;
+        };
+        EstimateCostLineRead: {
+            id: number;
+            estimate_id: number;
+            task_id?: number | null;
+            cost_type_id: number;
+            cost_category_id: number;
+            cost_type_code: string;
+            cost_category_code: string;
+            accounting_code?: string | null;
+            label: string;
+            quantity: number;
+            unit_cost: number;
+            purchase_cost: number;
+            supply_status?: components["schemas"]["SupplyStatus"] | null;
+        };
         ResourceNodeCreate: {
             code: string;
             name: string;
@@ -1225,6 +1294,8 @@ export interface components {
         AssignmentId: number;
         /** @description Identifiant technique de la version de devis */
         EstimateId: number;
+        /** @description Identifiant technique de la ligne de coût du devis */
+        CostLineId: number;
         /** @description Identifiant technique du noeud de ressources */
         NodeId: number;
         /** @description Identifiant technique du role */
@@ -2190,6 +2261,129 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["ProjectNotFound"];
+        };
+    };
+    listEstimateCostLines: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de devis */
+                estimateId: components["parameters"]["EstimateId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Lignes de coût du devis */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EstimateCostLineRead"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+        };
+    };
+    createEstimateCostLine: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de devis */
+                estimateId: components["parameters"]["EstimateId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EstimateCostLineCreate"];
+            };
+        };
+        responses: {
+            /** @description Ligne de coût créée */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EstimateCostLineRead"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    deleteEstimateCostLine: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de devis */
+                estimateId: components["parameters"]["EstimateId"];
+                /** @description Identifiant technique de la ligne de coût du devis */
+                costLineId: components["parameters"]["CostLineId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ligne de coût supprimée */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    updateEstimateCostLine: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de devis */
+                estimateId: components["parameters"]["EstimateId"];
+                /** @description Identifiant technique de la ligne de coût du devis */
+                costLineId: components["parameters"]["CostLineId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EstimateCostLineUpdate"];
+            };
+        };
+        responses: {
+            /** @description Ligne de coût modifiée */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EstimateCostLineRead"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     validateProjectEstimate: {
