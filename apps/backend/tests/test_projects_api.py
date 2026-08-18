@@ -273,3 +273,32 @@ def test_user_can_create_manual_project() -> None:
         payload = cast(dict[str, Any], response.json())
         assert payload["name"] == "Projet manuel"
         assert payload["currency_code"] == "EUR"
+
+
+def test_project_and_task_pagination() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        owner_id = _current_user_id(client, headers)
+        first_project_id, _ = _seed_projects_and_tasks(owner_id)
+        second_project_id, _ = _seed_projects_and_tasks(owner_id)
+
+        first_page = client.get("/projects?limit=1&offset=0", headers=headers)
+        second_page = client.get("/projects?limit=1&offset=1", headers=headers)
+        assert first_page.status_code == 200
+        assert second_page.status_code == 200
+        first_projects = cast(list[dict[str, Any]], first_page.json())
+        second_projects = cast(list[dict[str, Any]], second_page.json())
+        assert len(first_projects) == 1
+        assert len(second_projects) == 1
+        assert first_projects[0]["id"] != second_projects[0]["id"]
+
+        task_page = client.get(
+            f"/projects/{first_project_id}/tasks?limit=1&offset=1",
+            headers=headers,
+        )
+        assert task_page.status_code == 200
+        tasks = cast(list[dict[str, Any]], task_page.json())
+        assert len(tasks) == 1
+        assert tasks[0]["uid"] == 1002
+
+        assert first_project_id != second_project_id

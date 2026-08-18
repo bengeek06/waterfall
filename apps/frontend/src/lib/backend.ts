@@ -473,8 +473,15 @@ export function setUserRole(
 export function getProjects(
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
+  limit = 50,
+  offset = 0,
 ) {
-  return authRequest<Project[]>("/projects", tokens, { method: "GET" }, onSessionRefresh);
+  return authRequest<Project[]>(
+    `/projects?limit=${limit}&offset=${offset}`,
+    tokens,
+    { method: "GET" },
+    onSessionRefresh,
+  );
 }
 
 export function createProject(
@@ -606,9 +613,11 @@ export function getProjectTasks(
   projectId: number,
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
+  limit = 200,
+  offset = 0,
 ) {
   return authRequest<Task[]>(
-    `/projects/${projectId}/tasks`,
+    `/projects/${projectId}/tasks?limit=${limit}&offset=${offset}`,
     tokens,
     { method: "GET" },
     onSessionRefresh,

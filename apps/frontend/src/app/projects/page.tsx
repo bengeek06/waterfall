@@ -23,12 +23,14 @@ import {
 import { clearSession, getSession, setSession, type SessionTokens } from "@/lib/session";
 
 const MAX_IMPORT_FILE_SIZE = 25 * 1024 * 1024;
+const PROJECT_PAGE_SIZE = 50;
 
 export default function ProjectsPage() {
   const router = useRouter();
   const [session, setSessionState] = useState<SessionTokens | null>(() => getSession());
   const [me, setMe] = useState<AuthUser | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [projectOffset, setProjectOffset] = useState(0);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState<string | null>(null);
@@ -58,7 +60,12 @@ export default function ProjectsPage() {
       try {
         const meData = await getMe(session, onSessionRefresh);
         setMe(meData);
-        const projectsData = await getProjects(session, onSessionRefresh);
+        const projectsData = await getProjects(
+          session,
+          onSessionRefresh,
+          PROJECT_PAGE_SIZE,
+          projectOffset,
+        );
         setProjects(projectsData);
       } catch (cause) {
         if (cause instanceof SessionExpiredError) {
@@ -82,10 +89,15 @@ export default function ProjectsPage() {
     }
 
     void load();
-  }, [onSessionRefresh, router, session]);
+  }, [onSessionRefresh, projectOffset, router, session]);
 
   async function refreshProjects(activeSession: SessionTokens) {
-    const projectsData = await getProjects(activeSession, onSessionRefresh);
+    const projectsData = await getProjects(
+      activeSession,
+      onSessionRefresh,
+      PROJECT_PAGE_SIZE,
+      projectOffset,
+    );
     setProjects(projectsData);
   }
 
@@ -466,6 +478,32 @@ export default function ProjectsPage() {
               ))}
             </tbody>
           </table>
+        ) : null}
+
+        {!busy ? (
+          <div className="row" style={{ marginTop: "1rem", justifyContent: "space-between" }}>
+            <span className="muted">
+              {projects.length ? `Projets ${projectOffset + 1} à ${projectOffset + projects.length}` : ""}
+            </span>
+            <div className="row">
+              <button
+                className="btn"
+                type="button"
+                disabled={projectOffset === 0}
+                onClick={() => setProjectOffset((current) => Math.max(0, current - PROJECT_PAGE_SIZE))}
+              >
+                Précédent
+              </button>
+              <button
+                className="btn"
+                type="button"
+                disabled={projects.length < PROJECT_PAGE_SIZE}
+                onClick={() => setProjectOffset((current) => current + PROJECT_PAGE_SIZE)}
+              >
+                Suivant
+              </button>
+            </div>
+          </div>
         ) : null}
       </section>
     </>

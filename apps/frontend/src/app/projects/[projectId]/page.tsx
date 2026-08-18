@@ -13,6 +13,8 @@ import {
 } from "@/lib/backend";
 import { clearSession, getSession, setSession, type SessionTokens } from "@/lib/session";
 
+const TASK_PAGE_SIZE = 200;
+
 export default function ProjectDetailsPage() {
   const router = useRouter();
   const params = useParams<{ projectId: string }>();
@@ -20,6 +22,7 @@ export default function ProjectDetailsPage() {
 
   const [session, setSessionState] = useState<SessionTokens | null>(() => getSession());
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [taskOffset, setTaskOffset] = useState(0);
   const [drafts, setDrafts] = useState<Record<number, string>>({});
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -43,7 +46,13 @@ export default function ProjectDetailsPage() {
       setBusy(true);
       setError(null);
       try {
-        const tasksData = await getProjectTasks(projectId, session, onSessionRefresh);
+        const tasksData = await getProjectTasks(
+          projectId,
+          session,
+          onSessionRefresh,
+          TASK_PAGE_SIZE,
+          taskOffset,
+        );
         setTasks(tasksData);
         const initialDrafts: Record<number, string> = {};
         for (const task of tasksData) {
@@ -72,7 +81,7 @@ export default function ProjectDetailsPage() {
     }
 
     void load();
-  }, [onSessionRefresh, projectId, router, session]);
+  }, [onSessionRefresh, projectId, router, session, taskOffset]);
 
   async function saveDescription(task: Task) {
     if (!session) {
@@ -160,6 +169,32 @@ export default function ProjectDetailsPage() {
               ))}
             </tbody>
           </table>
+        ) : null}
+
+        {!busy ? (
+          <div className="row" style={{ marginTop: "1rem", justifyContent: "space-between" }}>
+            <span className="muted">
+              {tasks.length ? `Tâches ${taskOffset + 1} à ${taskOffset + tasks.length}` : ""}
+            </span>
+            <div className="row">
+              <button
+                className="btn"
+                type="button"
+                disabled={taskOffset === 0}
+                onClick={() => setTaskOffset((current) => Math.max(0, current - TASK_PAGE_SIZE))}
+              >
+                Précédent
+              </button>
+              <button
+                className="btn"
+                type="button"
+                disabled={tasks.length < TASK_PAGE_SIZE}
+                onClick={() => setTaskOffset((current) => current + TASK_PAGE_SIZE)}
+              >
+                Suivant
+              </button>
+            </div>
+          </div>
         ) : null}
       </section>
     </>
