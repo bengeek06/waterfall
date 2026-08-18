@@ -1506,8 +1506,6 @@ components:
           type: string
           maxLength: 255
           description: Nom logique de la source ou du planning
-        sourceVersionHint:
-          $ref: '#/components/schemas/SourceVersion'
 
     ImportBatchResponse:
       type: object
@@ -1555,10 +1553,6 @@ components:
           type: boolean
           default: false
           description: Valide le fichier sans persister en base (optionnel)
-        failFast:
-          type: boolean
-          default: true
-          description: Arrete l'import a la premiere erreur bloquante
 
     ImportRunAcceptedResponse:
       type: object

@@ -136,7 +136,7 @@ def test_import_batch_minimal_flow() -> None:
 
         run_response: Response = client.post(
             f"/imports/v1/batches/{batch_id}/run",
-            json={"dryRun": True, "failFast": True},
+            json={"dryRun": True},
             headers=headers,
         )
         errors_response: Response = client.get(
@@ -164,7 +164,7 @@ def test_import_batch_minimal_flow() -> None:
 
         rerun_response: Response = client.post(
             f"/imports/v1/batches/{batch_id}/run",
-            json={"dryRun": True, "failFast": True},
+            json={"dryRun": True},
             headers=headers,
         )
         assert rerun_response.status_code == 409
@@ -211,7 +211,7 @@ def test_import_batch_real_examples_via_api_with_counters(xml_path: Path) -> Non
 
         run_response: Response = client.post(
             f"/imports/v1/batches/{batch_id}/run",
-            json={"dryRun": False, "failFast": True},
+            json={"dryRun": False},
             headers=headers,
         )
         assert run_response.status_code == 202

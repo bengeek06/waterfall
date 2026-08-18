@@ -296,7 +296,6 @@ def run_batch(
         payload["counters"] = {"tasks": task_count, "links": link_count}
         payload["errors"] = []
         payload["dry_run"] = run_request.dry_run
-        payload["fail_fast"] = run_request.fail_fast
         batch.log_json = json.dumps(payload)
         db.add(batch)
         db.commit()

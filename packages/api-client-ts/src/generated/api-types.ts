@@ -701,7 +701,6 @@ export interface components {
             importMode: components["schemas"]["ImportMode"];
             /** @description Nom logique de la source ou du planning */
             sourceName?: string;
-            sourceVersionHint?: components["schemas"]["SourceVersion"];
         };
         ImportBatchResponse: {
             id: number;
@@ -725,11 +724,6 @@ export interface components {
              * @default false
              */
             dryRun: boolean;
-            /**
-             * @description Arrete l'import a la premiere erreur bloquante
-             * @default true
-             */
-            failFast: boolean;
         };
         ImportRunAcceptedResponse: {
             batchId: number;

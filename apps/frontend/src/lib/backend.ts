@@ -486,7 +486,7 @@ export function runImportBatch(
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ dryRun: false, failFast: true }),
+      body: JSON.stringify({ dryRun: false }),
     },
     onSessionRefresh,
   );

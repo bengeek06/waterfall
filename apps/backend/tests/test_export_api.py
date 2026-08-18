@@ -69,7 +69,7 @@ def test_export_xml_contains_task_notes_from_description() -> None:
 
         run_response: Response = client.post(
             f"/imports/v1/batches/{batch_id}/run",
-            json={"dryRun": False, "failFast": True},
+            json={"dryRun": False},
             headers=headers,
         )
         assert run_response.status_code == 202
