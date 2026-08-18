@@ -92,6 +92,23 @@ def _validate_node_parent(db: Session, node_id: int, parent_id: int | None) -> N
         current_id = current_node.parent_id
 
 
+def _descendant_node_ids(db: Session, node_id: int) -> set[int]:
+    nodes = db.query(ResourceNode.id, ResourceNode.parent_id).all()
+    children_by_parent: dict[int | None, list[int]] = {}
+    for child_id, parent_id in nodes:
+        children_by_parent.setdefault(parent_id, []).append(child_id)
+
+    descendants = {node_id}
+    pending = [node_id]
+    while pending:
+        current_id = pending.pop()
+        for child_id in children_by_parent.get(current_id, []):
+            if child_id not in descendants:
+                descendants.add(child_id)
+                pending.append(child_id)
+    return descendants
+
+
 @router.get("/nodes", response_model=list[ResourceNodeRead])
 def list_nodes(
     db: Session = Depends(get_db),
@@ -151,12 +168,17 @@ def update_node(
 @router.get("/roles", response_model=list[ResourceRoleRead])
 def list_roles(
     node_id: int | None = Query(default=None, gt=0),
+    include_descendants: bool = Query(default=False),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_active_user),
 ) -> list[ResourceRole]:
     query = db.query(ResourceRole).filter(ResourceRole.is_active.is_(True))
     if node_id is not None:
-        query = query.filter(ResourceRole.node_id == node_id)
+        _get_or_404(db, ResourceNode, node_id, "Resource node")
+        if include_descendants:
+            query = query.filter(ResourceRole.node_id.in_(_descendant_node_ids(db, node_id)))
+        else:
+            query = query.filter(ResourceRole.node_id == node_id)
     return query.order_by(ResourceRole.code).all()
 
 

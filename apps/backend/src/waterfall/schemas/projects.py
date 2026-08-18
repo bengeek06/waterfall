@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 
 from pydantic import BaseModel, Field
 
@@ -41,3 +42,31 @@ class TaskRead(BaseModel):
 
 class TaskDescriptionUpdate(BaseModel):
     description: str | None = Field(default=None, max_length=10000)
+
+
+class TaskRoleAssignmentCreate(BaseModel):
+    role_id: int = Field(gt=0)
+    quantity: Decimal = Field(gt=0, max_digits=10, decimal_places=2)
+    hours: Decimal = Field(ge=0, max_digits=14, decimal_places=2)
+    comment: str | None = Field(default=None, max_length=10000)
+
+
+class TaskRoleAssignmentUpdate(BaseModel):
+    quantity: Decimal | None = Field(default=None, gt=0, max_digits=10, decimal_places=2)
+    hours: Decimal | None = Field(default=None, ge=0, max_digits=14, decimal_places=2)
+    comment: str | None = Field(default=None, max_length=10000)
+
+
+class TaskRoleAssignmentRead(BaseModel):
+    id: int
+    task_id: int
+    role_id: int
+    role_code: str
+    role_name: str
+    cost_category_id: int
+    cost_category_code: str
+    quantity: Decimal
+    hours: Decimal
+    comment: str | None
+    created_at: datetime
+    updated_at: datetime

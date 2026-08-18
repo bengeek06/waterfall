@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 from typing import Any, cast
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 from httpx import Response
@@ -7,10 +8,12 @@ from httpx import Response
 from waterfall.db.session import get_session_factory
 from waterfall.main import app
 from waterfall.models.ms_core import MsProject, MsTask
+from waterfall.models.resources import CostCategory, CostType, ResourceNode, ResourceRole
 from waterfall.models.wf_core import WfTaskEnrichment
 
 
-def _auth_headers(client: TestClient, email: str = "projects.tester@example.com") -> dict[str, str]:
+def _auth_headers(client: TestClient, email: str | None = None) -> dict[str, str]:
+    email = email or f"projects.tester.{uuid4().hex}@example.com"
     password = "SuperSecret123!"
 
     register_response: Response = client.post(
@@ -98,6 +101,50 @@ def _seed_projects_and_tasks(owner_id: int) -> tuple[int, int]:
         session.add_all([task1, task2])
         session.commit()
         return project.id, 2
+
+
+def _seed_roles() -> tuple[int, int]:
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        root = ResourceNode(code="DIRECTION", name="Direction")
+        child = ResourceNode(code="SERVICE", name="Service", parent_id=None)
+        session.add_all([root, child])
+        session.flush()
+        child.parent_id = root.id
+
+        labor_type = CostType(code="MO", name="Main d'oeuvre")
+        supply_type = CostType(code="FOURNITURE", name="Fourniture")
+        session.add_all([labor_type, supply_type])
+        session.flush()
+        labor_category = CostCategory(
+            cost_type_id=labor_type.id,
+            code="MO-DEV",
+            accounting_code="IDEX",
+            name="Développement",
+        )
+        supply_category = CostCategory(
+            cost_type_id=supply_type.id,
+            code="FO-CABLE",
+            accounting_code="ACHAT",
+            name="Câbles",
+        )
+        session.add_all([labor_category, supply_category])
+        session.flush()
+        labor_role = ResourceRole(
+            node_id=child.id,
+            cost_category_id=labor_category.id,
+            code="DEV",
+            name="Développeur",
+        )
+        supply_role = ResourceRole(
+            node_id=child.id,
+            cost_category_id=supply_category.id,
+            code="CABLE",
+            name="Câble",
+        )
+        session.add_all([labor_role, supply_role])
+        session.commit()
+        return labor_role.id, supply_role.id
 
 
 def test_get_projects_and_project_tasks() -> None:
@@ -302,3 +349,71 @@ def test_project_and_task_pagination() -> None:
         assert tasks[0]["uid"] == 1002
 
         assert first_project_id != second_project_id
+
+
+def test_task_role_assignment_lifecycle_and_labor_validation() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        labor_role_id, supply_role_id = _seed_roles()
+
+        rejected_response = client.post(
+            f"/projects/{project_id}/tasks/1001/role-assignments",
+            json={"role_id": supply_role_id, "quantity": "1", "hours": "7.4"},
+            headers=headers,
+        )
+        assert rejected_response.status_code == 400
+
+        create_response = client.post(
+            f"/projects/{project_id}/tasks/1001/role-assignments",
+            json={"role_id": labor_role_id, "quantity": "2", "hours": "7.4"},
+            headers=headers,
+        )
+        assert create_response.status_code == 201
+        assignment = cast(dict[str, Any], create_response.json())
+        assignment_id = cast(int, assignment["id"])
+        assert assignment["role_code"] == "DEV"
+        assert assignment["cost_category_code"] == "MO-DEV"
+
+        list_response = client.get(
+            f"/projects/{project_id}/tasks/1001/role-assignments",
+            headers=headers,
+        )
+        assert list_response.status_code == 200
+        assignments = cast(list[dict[str, Any]], list_response.json())
+        assert len(assignments) == 1
+
+        update_response = client.patch(
+            f"/projects/{project_id}/tasks/1001/role-assignments/{assignment_id}",
+            json={"hours": "14.8"},
+            headers=headers,
+        )
+        assert update_response.status_code == 200
+        assert update_response.json()["hours"] == "14.80"
+
+        delete_response = client.delete(
+            f"/projects/{project_id}/tasks/1001/role-assignments/{assignment_id}",
+            headers=headers,
+        )
+        assert delete_response.status_code == 204
+
+
+def test_role_filter_can_include_descendant_nodes() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        labor_role_id, _ = _seed_roles()
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            role = session.query(ResourceRole).filter(ResourceRole.id == labor_role_id).one()
+            root_id = session.query(ResourceNode).filter(ResourceNode.code == "DIRECTION").one().id
+
+        direct_response = client.get(f"/resources/roles?node_id={root_id}", headers=headers)
+        descendants_response = client.get(
+            f"/resources/roles?node_id={root_id}&include_descendants=true",
+            headers=headers,
+        )
+        assert direct_response.status_code == 200
+        assert descendants_response.status_code == 200
+        assert direct_response.json() == []
+        assert role.id in [item["id"] for item in descendants_response.json()]

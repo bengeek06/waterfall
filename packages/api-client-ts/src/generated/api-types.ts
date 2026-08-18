@@ -382,6 +382,42 @@ export interface paths {
         patch: operations["updateTaskDescription"];
         trace?: never;
     };
+    "/projects/{projectId}/tasks/{taskUid}/role-assignments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lister les affectations de main-d'œuvre d'une tâche */
+        get: operations["listTaskRoleAssignments"];
+        put?: never;
+        /** Affecter un rôle de main-d'œuvre à une tâche */
+        post: operations["createTaskRoleAssignment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{projectId}/tasks/{taskUid}/role-assignments/{assignmentId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Supprimer une affectation de rôle */
+        delete: operations["deleteTaskRoleAssignment"];
+        options?: never;
+        head?: never;
+        /** Modifier une affectation de rôle */
+        patch: operations["updateTaskRoleAssignment"];
+        trace?: never;
+    };
     "/projects/{projectId}/export.xml": {
         parameters: {
             query?: never;
@@ -835,6 +871,33 @@ export interface components {
         TaskDescriptionUpdate: {
             description?: string | null;
         };
+        TaskRoleAssignmentCreate: {
+            role_id: number;
+            quantity: number;
+            hours: number;
+            comment?: string | null;
+        };
+        TaskRoleAssignmentUpdate: {
+            quantity?: number;
+            hours?: number;
+            comment?: string | null;
+        };
+        TaskRoleAssignmentRead: {
+            id: number;
+            task_id: number;
+            role_id: number;
+            role_code: string;
+            role_name: string;
+            cost_category_id: number;
+            cost_category_code: string;
+            quantity: number;
+            hours: number;
+            comment?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
         ResourceNodeCreate: {
             code: string;
             name: string;
@@ -1055,6 +1118,8 @@ export interface components {
         ProjectId: number;
         /** @description UID fonctionnel de la tache dans un projet */
         TaskUid: number;
+        /** @description Identifiant technique de l'affectation de rôle */
+        AssignmentId: number;
         /** @description Identifiant technique du noeud de ressources */
         NodeId: number;
         /** @description Identifiant technique du role */
@@ -1793,6 +1858,126 @@ export interface operations {
             404: components["responses"]["TaskNotFound"];
         };
     };
+    listTaskRoleAssignments: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description UID fonctionnel de la tache dans un projet */
+                taskUid: components["parameters"]["TaskUid"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Affectations de rôles */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskRoleAssignmentRead"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["TaskNotFound"];
+        };
+    };
+    createTaskRoleAssignment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description UID fonctionnel de la tache dans un projet */
+                taskUid: components["parameters"]["TaskUid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaskRoleAssignmentCreate"];
+            };
+        };
+        responses: {
+            /** @description Affectation créée */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskRoleAssignmentRead"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["TaskNotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    deleteTaskRoleAssignment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description UID fonctionnel de la tache dans un projet */
+                taskUid: components["parameters"]["TaskUid"];
+                /** @description Identifiant technique de l'affectation de rôle */
+                assignmentId: components["parameters"]["AssignmentId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Affectation supprimée */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["TaskNotFound"];
+        };
+    };
+    updateTaskRoleAssignment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description UID fonctionnel de la tache dans un projet */
+                taskUid: components["parameters"]["TaskUid"];
+                /** @description Identifiant technique de l'affectation de rôle */
+                assignmentId: components["parameters"]["AssignmentId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaskRoleAssignmentUpdate"];
+            };
+        };
+        responses: {
+            /** @description Affectation modifiée */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskRoleAssignmentRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["TaskNotFound"];
+        };
+    };
     exportProjectXml: {
         parameters: {
             query?: never;
@@ -1927,6 +2112,7 @@ export interface operations {
         parameters: {
             query?: {
                 node_id?: number;
+                include_descendants?: boolean;
             };
             header?: never;
             path?: never;

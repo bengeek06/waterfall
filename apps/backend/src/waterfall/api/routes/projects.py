@@ -3,11 +3,13 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from waterfall.api.dependencies import get_current_active_user
 from waterfall.db.session import get_db
 from waterfall.models.ms_core import MsProject, MsTask, MsTaskLink
+from waterfall.models.resources import CostCategory, CostType, ResourceRole, TaskRoleAssignment
 from waterfall.models.user import User
 from waterfall.models.wf_core import WfChargeLine, WfExcelImport, WfImportBatch, WfTaskEnrichment
 from waterfall.schemas.projects import (
@@ -16,6 +18,9 @@ from waterfall.schemas.projects import (
     ProjectUpdate,
     TaskDescriptionUpdate,
     TaskRead,
+    TaskRoleAssignmentCreate,
+    TaskRoleAssignmentRead,
+    TaskRoleAssignmentUpdate,
 )
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -56,6 +61,39 @@ def _to_project_read(project: MsProject) -> ProjectRead:
         start_date=project.start_date,
         finish_date=project.finish_date,
         currency_code=project.currency_code,
+    )
+
+
+def _get_task_or_404(db: Session, project_id: int, task_uid: int) -> MsTask:
+    task = (
+        db.query(MsTask)
+        .filter(MsTask.project_id == project_id)
+        .filter(MsTask.uid == task_uid)
+        .first()
+    )
+    if task is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+    return task
+
+
+def _to_task_role_assignment_read(
+    assignment: TaskRoleAssignment,
+    role: ResourceRole,
+    category: CostCategory,
+) -> TaskRoleAssignmentRead:
+    return TaskRoleAssignmentRead(
+        id=assignment.id,
+        task_id=assignment.task_id,
+        role_id=role.id,
+        role_code=role.code,
+        role_name=role.name,
+        cost_category_id=category.id,
+        cost_category_code=category.code,
+        quantity=assignment.quantity,
+        hours=assignment.hours,
+        comment=assignment.comment,
+        created_at=assignment.created_at,
+        updated_at=assignment.updated_at,
     )
 
 
@@ -274,6 +312,143 @@ def update_task_description(
         is_milestone=task.is_milestone,
         description=payload.description,
     )
+
+
+@router.get(
+    "/{project_id}/tasks/{task_uid}/role-assignments",
+    response_model=list[TaskRoleAssignmentRead],
+)
+def list_task_role_assignments(
+    project_id: int,
+    task_uid: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> list[TaskRoleAssignmentRead]:
+    _get_project_or_404(db, project_id, current_user.id)
+    task = _get_task_or_404(db, project_id, task_uid)
+    rows = (
+        db.query(TaskRoleAssignment, ResourceRole, CostCategory)
+        .join(ResourceRole, TaskRoleAssignment.role_id == ResourceRole.id)
+        .join(CostCategory, ResourceRole.cost_category_id == CostCategory.id)
+        .filter(TaskRoleAssignment.task_id == task.id)
+        .order_by(ResourceRole.code)
+        .all()
+    )
+    return [
+        _to_task_role_assignment_read(assignment, role, category)
+        for assignment, role, category in rows
+    ]
+
+
+@router.post(
+    "/{project_id}/tasks/{task_uid}/role-assignments",
+    response_model=TaskRoleAssignmentRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_task_role_assignment(
+    project_id: int,
+    task_uid: int,
+    payload: TaskRoleAssignmentCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> TaskRoleAssignmentRead:
+    _get_project_or_404(db, project_id, current_user.id)
+    task = _get_task_or_404(db, project_id, task_uid)
+    row = (
+        db.query(ResourceRole, CostCategory, CostType)
+        .join(CostCategory, ResourceRole.cost_category_id == CostCategory.id)
+        .join(CostType, CostCategory.cost_type_id == CostType.id)
+        .filter(ResourceRole.id == payload.role_id)
+        .filter(ResourceRole.is_active.is_(True))
+        .filter(CostCategory.is_active.is_(True))
+        .filter(CostType.code == "MO")
+        .filter(CostType.is_active.is_(True))
+        .first()
+    )
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Role must belong to an active labor cost category",
+        )
+
+    role, category, _ = row
+    assignment = TaskRoleAssignment(task_id=task.id, **payload.model_dump())
+    db.add(assignment)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Role is already assigned to this task",
+        ) from exc
+    db.refresh(assignment)
+    return _to_task_role_assignment_read(assignment, role, category)
+
+
+@router.patch(
+    "/{project_id}/tasks/{task_uid}/role-assignments/{assignment_id}",
+    response_model=TaskRoleAssignmentRead,
+)
+def update_task_role_assignment(
+    project_id: int,
+    task_uid: int,
+    assignment_id: int,
+    payload: TaskRoleAssignmentUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> TaskRoleAssignmentRead:
+    _get_project_or_404(db, project_id, current_user.id)
+    task = _get_task_or_404(db, project_id, task_uid)
+    row = (
+        db.query(TaskRoleAssignment, ResourceRole, CostCategory)
+        .join(ResourceRole, TaskRoleAssignment.role_id == ResourceRole.id)
+        .join(CostCategory, ResourceRole.cost_category_id == CostCategory.id)
+        .filter(TaskRoleAssignment.id == assignment_id)
+        .filter(TaskRoleAssignment.task_id == task.id)
+        .first()
+    )
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Role assignment not found",
+        )
+
+    assignment, role, category = row
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(assignment, field, value)
+    db.add(assignment)
+    db.commit()
+    db.refresh(assignment)
+    return _to_task_role_assignment_read(assignment, role, category)
+
+
+@router.delete(
+    "/{project_id}/tasks/{task_uid}/role-assignments/{assignment_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_task_role_assignment(
+    project_id: int,
+    task_uid: int,
+    assignment_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> None:
+    _get_project_or_404(db, project_id, current_user.id)
+    task = _get_task_or_404(db, project_id, task_uid)
+    assignment = (
+        db.query(TaskRoleAssignment)
+        .filter(TaskRoleAssignment.id == assignment_id)
+        .filter(TaskRoleAssignment.task_id == task.id)
+        .first()
+    )
+    if assignment is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Role assignment not found",
+        )
+    db.delete(assignment)
+    db.commit()
 
 
 @router.get("/{project_id}/export.xml")

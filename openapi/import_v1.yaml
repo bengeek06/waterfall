@@ -670,6 +670,106 @@ paths:
         '404':
           $ref: '#/components/responses/TaskNotFound'
 
+  /projects/{projectId}/tasks/{taskUid}/role-assignments:
+    get:
+      tags: [projects]
+      summary: Lister les affectations de main-d'œuvre d'une tâche
+      operationId: listTaskRoleAssignments
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/TaskUid'
+      responses:
+        '200':
+          description: Affectations de rôles
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TaskRoleAssignmentRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/TaskNotFound'
+    post:
+      tags: [projects]
+      summary: Affecter un rôle de main-d'œuvre à une tâche
+      operationId: createTaskRoleAssignment
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/TaskUid'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskRoleAssignmentCreate'
+      responses:
+        '201':
+          description: Affectation créée
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskRoleAssignmentRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/TaskNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /projects/{projectId}/tasks/{taskUid}/role-assignments/{assignmentId}:
+    patch:
+      tags: [projects]
+      summary: Modifier une affectation de rôle
+      operationId: updateTaskRoleAssignment
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/TaskUid'
+        - $ref: '#/components/parameters/AssignmentId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskRoleAssignmentUpdate'
+      responses:
+        '200':
+          description: Affectation modifiée
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskRoleAssignmentRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/TaskNotFound'
+    delete:
+      tags: [projects]
+      summary: Supprimer une affectation de rôle
+      operationId: deleteTaskRoleAssignment
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/TaskUid'
+        - $ref: '#/components/parameters/AssignmentId'
+      responses:
+        '204':
+          description: Affectation supprimée
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/TaskNotFound'
+
   /projects/{projectId}/export.xml:
     get:
       tags: [projects]
@@ -801,6 +901,12 @@ paths:
           schema:
             type: integer
             minimum: 1
+        - name: include_descendants
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
       responses:
         '200':
           description: Liste des roles
@@ -1325,6 +1431,14 @@ components:
         type: integer
         minimum: 1
       description: UID fonctionnel de la tache dans un projet
+    AssignmentId:
+      name: assignmentId
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+      description: Identifiant technique de l'affectation de rôle
     NodeId:
       name: nodeId
       in: path
@@ -1827,6 +1941,85 @@ components:
           type: string
           nullable: true
           maxLength: 10000
+
+    TaskRoleAssignmentCreate:
+      type: object
+      required: [role_id, quantity, hours]
+      properties:
+        role_id:
+          type: integer
+          minimum: 1
+        quantity:
+          type: number
+          exclusiveMinimum: 0
+        hours:
+          type: number
+          minimum: 0
+        comment:
+          type: string
+          maxLength: 10000
+          nullable: true
+
+    TaskRoleAssignmentUpdate:
+      type: object
+      properties:
+        quantity:
+          type: number
+          exclusiveMinimum: 0
+        hours:
+          type: number
+          minimum: 0
+        comment:
+          type: string
+          maxLength: 10000
+          nullable: true
+
+    TaskRoleAssignmentRead:
+      type: object
+      required:
+        - id
+        - task_id
+        - role_id
+        - role_code
+        - role_name
+        - cost_category_id
+        - cost_category_code
+        - quantity
+        - hours
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: integer
+          minimum: 1
+        task_id:
+          type: integer
+          minimum: 1
+        role_id:
+          type: integer
+          minimum: 1
+        role_code:
+          type: string
+        role_name:
+          type: string
+        cost_category_id:
+          type: integer
+          minimum: 1
+        cost_category_code:
+          type: string
+        quantity:
+          type: number
+        hours:
+          type: number
+        comment:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
 
     ResourceNodeCreate:
       type: object

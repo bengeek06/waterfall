@@ -13,6 +13,7 @@ export type InflationRate = components["schemas"]["InflationRateRead"];
 export type RoleCapacity = components["schemas"]["RoleCapacityRead"];
 export type Project = components["schemas"]["ProjectRead"];
 export type Task = components["schemas"]["TaskRead"];
+export type TaskRoleAssignment = components["schemas"]["TaskRoleAssignmentRead"];
 export type ImportBatch = components["schemas"]["ImportBatchResponse"];
 export type ImportBatchStatus = components["schemas"]["ImportBatchStatusResponse"];
 export type TokenResponse = components["schemas"]["Token"];
@@ -235,8 +236,21 @@ export function createResourceNode(
   );
 }
 
-export function getResourceRoles(tokens: SessionTokens, onSessionRefresh: (next: SessionTokens) => void) {
-  return authRequest<ResourceRole[]>("/resources/roles", tokens, { method: "GET" }, onSessionRefresh);
+export function getResourceRoles(
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+  nodeId?: number,
+  includeDescendants = false,
+) {
+  const query = nodeId
+    ? `?node_id=${nodeId}&include_descendants=${includeDescendants}`
+    : "";
+  return authRequest<ResourceRole[]>(
+    `/resources/roles${query}`,
+    tokens,
+    { method: "GET" },
+    onSessionRefresh,
+  );
 }
 
 export function createResourceRole(
@@ -561,6 +575,66 @@ export function updateTaskDescription(
       },
       body: JSON.stringify({ description }),
     },
+    onSessionRefresh,
+  );
+}
+
+export function getTaskRoleAssignments(
+  projectId: number,
+  taskUid: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<TaskRoleAssignment[]>(
+    `/projects/${projectId}/tasks/${taskUid}/role-assignments`,
+    tokens,
+    { method: "GET" },
+    onSessionRefresh,
+  );
+}
+
+export function createTaskRoleAssignment(
+  projectId: number,
+  taskUid: number,
+  payload: { role_id: number; quantity: number; hours: number; comment?: string | null },
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<TaskRoleAssignment>(
+    `/projects/${projectId}/tasks/${taskUid}/role-assignments`,
+    tokens,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
+    onSessionRefresh,
+  );
+}
+
+export function updateTaskRoleAssignment(
+  projectId: number,
+  taskUid: number,
+  assignmentId: number,
+  payload: { quantity?: number; hours?: number; comment?: string | null },
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<TaskRoleAssignment>(
+    `/projects/${projectId}/tasks/${taskUid}/role-assignments/${assignmentId}`,
+    tokens,
+    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
+    onSessionRefresh,
+  );
+}
+
+export function deleteTaskRoleAssignment(
+  projectId: number,
+  taskUid: number,
+  assignmentId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<void>(
+    `/projects/${projectId}/tasks/${taskUid}/role-assignments/${assignmentId}`,
+    tokens,
+    { method: "DELETE" },
     onSessionRefresh,
   );
 }
