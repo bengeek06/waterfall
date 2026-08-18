@@ -9,7 +9,9 @@ import {
   CostCategory,
   createEstimateCostLine,
   createProjectEstimate,
+  createProjectTask,
   deleteEstimateCostLine,
+  deleteProjectTask,
   EstimateCostLine,
   getCostCategories,
   getCostTypes,
@@ -28,6 +30,7 @@ import {
   validateProjectEstimate,
 } from "@/lib/backend";
 import { clearSession, getSession, setSession, type SessionTokens } from "@/lib/session";
+import { ReadOnlyGantt } from "@/components/read-only-gantt";
 
 const TASK_PAGE_SIZE = 200;
 type ProjectTab = "planning" | "estimate" | "commitments" | "analytics";
@@ -58,6 +61,8 @@ export default function ProjectDetailsPage() {
   const [taskOffset, setTaskOffset] = useState(0);
   const [drafts, setDrafts] = useState<Record<number, string>>({});
   const [savingTaskUid, setSavingTaskUid] = useState<number | null>(null);
+  const [taskDraft, setTaskDraft] = useState({ name: "", parentTaskId: "", isMilestone: false });
+  const [taskBusy, setTaskBusy] = useState(false);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -384,6 +389,70 @@ export default function ProjectDetailsPage() {
     }
   }
 
+  async function addTask() {
+    if (!session) {
+      router.push("/login");
+      return;
+    }
+    if (!taskDraft.name.trim()) {
+      setError("Le nom de la tâche est obligatoire.");
+      return;
+    }
+
+    setTaskBusy(true);
+    setError(null);
+    try {
+      const created = await createProjectTask(
+        projectId,
+        {
+          name: taskDraft.name.trim(),
+          parent_task_id: taskDraft.parentTaskId ? Number(taskDraft.parentTaskId) : null,
+          is_milestone: taskDraft.isMilestone,
+        },
+        session,
+        onSessionRefresh,
+      );
+      setTasks((previous) => [...previous, created]);
+      setDrafts((previous) => ({ ...previous, [created.uid]: "" }));
+      setTaskDraft({ name: "", parentTaskId: "", isMilestone: false });
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      setError(cause instanceof ApiError ? cause.message : "Impossible d'ajouter la tâche.");
+    } finally {
+      setTaskBusy(false);
+    }
+  }
+
+  async function removeTask(task: Task) {
+    if (!session) {
+      return;
+    }
+    const confirmed = window.confirm(`Supprimer la tâche "${task.name}" ?`);
+    if (!confirmed) {
+      return;
+    }
+
+    setTaskBusy(true);
+    setError(null);
+    try {
+      await deleteProjectTask(projectId, task.uid, session, onSessionRefresh);
+      setTasks((previous) => previous.filter((item) => item.uid !== task.uid));
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      setError(cause instanceof ApiError ? cause.message : "Impossible de supprimer la tâche.");
+    } finally {
+      setTaskBusy(false);
+    }
+  }
+
   return (
     <>
       <section className="panel">
@@ -422,6 +491,48 @@ export default function ProjectDetailsPage() {
         {busy ? <p className="muted" role="status">Chargement...</p> : null}
         {error ? <p className="error" role="alert">{error}</p> : null}
 
+        {activeTab === "planning" ? (
+          <div className="row cost-line-form" style={{ marginBottom: "1rem" }}>
+            <div className="field">
+              <label htmlFor="task-name">Nom de la tâche</label>
+              <input
+                id="task-name"
+                value={taskDraft.name}
+                onChange={(event) => setTaskDraft((prev) => ({ ...prev, name: event.target.value }))}
+              />
+            </div>
+            <label className="estimate-select-label">
+              Tâche parente
+              <select
+                value={taskDraft.parentTaskId}
+                onChange={(event) =>
+                  setTaskDraft((prev) => ({ ...prev, parentTaskId: event.target.value }))
+                }
+              >
+                <option value="">Aucune (racine)</option>
+                {tasks.map((task) => (
+                  <option key={task.id} value={task.id}>
+                    {task.outline_number ?? task.uid} — {task.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="row" style={{ gap: "0.4rem" }}>
+              <input
+                type="checkbox"
+                checked={taskDraft.isMilestone}
+                onChange={(event) =>
+                  setTaskDraft((prev) => ({ ...prev, isMilestone: event.target.checked }))
+                }
+              />
+              Jalon
+            </label>
+            <button className="btn btn-primary" type="button" disabled={taskBusy} onClick={() => void addTask()}>
+              Ajouter la tâche
+            </button>
+          </div>
+        ) : null}
+
         {activeTab === "planning" && !busy && !tasks.length ? <p className="muted">Aucune tâche.</p> : null}
 
         {activeTab === "planning" && !busy && tasks.length ? (
@@ -431,6 +542,8 @@ export default function ProjectDetailsPage() {
               <tr>
                 <th scope="col">UID</th>
                 <th scope="col">Nom</th>
+                <th scope="col">Début</th>
+                <th scope="col">Fin</th>
                 <th scope="col">Avancement</th>
                 <th scope="col">Description</th>
                 <th scope="col">Action</th>
@@ -441,9 +554,14 @@ export default function ProjectDetailsPage() {
                 <tr key={task.uid}>
                   <td>{task.uid}</td>
                   <td>
-                    <strong>{task.name}</strong>
+                    <strong>
+                      {task.is_milestone ? "◆ " : ""}
+                      {task.name}
+                    </strong>
                     <div className="muted">{task.outline_number ?? "-"}</div>
                   </td>
+                  <td>{task.start_at ? new Date(task.start_at).toLocaleDateString("fr-FR") : "-"}</td>
+                  <td>{task.finish_at ? new Date(task.finish_at).toLocaleDateString("fr-FR") : "-"}</td>
                   <td>{task.percent_complete ?? 0}%</td>
                   <td style={{ minWidth: "280px" }}>
                     <textarea
@@ -455,13 +573,23 @@ export default function ProjectDetailsPage() {
                     />
                   </td>
                   <td>
-                    <button
-                      className="btn btn-primary"
-                      disabled={savingTaskUid === task.uid}
-                      onClick={() => void saveDescription(task)}
-                    >
-                      {savingTaskUid === task.uid ? "Sauvegarde..." : "Sauver"}
-                    </button>
+                    <div className="row">
+                      <button
+                        className="btn btn-primary"
+                        disabled={savingTaskUid === task.uid}
+                        onClick={() => void saveDescription(task)}
+                      >
+                        {savingTaskUid === task.uid ? "Sauvegarde..." : "Sauver"}
+                      </button>
+                      <button
+                        className="btn btn-danger"
+                        type="button"
+                        disabled={taskBusy}
+                        onClick={() => void removeTask(task)}
+                      >
+                        Supprimer
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -495,6 +623,8 @@ export default function ProjectDetailsPage() {
             </div>
           </div>
         ) : null}
+
+        {activeTab === "planning" && !busy && tasks.length ? <ReadOnlyGantt tasks={tasks} /> : null}
 
         {activeTab === "estimate" ? (
           <div className="tab-content">

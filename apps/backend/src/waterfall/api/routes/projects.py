@@ -34,6 +34,7 @@ from waterfall.schemas.projects import (
     ProjectRead,
     ProjectUpdate,
     SupplyStatus,
+    TaskCreate,
     TaskDescriptionUpdate,
     TaskRead,
     TaskRoleAssignmentCreate,
@@ -181,6 +182,24 @@ def _get_task_or_404(db: Session, project_id: int, task_uid: int) -> MsTask:
     if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
     return task
+
+
+def _to_task_read(task: MsTask, description: str | None) -> TaskRead:
+    return TaskRead(
+        id=task.id,
+        project_id=task.project_id,
+        uid=task.uid,
+        id_display=task.id_display,
+        name=task.name,
+        outline_number=task.outline_number,
+        outline_level=task.outline_level,
+        start_at=task.start_at,
+        finish_at=task.finish_at,
+        percent_complete=task.percent_complete,
+        is_summary=task.is_summary,
+        is_milestone=task.is_milestone,
+        description=description,
+    )
 
 
 def _to_task_role_assignment_read(
@@ -673,24 +692,73 @@ def list_project_tasks(
         )
         descriptions_by_uid = {item.task_uid: item.description for item in enrichments}
 
-    return [
-        TaskRead(
-            id=task.id,
-            project_id=task.project_id,
-            uid=task.uid,
-            id_display=task.id_display,
-            name=task.name,
-            outline_number=task.outline_number,
-            outline_level=task.outline_level,
-            start_at=task.start_at,
-            finish_at=task.finish_at,
-            percent_complete=task.percent_complete,
-            is_summary=task.is_summary,
-            is_milestone=task.is_milestone,
-            description=descriptions_by_uid.get(task.uid),
+    return [_to_task_read(task, descriptions_by_uid.get(task.uid)) for task in tasks]
+
+
+@router.post("/{project_id}/tasks", response_model=TaskRead, status_code=status.HTTP_201_CREATED)
+def create_project_task(
+    project_id: int,
+    payload: TaskCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> TaskRead:
+    """Add a planning task for devis purposes; dates stay driven by MS Project."""
+    _get_project_or_404(db, project_id, current_user.id)
+
+    parent_task: MsTask | None = None
+    if payload.parent_task_id is not None:
+        parent_task = (
+            db.query(MsTask)
+            .filter(MsTask.id == payload.parent_task_id)
+            .filter(MsTask.project_id == project_id)
+            .first()
         )
-        for task in tasks
-    ]
+        if parent_task is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Parent task does not belong to project",
+            )
+
+    max_uid = db.query(func.max(MsTask.uid)).filter(MsTask.project_id == project_id).scalar()
+    max_id_display = (
+        db.query(func.max(MsTask.id_display)).filter(MsTask.project_id == project_id).scalar()
+    )
+
+    if parent_task is not None:
+        outline_level = (parent_task.outline_level or 0) + 1
+        sibling_prefix = f"{parent_task.outline_number}."
+        sibling_count = (
+            db.query(MsTask)
+            .filter(MsTask.project_id == project_id)
+            .filter(MsTask.outline_number.like(f"{sibling_prefix}%"))
+            .filter(MsTask.outline_level == outline_level)
+            .count()
+        )
+        outline_number = f"{parent_task.outline_number}.{sibling_count + 1}"
+    else:
+        outline_level = 1
+        root_count = (
+            db.query(MsTask)
+            .filter(MsTask.project_id == project_id)
+            .filter(MsTask.outline_level == 1)
+            .count()
+        )
+        outline_number = str(root_count + 1)
+
+    task = MsTask(
+        project_id=project_id,
+        uid=(max_uid or 0) + 1,
+        id_display=(max_id_display or 0) + 1,
+        name=payload.name.strip(),
+        outline_number=outline_number,
+        outline_level=outline_level,
+        is_summary=False,
+        is_milestone=payload.is_milestone,
+    )
+    db.add(task)
+    db.commit()
+    db.refresh(task)
+    return _to_task_read(task, description=None)
 
 
 @router.patch("/{project_id}/tasks/{task_uid}", response_model=TaskRead)
@@ -734,21 +802,54 @@ def update_task_description(
 
     db.commit()
 
-    return TaskRead(
-        id=task.id,
-        project_id=task.project_id,
-        uid=task.uid,
-        id_display=task.id_display,
-        name=task.name,
-        outline_number=task.outline_number,
-        outline_level=task.outline_level,
-        start_at=task.start_at,
-        finish_at=task.finish_at,
-        percent_complete=task.percent_complete,
-        is_summary=task.is_summary,
-        is_milestone=task.is_milestone,
-        description=payload.description,
+    return _to_task_read(task, description=payload.description)
+
+
+@router.delete("/{project_id}/tasks/{task_uid}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_project_task(
+    project_id: int,
+    task_uid: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> None:
+    _get_project_or_404(db, project_id, current_user.id)
+    task = _get_task_or_404(db, project_id, task_uid)
+
+    has_children = (
+        db.query(MsTask)
+        .filter(MsTask.project_id == project_id)
+        .filter(MsTask.outline_number.like(f"{task.outline_number}.%"))
+        .filter(MsTask.id != task.id)
+        .first()
+        is not None
     )
+    if has_children:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Task has child tasks and cannot be deleted",
+        )
+
+    in_use = (
+        db.query(TaskRoleAssignment).filter(TaskRoleAssignment.task_id == task.id).first()
+        is not None
+        or db.query(EstimateCostLine).filter(EstimateCostLine.task_id == task.id).first()
+        is not None
+        or db.query(EstimateTaskRow).filter(EstimateTaskRow.task_id == task.id).first() is not None
+    )
+    if in_use:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Task is referenced by an estimate and cannot be deleted",
+        )
+
+    db.query(MsTaskLink).filter(MsTaskLink.project_id == project_id).filter(
+        (MsTaskLink.task_uid == task_uid) | (MsTaskLink.predecessor_uid == task_uid)
+    ).delete(synchronize_session=False)
+    db.query(WfTaskEnrichment).filter(WfTaskEnrichment.project_id == project_id).filter(
+        WfTaskEnrichment.task_uid == task_uid
+    ).delete(synchronize_session=False)
+    db.delete(task)
+    db.commit()
 
 
 @router.get(

@@ -639,6 +639,33 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/ProjectNotFound'
+    post:
+      tags: [projects]
+      summary: Ajouter une tache de planning au projet
+      operationId: createProjectTask
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskCreate'
+      responses:
+        '201':
+          description: Tache creee
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
 
   /projects/{projectId}/tasks/{taskUid}:
     patch:
@@ -669,6 +696,24 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/TaskNotFound'
+    delete:
+      tags: [projects]
+      summary: Supprimer une tache de planning sans enfant ni usage dans un devis
+      operationId: deleteProjectTask
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/TaskUid'
+      responses:
+        '204':
+          description: Tache supprimee
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/TaskNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
 
   /projects/{projectId}/tasks/{taskUid}/role-assignments:
     get:
@@ -2182,6 +2227,22 @@ components:
           type: string
           nullable: true
           maxLength: 10000
+
+    TaskCreate:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 512
+        parent_task_id:
+          type: integer
+          minimum: 1
+          nullable: true
+        is_milestone:
+          type: boolean
+          default: false
 
     TaskRoleAssignmentCreate:
       type: object

@@ -271,6 +271,56 @@ body {
   min-width: 140px;
 }
 
+.gantt {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+}
+
+.gantt-title {
+  margin-bottom: 0.8rem;
+  font-family: var(--font-title), sans-serif;
+  font-size: 1rem;
+  color: var(--ink-soft);
+}
+
+.gantt-rows {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.gantt-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 220px) 1fr;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.gantt-label {
+  overflow: hidden;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.gantt-track {
+  position: relative;
+  height: 14px;
+  border-radius: 999px;
+  background: #eef2f1;
+}
+
+.gantt-bar {
+  position: absolute;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.gantt-bar-milestone {
+  background: var(--warn);
+}
+
 .estimate-metric {
   display: grid;
   gap: 0.15rem;

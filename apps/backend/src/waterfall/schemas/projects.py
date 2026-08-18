@@ -45,6 +45,12 @@ class TaskDescriptionUpdate(BaseModel):
     description: str | None = Field(default=None, max_length=10000)
 
 
+class TaskCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=512)
+    parent_task_id: int | None = Field(default=None, gt=0)
+    is_milestone: bool = False
+
+
 class TaskRoleAssignmentCreate(BaseModel):
     role_id: int = Field(gt=0)
     quantity: Decimal = Field(gt=0, max_digits=10, decimal_places=2)

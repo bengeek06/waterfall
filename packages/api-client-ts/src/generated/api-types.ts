@@ -358,7 +358,8 @@ export interface paths {
         /** Lister les taches d'un projet */
         get: operations["listProjectTasks"];
         put?: never;
-        post?: never;
+        /** Ajouter une tache de planning au projet */
+        post: operations["createProjectTask"];
         delete?: never;
         options?: never;
         head?: never;
@@ -375,7 +376,8 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        delete?: never;
+        /** Supprimer une tache de planning sans enfant ni usage dans un devis */
+        delete: operations["deleteProjectTask"];
         options?: never;
         head?: never;
         /** Mettre a jour la description d'une tache */
@@ -975,6 +977,12 @@ export interface components {
         };
         TaskDescriptionUpdate: {
             description?: string | null;
+        };
+        TaskCreate: {
+            name: string;
+            parent_task_id?: number | null;
+            /** @default false */
+            is_milestone: boolean;
         };
         TaskRoleAssignmentCreate: {
             role_id: number;
@@ -2000,6 +2008,62 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["ProjectNotFound"];
+        };
+    };
+    createProjectTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaskCreate"];
+            };
+        };
+        responses: {
+            /** @description Tache creee */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskRead"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+        };
+    };
+    deleteProjectTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description UID fonctionnel de la tache dans un projet */
+                taskUid: components["parameters"]["TaskUid"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Tache supprimee */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["TaskNotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     updateTaskDescription: {

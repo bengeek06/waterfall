@@ -221,6 +221,171 @@ def test_patch_task_description_not_found() -> None:
         assert response.status_code == 404
 
 
+def test_create_root_task_appends_outline_number() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        response: Response = client.post(
+            f"/projects/{project_id}/tasks",
+            json={"name": "Lot additionnel", "is_milestone": True},
+            headers=headers,
+        )
+        assert response.status_code == 201
+        payload = cast(dict[str, Any], response.json())
+        assert payload["name"] == "Lot additionnel"
+        assert payload["outline_level"] == 1
+        assert payload["outline_number"] == "3"
+        assert payload["is_milestone"] is True
+        assert payload["is_summary"] is False
+
+
+def test_create_child_task_uses_parent_outline_number() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        tasks_response: Response = client.get(f"/projects/{project_id}/tasks", headers=headers)
+        tasks_payload = cast(list[dict[str, Any]], tasks_response.json())
+        parent_task_id = next(task["id"] for task in tasks_payload if task["uid"] == 1001)
+
+        first_child: Response = client.post(
+            f"/projects/{project_id}/tasks",
+            json={"name": "Sous-tache A", "parent_task_id": parent_task_id},
+            headers=headers,
+        )
+        assert first_child.status_code == 201
+        first_payload = cast(dict[str, Any], first_child.json())
+        assert first_payload["outline_level"] == 2
+        assert first_payload["outline_number"] == "1.1"
+
+        second_child: Response = client.post(
+            f"/projects/{project_id}/tasks",
+            json={"name": "Sous-tache B", "parent_task_id": parent_task_id},
+            headers=headers,
+        )
+        assert second_child.status_code == 201
+        second_payload = cast(dict[str, Any], second_child.json())
+        assert second_payload["outline_number"] == "1.2"
+
+
+def test_create_task_rejects_foreign_parent() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        other_project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        tasks_response: Response = client.get(
+            f"/projects/{other_project_id}/tasks", headers=headers
+        )
+        foreign_task_id = cast(list[dict[str, Any]], tasks_response.json())[0]["id"]
+
+        response: Response = client.post(
+            f"/projects/{project_id}/tasks",
+            json={"name": "Invalide", "parent_task_id": foreign_task_id},
+            headers=headers,
+        )
+        assert response.status_code == 400
+
+
+def test_delete_task_without_children_succeeds() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        response: Response = client.delete(f"/projects/{project_id}/tasks/1002", headers=headers)
+        assert response.status_code == 204
+
+        tasks_response: Response = client.get(f"/projects/{project_id}/tasks", headers=headers)
+        tasks_payload = cast(list[dict[str, Any]], tasks_response.json())
+        assert all(task["uid"] != 1002 for task in tasks_payload)
+
+
+def test_delete_task_with_children_conflicts() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        tasks_response: Response = client.get(f"/projects/{project_id}/tasks", headers=headers)
+        parent_task_id = next(
+            task["id"]
+            for task in cast(list[dict[str, Any]], tasks_response.json())
+            if task["uid"] == 1001
+        )
+        create_response: Response = client.post(
+            f"/projects/{project_id}/tasks",
+            json={"name": "Sous-tache", "parent_task_id": parent_task_id},
+            headers=headers,
+        )
+        assert create_response.status_code == 201
+
+        delete_response: Response = client.delete(
+            f"/projects/{project_id}/tasks/1001", headers=headers
+        )
+        assert delete_response.status_code == 409
+
+
+def test_delete_task_referenced_by_cost_line_conflicts() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            cost_type = CostType(code=f"MAT-{uuid4().hex[:8]}", name="Materiel")
+            session.add(cost_type)
+            session.flush()
+            cost_category = CostCategory(
+                cost_type_id=cost_type.id,
+                code=f"MATCAT-{uuid4().hex[:8]}",
+                name="Materiel",
+            )
+            session.add(cost_category)
+            session.commit()
+            cost_category_id = cost_category.id
+
+        tasks_response: Response = client.get(f"/projects/{project_id}/tasks", headers=headers)
+        task_id = next(
+            task["id"]
+            for task in cast(list[dict[str, Any]], tasks_response.json())
+            if task["uid"] == 1001
+        )
+
+        estimate_response: Response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        estimate_id = estimate_response.json()["id"]
+
+        cost_line_response: Response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "task_id": task_id,
+                "cost_category_id": cost_category_id,
+                "label": "Materiel dedie",
+                "quantity": 1,
+                "unit_cost": 100,
+            },
+            headers=headers,
+        )
+        assert cost_line_response.status_code == 201
+
+        delete_response: Response = client.delete(
+            f"/projects/{project_id}/tasks/1001", headers=headers
+        )
+        assert delete_response.status_code == 409
+
+
+def test_delete_task_not_found() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        response: Response = client.delete(f"/projects/{project_id}/tasks/999999", headers=headers)
+        assert response.status_code == 404
+
+
 def test_get_project_not_found() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)

@@ -725,6 +725,40 @@ export function updateTaskDescription(
   );
 }
 
+export type TaskCreate = components["schemas"]["TaskCreate"];
+
+export function createProjectTask(
+  projectId: number,
+  payload: TaskCreate,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<Task>(
+    `/projects/${projectId}/tasks`,
+    tokens,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    onSessionRefresh,
+  );
+}
+
+export function deleteProjectTask(
+  projectId: number,
+  taskUid: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<void>(
+    `/projects/${projectId}/tasks/${taskUid}`,
+    tokens,
+    { method: "DELETE" },
+    onSessionRefresh,
+  );
+}
+
 export function getTaskRoleAssignments(
   projectId: number,
   taskUid: number,
