@@ -146,3 +146,10 @@ class EstimateCostLineRead(BaseModel):
     unit_cost: Decimal
     purchase_cost: Decimal
     supply_status: SupplyStatus | None
+
+
+class EstimateAggregatesRead(BaseModel):
+    total_labor_cost: Decimal
+    total_purchase_cost: Decimal
+    total_unburdened_cost: Decimal
+    by_category: dict[str, Decimal]

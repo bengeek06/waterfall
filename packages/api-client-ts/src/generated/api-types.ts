@@ -525,6 +525,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{projectId}/estimates/{estimateId}/aggregates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lire les agrégats financiers d'un devis */
+        get: operations["getEstimateAggregates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{projectId}/estimates/{estimateId}/export.xlsx": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Exporter le devis au format Excel */
+        get: operations["exportEstimateExcel"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/projects/{projectId}/export.xml": {
         parameters: {
             query?: never;
@@ -1077,6 +1111,14 @@ export interface components {
             unit_cost: number;
             purchase_cost: number;
             supply_status?: components["schemas"]["SupplyStatus"] | null;
+        };
+        EstimateAggregatesRead: {
+            total_labor_cost: number;
+            total_purchase_cost: number;
+            total_unburdened_cost: number;
+            by_category: {
+                [key: string]: number;
+            };
         };
         ResourceNodeCreate: {
             code: string;
@@ -2476,6 +2518,60 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["ProjectNotFound"];
             409: components["responses"]["Conflict"];
+        };
+    };
+    getEstimateAggregates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de devis */
+                estimateId: components["parameters"]["EstimateId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Agrégats du devis */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EstimateAggregatesRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+        };
+    };
+    exportEstimateExcel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de devis */
+                estimateId: components["parameters"]["EstimateId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Classeur Excel du devis */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": string;
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
         };
     };
     exportProjectXml: {

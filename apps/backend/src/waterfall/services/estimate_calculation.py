@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import TypedDict
 
 from sqlalchemy.orm import Session
 
@@ -146,9 +147,14 @@ def _generate_labor_lines(
     return lines
 
 
-def calculate_estimate_aggregates(
-    db: Session, estimate_id: int
-) -> dict[str, Decimal | dict[str, Decimal]]:
+class EstimateAggregates(TypedDict):
+    total_labor_cost: Decimal
+    total_purchase_cost: Decimal
+    total_unburdened_cost: Decimal
+    by_category: dict[str, Decimal]
+
+
+def calculate_estimate_aggregates(db: Session, estimate_id: int) -> EstimateAggregates:
     """
     Calculate aggregate totals for an estimate by type, category, accounting code, etc.
 

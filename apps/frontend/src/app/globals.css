@@ -321,6 +321,10 @@ body {
   background: var(--warn);
 }
 
+.analytics-breakdown {
+  padding-top: 0.5rem;
+}
+
 .estimate-metric {
   display: grid;
   gap: 0.15rem;

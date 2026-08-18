@@ -12,9 +12,12 @@ import {
   createProjectTask,
   deleteEstimateCostLine,
   deleteProjectTask,
+  EstimateAggregates,
   EstimateCostLine,
+  exportEstimateExcel,
   getCostCategories,
   getCostTypes,
+  getEstimateAggregates,
   getProject,
   listEstimateCostLines,
   listEstimateTaskRows,
@@ -57,6 +60,8 @@ export default function ProjectDetailsPage() {
   const [editingLineId, setEditingLineId] = useState<number | null>(null);
   const [editingLineDraft, setEditingLineDraft] = useState({ label: "", quantity: "", unitCost: "" });
   const [estimateBusy, setEstimateBusy] = useState(false);
+  const [aggregates, setAggregates] = useState<EstimateAggregates | null>(null);
+  const [exportBusy, setExportBusy] = useState(false);
   const [activeTab, setActiveTab] = useState<ProjectTab>("planning");
   const [taskOffset, setTaskOffset] = useState(0);
   const [drafts, setDrafts] = useState<Record<number, string>>({});
@@ -183,8 +188,57 @@ export default function ProjectDetailsPage() {
     void loadCostCategories();
   }, [onSessionRefresh, session]);
 
+  useEffect(() => {
+    async function loadAggregates() {
+      if (!session || selectedEstimateId === null || activeTab !== "analytics") {
+        return;
+      }
+      try {
+        const data = await getEstimateAggregates(projectId, selectedEstimateId, session, onSessionRefresh);
+        setAggregates(data);
+      } catch (cause) {
+        if (cause instanceof SessionExpiredError) {
+          clearSession();
+          router.push("/login");
+          return;
+        }
+        setError(cause instanceof ApiError ? cause.message : "Impossible de charger les agrégats.");
+      }
+    }
+
+    void loadAggregates();
+  }, [activeTab, onSessionRefresh, projectId, router, selectedEstimateId, session]);
+
   const selectedEstimate = estimates.find((estimate) => estimate.id === selectedEstimateId) ?? null;
   const canEditEstimate = selectedEstimate?.status === "draft";
+
+  async function exportExcel() {
+    if (!session || selectedEstimateId === null) {
+      return;
+    }
+    setExportBusy(true);
+    setError(null);
+    try {
+      const blob = await exportEstimateExcel(projectId, selectedEstimateId, session, onSessionRefresh);
+      const objectUrl = window.URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = `devis-${project?.name ?? projectId}-v${selectedEstimate?.version_number ?? ""}.xlsx`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.URL.revokeObjectURL(objectUrl);
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      setError(cause instanceof ApiError ? cause.message : "Impossible d'exporter le devis.");
+    } finally {
+      setExportBusy(false);
+    }
+  }
 
   async function createDraftEstimate() {
     if (!session) {
@@ -656,6 +710,16 @@ export default function ProjectDetailsPage() {
                 <button className="btn btn-primary" type="button" onClick={() => void createDraftEstimate()}>
                   Nouveau brouillon
                 </button>
+                {estimates.length ? (
+                  <button
+                    className="btn"
+                    type="button"
+                    disabled={exportBusy}
+                    onClick={() => void exportExcel()}
+                  >
+                    {exportBusy ? "Export..." : "Export Excel"}
+                  </button>
+                ) : null}
                 {canEditEstimate ? (
                   <button
                     className="btn"
@@ -856,14 +920,64 @@ export default function ProjectDetailsPage() {
         {activeTab === "commitments" ? (
           <div className="tab-placeholder">
             <h2>Reste à engager</h2>
-            <p className="muted">La saisie des engagements sera ajoutée avec l’analyse financière du jalon 8.</p>
+            <p className="muted">
+              Le suivi budget de référence / engagé / reste à engager sera construit sur les versions
+              « forecast_remaining » du jalon 9.
+            </p>
           </div>
         ) : null}
 
         {activeTab === "analytics" ? (
-          <div className="tab-placeholder">
+          <div className="tab-content">
             <h2>Analytique</h2>
-            <p className="muted">Les agrégats et graphiques seront branchés sur les snapshots validés au jalon 8.</p>
+            {!selectedEstimateId ? <p className="muted">Sélectionne un devis dans l&apos;onglet Devis.</p> : null}
+            {selectedEstimateId && !aggregates ? <p className="muted">Chargement des agrégats...</p> : null}
+            {aggregates ? (
+              <div className="estimate-summary">
+                <div className="row">
+                  <div className="estimate-metric">
+                    <strong>{Number(aggregates.total_labor_cost).toFixed(2)}</strong>
+                    <span>Total MO</span>
+                  </div>
+                  <div className="estimate-metric">
+                    <strong>{Number(aggregates.total_purchase_cost).toFixed(2)}</strong>
+                    <span>Total Achat</span>
+                  </div>
+                  <div className="estimate-metric">
+                    <strong>{Number(aggregates.total_unburdened_cost).toFixed(2)}</strong>
+                    <span>PRU non chargé</span>
+                  </div>
+                </div>
+
+                <div className="analytics-breakdown">
+                  <h3 className="gantt-title">Répartition par catégorie</h3>
+                  {Object.keys(aggregates.by_category).length === 0 ? (
+                    <p className="muted">Aucun montant à répartir pour ce devis.</p>
+                  ) : (
+                    (() => {
+                      const entries = Object.entries(aggregates.by_category);
+                      const max = Math.max(...entries.map(([, amount]) => Number(amount)), 1);
+                      return (
+                        <div className="gantt-rows">
+                          {entries.map(([category, amount]) => (
+                            <div className="gantt-row" key={category}>
+                              <span className="gantt-label">{category}</span>
+                              <div className="gantt-track">
+                                <div
+                                  className="gantt-bar"
+                                  style={{ width: `${(Number(amount) / max) * 100}%` }}
+                                />
+                              </div>
+                              <span className="muted">{Number(amount).toFixed(2)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })()
+                  )}
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : null}
       </section>

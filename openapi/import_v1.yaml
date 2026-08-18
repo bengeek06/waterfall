@@ -1040,6 +1040,52 @@ paths:
           $ref: '#/components/responses/ProjectNotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+
+  /projects/{projectId}/estimates/{estimateId}/aggregates:
+    get:
+      tags: [projects]
+      summary: Lire les agrégats financiers d'un devis
+      operationId: getEstimateAggregates
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/EstimateId'
+      responses:
+        '200':
+          description: Agrégats du devis
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EstimateAggregatesRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+
+  /projects/{projectId}/estimates/{estimateId}/export.xlsx:
+    get:
+      tags: [projects]
+      summary: Exporter le devis au format Excel
+      operationId: exportEstimateExcel
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/EstimateId'
+      responses:
+        '200':
+          description: Classeur Excel du devis
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+
   /projects/{projectId}/export.xml:
     get:
       tags: [projects]
@@ -2527,6 +2573,25 @@ components:
           allOf:
             - $ref: '#/components/schemas/SupplyStatus'
           nullable: true
+
+    EstimateAggregatesRead:
+      type: object
+      required:
+        - total_labor_cost
+        - total_purchase_cost
+        - total_unburdened_cost
+        - by_category
+      properties:
+        total_labor_cost:
+          type: number
+        total_purchase_cost:
+          type: number
+        total_unburdened_cost:
+          type: number
+        by_category:
+          type: object
+          additionalProperties:
+            type: number
 
     ResourceNodeCreate:
       type: object

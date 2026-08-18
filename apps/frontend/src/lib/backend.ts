@@ -564,6 +564,36 @@ export function validateProjectEstimate(
   );
 }
 
+export type EstimateAggregates = components["schemas"]["EstimateAggregatesRead"];
+
+export function getEstimateAggregates(
+  projectId: number,
+  estimateId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<EstimateAggregates>(
+    `/projects/${projectId}/estimates/${estimateId}/aggregates`,
+    tokens,
+    { method: "GET" },
+    onSessionRefresh,
+  );
+}
+
+export function exportEstimateExcel(
+  projectId: number,
+  estimateId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authDownload(
+    `/projects/${projectId}/estimates/${estimateId}/export.xlsx`,
+    tokens,
+    { method: "GET" },
+    onSessionRefresh,
+  );
+}
+
 export function createProject(
   name: string,
   tokens: SessionTokens,

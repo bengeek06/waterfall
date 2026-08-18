@@ -24,6 +24,7 @@ from waterfall.models.resources import (
 from waterfall.models.user import User
 from waterfall.models.wf_core import WfChargeLine, WfExcelImport, WfImportBatch, WfTaskEnrichment
 from waterfall.schemas.projects import (
+    EstimateAggregatesRead,
     EstimateCostLineCreate,
     EstimateCostLineRead,
     EstimateCostLineUpdate,
@@ -41,7 +42,11 @@ from waterfall.schemas.projects import (
     TaskRoleAssignmentRead,
     TaskRoleAssignmentUpdate,
 )
-from waterfall.services import calculate_estimate_lines
+from waterfall.services import (
+    build_estimate_workbook,
+    calculate_estimate_aggregates,
+    calculate_estimate_lines,
+)
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 MSP_NS = "http://schemas.microsoft.com/project"
@@ -406,6 +411,40 @@ def validate_project_estimate(
     db.commit()
     db.refresh(estimate)
     return _to_project_estimate_read(estimate)
+
+
+@router.get(
+    "/{project_id}/estimates/{estimate_id}/aggregates",
+    response_model=EstimateAggregatesRead,
+)
+def get_estimate_aggregates(
+    project_id: int,
+    estimate_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> EstimateAggregatesRead:
+    _get_project_or_404(db, project_id, current_user.id)
+    _get_estimate_or_404(db, project_id, estimate_id)
+    aggregates = calculate_estimate_aggregates(db, estimate_id)
+    return EstimateAggregatesRead(**aggregates)
+
+
+@router.get("/{project_id}/estimates/{estimate_id}/export.xlsx")
+def export_estimate_excel(
+    project_id: int,
+    estimate_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> Response:
+    project = _get_project_or_404(db, project_id, current_user.id)
+    estimate = _get_estimate_or_404(db, project_id, estimate_id)
+    workbook_bytes = build_estimate_workbook(db, project, estimate)
+    filename = f"devis-{project.name}-v{estimate.version_number}.xlsx".replace(" ", "-")
+    return Response(
+        content=workbook_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get(

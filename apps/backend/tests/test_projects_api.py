@@ -386,6 +386,90 @@ def test_delete_task_not_found() -> None:
         assert response.status_code == 404
 
 
+def test_estimate_aggregates_on_draft_are_zero() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        estimate_response: Response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        estimate_id = estimate_response.json()["id"]
+
+        response: Response = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/aggregates", headers=headers
+        )
+        assert response.status_code == 200
+        payload = cast(dict[str, Any], response.json())
+        assert float(payload["total_labor_cost"]) == 0
+        assert float(payload["total_purchase_cost"]) == 0
+        assert payload["by_category"] == {}
+
+
+def test_estimate_aggregates_and_excel_export_after_validation() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            cost_type = CostType(code=f"MAT-{uuid4().hex[:8]}", name="Materiel")
+            session.add(cost_type)
+            session.flush()
+            cost_category = CostCategory(
+                cost_type_id=cost_type.id,
+                code=f"MATCAT-{uuid4().hex[:8]}",
+                name="Materiel",
+            )
+            session.add(cost_category)
+            session.commit()
+            cost_category_id = cost_category.id
+
+        estimate_response: Response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        estimate_id = estimate_response.json()["id"]
+
+        cost_line_response: Response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "cost_category_id": cost_category_id,
+                "label": "Ordinateurs",
+                "quantity": 2,
+                "unit_cost": 900,
+            },
+            headers=headers,
+        )
+        assert cost_line_response.status_code == 201
+
+        validate_response: Response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/validate", headers=headers
+        )
+        assert validate_response.status_code == 200
+
+        aggregates_response: Response = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/aggregates", headers=headers
+        )
+        assert aggregates_response.status_code == 200
+        aggregates_payload = cast(dict[str, Any], aggregates_response.json())
+        assert float(aggregates_payload["total_purchase_cost"]) == 1800.0
+        assert float(aggregates_payload["total_unburdened_cost"]) == 1800.0
+
+        excel_response: Response = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/export.xlsx", headers=headers
+        )
+        assert excel_response.status_code == 200
+        assert (
+            excel_response.headers["content-type"]
+            == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+        assert excel_response.content[:2] == b"PK"
+
+
 def test_get_project_not_found() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)
