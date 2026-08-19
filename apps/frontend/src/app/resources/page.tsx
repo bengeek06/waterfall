@@ -43,7 +43,7 @@ type SettingsTab = "resources" | "costs" | "users";
 export default function ResourcesPage() {
   const router = useRouter();
   const [session, setSessionState] = useState<SessionTokens | null>(() => getSession());
-  const [activeTab, setActiveTab] = useState<SettingsTab>("resources");
+  const [activeTab, setActiveTab] = useState<SettingsTab>("costs");
   const [nodes, setNodes] = useState<ResourceNode[]>([]);
   const [roles, setRoles] = useState<ResourceRole[]>([]);
   const [costTypes, setCostTypes] = useState<CostType[]>([]);
@@ -426,8 +426,8 @@ export default function ResourcesPage() {
       <nav className="project-tabs" aria-label="Sections des paramètres">
         {(
           [
-            ["resources", "Ressources"],
             ["costs", "Coûts"],
+            ["resources", "Ressources"],
             ["users", "Utilisateurs"],
           ] as const
         ).map(([tab, label]) => (
