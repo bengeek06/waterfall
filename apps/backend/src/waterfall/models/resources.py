@@ -1,10 +1,9 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
-    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -142,16 +141,13 @@ class InflationRate(Base):
 class RoleCapacity(Base):
     __tablename__ = "wf_role_capacity"
     __table_args__ = (
-        CheckConstraint("period_end > period_start", name="ck_wf_role_capacity_period"),
         CheckConstraint("person_count >= 0", name="ck_wf_role_capacity_person_count"),
         CheckConstraint("available_hours >= 0", name="ck_wf_role_capacity_hours"),
-        Index("idx_wf_role_capacity_role_period", "role_id", "period_start", "period_end"),
+        UniqueConstraint("role_id", name="uq_wf_role_capacity_role"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     role_id: Mapped[int] = mapped_column(ForeignKey("wf_resource_role.id"), nullable=False)
-    period_start: Mapped[date] = mapped_column(Date, nullable=False)
-    period_end: Mapped[date] = mapped_column(Date, nullable=False)
     person_count: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     available_hours: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     created_at: Mapped[datetime] = mapped_column(

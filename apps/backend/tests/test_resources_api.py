@@ -110,8 +110,6 @@ def test_admin_can_manage_resource_reference_data() -> None:
             "/resources/capacities",
             json={
                 "role_id": role_id,
-                "period_start": "2026-01-01",
-                "period_end": "2027-01-01",
                 "person_count": "2",
                 "available_hours": "3200",
             },
@@ -314,3 +312,29 @@ def test_resource_nodes_reject_indirect_cycles() -> None:
             headers=headers,
         )
         assert cycle_response.status_code == 400
+
+
+def test_resource_nodes_can_update_and_delete_leaf_nodes() -> None:
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        create_response = client.post(
+            "/resources/nodes",
+            json={"code": "OLD", "name": "Ancien"},
+            headers=headers,
+        )
+        node_id = create_response.json()["id"]
+
+        update_response = client.patch(
+            f"/resources/nodes/{node_id}",
+            json={"code": "NEW", "name": "Nouveau"},
+            headers=headers,
+        )
+        assert update_response.status_code == 200
+        assert update_response.json()["code"] == "NEW"
+
+        delete_response = client.delete(f"/resources/nodes/{node_id}", headers=headers)
+        assert delete_response.status_code == 204
+        listed_codes = [
+            node["code"] for node in client.get("/resources/nodes", headers=headers).json()
+        ]
+        assert "NEW" not in listed_codes

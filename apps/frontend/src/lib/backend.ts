@@ -241,7 +241,7 @@ export function createResourceNode(
 
 export function updateResourceNode(
   nodeId: number,
-  payload: { name?: string; parent_id?: number | null; is_active?: boolean },
+  payload: { code?: string; name?: string; parent_id?: number | null; is_active?: boolean },
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
 ) {
@@ -249,6 +249,19 @@ export function updateResourceNode(
     `/resources/nodes/${nodeId}`,
     tokens,
     { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
+    onSessionRefresh,
+  );
+}
+
+export function deleteResourceNode(
+  nodeId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<void>(
+    `/resources/nodes/${nodeId}`,
+    tokens,
+    { method: "DELETE" },
     onSessionRefresh,
   );
 }
@@ -432,8 +445,6 @@ export function getRoleCapacities(tokens: SessionTokens, onSessionRefresh: (next
 export function createRoleCapacity(
   payload: {
     role_id: number;
-    period_start: string;
-    period_end: string;
     person_count: string;
     available_hours: string;
   },
@@ -444,6 +455,20 @@ export function createRoleCapacity(
     "/resources/capacities",
     tokens,
     { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
+    onSessionRefresh,
+  );
+}
+
+export function updateRoleCapacity(
+  capacityId: number,
+  payload: { person_count?: string; available_hours?: string },
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<RoleCapacity>(
+    `/resources/capacities/${capacityId}`,
+    tokens,
+    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
     onSessionRefresh,
   );
 }

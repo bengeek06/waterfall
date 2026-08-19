@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy.exc import IntegrityError
@@ -95,8 +95,6 @@ def _seed_resource_graph() -> tuple[int, int, int]:
                 InflationRate(year=2026, coefficient=Decimal("1.00000000")),
                 RoleCapacity(
                     role_id=role.id,
-                    period_start=date(2026, 1, 1),
-                    period_end=date(2027, 1, 1),
                     person_count=Decimal("2.00"),
                     available_hours=Decimal("3200.00"),
                 ),

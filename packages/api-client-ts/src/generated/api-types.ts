@@ -605,7 +605,8 @@ export interface paths {
         get: operations["getResourceNode"];
         put?: never;
         post?: never;
-        delete?: never;
+        /** Desactiver un noeud de ressources */
+        delete: operations["deleteResourceNode"];
         options?: never;
         head?: never;
         /** Modifier ou desactiver un noeud */
@@ -1132,6 +1133,7 @@ export interface components {
             parent_id?: number | null;
         };
         ResourceNodeUpdate: {
+            code?: string;
             name?: string;
             parent_id?: number | null;
             is_active?: boolean;
@@ -1235,18 +1237,10 @@ export interface components {
         };
         RoleCapacityCreate: {
             role_id: number;
-            /** Format: date */
-            period_start: string;
-            /** Format: date */
-            period_end: string;
             person_count: number;
             available_hours: number;
         };
         RoleCapacityUpdate: {
-            /** Format: date */
-            period_start?: string;
-            /** Format: date */
-            period_end?: string;
             person_count?: number;
             available_hours?: number;
         };
@@ -2653,7 +2647,6 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["ResourceNotFound"];
-            409: components["responses"]["Conflict"];
         };
     };
     getResourceNode: {
@@ -2679,6 +2672,31 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["ResourceNotFound"];
+        };
+    };
+    deleteResourceNode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique du noeud de ressources */
+                nodeId: components["parameters"]["NodeId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Noeud desactive */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     updateResourceNode: {
@@ -3163,8 +3181,6 @@ export interface operations {
         parameters: {
             query?: {
                 role_id?: number;
-                period_start?: string;
-                period_end?: string;
             };
             header?: never;
             path?: never;

@@ -18,6 +18,7 @@ import {
   createCostType,
   createResourceNode,
   createResourceRole,
+  deleteResourceNode,
   createRoleCapacity,
   createUser,
   deleteUser,
@@ -36,6 +37,7 @@ import {
   updateCostCategory,
   updateCostRate,
   updateCostType,
+  updateRoleCapacity,
   updateResourceNode,
 } from "@/lib/backend";
 import { clearSession, getSession, setSession, type SessionTokens } from "@/lib/session";
@@ -80,11 +82,13 @@ export default function ResourcesPage() {
   const [session, setSessionState] = useState<SessionTokens | null>(() => getSession());
   const [activeTab, setActiveTab] = useState<SettingsTab>("costs");
   const [nodes, setNodes] = useState<ResourceNode[]>([]);
+  const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null);
   const [roles, setRoles] = useState<ResourceRole[]>([]);
   const [costTypes, setCostTypes] = useState<CostType[]>([]);
   const [categories, setCategories] = useState<CostCategory[]>([]);
   const [rates, setRates] = useState<CostRate[]>([]);
   const [capacities, setCapacities] = useState<RoleCapacity[]>([]);
+  const [capacityDrafts, setCapacityDrafts] = useState<Record<number, { personCount: string; availableHours: string }>>({});
   const [users, setUsers] = useState<AuthUserAdmin[]>([]);
   const [busy, setBusy] = useState(true);
   const [actionBusy, setActionBusy] = useState(false);
@@ -95,7 +99,7 @@ export default function ResourcesPage() {
   const [nodeName, setNodeName] = useState("");
   const [nodeParentId, setNodeParentId] = useState("");
   const [editingNodeId, setEditingNodeId] = useState<number | null>(null);
-  const [nodeDraft, setNodeDraft] = useState({ name: "", parentId: "" });
+  const [nodeDraft, setNodeDraft] = useState({ code: "", name: "", parentId: "" });
   const [categoryCode, setCategoryCode] = useState("");
   const [categoryName, setCategoryName] = useState("");
   const [categoryCostTypeId, setCategoryCostTypeId] = useState("");
@@ -111,11 +115,6 @@ export default function ResourcesPage() {
   const [inflationValue, setInflationValue] = useState("");
   const [displayCurrency, setDisplayCurrency] = useState("EUR");
   const [rateDrafts, setRateDrafts] = useState<Record<string, string>>({});
-  const [capacityRoleId, setCapacityRoleId] = useState("");
-  const [capacityStart, setCapacityStart] = useState("");
-  const [capacityEnd, setCapacityEnd] = useState("");
-  const [personCount, setPersonCount] = useState("");
-  const [availableHours, setAvailableHours] = useState("");
   const [createUserMode, setCreateUserMode] = useState(false);
   const [newEmail, setNewEmail] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -172,6 +171,8 @@ export default function ResourcesPage() {
           getUsers(session, onSessionRefresh),
         ]);
         setNodes(nodeData);
+        setSelectedNodeId((previous) => previous ?? nodeData[0]?.id ?? null);
+        setRoleNodeId((previous) => previous || (nodeData[0] ? String(nodeData[0].id) : ""));
         setRoles(roleData);
         setCostTypes(costTypeData);
         setCategories(categoryData);
@@ -180,6 +181,7 @@ export default function ResourcesPage() {
         setInflationValue(currentInflation ? ((Number(currentInflation.coefficient) - 1) * 100).toFixed(2) : "");
         setRateDrafts(Object.fromEntries(rateData.map((rate) => [`${rate.cost_category_id}:${rate.year}`, Number(rate.hourly_rate).toFixed(2)])));
         setCapacities(capacityData);
+        setCapacityDrafts(Object.fromEntries(capacityData.map((capacity) => [capacity.role_id, { personCount: String(capacity.person_count), availableHours: String(capacity.available_hours) }])))
         setUsers(usersData);
       } catch (cause) {
         if (cause instanceof SessionExpiredError) {
@@ -238,7 +240,7 @@ export default function ResourcesPage() {
 
   function startEditNode(node: ResourceNode) {
     setEditingNodeId(node.id);
-    setNodeDraft({ name: node.name, parentId: node.parent_id ? String(node.parent_id) : "" });
+    setNodeDraft({ code: node.code, name: node.name, parentId: node.parent_id ? String(node.parent_id) : "" });
   }
 
   async function saveNode(node: ResourceNode) {
@@ -246,13 +248,22 @@ export default function ResourcesPage() {
     await submitAction(async () => {
       const updated = await updateResourceNode(
         node.id,
-        { name: nodeDraft.name, parent_id: nodeDraft.parentId ? Number(nodeDraft.parentId) : null },
+        { code: nodeDraft.code, name: nodeDraft.name, parent_id: nodeDraft.parentId ? Number(nodeDraft.parentId) : null },
         session,
         onSessionRefresh,
       );
       setNodes((previous) => previous.map((item) => (item.id === updated.id ? updated : item)));
       setEditingNodeId(null);
     }, "Nœud modifié.");
+  }
+
+  async function removeNode(node: ResourceNode) {
+    if (!session || !globalThis.confirm(`Supprimer le nœud ${node.name} ?`)) return;
+    await submitAction(async () => {
+      await deleteResourceNode(node.id, session, onSessionRefresh);
+      setNodes((previous) => previous.filter((item) => item.id !== node.id));
+      setSelectedNodeId((previous) => previous === node.id ? null : previous);
+    }, "Nœud supprimé.");
   }
 
   async function addCategory(event: FormEvent<HTMLFormElement>) {
@@ -403,22 +414,15 @@ export default function ResourcesPage() {
     }, "Taux horaires enregistrés.");
   }
 
-  async function addCapacity(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function saveRoleCapacity(roleId: number) {
     if (!session) return;
+    const draft = capacityDrafts[roleId] ?? { personCount: "0.00", availableHours: "0.00" };
     await submitAction(async () => {
-      const created = await createRoleCapacity(
-        {
-          role_id: Number(capacityRoleId),
-          period_start: capacityStart,
-          period_end: capacityEnd,
-          person_count: personCount,
-          available_hours: availableHours,
-        },
-        session,
-        onSessionRefresh,
-      );
-      setCapacities((prev) => [...prev, created]);
+      const existing = capacities.find((capacity) => capacity.role_id === roleId);
+      const saved = existing
+        ? await updateRoleCapacity(existing.id, { person_count: draft.personCount, available_hours: draft.availableHours }, session, onSessionRefresh)
+        : await createRoleCapacity({ role_id: roleId, person_count: draft.personCount, available_hours: draft.availableHours }, session, onSessionRefresh);
+      setCapacities((previous) => existing ? previous.map((capacity) => capacity.id === saved.id ? saved : capacity) : [...previous, saved]);
     }, "Capacité enregistrée.");
   }
 
@@ -525,13 +529,19 @@ export default function ResourcesPage() {
     }
   }
 
-  const nodeNameById = new Map(nodes.map((node) => [node.id, node.name]));
   const costTypeNameById = new Map(costTypes.map((costType) => [costType.id, costType.name]));
   const categoryNameById = new Map(categories.map((category) => [category.id, category.name]));
   const organizationRows = useMemo(
     () => flattenOrganization(nodes, collapsedNodeIds),
     [nodes, collapsedNodeIds],
   );
+  const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? null;
+  const selectedRoles = selectedNodeId === null ? [] : roles.filter((role) => role.node_id === selectedNodeId);
+
+  function selectNode(nodeId: number) {
+    setSelectedNodeId(nodeId);
+    setRoleNodeId(String(nodeId));
+  }
 
   function toggleNodeCollapsed(nodeId: number) {
     setCollapsedNodeIds((previous) => {
@@ -541,7 +551,6 @@ export default function ResourcesPage() {
       return next;
     });
   }
-  const roleNameById = new Map(roles.map((role) => [role.id, role.name]));
 
   return (
     <>
@@ -588,11 +597,12 @@ export default function ResourcesPage() {
 
       {!busy && activeTab === "resources" ? (
         <>
+          <div className="master-detail">
           <section className="panel panel-stack">
             <h2>Organisation</h2>
             <form onSubmit={addNode}>
               <div className="table-scroll">
-                <table className="table">
+                <table className="table organization-table">
                   <thead><tr><th scope="col">Code</th><th scope="col">Nom</th><th scope="col">Actions</th></tr></thead>
                   <tbody>
                     <tr>
@@ -603,27 +613,27 @@ export default function ResourcesPage() {
                     {organizationRows.map((node) => {
                       const editing = editingNodeId === node.id;
                       return (
-                        <tr key={node.id}>
+                        <tr key={node.id} className={selectedNodeId === node.id ? "organization-row-selected" : ""} onClick={() => selectNode(node.id)}>
                           <td>
                             <div className="row" style={{ gap: "0.35rem", paddingLeft: `${node.depth * 1.25}rem` }}>
                               {node.hasChildren ? <button className="btn btn-icon" type="button" aria-label={collapsedNodeIds.has(node.id) ? `Déplier ${node.name}` : `Replier ${node.name}`} onClick={() => toggleNodeCollapsed(node.id)}>{collapsedNodeIds.has(node.id) ? "▸" : "▾"}</button> : <span style={{ width: "2rem" }} />}
-                              <strong>{node.code}</strong>
+                              {editing ? <input aria-label={`Code de ${node.name}`} value={nodeDraft.code} onChange={(event) => setNodeDraft((previous) => ({ ...previous, code: event.target.value }))} /> : <strong>{node.code}</strong>}
                             </div>
                           </td>
                           <td>
                             {editing ? <input aria-label={`Nom de ${node.code}`} value={nodeDraft.name} onChange={(event) => setNodeDraft((previous) => ({ ...previous, name: event.target.value }))} /> : <span>{node.name}</span>}
                           </td>
-                          <td style={{ textAlign: "right" }}>
+                          <td className="table-actions">
                             {editing ? (
                               <div className="row" style={{ justifyContent: "flex-end" }}>
                                 <select aria-label={`Parent de ${node.code}`} value={nodeDraft.parentId} onChange={(event) => setNodeDraft((previous) => ({ ...previous, parentId: event.target.value }))}>
                                   <option value="">Racine</option>
                                   {organizationRows.filter((candidate) => candidate.id !== node.id).map((candidate) => <option key={candidate.id} value={candidate.id}>{"  ".repeat(candidate.depth)}{candidate.code} - {candidate.name}</option>)}
                                 </select>
-                                <button className="btn btn-primary" type="button" disabled={actionBusy} onClick={() => void saveNode(node)}>Enregistrer</button>
-                                <button className="btn" type="button" onClick={() => setEditingNodeId(null)}>Annuler</button>
+                                <button className="btn btn-primary" type="button" disabled={actionBusy} onClick={(event) => { event.stopPropagation(); void saveNode(node); }}>Enregistrer</button>
+                                <button className="btn" type="button" onClick={(event) => { event.stopPropagation(); setEditingNodeId(null); }}>Annuler</button>
                               </div>
-                            ) : <div className="row" style={{ justifyContent: "flex-end" }}><button className="btn" type="button" onClick={() => startEditNode(node)}>Modifier</button></div>}
+                            ) : <div className="row" style={{ justifyContent: "flex-end" }}><button className="btn" type="button" onClick={(event) => { event.stopPropagation(); startEditNode(node); }}>Modifier</button><button className="btn btn-danger" type="button" disabled={actionBusy} onClick={(event) => { event.stopPropagation(); void removeNode(node); }}>Supprimer</button></div>}
                           </td>
                         </tr>
                       );
@@ -634,23 +644,20 @@ export default function ResourcesPage() {
             </form>
           </section>
 
-          <section className="grid-3">
-
-          <div className="panel">
-            <h2>Rôles</h2>
+          <div className="panel panel-stack">
+            <h2>Rôles {selectedNode ? `de ${selectedNode.name}` : ""}</h2>
             <form onSubmit={addRole}>
               <div className="field"><label htmlFor="role-code">Code</label><input id="role-code" value={roleCode} onChange={(event) => setRoleCode(event.target.value)} required /></div>
               <div className="field"><label htmlFor="role-name">Nom</label><input id="role-name" value={roleName} onChange={(event) => setRoleName(event.target.value)} required /></div>
-              <div className="field"><label htmlFor="role-node">Nœud</label><select id="role-node" value={roleNodeId} onChange={(event) => setRoleNodeId(event.target.value)} required><option value="">Sélectionner</option>{nodes.map((node) => <option key={node.id} value={node.id}>{node.code} - {node.name}</option>)}</select></div>
-              <div className="field"><label htmlFor="role-category">Code comptable</label><select id="role-category" value={roleCategoryId} onChange={(event) => setRoleCategoryId(event.target.value)} required><option value="">Sélectionner</option>{categories.filter((category) => category.is_active).map((category) => <option key={category.id} value={category.id}>{category.accounting_code} - {category.name}</option>)}</select></div>
+              <div className="field"><label htmlFor="role-node">Nœud</label><select id="role-node" value={roleNodeId} onChange={(event) => { setRoleNodeId(event.target.value); setSelectedNodeId(Number(event.target.value)); }} required><option value="">Sélectionner</option>{nodes.map((node) => <option key={node.id} value={node.id}>{node.code} - {node.name}</option>)}</select></div>
+              <div className="field"><label htmlFor="role-category">Code comptable</label><select id="role-category" value={roleCategoryId} onChange={(event) => setRoleCategoryId(event.target.value)} required><option value="">Sélectionner</option>{categories.filter((category) => category.is_active && costTypes.some((costType) => costType.id === category.cost_type_id && costType.kind === "labor")).map((category) => <option key={category.id} value={category.id}>{category.accounting_code} - {category.name}</option>)}</select></div>
               <button className="btn btn-primary" disabled={actionBusy} type="submit">Ajouter</button>
             </form>
-            <ul className="resource-list">{roles.map((role) => <li key={role.id}><strong>{role.code}</strong> {role.name}<span>{nodeNameById.get(role.node_id) ?? "?"} / {categoryNameById.get(role.cost_category_id) ?? "?"}</span></li>)}</ul>
+            <ul className="resource-list">{selectedRoles.map((role) => <li key={role.id}><strong>{role.code}</strong> {role.name}<span>{categoryNameById.get(role.cost_category_id) ?? "?"}</span></li>)}</ul>
           </div>
 
-          <div className="panel"><h2>Capacités</h2><form onSubmit={addCapacity}><div className="field"><label htmlFor="capacity-role">Rôle</label><select id="capacity-role" value={capacityRoleId} onChange={(event) => setCapacityRoleId(event.target.value)} required><option value="">Sélectionner</option>{roles.map((role) => <option key={role.id} value={role.id}>{role.code} - {role.name}</option>)}</select></div><div className="field"><label htmlFor="capacity-start">Début</label><input id="capacity-start" type="date" value={capacityStart} onChange={(event) => setCapacityStart(event.target.value)} required /></div><div className="field"><label htmlFor="capacity-end">Fin</label><input id="capacity-end" type="date" value={capacityEnd} onChange={(event) => setCapacityEnd(event.target.value)} required /></div><div className="field"><label htmlFor="person-count">Nombre de personnes</label><input id="person-count" type="number" min="0" step="0.01" value={personCount} onChange={(event) => setPersonCount(event.target.value)} required /></div><div className="field"><label htmlFor="available-hours">Heures disponibles</label><input id="available-hours" type="number" min="0" step="0.01" value={availableHours} onChange={(event) => setAvailableHours(event.target.value)} required /></div><button className="btn btn-primary" disabled={actionBusy} type="submit">Enregistrer</button></form></div>
-          <div className="panel"><h2>Capacités enregistrées</h2><ul className="resource-list">{capacities.map((capacity) => <li key={capacity.id}><strong>{roleNameById.get(capacity.role_id) ?? "?"}</strong><span>{capacity.period_start} {"->"} {capacity.period_end}</span><span>{capacity.person_count} personnes / {capacity.available_hours} h</span></li>)}</ul></div>
-          </section>
+          </div>
+          <div className="panel panel-stack"><h2>Capacités</h2><div className="table-scroll"><table className="table"><thead><tr><th scope="col">Rôle</th><th scope="col">Nombre de personnes</th><th scope="col">Heures disponibles</th><th scope="col">Actions</th></tr></thead><tbody>{roles.map((role) => { const draft = capacityDrafts[role.id] ?? { personCount: "0.00", availableHours: "0.00" }; return <tr key={role.id}><td><strong>{role.code}</strong> {role.name}</td><td><input type="number" min="0" step="0.01" value={draft.personCount} onChange={(event) => setCapacityDrafts((previous) => ({ ...previous, [role.id]: { ...draft, personCount: event.target.value } }))} /></td><td><input type="number" min="0" step="0.01" value={draft.availableHours} onChange={(event) => setCapacityDrafts((previous) => ({ ...previous, [role.id]: { ...draft, availableHours: event.target.value } }))} /></td><td className="table-actions"><button className="btn btn-primary" type="button" disabled={actionBusy} onClick={() => void saveRoleCapacity(role.id)}>Enregistrer</button></td></tr>; })}</tbody></table></div></div>
         </>
       ) : null}
 

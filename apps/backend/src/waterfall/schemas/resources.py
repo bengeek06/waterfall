@@ -1,9 +1,9 @@
-from datetime import date, datetime
+from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 EstimateKind = Literal["initial", "remaining"]
 EstimateStatus = Literal["draft", "validated", "superseded", "archived"]
@@ -35,10 +35,12 @@ class ResourceNodeCreate(ResourceNodeBase):
 
 
 class ResourceNodeUpdate(BaseModel):
+    code: str | None = Field(default=None, min_length=1, max_length=64)
     name: str | None = Field(default=None, min_length=1, max_length=255)
     parent_id: int | None = Field(default=None, gt=0)
     is_active: bool | None = None
 
+    _normalize_code = field_validator("code")(_required_text)
     _normalize_name = field_validator("name")(_required_text)
 
 
@@ -204,16 +206,8 @@ class InflationRateRead(InflationRateBase):
 
 
 class RoleCapacityBase(BaseModel):
-    period_start: date
-    period_end: date
     person_count: Decimal = Field(ge=0, max_digits=10, decimal_places=2)
     available_hours: Decimal = Field(ge=0, max_digits=14, decimal_places=2)
-
-    @model_validator(mode="after")
-    def validate_period(self) -> "RoleCapacityBase":
-        if self.period_end <= self.period_start:
-            raise ValueError("period_end must be after period_start")
-        return self
 
 
 class RoleCapacityCreate(RoleCapacityBase):
@@ -221,8 +215,6 @@ class RoleCapacityCreate(RoleCapacityBase):
 
 
 class RoleCapacityUpdate(BaseModel):
-    period_start: date | None = None
-    period_end: date | None = None
     person_count: Decimal | None = Field(default=None, ge=0, max_digits=10, decimal_places=2)
     available_hours: Decimal | None = Field(
         default=None,
@@ -230,16 +222,6 @@ class RoleCapacityUpdate(BaseModel):
         max_digits=14,
         decimal_places=2,
     )
-
-    @model_validator(mode="after")
-    def validate_period(self) -> "RoleCapacityUpdate":
-        if (
-            self.period_start is not None
-            and self.period_end is not None
-            and self.period_end <= self.period_start
-        ):
-            raise ValueError("period_end must be after period_start")
-        return self
 
 
 class RoleCapacityRead(RoleCapacityBase):

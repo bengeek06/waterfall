@@ -101,8 +101,8 @@ def upgrade() -> None:
         sa.Column("period_end", sa.Date(), nullable=False),
         sa.Column("person_count", sa.Numeric(precision=10, scale=2), nullable=False),
         sa.Column("available_hours", sa.Numeric(precision=14, scale=2), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(), nullable=False),
         sa.CheckConstraint("period_end > period_start", name="ck_wf_role_capacity_period"),
         sa.CheckConstraint("person_count >= 0", name="ck_wf_role_capacity_person_count"),
         sa.CheckConstraint("available_hours >= 0", name="ck_wf_role_capacity_hours"),
@@ -114,7 +114,6 @@ def upgrade() -> None:
         "wf_role_capacity",
         ["role_id", "period_start", "period_end"],
     )
-
     op.create_table(
         "wf_task_role_assignment",
         sa.Column("id", sa.Integer(), nullable=False),

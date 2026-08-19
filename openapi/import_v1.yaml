@@ -1150,9 +1150,6 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/ResourceNotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-
   /resources/nodes/{nodeId}:
     get:
       tags: [resources]
@@ -1173,6 +1170,25 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/ResourceNotFound'
+    delete:
+      tags: [resources]
+      summary: Desactiver un noeud de ressources
+      operationId: deleteResourceNode
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/NodeId'
+      responses:
+        '204':
+          description: Noeud desactive
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
     patch:
       tags: [resources]
       summary: Modifier ou desactiver un noeud
@@ -1649,18 +1665,6 @@ paths:
           schema:
             type: integer
             minimum: 1
-        - name: period_start
-          in: query
-          required: false
-          schema:
-            type: string
-            format: date
-        - name: period_end
-          in: query
-          required: false
-          schema:
-            type: string
-            format: date
       responses:
         '200':
           description: Capacites par periode
@@ -2648,6 +2652,10 @@ components:
     ResourceNodeUpdate:
       type: object
       properties:
+        code:
+          type: string
+          minLength: 1
+          maxLength: 64
         name:
           type: string
           minLength: 1
@@ -2913,17 +2921,11 @@ components:
 
     RoleCapacityCreate:
       type: object
-      required: [role_id, period_start, period_end, person_count, available_hours]
+      required: [role_id, person_count, available_hours]
       properties:
         role_id:
           type: integer
           minimum: 1
-        period_start:
-          type: string
-          format: date
-        period_end:
-          type: string
-          format: date
         person_count:
           type: number
           minimum: 0
@@ -2934,12 +2936,6 @@ components:
     RoleCapacityUpdate:
       type: object
       properties:
-        period_start:
-          type: string
-          format: date
-        period_end:
-          type: string
-          format: date
         person_count:
           type: number
           minimum: 0

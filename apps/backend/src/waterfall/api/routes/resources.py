@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import date
 from typing import TypeVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -191,6 +190,24 @@ def update_node(
     _commit(db, "Resource node update conflicts with existing data")
     db.refresh(node)
     return node
+
+
+@router.delete("/nodes/{node_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_node(
+    node_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_admin_user),
+) -> None:
+    node = _get_or_404(db, ResourceNode, node_id, "Resource node")
+    has_children = db.query(ResourceNode.id).filter(ResourceNode.parent_id == node_id).first()
+    if has_children is not None:
+        raise _conflict("Resource node has child nodes and cannot be deleted")
+    has_roles = db.query(ResourceRole.id).filter(ResourceRole.node_id == node_id).first()
+    if has_roles is not None:
+        raise _conflict("Resource node has roles and cannot be deleted")
+    node.is_active = False
+    db.add(node)
+    _commit(db, "Resource node deletion conflicts with existing data")
 
 
 @router.get("/roles", response_model=list[ResourceRoleRead])
@@ -436,19 +453,13 @@ def put_inflation_rate(
 @router.get("/capacities", response_model=list[RoleCapacityRead])
 def list_capacities(
     role_id: int | None = Query(default=None, gt=0),
-    period_start: date | None = None,
-    period_end: date | None = None,
     db: Session = Depends(get_db),
     _: User = Depends(get_current_active_user),
 ) -> list[RoleCapacity]:
     query = db.query(RoleCapacity)
     if role_id is not None:
         query = query.filter(RoleCapacity.role_id == role_id)
-    if period_start is not None:
-        query = query.filter(RoleCapacity.period_end > period_start)
-    if period_end is not None:
-        query = query.filter(RoleCapacity.period_start < period_end)
-    return query.order_by(RoleCapacity.period_start, RoleCapacity.role_id).all()
+    return query.order_by(RoleCapacity.role_id).all()
 
 
 @router.post("/capacities", response_model=RoleCapacityRead, status_code=status.HTTP_201_CREATED)
@@ -458,8 +469,13 @@ def create_capacity(
     _: User = Depends(get_current_admin_user),
 ) -> RoleCapacity:
     _get_or_404(db, ResourceRole, payload.role_id, "Resource role")
-    capacity = RoleCapacity(**payload.model_dump())
-    db.add(capacity)
+    capacity = db.query(RoleCapacity).filter(RoleCapacity.role_id == payload.role_id).one_or_none()
+    if capacity is None:
+        capacity = RoleCapacity(**payload.model_dump())
+        db.add(capacity)
+    else:
+        capacity.person_count = payload.person_count
+        capacity.available_hours = payload.available_hours
     _commit(db, "Role capacity conflicts with existing data")
     db.refresh(capacity)
     return capacity
@@ -474,13 +490,6 @@ def update_capacity(
 ) -> RoleCapacity:
     capacity = _get_or_404(db, RoleCapacity, capacity_id, "Role capacity")
     values = payload.model_dump(exclude_unset=True)
-    period_start = values.get("period_start", capacity.period_start)
-    period_end = values.get("period_end", capacity.period_end)
-    if period_end <= period_start:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="period_end must be after period_start",
-        )
     for field, value in values.items():
         setattr(capacity, field, value)
     db.add(capacity)
