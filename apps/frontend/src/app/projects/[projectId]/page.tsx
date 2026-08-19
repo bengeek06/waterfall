@@ -40,11 +40,10 @@ import {
 } from "@/lib/backend";
 import { clearSession, getSession, setSession, type SessionTokens } from "@/lib/session";
 import { ReadOnlyGantt } from "@/components/read-only-gantt";
+import { ProjectTabs, type ProjectTab } from "@/components/project-tabs";
 
 const TASK_PAGE_SIZE = 200;
 const MAX_IMPORT_FILE_SIZE = 25 * 1024 * 1024;
-type ProjectTab = "planning" | "estimate" | "commitments" | "analytics";
-
 export default function ProjectDetailsPage() {
   const router = useRouter();
   const params = useParams<{ projectId: string }>();
@@ -191,7 +190,7 @@ export default function ProjectDetailsPage() {
           getCostCategories(session, onSessionRefresh),
           getCostTypes(session, onSessionRefresh),
         ]);
-        const laborTypeIds = new Set(types.filter((type) => type.code === "MO").map((type) => type.id));
+        const laborTypeIds = new Set(types.filter((type) => type.kind === "labor").map((type) => type.id));
         setCostCategories(categories.filter((category) => !laborTypeIds.has(category.cost_type_id)));
       } catch {
         // Non-blocking: the add-line form simply stays disabled without categories.
@@ -702,25 +701,7 @@ export default function ProjectDetailsPage() {
         </div>
       </section>
 
-      <nav className="project-tabs" aria-label="Sections du projet">
-        {([
-          ["planning", "Planning"],
-          ["estimate", "Devis"],
-          ["commitments", "Reste à engager"],
-          ["analytics", "Analytique"],
-        ] as const).map(([tab, label]) => (
-          <button
-            key={tab}
-            className={`project-tab ${activeTab === tab ? "project-tab-active" : ""}`}
-            type="button"
-            aria-selected={activeTab === tab}
-            role="tab"
-            onClick={() => setActiveTab(tab)}
-          >
-            {label}
-          </button>
-        ))}
-      </nav>
+      <ProjectTabs activeTab={activeTab} onChange={setActiveTab} />
 
       <section className="panel">
         {busy ? <p className="muted" role="status">Chargement...</p> : null}

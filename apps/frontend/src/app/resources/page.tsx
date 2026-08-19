@@ -41,38 +41,28 @@ import {
   updateResourceNode,
 } from "@/lib/backend";
 import { clearSession, getSession, setSession, type SessionTokens } from "@/lib/session";
+import { SettingsTabs, type SettingsTab } from "@/components/settings-tabs";
+import { UsersTab } from "@/components/users-tab";
+import { OrganizationTree, type OrganizationRow } from "@/components/organization-tree";
+import { RolesPanel } from "@/components/roles-panel";
+import { CapacityTable } from "@/components/capacity-table";
+import { CostTypesTable } from "@/components/cost-types-table";
+import { CostCategoriesTable } from "@/components/cost-categories-table";
+import { ValuationPanel } from "@/components/valuation-panel";
 
 type Notice = { kind: "error" | "success"; message: string } | null;
-type SettingsTab = "resources" | "costs" | "users";
-
 const costTypeKindLabels = {
   labor: "Main d'œuvre",
   supply: "Fourniture",
   other: "Autres",
 } as const;
 
-type OrganizationRow = ResourceNode & { depth: number; hasChildren: boolean };
-
 function flattenOrganization(nodes: ResourceNode[], collapsedIds: Set<number>): OrganizationRow[] {
   const childrenByParent = new Map<number | null, ResourceNode[]>();
-  for (const node of nodes) {
-    const parentId = node.parent_id ?? null;
-    const siblings = childrenByParent.get(parentId) ?? [];
-    siblings.push(node);
-    childrenByParent.set(parentId, siblings);
-  }
-  for (const siblings of childrenByParent.values()) {
-    siblings.sort((left, right) => left.code.localeCompare(right.code));
-  }
-
+  for (const node of nodes) { const parentId = node.parent_id ?? null; const siblings = childrenByParent.get(parentId) ?? []; siblings.push(node); childrenByParent.set(parentId, siblings); }
+  for (const siblings of childrenByParent.values()) siblings.sort((left, right) => left.code.localeCompare(right.code));
   const rows: OrganizationRow[] = [];
-  function visit(parentId: number | null, depth: number) {
-    for (const node of childrenByParent.get(parentId) ?? []) {
-      const hasChildren = (childrenByParent.get(node.id)?.length ?? 0) > 0;
-      rows.push({ ...node, depth, hasChildren });
-      if (hasChildren && !collapsedIds.has(node.id)) visit(node.id, depth + 1);
-    }
-  }
+  function visit(parentId: number | null, depth: number) { for (const node of childrenByParent.get(parentId) ?? []) { const hasChildren = (childrenByParent.get(node.id)?.length ?? 0) > 0; rows.push({ ...node, depth, hasChildren }); if (hasChildren && !collapsedIds.has(node.id)) visit(node.id, depth + 1); } }
   visit(null, 0);
   return rows;
 }
@@ -529,12 +519,8 @@ export default function ResourcesPage() {
     }
   }
 
-  const costTypeNameById = new Map(costTypes.map((costType) => [costType.id, costType.name]));
   const categoryNameById = new Map(categories.map((category) => [category.id, category.name]));
-  const organizationRows = useMemo(
-    () => flattenOrganization(nodes, collapsedNodeIds),
-    [nodes, collapsedNodeIds],
-  );
+  const organizationRows = useMemo(() => flattenOrganization(nodes, collapsedNodeIds), [nodes, collapsedNodeIds]);
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? null;
   const selectedRoles = selectedNodeId === null ? [] : roles.filter((role) => role.node_id === selectedNodeId);
 
@@ -563,26 +549,7 @@ export default function ResourcesPage() {
         </div>
       </section>
 
-      <nav className="project-tabs" aria-label="Sections des paramètres">
-        {(
-          [
-            ["costs", "Coûts"],
-            ["resources", "Ressources"],
-            ["users", "Utilisateurs"],
-          ] as const
-        ).map(([tab, label]) => (
-          <button
-            key={tab}
-            className={`project-tab ${activeTab === tab ? "project-tab-active" : ""}`}
-            type="button"
-            aria-selected={activeTab === tab}
-            role="tab"
-            onClick={() => setActiveTab(tab)}
-          >
-            {label}
-          </button>
-        ))}
-      </nav>
+      <SettingsTabs activeTab={activeTab} onChange={setActiveTab} />
 
       {notice ? (
         <p className={notice.kind === "error" ? "error" : "success"} role={notice.kind === "error" ? "alert" : "status"}>
@@ -598,260 +565,45 @@ export default function ResourcesPage() {
       {!busy && activeTab === "resources" ? (
         <>
           <div className="master-detail">
-          <section className="panel panel-stack">
-            <h2>Organisation</h2>
-            <form onSubmit={addNode}>
-              <div className="table-scroll">
-                <table className="table organization-table">
-                  <thead><tr><th scope="col">Code</th><th scope="col">Nom</th><th scope="col">Actions</th></tr></thead>
-                  <tbody>
-                    <tr>
-                      <td><input id="node-code" aria-label="Code du nouveau nœud" value={nodeCode} onChange={(event) => setNodeCode(event.target.value)} required /></td>
-                      <td><input id="node-name" aria-label="Nom du nouveau nœud" value={nodeName} onChange={(event) => setNodeName(event.target.value)} required /></td>
-                      <td><div className="row"><select id="node-parent" aria-label="Parent du nouveau nœud" value={nodeParentId} onChange={(event) => setNodeParentId(event.target.value)}><option value="">Racine</option>{organizationRows.map((node) => <option key={node.id} value={node.id}>{"  ".repeat(node.depth)}{node.code} - {node.name}</option>)}</select><button className="btn btn-primary" disabled={actionBusy} type="submit">Ajouter</button></div></td>
-                    </tr>
-                    {organizationRows.map((node) => {
-                      const editing = editingNodeId === node.id;
-                      return (
-                        <tr key={node.id} className={selectedNodeId === node.id ? "organization-row-selected" : ""} onClick={() => selectNode(node.id)}>
-                          <td>
-                            <div className="row" style={{ gap: "0.35rem", paddingLeft: `${node.depth * 1.25}rem` }}>
-                              {node.hasChildren ? <button className="btn btn-icon" type="button" aria-label={collapsedNodeIds.has(node.id) ? `Déplier ${node.name}` : `Replier ${node.name}`} onClick={() => toggleNodeCollapsed(node.id)}>{collapsedNodeIds.has(node.id) ? "▸" : "▾"}</button> : <span style={{ width: "2rem" }} />}
-                              {editing ? <input aria-label={`Code de ${node.name}`} value={nodeDraft.code} onChange={(event) => setNodeDraft((previous) => ({ ...previous, code: event.target.value }))} /> : <strong>{node.code}</strong>}
-                            </div>
-                          </td>
-                          <td>
-                            {editing ? <input aria-label={`Nom de ${node.code}`} value={nodeDraft.name} onChange={(event) => setNodeDraft((previous) => ({ ...previous, name: event.target.value }))} /> : <span>{node.name}</span>}
-                          </td>
-                          <td className="table-actions">
-                            {editing ? (
-                              <div className="row" style={{ justifyContent: "flex-end" }}>
-                                <select aria-label={`Parent de ${node.code}`} value={nodeDraft.parentId} onChange={(event) => setNodeDraft((previous) => ({ ...previous, parentId: event.target.value }))}>
-                                  <option value="">Racine</option>
-                                  {organizationRows.filter((candidate) => candidate.id !== node.id).map((candidate) => <option key={candidate.id} value={candidate.id}>{"  ".repeat(candidate.depth)}{candidate.code} - {candidate.name}</option>)}
-                                </select>
-                                <button className="btn btn-primary" type="button" disabled={actionBusy} onClick={(event) => { event.stopPropagation(); void saveNode(node); }}>Enregistrer</button>
-                                <button className="btn" type="button" onClick={(event) => { event.stopPropagation(); setEditingNodeId(null); }}>Annuler</button>
-                              </div>
-                            ) : <div className="row" style={{ justifyContent: "flex-end" }}><button className="btn" type="button" onClick={(event) => { event.stopPropagation(); startEditNode(node); }}>Modifier</button><button className="btn btn-danger" type="button" disabled={actionBusy} onClick={(event) => { event.stopPropagation(); void removeNode(node); }}>Supprimer</button></div>}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </form>
-          </section>
+          <OrganizationTree
+            rows={organizationRows}
+            selectedNodeId={selectedNodeId}
+            collapsedNodeIds={collapsedNodeIds}
+            editingNodeId={editingNodeId}
+            nodeCode={nodeCode}
+            nodeName={nodeName}
+            nodeParentId={nodeParentId}
+            nodeDraft={nodeDraft}
+            actionBusy={actionBusy}
+            onAdd={addNode}
+            onSelect={selectNode}
+            onToggleCollapsed={toggleNodeCollapsed}
+            onStartEdit={startEditNode}
+            onDraftChange={(field, value) => setNodeDraft((previous) => ({ ...previous, [field]: value }))}
+            onSave={(node) => void saveNode(node)}
+            onCancel={() => setEditingNodeId(null)}
+            onRemove={(node) => void removeNode(node)}
+            onNodeChange={(field, value) => { if (field === "code") setNodeCode(value); if (field === "name") setNodeName(value); if (field === "parent") setNodeParentId(value); }}
+          />
 
-          <div className="panel panel-stack">
-            <h2>Rôles {selectedNode ? `de ${selectedNode.name}` : ""}</h2>
-            <form onSubmit={addRole}>
-              <div className="field"><label htmlFor="role-code">Code</label><input id="role-code" value={roleCode} onChange={(event) => setRoleCode(event.target.value)} required /></div>
-              <div className="field"><label htmlFor="role-name">Nom</label><input id="role-name" value={roleName} onChange={(event) => setRoleName(event.target.value)} required /></div>
-              <div className="field"><label htmlFor="role-node">Nœud</label><select id="role-node" value={roleNodeId} onChange={(event) => { setRoleNodeId(event.target.value); setSelectedNodeId(Number(event.target.value)); }} required><option value="">Sélectionner</option>{nodes.map((node) => <option key={node.id} value={node.id}>{node.code} - {node.name}</option>)}</select></div>
-              <div className="field"><label htmlFor="role-category">Code comptable</label><select id="role-category" value={roleCategoryId} onChange={(event) => setRoleCategoryId(event.target.value)} required><option value="">Sélectionner</option>{categories.filter((category) => category.is_active && costTypes.some((costType) => costType.id === category.cost_type_id && costType.kind === "labor")).map((category) => <option key={category.id} value={category.id}>{category.accounting_code} - {category.name}</option>)}</select></div>
-              <button className="btn btn-primary" disabled={actionBusy} type="submit">Ajouter</button>
-            </form>
-            <ul className="resource-list">{selectedRoles.map((role) => <li key={role.id}><strong>{role.code}</strong> {role.name}<span>{categoryNameById.get(role.cost_category_id) ?? "?"}</span></li>)}</ul>
-          </div>
+          <RolesPanel selectedNode={selectedNode} selectedRoles={selectedRoles} nodes={nodes} categories={categories} costTypes={costTypes} roleCode={roleCode} roleName={roleName} roleNodeId={roleNodeId} roleCategoryId={roleCategoryId} actionBusy={actionBusy} categoryNames={categoryNameById} onSubmit={addRole} onCodeChange={setRoleCode} onNameChange={setRoleName} onNodeChange={(value) => { setRoleNodeId(value); setSelectedNodeId(Number(value)); }} onCategoryChange={setRoleCategoryId} />
 
           </div>
-          <div className="panel panel-stack"><h2>Capacités</h2><div className="table-scroll"><table className="table"><thead><tr><th scope="col">Rôle</th><th scope="col">Nombre de personnes</th><th scope="col">Heures disponibles</th><th scope="col">Actions</th></tr></thead><tbody>{roles.map((role) => { const draft = capacityDrafts[role.id] ?? { personCount: "0.00", availableHours: "0.00" }; return <tr key={role.id}><td><strong>{role.code}</strong> {role.name}</td><td><input type="number" min="0" step="0.01" value={draft.personCount} onChange={(event) => setCapacityDrafts((previous) => ({ ...previous, [role.id]: { ...draft, personCount: event.target.value } }))} /></td><td><input type="number" min="0" step="0.01" value={draft.availableHours} onChange={(event) => setCapacityDrafts((previous) => ({ ...previous, [role.id]: { ...draft, availableHours: event.target.value } }))} /></td><td className="table-actions"><button className="btn btn-primary" type="button" disabled={actionBusy} onClick={() => void saveRoleCapacity(role.id)}>Enregistrer</button></td></tr>; })}</tbody></table></div></div>
+          <CapacityTable roles={roles} drafts={capacityDrafts} actionBusy={actionBusy} onDraftChange={(roleId, draft) => setCapacityDrafts((previous) => ({ ...previous, [roleId]: draft }))} onSave={(roleId) => void saveRoleCapacity(roleId)} />
         </>
       ) : null}
 
       {!busy && activeTab === "costs" ? (
         <>
-          <section className="panel panel-stack">
-            <h2>Types de coût</h2>
-            <form onSubmit={addCostType}>
-              <div className="table-scroll">
-                <table className="table">
-                  <thead><tr><th scope="col">Code</th><th scope="col">Nom</th><th scope="col">Comportement</th><th scope="col">Actions</th></tr></thead>
-                  <tbody>
-                    <tr>
-                      <td><input id="cost-type-code" aria-label="Code du nouveau type" value={costTypeCode} onChange={(event) => setCostTypeCode(event.target.value)} required /></td>
-                      <td><input id="cost-type-name" aria-label="Nom du nouveau type" value={costTypeName} onChange={(event) => setCostTypeName(event.target.value)} required /></td>
-                      <td><select aria-label="Comportement du nouveau type" value={costTypeKind} onChange={(event) => setCostTypeKind(event.target.value as CostType["kind"])}><option value="labor">{costTypeKindLabels.labor}</option><option value="supply">{costTypeKindLabels.supply}</option><option value="other">{costTypeKindLabels.other}</option></select></td>
-                      <td><button className="btn btn-primary" disabled={actionBusy} type="submit">Ajouter</button></td>
-                    </tr>
-                    {costTypes.map((costType) => {
-                      const editing = editingCostTypeId === costType.id;
-                      return (
-                        <tr key={costType.id} style={{ opacity: costType.is_active ? 1 : 0.55 }}>
-                          <td><strong>{costType.code}</strong></td>
-                          <td>{editing ? <input aria-label={`Nom de ${costType.code}`} value={costTypeDraft} onChange={(event) => setCostTypeDraft(event.target.value)} /> : costType.name}</td>
-                          <td>{costTypeKindLabels[costType.kind]}</td>
-                          <td className="table-actions">
-                            <div className="row">
-                              {costType.is_active && (editing ? (
-                                <>
-                                  <button className="btn btn-primary" type="button" disabled={actionBusy} onClick={() => void saveCostType(costType)}>Enregistrer</button>
-                                  <button className="btn" type="button" onClick={() => setEditingCostTypeId(null)}>Annuler</button>
-                                </>
-                              ) : <button className="btn" type="button" onClick={() => startEditCostType(costType)}>Modifier</button>)}
-                              <button className="btn" type="button" disabled={actionBusy} onClick={() => void toggleCostTypeActive(costType)}>{costType.is_active ? "Désactiver" : "Réactiver"}</button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </form>
-          </section>
+          <CostTypesTable items={costTypes} code={costTypeCode} name={costTypeName} kind={costTypeKind} draft={costTypeDraft} editingId={editingCostTypeId} busy={actionBusy} labels={costTypeKindLabels} onSubmit={addCostType} onCodeChange={setCostTypeCode} onNameChange={setCostTypeName} onKindChange={setCostTypeKind} onStartEdit={startEditCostType} onDraftChange={setCostTypeDraft} onSave={(item) => void saveCostType(item)} onCancel={() => setEditingCostTypeId(null)} onToggle={(item) => void toggleCostTypeActive(item)} />
 
-          <section className="panel panel-stack">
-              <h2>Catégories de coût</h2>
-              <form onSubmit={addCategory}>
-                <div className="table-scroll">
-                  <table className="table">
-                    <thead><tr><th scope="col">Type</th><th scope="col">Code comptable</th><th scope="col">Catégorie comptable</th><th scope="col">Nom</th><th scope="col">Actions</th></tr></thead>
-                    <tbody>
-                      <tr>
-                        <td><select id="category-type" aria-label="Type de la nouvelle catégorie" value={categoryCostTypeId} onChange={(event) => setCategoryCostTypeId(event.target.value)} required><option value="">Sélectionner</option>{costTypes.filter((costType) => costType.is_active).map((costType) => <option key={costType.id} value={costType.id}>{costType.code} - {costType.name}</option>)}</select></td>
-                        <td><input id="category-code" aria-label="Code comptable de la nouvelle catégorie" value={categoryCode} onChange={(event) => setCategoryCode(event.target.value)} required /></td>
-                        <td><input id="accounting-code" aria-label="Catégorie comptable de la nouvelle catégorie" value={accountingCode} onChange={(event) => setAccountingCode(event.target.value)} /></td>
-                        <td><input id="category-name" aria-label="Nom de la nouvelle catégorie" value={categoryName} onChange={(event) => setCategoryName(event.target.value)} required /></td>
-                        <td><button className="btn btn-primary" disabled={actionBusy} type="submit">Ajouter</button></td>
-                      </tr>
-                      {categories.map((category) => {
-                        const editing = editingCategoryId === category.id;
-                        return (
-                          <tr key={category.id} style={{ opacity: category.is_active ? 1 : 0.55 }}>
-                            <td>{costTypeNameById.get(category.cost_type_id) ?? "?"}</td>
-                            <td>{editing ? <input aria-label={`Code comptable de ${category.accounting_code}`} value={categoryDraft.code} onChange={(event) => setCategoryDraft((previous) => ({ ...previous, code: event.target.value }))} /> : <strong>{category.accounting_code}</strong>}</td>
-                            <td>{editing ? <input aria-label={`Catégorie comptable de ${category.accounting_code}`} value={categoryDraft.accountingCode} onChange={(event) => setCategoryDraft((previous) => ({ ...previous, accountingCode: event.target.value }))} /> : (category.category_code ?? "Sans catégorie")}</td>
-                            <td>{editing ? <input aria-label={`Nom de ${category.accounting_code}`} value={categoryDraft.name} onChange={(event) => setCategoryDraft((previous) => ({ ...previous, name: event.target.value }))} /> : category.name}{category.is_active ? null : <span className="tag" style={{ marginLeft: "0.4rem" }}>Inactive</span>}</td>
-                            <td className="table-actions">
-                              <div className="row" style={{ justifyContent: "flex-end" }}>
-                                {editing ? <><button className="btn btn-primary" type="button" disabled={actionBusy} onClick={() => void saveCategory(category)}>Enregistrer</button><button className="btn" type="button" onClick={() => setEditingCategoryId(null)}>Annuler</button></> : <button className="btn" type="button" onClick={() => startEditCategory(category)}>Modifier</button>}
-                                <button className="btn" type="button" disabled={actionBusy} onClick={() => void toggleCategoryActive(category)}>{category.is_active ? "Désactiver" : "Réactiver"}</button>
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </form>
-          </section>
+          <CostCategoriesTable items={categories} types={costTypes} typeId={categoryCostTypeId} accountingCode={categoryCode} categoryCode={accountingCode} name={categoryName} draft={categoryDraft} editingId={editingCategoryId} busy={actionBusy} onSubmit={addCategory} onTypeChange={setCategoryCostTypeId} onAccountingCodeChange={setCategoryCode} onCategoryCodeChange={setAccountingCode} onNameChange={setCategoryName} onStartEdit={startEditCategory} onDraftChange={(field, value) => setCategoryDraft((previous) => ({ ...previous, [field]: value }))} onSave={(item) => void saveCategory(item)} onCancel={() => setEditingCategoryId(null)} onToggle={(item) => void toggleCategoryActive(item)} />
 
-          <section className="panel panel-stack">
-            <h2>Valorisation</h2>
-            <div className="grid-3">
-              <div className="field"><label htmlFor="display-currency">Devise</label><select id="display-currency" value={displayCurrency} onChange={(event) => setDisplayCurrency(event.target.value)}><option value="EUR">EUR</option><option value="USD">Dollar</option></select></div>
-              <div>
-                <div className="field"><label htmlFor="inflation-year">Inflation ({inflationYear})</label><div className="row"><input id="inflation-value" type="number" min="-100" step="0.01" value={inflationValue} onChange={(event) => setInflationValue(event.target.value)} placeholder="Pourcentage" /><span>%</span></div></div>
-              </div>
-            </div>
-            <div className="table-scroll">
-              <table className="table">
-                <thead><tr><th scope="col">Code comptable</th>{[-4, -3, -2, -1, 0].map((offset) => { const year = new Date().getFullYear() + offset; return <th scope="col" key={year} style={offset === 0 ? { background: "var(--accent-soft)" } : undefined}>{year}</th>; })}</tr></thead>
-                <tbody>{categories.filter((category) => costTypes.find((type) => type.id === category.cost_type_id)?.kind === "labor").map((category) => <tr key={category.id}><td><strong>{category.accounting_code}</strong></td>{[-4, -3, -2, -1, 0].map((offset) => { const year = new Date().getFullYear() + offset; const key = `${category.id}:${year}`; return <td key={year} style={offset === 0 ? { background: "var(--accent-soft)" } : undefined}><input aria-label={`${category.accounting_code} ${year}`} type="number" step="0.01" min="0" value={rateDrafts[key] ?? ""} onChange={(event) => setRateDrafts((previous) => ({ ...previous, [key]: event.target.value }))} placeholder="-" /></td>; })}</tr>)}</tbody>
-              </table>
-            </div>
-            <div className="row" style={{ justifyContent: "flex-end" }}><button className="btn btn-primary" type="button" disabled={actionBusy} onClick={() => void saveAllValuation()}>Enregistrer</button></div>
-          </section>
+          <ValuationPanel categories={categories} costTypes={costTypes} inflationYear={inflationYear} inflationValue={inflationValue} currency={displayCurrency} drafts={rateDrafts} busy={actionBusy} onCurrencyChange={setDisplayCurrency} onInflationChange={setInflationValue} onRateChange={(key, value) => setRateDrafts((previous) => ({ ...previous, [key]: value }))} onSave={() => void saveAllValuation()} />
         </>
       ) : null}
 
-      {!busy && activeTab === "users" ? (
-        <>
-          <section className="panel">
-            <div className="row" style={{ marginTop: "0" }}>
-              <button className="btn btn-primary" type="button" onClick={() => setCreateUserMode(true)}>
-                Ajouter un utilisateur
-              </button>
-            </div>
-            {createUserMode ? (
-              <form onSubmit={addUser} style={{ marginTop: "1rem" }}>
-                <div className="grid-3">
-                  <div className="field">
-                    <label htmlFor="new-user-email">Email</label>
-                    <input
-                      id="new-user-email"
-                      type="email"
-                      value={newEmail}
-                      onChange={(event) => setNewEmail(event.target.value)}
-                      autoComplete="off"
-                      required
-                    />
-                  </div>
-                  <div className="field">
-                    <label htmlFor="new-user-password">Mot de passe</label>
-                    <input
-                      id="new-user-password"
-                      type="password"
-                      value={newPassword}
-                      onChange={(event) => setNewPassword(event.target.value)}
-                      minLength={8}
-                      autoComplete="new-password"
-                      required
-                    />
-                  </div>
-                </div>
-                <div className="row">
-                  <button className="btn btn-primary" type="submit" disabled={actionBusy}>
-                    {actionBusy ? "Création..." : "Créer"}
-                  </button>
-                  <button className="btn" type="button" onClick={() => setCreateUserMode(false)}>
-                    Annuler
-                  </button>
-                </div>
-              </form>
-            ) : null}
-          </section>
-
-          <section className="panel">
-            {usersError ? <p className="error" role="alert">{usersError}</p> : null}
-            <div className="table-scroll">
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th scope="col">ID</th>
-                    <th scope="col">Email</th>
-                    <th scope="col">Statut</th>
-                    <th scope="col">Role</th>
-                    <th scope="col">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {users.map((user) => (
-                    <tr key={user.id}>
-                      <td>{user.id}</td>
-                      <td>{user.email}</td>
-                      <td>{user.is_active ? "Actif" : "Inactif"}</td>
-                      <td>{user.is_admin ? "Admin" : "Standard"}</td>
-                      <td>
-                        <div className="row">
-                          <button className="btn" onClick={() => void toggleUserStatus(user)} type="button" disabled={actionBusy}>
-                            {user.is_active ? "Désactiver" : "Activer"}
-                          </button>
-                          <button className="btn" onClick={() => void toggleUserAdmin(user)} type="button" disabled={actionBusy}>
-                            {user.is_admin ? "Retirer admin" : "Promouvoir admin"}
-                          </button>
-                          <button
-                            className="btn btn-danger"
-                            onClick={() => void removeUser(user)}
-                            type="button"
-                            disabled={actionBusy}
-                          >
-                            Supprimer
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        </>
-      ) : null}
+      {!busy && activeTab === "users" ? <UsersTab users={users} usersError={usersError} createUserMode={createUserMode} newEmail={newEmail} newPassword={newPassword} actionBusy={actionBusy} onCreateUser={addUser} onSetCreateUserMode={setCreateUserMode} onEmailChange={setNewEmail} onPasswordChange={setNewPassword} onToggleStatus={(user) => void toggleUserStatus(user)} onToggleAdmin={(user) => void toggleUserAdmin(user)} onRemove={(user) => void removeUser(user)} /> : null}
     </>
   );
 }
