@@ -9,12 +9,14 @@ from sqlalchemy.orm import Session
 from waterfall.models.ms_core import MsProject, MsTask
 from waterfall.models.resources import (
     CostRate,
+    CostType,
     EstimateCostLine,
     EstimateLine,
     InflationRate,
     ResourceRole,
     TaskRoleAssignment,
 )
+from waterfall.schemas.resources import CostTypeKind
 
 
 def calculate_estimate_lines(db: Session, estimate_id: int) -> list[EstimateLine]:
@@ -51,12 +53,15 @@ def calculate_estimate_lines(db: Session, estimate_id: int) -> list[EstimateLine
 
     # 2. Process non-labor lines (Fourniture, Frais, UO)
     cost_lines = (
-        db.query(EstimateCostLine).filter(EstimateCostLine.estimate_id == estimate_id).all()
+        db.query(EstimateCostLine, CostType)
+        .join(CostType, EstimateCostLine.cost_type_id == CostType.id)
+        .filter(EstimateCostLine.estimate_id == estimate_id)
+        .all()
     )
 
-    for cost_line in cost_lines:
+    for cost_line, cost_type in cost_lines:
         # Skip MO cost types; they come from role assignments
-        if cost_line.cost_type_code == "MO":
+        if cost_type.kind == CostTypeKind.LABOR:
             continue
 
         # Create a single EstimateLine snapshot for non-labor

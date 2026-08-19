@@ -42,7 +42,7 @@ def test_admin_can_manage_resource_reference_data() -> None:
 
         cost_type_response = client.post(
             "/resources/cost-types",
-            json={"code": "MO", "name": "Main d'oeuvre"},
+            json={"code": "MO", "name": "Main d'oeuvre", "kind": "labor"},
             headers=headers,
         )
         assert cost_type_response.status_code == 201
@@ -135,6 +135,144 @@ def test_resource_writes_require_admin() -> None:
             headers=headers,
         )
         assert response.status_code == 403
+
+
+def test_inactive_cost_category_hidden_unless_included() -> None:
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        cost_type_id = cast(
+            dict[str, Any],
+            client.post(
+                "/resources/cost-types",
+                json={"code": "FRAIS-I", "name": "Frais", "kind": "other"},
+                headers=headers,
+            ).json(),
+        )["id"]
+        category = cast(
+            dict[str, Any],
+            client.post(
+                "/resources/categories",
+                json={"cost_type_id": cost_type_id, "code": "FRAIS-CAT-I", "name": "Frais divers"},
+                headers=headers,
+            ).json(),
+        )
+        category_id = category["id"]
+
+        deactivate_response: Response = client.patch(
+            f"/resources/categories/{category_id}",
+            json={"is_active": False},
+            headers=headers,
+        )
+        assert deactivate_response.status_code == 200
+        assert deactivate_response.json()["is_active"] is False
+
+        active_only: Response = client.get("/resources/categories", headers=headers)
+        active_payload = cast(list[dict[str, Any]], active_only.json())
+        assert all(item["id"] != category_id for item in active_payload)
+
+        with_inactive: Response = client.get(
+            "/resources/categories?include_inactive=true", headers=headers
+        )
+        inactive_payload = cast(list[dict[str, Any]], with_inactive.json())
+        assert any(item["id"] == category_id for item in inactive_payload)
+
+
+def test_role_creation_rejects_inactive_category() -> None:
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        cost_type_id = cast(
+            dict[str, Any],
+            client.post(
+                "/resources/cost-types",
+                json={"code": "MO-I", "name": "Main d'oeuvre", "kind": "labor"},
+                headers=headers,
+            ).json(),
+        )["id"]
+        category = cast(
+            dict[str, Any],
+            client.post(
+                "/resources/categories",
+                json={"cost_type_id": cost_type_id, "code": "MO-CAT-I", "name": "Developpement"},
+                headers=headers,
+            ).json(),
+        )
+        category_id = category["id"]
+        client.patch(
+            f"/resources/categories/{category_id}",
+            json={"is_active": False},
+            headers=headers,
+        )
+        node_id = cast(
+            dict[str, Any],
+            client.post(
+                "/resources/nodes", json={"code": "IT-I", "name": "Informatique"}, headers=headers
+            ).json(),
+        )["id"]
+
+        response: Response = client.post(
+            "/resources/roles",
+            json={
+                "code": "DEV-INACTIVE",
+                "name": "Developpeur",
+                "node_id": node_id,
+                "cost_category_id": category_id,
+            },
+            headers=headers,
+        )
+        assert response.status_code == 400
+
+
+def test_category_type_change_blocked_when_in_use() -> None:
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        labor_type_id = cast(
+            dict[str, Any],
+            client.post(
+                "/resources/cost-types",
+                json={"code": "MO-U", "name": "Main d'oeuvre", "kind": "labor"},
+                headers=headers,
+            ).json(),
+        )["id"]
+        other_type_id = cast(
+            dict[str, Any],
+            client.post(
+                "/resources/cost-types",
+                json={"code": "FRAIS-U", "name": "Frais", "kind": "other"},
+                headers=headers,
+            ).json(),
+        )["id"]
+        category = cast(
+            dict[str, Any],
+            client.post(
+                "/resources/categories",
+                json={"cost_type_id": labor_type_id, "code": "MO-CAT-U", "name": "Developpement"},
+                headers=headers,
+            ).json(),
+        )
+        category_id = category["id"]
+        node_id = cast(
+            dict[str, Any],
+            client.post(
+                "/resources/nodes", json={"code": "IT-U", "name": "Informatique"}, headers=headers
+            ).json(),
+        )["id"]
+        client.post(
+            "/resources/roles",
+            json={
+                "code": "DEV-U",
+                "name": "Developpeur",
+                "node_id": node_id,
+                "cost_category_id": category_id,
+            },
+            headers=headers,
+        )
+
+        response: Response = client.patch(
+            f"/resources/categories/{category_id}",
+            json={"cost_type_id": other_type_id},
+            headers=headers,
+        )
+        assert response.status_code == 409
 
 
 def test_resource_nodes_reject_indirect_cycles() -> None:

@@ -22,7 +22,7 @@ from waterfall.models.resources import (
 def _seed_resource_graph() -> tuple[int, int, int]:
     session_factory = get_session_factory()
     with session_factory() as session:
-        cost_type = CostType(code="MO", name="Main d'oeuvre")
+        cost_type = CostType(code="MO", name="Main d'oeuvre", kind="labor")
         session.add(cost_type)
         session.flush()
 

@@ -13,6 +13,7 @@ from waterfall.models.resources import (
     CostCategory,
     CostRate,
     CostType,
+    EstimateCostLine,
     InflationRate,
     ResourceNode,
     ResourceRole,
@@ -68,6 +69,33 @@ def _get_or_404(
     if item is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"{label} not found")
     return item
+
+
+def _get_active_category_or_400(db: Session, category_id: int) -> CostCategory:
+    category = (
+        db.query(CostCategory)
+        .filter(CostCategory.id == category_id)
+        .filter(CostCategory.is_active.is_(True))
+        .first()
+    )
+    if category is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cost category not found or inactive",
+        )
+    return category
+
+
+def _category_in_use(db: Session, category_id: int) -> bool:
+    used_by_role = (
+        db.query(ResourceRole).filter(ResourceRole.cost_category_id == category_id).first()
+        is not None
+    )
+    used_by_cost_line = (
+        db.query(EstimateCostLine).filter(EstimateCostLine.cost_category_id == category_id).first()
+        is not None
+    )
+    return used_by_role or used_by_cost_line
 
 
 def _validate_node_parent(db: Session, node_id: int, parent_id: int | None) -> None:
@@ -189,7 +217,7 @@ def create_role(
     _: User = Depends(get_current_admin_user),
 ) -> ResourceRole:
     _get_or_404(db, ResourceNode, payload.node_id, "Resource node")
-    _get_or_404(db, CostCategory, payload.cost_category_id, "Cost category")
+    _get_active_category_or_400(db, payload.cost_category_id)
     role = ResourceRole(**payload.model_dump())
     db.add(role)
     _commit(db, "Resource role code already exists")
@@ -218,7 +246,7 @@ def update_role(
     if "node_id" in values:
         _get_or_404(db, ResourceNode, values["node_id"], "Resource node")
     if "cost_category_id" in values:
-        _get_or_404(db, CostCategory, values["cost_category_id"], "Cost category")
+        _get_active_category_or_400(db, values["cost_category_id"])
     for field, value in values.items():
         setattr(role, field, value)
     db.add(role)
@@ -229,23 +257,26 @@ def update_role(
 
 @router.get("/categories", response_model=list[CostCategoryRead])
 def list_categories(
+    include_inactive: bool = Query(default=False),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_active_user),
 ) -> list[CostCategory]:
-    return (
-        db.query(CostCategory)
-        .filter(CostCategory.is_active.is_(True))
-        .order_by(CostCategory.code)
-        .all()
-    )
+    query = db.query(CostCategory)
+    if not include_inactive:
+        query = query.filter(CostCategory.is_active.is_(True))
+    return query.order_by(CostCategory.code).all()
 
 
 @router.get("/cost-types", response_model=list[CostTypeRead])
 def list_cost_types(
+    include_inactive: bool = Query(default=False),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_active_user),
 ) -> list[CostType]:
-    return db.query(CostType).filter(CostType.is_active.is_(True)).order_by(CostType.code).all()
+    query = db.query(CostType)
+    if not include_inactive:
+        query = query.filter(CostType.is_active.is_(True))
+    return query.order_by(CostType.code).all()
 
 
 @router.post("/cost-types", response_model=CostTypeRead, status_code=status.HTTP_201_CREATED)
@@ -309,8 +340,10 @@ def update_category(
 ) -> CostCategory:
     category = _get_or_404(db, CostCategory, category_id, "Cost category")
     values = payload.model_dump(exclude_unset=True)
-    if "cost_type_id" in values:
+    if "cost_type_id" in values and values["cost_type_id"] != category.cost_type_id:
         _get_or_404(db, CostType, values["cost_type_id"], "Cost type")
+        if _category_in_use(db, category_id):
+            raise _conflict("Cost category is already in use and cannot change type")
     for field, value in values.items():
         setattr(category, field, value)
     db.add(category)

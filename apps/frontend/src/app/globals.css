@@ -215,7 +215,7 @@ body {
   padding: 1.25rem;
 }
 
-.panel + .panel {
+.panel + .panel:not(.grid-3 > .panel) {
   margin-top: 1rem;
 }
 

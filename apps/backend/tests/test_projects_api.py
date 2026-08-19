@@ -112,8 +112,8 @@ def _seed_roles() -> tuple[int, int]:
         session.flush()
         child.parent_id = root.id
 
-        labor_type = CostType(code="MO", name="Main d'oeuvre")
-        supply_type = CostType(code="FOURNITURE", name="Fourniture")
+        labor_type = CostType(code="MO", name="Main d'oeuvre", kind="labor")
+        supply_type = CostType(code="FOURNITURE", name="Fourniture", kind="supply")
         session.add_all([labor_type, supply_type])
         session.flush()
         labor_category = CostCategory(
@@ -734,8 +734,8 @@ def test_estimate_cost_lines_support_non_labor_costs_and_draft_locking() -> None
                 .one()
                 .cost_category_id
             )
-            fee_type = CostType(code="FRAIS", name="Frais")
-            work_unit_type = CostType(code="UO", name="Unité d'oeuvre")
+            fee_type = CostType(code="FRAIS", name="Frais", kind="other")
+            work_unit_type = CostType(code="UO", name="Unité d'oeuvre", kind="other")
             session.add_all([fee_type, work_unit_type])
             session.flush()
             fee_category = CostCategory(

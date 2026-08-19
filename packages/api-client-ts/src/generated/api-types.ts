@@ -655,7 +655,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Lister les categories de cout actives */
+        /** Lister les categories de cout */
         get: operations["listCostCategories"];
         put?: never;
         /** Creer une categorie de cout */
@@ -673,7 +673,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Lister les types de coût actifs */
+        /** Lister les types de coût */
         get: operations["listCostTypes"];
         put?: never;
         /** Créer un type de coût */
@@ -1167,7 +1167,10 @@ export interface components {
         CostTypeCreate: {
             code: string;
             name: string;
+            kind: components["schemas"]["CostTypeKind"];
         };
+        /** @enum {string} */
+        CostTypeKind: "labor" | "supply" | "other";
         CostTypeUpdate: {
             name?: string;
             is_active?: boolean;
@@ -2820,7 +2823,9 @@ export interface operations {
     };
     listCostCategories: {
         parameters: {
-            query?: never;
+            query?: {
+                include_inactive?: boolean;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -2868,7 +2873,9 @@ export interface operations {
     };
     listCostTypes: {
         parameters: {
-            query?: never;
+            query?: {
+                include_inactive?: boolean;
+            };
             header?: never;
             path?: never;
             cookie?: never;

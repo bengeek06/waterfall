@@ -20,6 +20,10 @@ async def lifespan(_: FastAPI):
 
         _ = User.__tablename__
         Base.metadata.create_all(bind=get_engine())
+    if settings.app_env == "dev":
+        from waterfall.scripts.seed_admin import main as seed_admin
+
+        seed_admin()
     yield
 
 

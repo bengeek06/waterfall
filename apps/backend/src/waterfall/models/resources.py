@@ -62,10 +62,17 @@ class ResourceRole(Base):
 
 class CostType(Base):
     __tablename__ = "wf_cost_type"
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('labor', 'supply', 'other')",
+            name="ck_wf_cost_type_kind",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     code: Mapped[str] = mapped_column(String(32), nullable=False, unique=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, default="other")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)

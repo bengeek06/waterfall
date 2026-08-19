@@ -42,6 +42,7 @@ from waterfall.schemas.projects import (
     TaskRoleAssignmentRead,
     TaskRoleAssignmentUpdate,
 )
+from waterfall.schemas.resources import CostTypeKind
 from waterfall.services import (
     build_estimate_workbook,
     calculate_estimate_aggregates,
@@ -167,7 +168,7 @@ def _get_non_labor_category_or_400(
         .filter(CostCategory.id == cost_category_id)
         .filter(CostCategory.is_active.is_(True))
         .filter(CostType.is_active.is_(True))
-        .filter(CostType.code != "MO")
+        .filter(CostType.kind != CostTypeKind.LABOR)
         .first()
     )
     if row is None:
@@ -494,9 +495,9 @@ def create_estimate_cost_line(
                 detail="Task does not belong to project",
             )
     category, cost_type = _get_non_labor_category_or_400(db, payload.cost_category_id)
-    supply_status = "planned" if cost_type.code == "FOURNITURE" else None
+    supply_status = "planned" if cost_type.kind == CostTypeKind.SUPPLY else None
     if payload.supply_status is not None:
-        if cost_type.code != "FOURNITURE":
+        if cost_type.kind != CostTypeKind.SUPPLY:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Supply status is only valid for supplies",
@@ -563,7 +564,7 @@ def update_estimate_cost_line(
         values.get("cost_category_id", line.cost_category_id),
     )
     supply_status = values.get("supply_status", line.supply_status)
-    if cost_type.code == "FOURNITURE":
+    if cost_type.kind == CostTypeKind.SUPPLY:
         supply_status = supply_status or "planned"
     else:
         if values.get("supply_status") is not None:
@@ -950,7 +951,7 @@ def create_task_role_assignment(
         .filter(ResourceRole.id == payload.role_id)
         .filter(ResourceRole.is_active.is_(True))
         .filter(CostCategory.is_active.is_(True))
-        .filter(CostType.code == "MO")
+        .filter(CostType.kind == CostTypeKind.LABOR)
         .filter(CostType.is_active.is_(True))
         .first()
     )

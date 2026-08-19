@@ -239,6 +239,20 @@ export function createResourceNode(
   );
 }
 
+export function updateResourceNode(
+  nodeId: number,
+  payload: { name?: string; parent_id?: number | null; is_active?: boolean },
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<ResourceNode>(
+    `/resources/nodes/${nodeId}`,
+    tokens,
+    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
+    onSessionRefresh,
+  );
+}
+
 export function getResourceRoles(
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
@@ -269,16 +283,36 @@ export function createResourceRole(
   );
 }
 
-export function getCostCategories(tokens: SessionTokens, onSessionRefresh: (next: SessionTokens) => void) {
-  return authRequest<CostCategory[]>("/resources/categories", tokens, { method: "GET" }, onSessionRefresh);
+export function getCostCategories(
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+  includeInactive = false,
+) {
+  const query = includeInactive ? "?include_inactive=true" : "";
+  return authRequest<CostCategory[]>(
+    `/resources/categories${query}`,
+    tokens,
+    { method: "GET" },
+    onSessionRefresh,
+  );
 }
 
-export function getCostTypes(tokens: SessionTokens, onSessionRefresh: (next: SessionTokens) => void) {
-  return authRequest<CostType[]>("/resources/cost-types", tokens, { method: "GET" }, onSessionRefresh);
+export function getCostTypes(
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+  includeInactive = false,
+) {
+  const query = includeInactive ? "?include_inactive=true" : "";
+  return authRequest<CostType[]>(
+    `/resources/cost-types${query}`,
+    tokens,
+    { method: "GET" },
+    onSessionRefresh,
+  );
 }
 
 export function createCostType(
-  payload: { code: string; name: string },
+  payload: { code: string; name: string; kind: CostType["kind"] },
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
 ) {
@@ -286,6 +320,20 @@ export function createCostType(
     "/resources/cost-types",
     tokens,
     { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
+    onSessionRefresh,
+  );
+}
+
+export function updateCostType(
+  costTypeId: number,
+  payload: { name?: string; is_active?: boolean },
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<CostType>(
+    `/resources/cost-types/${costTypeId}`,
+    tokens,
+    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
     onSessionRefresh,
   );
 }
@@ -305,6 +353,26 @@ export function createCostCategory(
     "/resources/categories",
     tokens,
     { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
+    onSessionRefresh,
+  );
+}
+
+export function updateCostCategory(
+  categoryId: number,
+  payload: {
+    cost_type_id?: number;
+    accounting_code?: string | null;
+    name?: string;
+    calendar_code?: string | null;
+    is_active?: boolean;
+  },
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<CostCategory>(
+    `/resources/categories/${categoryId}`,
+    tokens,
+    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
     onSessionRefresh,
   );
 }

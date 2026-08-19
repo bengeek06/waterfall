@@ -1,11 +1,18 @@
 from datetime import date, datetime
 from decimal import Decimal
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 EstimateKind = Literal["initial", "remaining"]
 EstimateStatus = Literal["draft", "validated", "superseded", "archived"]
+
+
+class CostTypeKind(StrEnum):
+    LABOR = "labor"
+    SUPPLY = "supply"
+    OTHER = "other"
 
 
 def _required_text(value: str) -> str:
@@ -81,6 +88,7 @@ class ResourceRoleRead(ResourceRoleBase):
 class CostTypeBase(BaseModel):
     code: str = Field(min_length=1, max_length=32)
     name: str = Field(min_length=1, max_length=255)
+    kind: CostTypeKind
 
     _normalize_code = field_validator("code")(_required_text)
     _normalize_name = field_validator("name")(_required_text)

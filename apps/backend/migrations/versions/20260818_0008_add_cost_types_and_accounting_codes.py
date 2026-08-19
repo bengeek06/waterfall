@@ -17,12 +17,7 @@ branch_labels = None
 depends_on = None
 
 
-COST_TYPES = [
-    {"id": 1, "code": "MO", "name": "Main d'oeuvre", "is_active": True},
-    {"id": 2, "code": "FOURNITURE", "name": "Fourniture", "is_active": True},
-    {"id": 3, "code": "FRAIS", "name": "Frais", "is_active": True},
-    {"id": 4, "code": "UO", "name": "Unité d'oeuvre", "is_active": True},
-]
+COST_TYPES: list[dict[str, object]] = []
 
 
 def upgrade() -> None:
@@ -31,7 +26,12 @@ def upgrade() -> None:
         sa.Column("id", sa.Integer(), nullable=False),
         sa.Column("code", sa.String(length=32), nullable=False),
         sa.Column("name", sa.String(length=255), nullable=False),
+        sa.Column("kind", sa.String(length=16), nullable=False),
         sa.Column("is_active", sa.Boolean(), nullable=False),
+        sa.CheckConstraint(
+            "kind IN ('labor', 'supply', 'other')",
+            name="ck_wf_cost_type_kind",
+        ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -52,6 +52,7 @@ def upgrade() -> None:
         sa.column("id", sa.Integer()),
         sa.column("code", sa.String()),
         sa.column("name", sa.String()),
+        sa.column("kind", sa.String()),
         sa.column("is_active", sa.Boolean()),
     )
     op.bulk_insert(cost_type_table, COST_TYPES)

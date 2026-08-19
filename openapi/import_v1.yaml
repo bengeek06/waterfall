@@ -1315,10 +1315,17 @@ paths:
   /resources/categories:
     get:
       tags: [resources]
-      summary: Lister les categories de cout actives
+      summary: Lister les categories de cout
       operationId: listCostCategories
       security:
         - bearerAuth: []
+      parameters:
+        - name: include_inactive
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
       responses:
         '200':
           description: Liste des categories
@@ -1359,10 +1366,17 @@ paths:
   /resources/cost-types:
     get:
       tags: [resources]
-      summary: Lister les types de coût actifs
+      summary: Lister les types de coût
       operationId: listCostTypes
       security:
         - bearerAuth: []
+      parameters:
+        - name: include_inactive
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
       responses:
         '200':
           description: Liste des types de coût
@@ -2616,7 +2630,7 @@ components:
 
     ResourceNodeCreate:
       type: object
-      required: [code, name]
+      required: [code, name, kind]
       properties:
         code:
           type: string
@@ -2718,7 +2732,7 @@ components:
 
     CostTypeCreate:
       type: object
-      required: [code, name]
+      required: [code, name, kind]
       properties:
         code:
           type: string
@@ -2728,6 +2742,12 @@ components:
           type: string
           minLength: 1
           maxLength: 255
+        kind:
+          $ref: '#/components/schemas/CostTypeKind'
+
+    CostTypeKind:
+      type: string
+      enum: [labor, supply, other]
 
     CostTypeUpdate:
       type: object

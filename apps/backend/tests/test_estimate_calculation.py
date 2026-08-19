@@ -56,7 +56,7 @@ def _seed_resources_with_rates() -> tuple[int, dict[int, dict[int, Decimal]]]:
         session.add(root)
         session.flush()
 
-        labor_type = CostType(code="MO", name="Main d'oeuvre")
+        labor_type = CostType(code="MO", name="Main d'oeuvre", kind="labor")
         session.add(labor_type)
         session.flush()
 
@@ -339,7 +339,7 @@ def test_non_labor_cost_lines_create_single_snapshot() -> None:
             session.flush()
 
             # Create supply type and category
-            supply_type = CostType(code="FOURNITURE", name="Fourniture")
+            supply_type = CostType(code="FOURNITURE", name="Fourniture", kind="supply")
             session.add(supply_type)
             session.flush()
 

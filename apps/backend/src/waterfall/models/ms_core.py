@@ -29,8 +29,8 @@ class MsProject(Base):
             name="ck_ms_project_save_version_out",
         ),
         CheckConstraint(
-            "(schedule_from_start = 1 AND start_date IS NOT NULL) OR "
-            "(schedule_from_start = 0 AND finish_date IS NOT NULL)",
+            "(schedule_from_start = true AND start_date IS NOT NULL) OR "
+            "(schedule_from_start = false AND finish_date IS NOT NULL)",
             name="ck_ms_project_schedule_dates",
         ),
         Index("idx_ms_project_name", "name"),
