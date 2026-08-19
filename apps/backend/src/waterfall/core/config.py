@@ -4,8 +4,24 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Resolve the repo-root .env regardless of the process's current working directory.
-_ENV_FILE = Path(__file__).resolve().parents[5] / ".env"
+
+def _find_env_file() -> Path | None:
+    """Locate a repo-root .env by walking up from this file.
+
+    Absent in containers, where environment variables are injected directly.
+    """
+    current = Path(__file__).resolve().parent
+    for _ in range(8):
+        candidate = current / ".env"
+        if candidate.exists():
+            return candidate
+        if current.parent == current:
+            break
+        current = current.parent
+    return None
+
+
+_ENV_FILE = _find_env_file()
 
 
 class Settings(BaseSettings):
