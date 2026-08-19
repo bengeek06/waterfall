@@ -53,10 +53,9 @@ def test_admin_can_manage_resource_reference_data() -> None:
             "/resources/categories",
             json={
                 "cost_type_id": cost_type_id,
-                "code": "DEV",
-                "accounting_code": "IDEX",
+                "accounting_code": "DEV",
+                "category_code": "IDEX",
                 "name": "Developpement",
-                "calendar_code": "STANDARD",
             },
             headers=headers,
         )
@@ -152,7 +151,11 @@ def test_inactive_cost_category_hidden_unless_included() -> None:
             dict[str, Any],
             client.post(
                 "/resources/categories",
-                json={"cost_type_id": cost_type_id, "code": "FRAIS-CAT-I", "name": "Frais divers"},
+                json={
+                    "cost_type_id": cost_type_id,
+                    "accounting_code": "FRAIS-CAT-I",
+                    "name": "Frais divers",
+                },
                 headers=headers,
             ).json(),
         )
@@ -160,11 +163,12 @@ def test_inactive_cost_category_hidden_unless_included() -> None:
 
         deactivate_response: Response = client.patch(
             f"/resources/categories/{category_id}",
-            json={"is_active": False},
+            json={"is_active": False, "accounting_code": "FRAIS-CAT-I-RENAMED"},
             headers=headers,
         )
         assert deactivate_response.status_code == 200
         assert deactivate_response.json()["is_active"] is False
+        assert deactivate_response.json()["accounting_code"] == "FRAIS-CAT-I-RENAMED"
 
         active_only: Response = client.get("/resources/categories", headers=headers)
         active_payload = cast(list[dict[str, Any]], active_only.json())
@@ -192,7 +196,11 @@ def test_role_creation_rejects_inactive_category() -> None:
             dict[str, Any],
             client.post(
                 "/resources/categories",
-                json={"cost_type_id": cost_type_id, "code": "MO-CAT-I", "name": "Developpement"},
+                json={
+                    "cost_type_id": cost_type_id,
+                    "accounting_code": "MO-CAT-I",
+                    "name": "Developpement",
+                },
                 headers=headers,
             ).json(),
         )
@@ -245,7 +253,11 @@ def test_category_type_change_blocked_when_in_use() -> None:
             dict[str, Any],
             client.post(
                 "/resources/categories",
-                json={"cost_type_id": labor_type_id, "code": "MO-CAT-U", "name": "Developpement"},
+                json={
+                    "cost_type_id": labor_type_id,
+                    "accounting_code": "MO-CAT-U",
+                    "name": "Developpement",
+                },
                 headers=headers,
             ).json(),
         )

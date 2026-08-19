@@ -22,8 +22,9 @@ def upgrade() -> None:
         "wf_resource_node",
         sa.Column("id", sa.Integer(), nullable=False),
         sa.Column("parent_id", sa.Integer(), nullable=True),
-        sa.Column("code", sa.String(length=64), nullable=False),
+        sa.Column("accounting_code", sa.String(length=64), nullable=False),
         sa.Column("name", sa.String(length=255), nullable=False),
+        sa.Column("category_code", sa.String(length=64), nullable=True),
         sa.Column("is_active", sa.Boolean(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
@@ -38,12 +39,11 @@ def upgrade() -> None:
         sa.Column("id", sa.Integer(), nullable=False),
         sa.Column("code", sa.String(length=64), nullable=False),
         sa.Column("name", sa.String(length=255), nullable=False),
-        sa.Column("calendar_code", sa.String(length=64), nullable=True),
         sa.Column("is_active", sa.Boolean(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("code"),
+        sa.UniqueConstraint("accounting_code"),
     )
 
     op.create_table(
@@ -165,7 +165,7 @@ def upgrade() -> None:
         sa.Column("task_name", sa.String(length=512), nullable=False),
         sa.Column("role_code", sa.String(length=64), nullable=False),
         sa.Column("role_name", sa.String(length=255), nullable=False),
-        sa.Column("cost_category_code", sa.String(length=64), nullable=False),
+        sa.Column("accounting_code", sa.String(length=64), nullable=False),
         sa.Column("year", sa.Integer(), nullable=False),
         sa.Column("quantity", sa.Numeric(precision=10, scale=2), nullable=False),
         sa.Column("hours", sa.Numeric(precision=14, scale=2), nullable=False),

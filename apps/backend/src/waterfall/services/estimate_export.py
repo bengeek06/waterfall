@@ -54,7 +54,7 @@ def _write_grid_sheet(
     total_labor = 0
     for line in labor_lines:
         sheet.cell(row=row, column=1, value="MO")
-        sheet.cell(row=row, column=2, value=line.cost_category_code)
+        sheet.cell(row=row, column=2, value=line.accounting_code)
         sheet.cell(row=row, column=3, value=f"{line.task_name} ({line.role_name})")
         sheet.cell(row=row, column=4, value=float(line.hours))
         sheet.cell(row=row, column=5, value=float(line.hourly_rate))
@@ -65,7 +65,7 @@ def _write_grid_sheet(
     total_purchase = 0
     for cost_line in cost_lines:
         sheet.cell(row=row, column=1, value=cost_line.cost_type_code)
-        sheet.cell(row=row, column=2, value=cost_line.cost_category_code)
+        sheet.cell(row=row, column=2, value=cost_line.accounting_code)
         sheet.cell(row=row, column=3, value=cost_line.label)
         sheet.cell(row=row, column=4, value=float(cost_line.quantity))
         sheet.cell(row=row, column=5, value=float(cost_line.unit_cost))

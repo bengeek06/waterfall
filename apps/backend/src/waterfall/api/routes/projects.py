@@ -141,8 +141,8 @@ def _to_estimate_cost_line_read(line: EstimateCostLine) -> EstimateCostLineRead:
         cost_type_id=line.cost_type_id,
         cost_category_id=line.cost_category_id,
         cost_type_code=line.cost_type_code,
-        cost_category_code=line.cost_category_code,
         accounting_code=line.accounting_code,
+        category_code=line.category_code,
         label=line.label,
         quantity=line.quantity,
         unit_cost=line.unit_cost,
@@ -222,7 +222,7 @@ def _to_task_role_assignment_read(
         role_code=role.code,
         role_name=role.name,
         cost_category_id=category.id,
-        cost_category_code=category.code,
+        accounting_code=category.accounting_code,
         quantity=assignment.quantity,
         hours=assignment.hours,
         comment=assignment.comment,
@@ -510,8 +510,8 @@ def create_estimate_cost_line(
         cost_type_id=cost_type.id,
         cost_category_id=category.id,
         cost_type_code=cost_type.code,
-        cost_category_code=category.code,
         accounting_code=category.accounting_code,
+        category_code=category.category_code,
         label=payload.label,
         quantity=payload.quantity,
         unit_cost=payload.unit_cost,
@@ -579,8 +579,8 @@ def update_estimate_cost_line(
     line.cost_type_id = cost_type.id
     line.cost_category_id = category.id
     line.cost_type_code = cost_type.code
-    line.cost_category_code = category.code
     line.accounting_code = category.accounting_code
+    line.category_code = category.category_code
     line.supply_status = supply_status
     line.purchase_cost = line.quantity * line.unit_cost
     db.add(line)

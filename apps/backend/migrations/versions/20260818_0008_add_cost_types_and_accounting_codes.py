@@ -60,7 +60,7 @@ def upgrade() -> None:
     op.add_column("wf_cost_category", sa.Column("cost_type_id", sa.Integer(), nullable=True))
     op.add_column(
         "wf_cost_category",
-        sa.Column("accounting_code", sa.String(length=64), nullable=True),
+        sa.Column("category_code", sa.String(length=64), nullable=True),
     )
     op.execute("UPDATE wf_cost_category SET cost_type_id = 1 WHERE cost_type_id IS NULL")
 

@@ -528,6 +528,17 @@ body {
   color: var(--ink-soft);
 }
 
+.table-actions {
+  min-width: 12rem;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.table-actions .row {
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+}
+
 .table-row-clickable {
   cursor: pointer;
 }

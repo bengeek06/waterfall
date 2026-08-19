@@ -116,12 +116,11 @@ class CostTypeRead(CostTypeBase):
 
 class CostCategoryBase(BaseModel):
     cost_type_id: int = Field(gt=0)
-    code: str = Field(min_length=1, max_length=64)
-    accounting_code: str | None = Field(default=None, max_length=64)
+    accounting_code: str = Field(min_length=1, max_length=64)
+    category_code: str | None = Field(default=None, max_length=64)
     name: str = Field(min_length=1, max_length=255)
-    calendar_code: str | None = Field(default=None, max_length=64)
 
-    _normalize_code = field_validator("code")(_required_text)
+    _normalize_accounting_code = field_validator("accounting_code")(_required_text)
     _normalize_name = field_validator("name")(_required_text)
 
 
@@ -131,12 +130,13 @@ class CostCategoryCreate(CostCategoryBase):
 
 class CostCategoryUpdate(BaseModel):
     cost_type_id: int | None = Field(default=None, gt=0)
-    accounting_code: str | None = Field(default=None, max_length=64)
+    accounting_code: str | None = Field(default=None, min_length=1, max_length=64)
+    category_code: str | None = Field(default=None, max_length=64)
     name: str | None = Field(default=None, min_length=1, max_length=255)
-    calendar_code: str | None = Field(default=None, max_length=64)
     is_active: bool | None = None
 
     _normalize_name = field_validator("name")(_required_text)
+    _normalize_accounting_code = field_validator("accounting_code")(_required_text)
 
 
 class CostCategoryRead(CostCategoryBase):
@@ -314,7 +314,7 @@ class EstimateLineRead(BaseModel):
     task_name: str
     role_code: str
     role_name: str
-    cost_category_code: str
+    accounting_code: str
     year: int
     quantity: Decimal
     hours: Decimal

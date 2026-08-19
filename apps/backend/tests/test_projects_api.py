@@ -118,14 +118,14 @@ def _seed_roles() -> tuple[int, int]:
         session.flush()
         labor_category = CostCategory(
             cost_type_id=labor_type.id,
-            code="MO-DEV",
-            accounting_code="IDEX",
+            accounting_code="MO-DEV",
+            category_code="IDEX",
             name="Développement",
         )
         supply_category = CostCategory(
             cost_type_id=supply_type.id,
-            code="FO-CABLE",
-            accounting_code="ACHAT",
+            accounting_code="FO-CABLE",
+            category_code="ACHAT",
             name="Câbles",
         )
         session.add_all([labor_category, supply_category])
@@ -337,7 +337,7 @@ def test_delete_task_referenced_by_cost_line_conflicts() -> None:
             session.flush()
             cost_category = CostCategory(
                 cost_type_id=cost_type.id,
-                code=f"MATCAT-{uuid4().hex[:8]}",
+                accounting_code=f"MATCAT-{uuid4().hex[:8]}",
                 name="Materiel",
             )
             session.add(cost_category)
@@ -420,7 +420,7 @@ def test_estimate_aggregates_and_excel_export_after_validation() -> None:
             session.flush()
             cost_category = CostCategory(
                 cost_type_id=cost_type.id,
-                code=f"MATCAT-{uuid4().hex[:8]}",
+                accounting_code=f"MATCAT-{uuid4().hex[:8]}",
                 name="Materiel",
             )
             session.add(cost_category)
@@ -563,7 +563,7 @@ def test_delete_project_cascades_related_data() -> None:
             session.flush()
             cost_category = CostCategory(
                 cost_type_id=cost_type.id,
-                code=f"MATCAT-{uuid4().hex[:8]}",
+                accounting_code=f"MATCAT-{uuid4().hex[:8]}",
                 name="Materiel",
             )
             session.add(cost_category)
@@ -740,14 +740,14 @@ def test_estimate_cost_lines_support_non_labor_costs_and_draft_locking() -> None
             session.flush()
             fee_category = CostCategory(
                 cost_type_id=fee_type.id,
-                code="FR-TRAVEL",
-                accounting_code="FRAIS",
+                accounting_code="FR-TRAVEL",
+                category_code="FRAIS",
                 name="Déplacement",
             )
             work_unit_category = CostCategory(
                 cost_type_id=work_unit_type.id,
-                code="UO-TEST",
-                accounting_code="UO",
+                accounting_code="UO-TEST",
+                category_code="UO",
                 name="Essais",
             )
             session.add_all([fee_category, work_unit_category])
@@ -779,8 +779,8 @@ def test_estimate_cost_lines_support_non_labor_costs_and_draft_locking() -> None
         cost_line = cast(dict[str, Any], create_response.json())
         cost_line_id = cast(int, cost_line["id"])
         assert cost_line["cost_type_code"] == "FOURNITURE"
-        assert cost_line["cost_category_code"] == "FO-CABLE"
-        assert cost_line["accounting_code"] == "ACHAT"
+        assert cost_line["accounting_code"] == "FO-CABLE"
+        assert cost_line["category_code"] == "ACHAT"
         assert cost_line["purchase_cost"] == "37.50"
         assert cost_line["supply_status"] == "ordered"
 
@@ -941,7 +941,7 @@ def test_task_role_assignment_lifecycle_and_labor_validation() -> None:
         assignment = cast(dict[str, Any], create_response.json())
         assignment_id = cast(int, assignment["id"])
         assert assignment["role_code"] == "DEV"
-        assert assignment["cost_category_code"] == "MO-DEV"
+        assert assignment["accounting_code"] == "MO-DEV"
 
         list_response = client.get(
             f"/projects/{project_id}/tasks/1001/role-assignments",

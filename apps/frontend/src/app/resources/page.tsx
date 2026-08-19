@@ -9,7 +9,6 @@ import {
   CostCategory,
   CostRate,
   CostType,
-  InflationRate,
   ResourceNode,
   ResourceRole,
   RoleCapacity,
@@ -35,6 +34,7 @@ import {
   setUserRole,
   setUserStatus,
   updateCostCategory,
+  updateCostRate,
   updateCostType,
   updateResourceNode,
 } from "@/lib/backend";
@@ -84,7 +84,6 @@ export default function ResourcesPage() {
   const [costTypes, setCostTypes] = useState<CostType[]>([]);
   const [categories, setCategories] = useState<CostCategory[]>([]);
   const [rates, setRates] = useState<CostRate[]>([]);
-  const [inflation, setInflation] = useState<InflationRate[]>([]);
   const [capacities, setCapacities] = useState<RoleCapacity[]>([]);
   const [users, setUsers] = useState<AuthUserAdmin[]>([]);
   const [busy, setBusy] = useState(true);
@@ -101,7 +100,6 @@ export default function ResourcesPage() {
   const [categoryName, setCategoryName] = useState("");
   const [categoryCostTypeId, setCategoryCostTypeId] = useState("");
   const [accountingCode, setAccountingCode] = useState("");
-  const [calendarCode, setCalendarCode] = useState("");
   const [costTypeCode, setCostTypeCode] = useState("");
   const [costTypeName, setCostTypeName] = useState("");
   const [costTypeKind, setCostTypeKind] = useState<CostType["kind"]>("other");
@@ -109,12 +107,10 @@ export default function ResourcesPage() {
   const [roleName, setRoleName] = useState("");
   const [roleNodeId, setRoleNodeId] = useState("");
   const [roleCategoryId, setRoleCategoryId] = useState("");
-  const [rateCategoryId, setRateCategoryId] = useState("");
-  const [rateYear, setRateYear] = useState(String(new Date().getFullYear()));
-  const [rateValue, setRateValue] = useState("");
-  const [rateCurrency, setRateCurrency] = useState("EUR");
-  const [inflationYear, setInflationYear] = useState(String(new Date().getFullYear()));
-  const [inflationValue, setInflationValue] = useState("1");
+  const [inflationYear] = useState(String(new Date().getFullYear()));
+  const [inflationValue, setInflationValue] = useState("");
+  const [displayCurrency, setDisplayCurrency] = useState("EUR");
+  const [rateDrafts, setRateDrafts] = useState<Record<string, string>>({});
   const [capacityRoleId, setCapacityRoleId] = useState("");
   const [capacityStart, setCapacityStart] = useState("");
   const [capacityEnd, setCapacityEnd] = useState("");
@@ -128,9 +124,9 @@ export default function ResourcesPage() {
   const [editingCategoryId, setEditingCategoryId] = useState<number | null>(null);
   const [collapsedNodeIds, setCollapsedNodeIds] = useState<Set<number>>(new Set());
   const [categoryDraft, setCategoryDraft] = useState({
+    code: "",
     name: "",
     accountingCode: "",
-    calendarCode: "",
   });
 
   const onSessionRefresh = useMemo(
@@ -180,7 +176,9 @@ export default function ResourcesPage() {
         setCostTypes(costTypeData);
         setCategories(categoryData);
         setRates(rateData);
-        setInflation(inflationData);
+        const currentInflation = inflationData.find((item) => item.year === new Date().getFullYear());
+        setInflationValue(currentInflation ? ((Number(currentInflation.coefficient) - 1) * 100).toFixed(2) : "");
+        setRateDrafts(Object.fromEntries(rateData.map((rate) => [`${rate.cost_category_id}:${rate.year}`, Number(rate.hourly_rate).toFixed(2)])));
         setCapacities(capacityData);
         setUsers(usersData);
       } catch (cause) {
@@ -264,19 +262,17 @@ export default function ResourcesPage() {
       const created = await createCostCategory(
         {
           cost_type_id: Number(categoryCostTypeId),
-          code: categoryCode,
-          accounting_code: accountingCode || null,
+          accounting_code: categoryCode,
+          category_code: accountingCode || null,
           name: categoryName,
-          calendar_code: calendarCode || null,
         },
         session,
         onSessionRefresh,
       );
-      setCategories((prev) => [...prev, created].sort((left, right) => left.code.localeCompare(right.code)));
+      setCategories((prev) => [...prev, created].sort((left, right) => left.accounting_code.localeCompare(right.accounting_code)));
       setCategoryCode("");
       setCategoryName("");
       setAccountingCode("");
-      setCalendarCode("");
     }, "Catégorie créée.");
   }
 
@@ -330,11 +326,7 @@ export default function ResourcesPage() {
 
   function startEditCategory(category: CostCategory) {
     setEditingCategoryId(category.id);
-    setCategoryDraft({
-      name: category.name,
-      accountingCode: category.accounting_code ?? "",
-      calendarCode: category.calendar_code ?? "",
-    });
+    setCategoryDraft({ code: category.accounting_code, name: category.name ?? "", accountingCode: category.category_code ?? "" });
   }
 
   async function saveCategory(category: CostCategory) {
@@ -343,9 +335,9 @@ export default function ResourcesPage() {
       const updated = await updateCostCategory(
         category.id,
         {
+          accounting_code: categoryDraft.code,
           name: categoryDraft.name,
-          accounting_code: categoryDraft.accountingCode || null,
-          calendar_code: categoryDraft.calendarCode || null,
+          category_code: categoryDraft.accountingCode || null,
         },
         session,
         onSessionRefresh,
@@ -388,40 +380,27 @@ export default function ResourcesPage() {
     }, "Rôle créé.");
   }
 
-  async function addRate(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function saveAllValuation() {
     if (!session) return;
     await submitAction(async () => {
-      const created = await createCostRate(
-        {
-          cost_category_id: Number(rateCategoryId),
-          year: Number(rateYear),
-          hourly_rate: rateValue,
-          currency_code: rateCurrency,
-        },
-        session,
-        onSessionRefresh,
-      );
-      setRates((prev) => [...prev, created].sort((left, right) => left.year - right.year));
-      setRateValue("");
-    }, "Taux horaire enregistré.");
-  }
-
-  async function saveInflation(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!session) return;
-    await submitAction(async () => {
-      const updated = await setInflationRate(
-        Number(inflationYear),
-        inflationValue,
-        session,
-        onSessionRefresh,
-      );
-      setInflation((prev) => {
-        const rest = prev.filter((item) => item.year !== updated.year);
-        return [...rest, updated].sort((left, right) => left.year - right.year);
-      });
-    }, "Coefficient d'inflation enregistré.");
+      if (inflationValue.trim()) {
+        const percentage = Number(inflationValue);
+        await setInflationRate(Number(inflationYear), String(1 + percentage / 100), session, onSessionRefresh);
+      }
+      const years = [-4, -3, -2, -1, 0].map((offset) => new Date().getFullYear() + offset);
+      const laborCategories = categories.filter((category) => costTypes.find((type) => type.id === category.cost_type_id)?.kind === "labor");
+      for (const category of laborCategories) {
+        for (const year of years) {
+          const value = rateDrafts[`${category.id}:${year}`]?.trim() ?? "";
+          if (!value) continue;
+          const existing = rates.find((rate) => rate.cost_category_id === category.id && rate.year === year);
+          const saved = existing
+            ? await updateCostRate(existing.id, { hourly_rate: value }, session, onSessionRefresh)
+            : await createCostRate({ cost_category_id: category.id, year, hourly_rate: value, currency_code: displayCurrency }, session, onSessionRefresh);
+          setRates((previous) => existing ? previous.map((rate) => rate.id === saved.id ? saved : rate) : [...previous, saved]);
+        }
+      }
+    }, "Taux horaires enregistrés.");
   }
 
   async function addCapacity(event: FormEvent<HTMLFormElement>) {
@@ -663,7 +642,7 @@ export default function ResourcesPage() {
               <div className="field"><label htmlFor="role-code">Code</label><input id="role-code" value={roleCode} onChange={(event) => setRoleCode(event.target.value)} required /></div>
               <div className="field"><label htmlFor="role-name">Nom</label><input id="role-name" value={roleName} onChange={(event) => setRoleName(event.target.value)} required /></div>
               <div className="field"><label htmlFor="role-node">Nœud</label><select id="role-node" value={roleNodeId} onChange={(event) => setRoleNodeId(event.target.value)} required><option value="">Sélectionner</option>{nodes.map((node) => <option key={node.id} value={node.id}>{node.code} - {node.name}</option>)}</select></div>
-              <div className="field"><label htmlFor="role-category">Catégorie</label><select id="role-category" value={roleCategoryId} onChange={(event) => setRoleCategoryId(event.target.value)} required><option value="">Sélectionner</option>{categories.filter((category) => category.is_active).map((category) => <option key={category.id} value={category.id}>{category.code} - {category.name}</option>)}</select></div>
+              <div className="field"><label htmlFor="role-category">Code comptable</label><select id="role-category" value={roleCategoryId} onChange={(event) => setRoleCategoryId(event.target.value)} required><option value="">Sélectionner</option>{categories.filter((category) => category.is_active).map((category) => <option key={category.id} value={category.id}>{category.accounting_code} - {category.name}</option>)}</select></div>
               <button className="btn btn-primary" disabled={actionBusy} type="submit">Ajouter</button>
             </form>
             <ul className="resource-list">{roles.map((role) => <li key={role.id}><strong>{role.code}</strong> {role.name}<span>{nodeNameById.get(role.node_id) ?? "?"} / {categoryNameById.get(role.cost_category_id) ?? "?"}</span></li>)}</ul>
@@ -697,7 +676,7 @@ export default function ResourcesPage() {
                           <td><strong>{costType.code}</strong></td>
                           <td>{editing ? <input aria-label={`Nom de ${costType.code}`} value={costTypeDraft} onChange={(event) => setCostTypeDraft(event.target.value)} /> : costType.name}</td>
                           <td>{costTypeKindLabels[costType.kind]}</td>
-                          <td>
+                          <td className="table-actions">
                             <div className="row">
                               {costType.is_active && (editing ? (
                                 <>
@@ -717,86 +696,58 @@ export default function ResourcesPage() {
             </form>
           </section>
 
-          <section className="grid-3">
-
-            <div className="panel">
+          <section className="panel panel-stack">
               <h2>Catégories de coût</h2>
               <form onSubmit={addCategory}>
-                <div className="field"><label htmlFor="category-type">Type</label><select id="category-type" value={categoryCostTypeId} onChange={(event) => setCategoryCostTypeId(event.target.value)} required><option value="">Sélectionner</option>{costTypes.filter((costType) => costType.is_active).map((costType) => <option key={costType.id} value={costType.id}>{costType.code} - {costType.name}</option>)}</select></div>
-                <div className="field"><label htmlFor="category-code">Code</label><input id="category-code" value={categoryCode} onChange={(event) => setCategoryCode(event.target.value)} required /></div>
-                <div className="field"><label htmlFor="accounting-code">Code comptable</label><input id="accounting-code" value={accountingCode} onChange={(event) => setAccountingCode(event.target.value)} /></div>
-                <div className="field"><label htmlFor="category-name">Nom</label><input id="category-name" value={categoryName} onChange={(event) => setCategoryName(event.target.value)} required /></div>
-                <div className="field"><label htmlFor="calendar-code">Calendrier</label><input id="calendar-code" value={calendarCode} onChange={(event) => setCalendarCode(event.target.value)} /></div>
-                <button className="btn btn-primary" disabled={actionBusy} type="submit">Ajouter</button>
+                <div className="table-scroll">
+                  <table className="table">
+                    <thead><tr><th scope="col">Type</th><th scope="col">Code comptable</th><th scope="col">Catégorie comptable</th><th scope="col">Nom</th><th scope="col">Actions</th></tr></thead>
+                    <tbody>
+                      <tr>
+                        <td><select id="category-type" aria-label="Type de la nouvelle catégorie" value={categoryCostTypeId} onChange={(event) => setCategoryCostTypeId(event.target.value)} required><option value="">Sélectionner</option>{costTypes.filter((costType) => costType.is_active).map((costType) => <option key={costType.id} value={costType.id}>{costType.code} - {costType.name}</option>)}</select></td>
+                        <td><input id="category-code" aria-label="Code comptable de la nouvelle catégorie" value={categoryCode} onChange={(event) => setCategoryCode(event.target.value)} required /></td>
+                        <td><input id="accounting-code" aria-label="Catégorie comptable de la nouvelle catégorie" value={accountingCode} onChange={(event) => setAccountingCode(event.target.value)} /></td>
+                        <td><input id="category-name" aria-label="Nom de la nouvelle catégorie" value={categoryName} onChange={(event) => setCategoryName(event.target.value)} required /></td>
+                        <td><button className="btn btn-primary" disabled={actionBusy} type="submit">Ajouter</button></td>
+                      </tr>
+                      {categories.map((category) => {
+                        const editing = editingCategoryId === category.id;
+                        return (
+                          <tr key={category.id} style={{ opacity: category.is_active ? 1 : 0.55 }}>
+                            <td>{costTypeNameById.get(category.cost_type_id) ?? "?"}</td>
+                            <td>{editing ? <input aria-label={`Code comptable de ${category.accounting_code}`} value={categoryDraft.code} onChange={(event) => setCategoryDraft((previous) => ({ ...previous, code: event.target.value }))} /> : <strong>{category.accounting_code}</strong>}</td>
+                            <td>{editing ? <input aria-label={`Catégorie comptable de ${category.accounting_code}`} value={categoryDraft.accountingCode} onChange={(event) => setCategoryDraft((previous) => ({ ...previous, accountingCode: event.target.value }))} /> : (category.category_code ?? "Sans catégorie")}</td>
+                            <td>{editing ? <input aria-label={`Nom de ${category.accounting_code}`} value={categoryDraft.name} onChange={(event) => setCategoryDraft((previous) => ({ ...previous, name: event.target.value }))} /> : category.name}{category.is_active ? null : <span className="tag" style={{ marginLeft: "0.4rem" }}>Inactive</span>}</td>
+                            <td className="table-actions">
+                              <div className="row" style={{ justifyContent: "flex-end" }}>
+                                {editing ? <><button className="btn btn-primary" type="button" disabled={actionBusy} onClick={() => void saveCategory(category)}>Enregistrer</button><button className="btn" type="button" onClick={() => setEditingCategoryId(null)}>Annuler</button></> : <button className="btn" type="button" onClick={() => startEditCategory(category)}>Modifier</button>}
+                                <button className="btn" type="button" disabled={actionBusy} onClick={() => void toggleCategoryActive(category)}>{category.is_active ? "Désactiver" : "Réactiver"}</button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </form>
-              <ul className="resource-list">
-                {categories.map((category) => {
-                  const editing = editingCategoryId === category.id;
-                  return (
-                    <li key={category.id} style={{ opacity: category.is_active ? 1 : 0.55 }}>
-                      <div className="row" style={{ justifyContent: "space-between" }}>
-                        <div>
-                          <strong>{category.code}</strong>{" "}
-                          {editing ? (
-                            <input
-                              value={categoryDraft.name}
-                              onChange={(event) => setCategoryDraft((prev) => ({ ...prev, name: event.target.value }))}
-                              style={{ display: "inline-block", width: "auto" }}
-                            />
-                          ) : (
-                            category.name
-                          )}
-                          {category.is_active ? null : <span className="tag" style={{ marginLeft: "0.4rem" }}>Inactive</span>}
-                          <span>{costTypeNameById.get(category.cost_type_id) ?? "?"} / {editing ? (
-                            <input
-                              value={categoryDraft.accountingCode}
-                              placeholder="Code comptable"
-                              onChange={(event) => setCategoryDraft((prev) => ({ ...prev, accountingCode: event.target.value }))}
-                              style={{ display: "inline-block", width: "auto" }}
-                            />
-                          ) : (category.accounting_code ?? "Sans code comptable")}</span>
-                          <span>{editing ? (
-                            <input
-                              value={categoryDraft.calendarCode}
-                              placeholder="Calendrier"
-                              onChange={(event) => setCategoryDraft((prev) => ({ ...prev, calendarCode: event.target.value }))}
-                              style={{ display: "inline-block", width: "auto" }}
-                            />
-                          ) : (category.calendar_code ?? "Sans calendrier")}</span>
-                        </div>
-                        <div className="row">
-                          {editing ? (
-                            <>
-                              <button className="btn btn-primary" type="button" disabled={actionBusy} onClick={() => void saveCategory(category)}>Sauver</button>
-                              <button className="btn" type="button" onClick={() => setEditingCategoryId(null)}>Annuler</button>
-                            </>
-                          ) : (
-                            <button className="btn" type="button" onClick={() => startEditCategory(category)}>Modifier</button>
-                          )}
-                          <button className="btn" type="button" disabled={actionBusy} onClick={() => void toggleCategoryActive(category)}>
-                            {category.is_active ? "Désactiver" : "Réactiver"}
-                          </button>
-                        </div>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-
-            <div className="panel"><h2>Inflation</h2><form onSubmit={saveInflation}><div className="field"><label htmlFor="inflation-year">Année</label><input id="inflation-year" type="number" min="2000" value={inflationYear} onChange={(event) => setInflationYear(event.target.value)} required /></div><div className="field"><label htmlFor="inflation-value">Coefficient</label><input id="inflation-value" type="number" min="0.0001" step="0.0001" value={inflationValue} onChange={(event) => setInflationValue(event.target.value)} required /></div><button className="btn btn-primary" disabled={actionBusy} type="submit">Enregistrer</button></form><ul className="resource-list">{inflation.map((item) => <li key={item.id}><strong>{item.year}</strong><span>{item.coefficient}</span></li>)}</ul></div>
           </section>
 
           <section className="panel panel-stack">
-            <h2>Taux horaires</h2>
-            <form className="grid-3" onSubmit={addRate}>
-              <div className="field"><label htmlFor="rate-category">Catégorie</label><select id="rate-category" value={rateCategoryId} onChange={(event) => setRateCategoryId(event.target.value)} required><option value="">Sélectionner</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.code}</option>)}</select></div>
-              <div className="field"><label htmlFor="rate-year">Année</label><input id="rate-year" type="number" min="2000" value={rateYear} onChange={(event) => setRateYear(event.target.value)} required /></div>
-              <div className="field"><label htmlFor="rate-value">Taux horaire</label><input id="rate-value" type="number" min="0" step="0.0001" value={rateValue} onChange={(event) => setRateValue(event.target.value)} required /></div>
-              <div className="field"><label htmlFor="rate-currency">Devise</label><input id="rate-currency" maxLength={3} value={rateCurrency} onChange={(event) => setRateCurrency(event.target.value)} required /></div>
-              <div className="row"><button className="btn btn-primary" disabled={actionBusy} type="submit">Enregistrer le taux</button></div>
-            </form>
-            <div className="table-scroll"><table className="table"><thead><tr><th scope="col">Année</th><th scope="col">Catégorie</th><th scope="col">Taux</th><th scope="col">Devise</th></tr></thead><tbody>{rates.map((rate) => <tr key={rate.id}><td>{rate.year}</td><td>{categoryNameById.get(rate.cost_category_id) ?? "?"}</td><td>{rate.hourly_rate}</td><td>{rate.currency_code}</td></tr>)}</tbody></table></div>
+            <h2>Valorisation</h2>
+            <div className="grid-3">
+              <div className="field"><label htmlFor="display-currency">Devise</label><select id="display-currency" value={displayCurrency} onChange={(event) => setDisplayCurrency(event.target.value)}><option value="EUR">EUR</option><option value="USD">Dollar</option></select></div>
+              <div>
+                <div className="field"><label htmlFor="inflation-year">Inflation ({inflationYear})</label><div className="row"><input id="inflation-value" type="number" min="-100" step="0.01" value={inflationValue} onChange={(event) => setInflationValue(event.target.value)} placeholder="Pourcentage" /><span>%</span></div></div>
+              </div>
+            </div>
+            <div className="table-scroll">
+              <table className="table">
+                <thead><tr><th scope="col">Code comptable</th>{[-4, -3, -2, -1, 0].map((offset) => { const year = new Date().getFullYear() + offset; return <th scope="col" key={year} style={offset === 0 ? { background: "var(--accent-soft)" } : undefined}>{year}</th>; })}</tr></thead>
+                <tbody>{categories.filter((category) => costTypes.find((type) => type.id === category.cost_type_id)?.kind === "labor").map((category) => <tr key={category.id}><td><strong>{category.accounting_code}</strong></td>{[-4, -3, -2, -1, 0].map((offset) => { const year = new Date().getFullYear() + offset; const key = `${category.id}:${year}`; return <td key={year} style={offset === 0 ? { background: "var(--accent-soft)" } : undefined}><input aria-label={`${category.accounting_code} ${year}`} type="number" step="0.01" min="0" value={rateDrafts[key] ?? ""} onChange={(event) => setRateDrafts((previous) => ({ ...previous, [key]: event.target.value }))} placeholder="-" /></td>; })}</tr>)}</tbody>
+              </table>
+            </div>
+            <div className="row" style={{ justifyContent: "flex-end" }}><button className="btn btn-primary" type="button" disabled={actionBusy} onClick={() => void saveAllValuation()}>Enregistrer</button></div>
           </section>
         </>
       ) : null}

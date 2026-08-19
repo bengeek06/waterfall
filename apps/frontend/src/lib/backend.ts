@@ -341,10 +341,9 @@ export function updateCostType(
 export function createCostCategory(
   payload: {
     cost_type_id: number;
-    code: string;
-    accounting_code?: string | null;
+    accounting_code: string;
+    category_code?: string | null;
     name: string;
-    calendar_code?: string | null;
   },
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
@@ -361,9 +360,9 @@ export function updateCostCategory(
   categoryId: number,
   payload: {
     cost_type_id?: number;
-    accounting_code?: string | null;
+    accounting_code?: string;
+    category_code?: string | null;
     name?: string;
-    calendar_code?: string | null;
     is_active?: boolean;
   },
   tokens: SessionTokens,
@@ -390,6 +389,20 @@ export function createCostRate(
     "/resources/rates",
     tokens,
     { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
+    onSessionRefresh,
+  );
+}
+
+export function updateCostRate(
+  rateId: number,
+  payload: { hourly_rate?: string; currency_code?: string; year?: number },
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<CostRate>(
+    `/resources/rates/${rateId}`,
+    tokens,
+    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
     onSessionRefresh,
   );
 }

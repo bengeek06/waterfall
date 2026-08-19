@@ -264,7 +264,7 @@ def list_categories(
     query = db.query(CostCategory)
     if not include_inactive:
         query = query.filter(CostCategory.is_active.is_(True))
-    return query.order_by(CostCategory.code).all()
+    return query.order_by(CostCategory.accounting_code).all()
 
 
 @router.get("/cost-types", response_model=list[CostTypeRead])

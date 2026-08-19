@@ -62,8 +62,8 @@ def _seed_resources_with_rates() -> tuple[int, dict[int, dict[int, Decimal]]]:
 
         labor_category = CostCategory(
             cost_type_id=labor_type.id,
-            code="MO-DEV",
-            accounting_code="IDEX",
+            accounting_code="MO-DEV",
+            category_code="IDEX",
             name="Développement",
         )
         session.add(labor_category)
@@ -345,8 +345,8 @@ def test_non_labor_cost_lines_create_single_snapshot() -> None:
 
             supply_category = CostCategory(
                 cost_type_id=supply_type.id,
-                code="FO-CABLE",
-                accounting_code="ACHAT",
+                accounting_code="FO-CABLE",
+                category_code="ACHAT",
                 name="Câbles",
             )
             session.add(supply_category)

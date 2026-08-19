@@ -28,8 +28,8 @@ def _seed_resource_graph() -> tuple[int, int, int]:
 
         category = CostCategory(
             cost_type_id=cost_type.id,
-            code="DEV",
-            accounting_code="IDEX",
+            accounting_code="DEV",
+            category_code="IDEX",
             name="Developpement",
         )
         session.add(category)
@@ -135,7 +135,7 @@ def test_resource_models_persist_assignments_and_estimate_snapshots() -> None:
                 task_name="Implementation",
                 role_code="DEV-SW",
                 role_name="Developpeur",
-                cost_category_code="DEV",
+                accounting_code="DEV",
                 year=2026,
                 quantity=Decimal("1.00"),
                 hours=Decimal("24.00"),

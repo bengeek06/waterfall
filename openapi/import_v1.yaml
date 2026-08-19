@@ -2366,7 +2366,7 @@ components:
         - role_code
         - role_name
         - cost_category_id
-        - cost_category_code
+        - accounting_code
         - quantity
         - hours
         - created_at
@@ -2388,7 +2388,7 @@ components:
         cost_category_id:
           type: integer
           minimum: 1
-        cost_category_code:
+        accounting_code:
           type: string
         quantity:
           type: number
@@ -2567,7 +2567,7 @@ components:
         - cost_type_id
         - cost_category_id
         - cost_type_code
-        - cost_category_code
+        - accounting_code
         - label
         - quantity
         - unit_cost
@@ -2591,9 +2591,9 @@ components:
           minimum: 1
         cost_type_code:
           type: string
-        cost_category_code:
-          type: string
         accounting_code:
+          type: string
+        category_code:
           type: string
           nullable: true
         label:
@@ -2779,16 +2779,16 @@ components:
 
     CostCategoryCreate:
       type: object
-      required: [cost_type_id, code, name]
+      required: [cost_type_id, accounting_code, name]
       properties:
         cost_type_id:
           type: integer
           minimum: 1
-        code:
+        accounting_code:
           type: string
           minLength: 1
           maxLength: 64
-        accounting_code:
+        category_code:
           type: string
           maxLength: 64
           nullable: true
@@ -2796,9 +2796,6 @@ components:
           type: string
           minLength: 1
           maxLength: 255
-        calendar_code:
-          type: string
-          maxLength: 64
           nullable: true
 
     CostCategoryUpdate:
@@ -2809,15 +2806,16 @@ components:
           minimum: 1
         accounting_code:
           type: string
+          minLength: 1
+          maxLength: 64
+        category_code:
+          type: string
           maxLength: 64
           nullable: true
         name:
           type: string
           minLength: 1
           maxLength: 255
-        calendar_code:
-          type: string
-          maxLength: 64
           nullable: true
         is_active:
           type: boolean

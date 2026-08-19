@@ -1042,7 +1042,7 @@ export interface components {
             role_code: string;
             role_name: string;
             cost_category_id: number;
-            cost_category_code: string;
+            accounting_code: string;
             quantity: number;
             hours: number;
             comment?: string | null;
@@ -1110,8 +1110,8 @@ export interface components {
             cost_type_id: number;
             cost_category_id: number;
             cost_type_code: string;
-            cost_category_code: string;
-            accounting_code?: string | null;
+            accounting_code: string;
+            category_code?: string | null;
             label: string;
             quantity: number;
             unit_cost: number;
@@ -1185,16 +1185,15 @@ export interface components {
         };
         CostCategoryCreate: {
             cost_type_id: number;
-            code: string;
-            accounting_code?: string | null;
-            name: string;
-            calendar_code?: string | null;
+            accounting_code: string;
+            category_code?: string | null;
+            name: string | null;
         };
         CostCategoryUpdate: {
             cost_type_id?: number;
-            accounting_code?: string | null;
-            name?: string;
-            calendar_code?: string | null;
+            accounting_code?: string;
+            category_code?: string | null;
+            name?: string | null;
             is_active?: boolean;
         };
         CostCategoryRead: components["schemas"]["CostCategoryCreate"] & {

@@ -74,7 +74,7 @@ def calculate_estimate_lines(db: Session, estimate_id: int) -> list[EstimateLine
             task_name=cost_line.label,
             role_code="",
             role_name="",
-            cost_category_code=cost_line.cost_category_code,
+            accounting_code=cost_line.accounting_code,
             year=snapshot_year,
             quantity=cost_line.quantity,
             hours=Decimal("0"),
@@ -139,7 +139,7 @@ def _generate_labor_lines(
             task_name=task.name,
             role_code=role.code,
             role_name=role.name,
-            cost_category_code=role.code,  # Use role code as proxy for category
+            accounting_code=role.code,  # Use role code as proxy for category
             year=year,
             quantity=assignment.quantity,
             hours=hours_per_year,
@@ -182,9 +182,9 @@ def calculate_estimate_aggregates(db: Session, estimate_id: int) -> EstimateAggr
         total_unburdened_cost += line.budget_cost
 
         # By category
-        if line.cost_category_code not in by_category:
-            by_category[line.cost_category_code] = Decimal("0")
-        by_category[line.cost_category_code] += line.budget_cost
+        if line.accounting_code not in by_category:
+            by_category[line.accounting_code] = Decimal("0")
+        by_category[line.accounting_code] += line.budget_cost
 
     return {
         "total_labor_cost": total_labor_cost,

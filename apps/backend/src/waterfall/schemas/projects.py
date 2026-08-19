@@ -77,7 +77,7 @@ class TaskRoleAssignmentRead(BaseModel):
     role_code: str
     role_name: str
     cost_category_id: int
-    cost_category_code: str
+    accounting_code: str
     quantity: Decimal
     hours: Decimal
     comment: str | None
@@ -145,8 +145,8 @@ class EstimateCostLineRead(BaseModel):
     cost_type_id: int
     cost_category_id: int
     cost_type_code: str
-    cost_category_code: str
-    accounting_code: str | None
+    accounting_code: str
+    category_code: str | None
     label: str
     quantity: Decimal
     unit_cost: Decimal

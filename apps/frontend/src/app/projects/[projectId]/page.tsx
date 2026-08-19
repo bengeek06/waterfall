@@ -1050,7 +1050,7 @@ export default function ProjectDetailsPage() {
                         const editing = editingLineId === line.id;
                         return (
                           <tr key={line.id}>
-                            <td>{line.cost_category_code}</td>
+                            <td>{line.accounting_code}</td>
                             <td>
                               {editing ? (
                                 <input
