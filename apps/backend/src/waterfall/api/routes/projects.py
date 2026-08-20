@@ -255,6 +255,38 @@ def _to_task_role_assignment_read(
     )
 
 
+def _to_task_reads(db: Session, project_id: int, tasks: list[MsTask]) -> list[TaskRead]:
+    task_uids = [task.uid for task in tasks]
+    descriptions_by_uid: dict[int, str | None] = {}
+    links_by_task_uid: dict[int, list[MsTaskLink]] = {}
+    if task_uids:
+        enrichments = (
+            db.query(WfTaskEnrichment)
+            .filter(WfTaskEnrichment.project_id == project_id)
+            .filter(WfTaskEnrichment.task_uid.in_(task_uids))
+            .all()
+        )
+        descriptions_by_uid = {item.task_uid: item.description for item in enrichments}
+        links = (
+            db.query(MsTaskLink)
+            .filter(MsTaskLink.project_id == project_id)
+            .filter(MsTaskLink.task_uid.in_(task_uids))
+            .order_by(MsTaskLink.id.asc())
+            .all()
+        )
+        for link in links:
+            links_by_task_uid.setdefault(link.task_uid, []).append(link)
+
+    return [
+        _to_task_read(
+            task,
+            descriptions_by_uid.get(task.uid),
+            links_by_task_uid.get(task.uid),
+        )
+        for task in tasks
+    ]
+
+
 @router.get("", response_model=list[ProjectRead])
 def list_projects(
     limit: int = Query(default=50, ge=1, le=500),
@@ -748,46 +780,15 @@ def list_project_tasks(
 ) -> list[TaskRead]:
     _get_project_or_404(db, project_id, current_user.id)
 
-    all_tasks = db.query(MsTask).filter(MsTask.project_id == project_id).all()
-    tasks = sorted(
-        all_tasks,
-        key=lambda task: (
-            tuple(int(part) for part in (task.outline_number or "").split(".")),
-            task.id,
-        ),
-    )[offset : offset + limit]
-
-    task_uids = [task.uid for task in tasks]
-    descriptions_by_uid: dict[int, str | None] = {}
-    if task_uids:
-        enrichments = (
-            db.query(WfTaskEnrichment)
-            .filter(WfTaskEnrichment.project_id == project_id)
-            .filter(WfTaskEnrichment.task_uid.in_(task_uids))
-            .all()
-        )
-        descriptions_by_uid = {item.task_uid: item.description for item in enrichments}
-
-    links_by_task_uid: dict[int, list[MsTaskLink]] = {}
-    if task_uids:
-        links = (
-            db.query(MsTaskLink)
-            .filter(MsTaskLink.project_id == project_id)
-            .filter(MsTaskLink.task_uid.in_(task_uids))
-            .order_by(MsTaskLink.id.asc())
-            .all()
-        )
-        for link in links:
-            links_by_task_uid.setdefault(link.task_uid, []).append(link)
-
-    return [
-        _to_task_read(
-            task,
-            descriptions_by_uid.get(task.uid),
-            links_by_task_uid.get(task.uid),
-        )
-        for task in tasks
-    ]
+    tasks = (
+        db.query(MsTask)
+        .filter(MsTask.project_id == project_id)
+        .order_by(MsTask.outline_number.asc().nulls_last(), MsTask.id.asc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    return _to_task_reads(db, project_id, tasks)
 
 
 @router.get("/{project_id}/planning-tree", response_model=PlanningTreeRead)
@@ -796,13 +797,14 @@ def get_planning_tree(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> PlanningTreeRead:
-    tasks = list_project_tasks(
-        project_id,
-        limit=2000,
-        offset=0,
-        db=db,
-        current_user=current_user,
+    _get_project_or_404(db, project_id, current_user.id)
+    stored_tasks = (
+        db.query(MsTask)
+        .filter(MsTask.project_id == project_id)
+        .order_by(MsTask.outline_number.asc().nulls_last(), MsTask.id.asc())
+        .all()
     )
+    tasks = _to_task_reads(db, project_id, stored_tasks)
     tree_by_uid = {task.uid: PlanningTaskTreeRead(**task.model_dump()) for task in tasks}
     roots: list[PlanningTaskTreeRead] = []
     for task in tree_by_uid.values():
@@ -881,6 +883,7 @@ def create_project_task(
             .count()
         )
         outline_number = f"{parent_task.outline_number}.{sibling_count + 1}"
+        position = sibling_count + 1
     else:
         outline_level = 1
         root_count = (
@@ -890,11 +893,14 @@ def create_project_task(
             .count()
         )
         outline_number = str(root_count + 1)
+        position = root_count + 1
 
     task = MsTask(
         project_id=project_id,
         uid=(max_uid or 0) + 1,
         id_display=(max_id_display or 0) + 1,
+        parent_uid=parent_task.uid if parent_task is not None else None,
+        position=position,
         name=payload.name.strip(),
         outline_number=outline_number,
         outline_level=outline_level,
