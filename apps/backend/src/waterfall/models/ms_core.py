@@ -68,7 +68,13 @@ class MsTask(Base):
     __tablename__ = "ms_task"
     __table_args__ = (
         UniqueConstraint("project_id", "uid", name="uq_ms_task_project_uid"),
+        UniqueConstraint("project_id", "structure_key", name="uq_ms_task_project_structure_key"),
         CheckConstraint("task_type IN (0, 1, 2) OR task_type IS NULL", name="ck_ms_task_type"),
+        CheckConstraint(
+            "structure_kind IN ('poste', 'lot', 'livrable', 'milestone', 'task') "
+            "OR structure_kind IS NULL",
+            name="ck_ms_task_structure_kind",
+        ),
         CheckConstraint(
             "percent_complete BETWEEN 0 AND 100 OR percent_complete IS NULL",
             name="ck_ms_task_percent_complete",
@@ -89,6 +95,10 @@ class MsTask(Base):
     project_id: Mapped[int] = mapped_column(ForeignKey("ms_project.id"), nullable=False)
     uid: Mapped[int] = mapped_column(Integer, nullable=False)
     id_display: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    structure_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    structure_kind: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    parent_uid: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    position: Mapped[int | None] = mapped_column(Integer, nullable=True)
     name: Mapped[str] = mapped_column(String(512), nullable=False)
     task_type: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
     outline_number: Mapped[str | None] = mapped_column(String(512), nullable=True)
