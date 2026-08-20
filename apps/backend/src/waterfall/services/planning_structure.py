@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from sqlalchemy.orm import Session
 
 from waterfall.models.ms_core import MsProject, MsTask, MsTaskLink
+from waterfall.models.resources import EstimateCostLine, EstimateTaskRow, TaskRoleAssignment
+from waterfall.models.wf_core import WfChargeLine, WfTaskEnrichment
 from waterfall.schemas.projects import PlanningStructureCreate
 
 
@@ -96,53 +98,40 @@ def generate_planning_structure(
     existing = (
         db.query(MsTask)
         .filter(MsTask.project_id == project.id)
-        .filter(MsTask.structure_key.in_(keys))
+        .filter(MsTask.structure_key.is_not(None))
         .all()
     )
-    if existing:
-        existing_by_key = {task.structure_key: task for task in existing}
-        if set(existing_by_key) != set(keys):
-            raise ValueError("Project contains an incomplete planning structure")
-        uid_by_key = {node.key: existing_by_key[node.key].uid for node in nodes}
-        deliverables_by_lot_key = {
-            f"{post.key}/{lot.key}": lot.deliverables for post in payload.posts for lot in post.lots
-        }
-        existing_links = (
-            db.query(MsTaskLink)
-            .filter(MsTaskLink.project_id == project.id)
-            .filter(MsTaskLink.task_uid.in_(uid_by_key.values()))
-            .all()
+    existing_by_key = {task.structure_key: task for task in existing}
+    incoming_keys = set(keys)
+    removed_tasks = [task for key, task in existing_by_key.items() if key not in incoming_keys]
+    for task in removed_tasks:
+        task_referenced = (
+            db.query(TaskRoleAssignment.id).filter(TaskRoleAssignment.task_id == task.id).first()
+            or db.query(EstimateCostLine.id).filter(EstimateCostLine.task_id == task.id).first()
+            or db.query(EstimateTaskRow.id).filter(EstimateTaskRow.task_id == task.id).first()
+            or db.query(WfChargeLine.id)
+            .filter(WfChargeLine.project_id == project.id)
+            .filter(WfChargeLine.task_uid == task.uid)
+            .first()
         )
-        existing_link_keys = {
-            (link.task_uid, link.predecessor_uid, link.link_type) for link in existing_links
-        }
-        for node in nodes:
-            task = existing_by_key[node.key]
-            task.name = node.name
-            task.structure_kind = node.kind
-            task.parent_uid = uid_by_key.get(node.parent_key) if node.parent_key else None
-            task.position = node.position
-            task.outline_number = node.outline_number
-            task.outline_level = node.outline_level
-            task.is_summary = node.is_summary
-            task.is_milestone = node.is_milestone
-            if node.kind != "milestone" or node.parent_key is None:
-                continue
-            for deliverable in deliverables_by_lot_key[node.parent_key]:
-                predecessor_uid = uid_by_key[f"{node.parent_key}/{deliverable.key}"]
-                link_key = (task.uid, predecessor_uid, 1)
-                if link_key not in existing_link_keys:
-                    db.add(
-                        MsTaskLink(
-                            project_id=project.id,
-                            task_uid=task.uid,
-                            predecessor_uid=predecessor_uid,
-                            link_type=1,
-                            lag_tenth_minute=0,
-                            lag_format=7,
-                        )
-                    )
-        return [existing_by_key[node.key] for node in nodes]
+        if task_referenced:
+            raise ValueError(
+                f"Planning task is referenced and cannot be removed: {task.structure_key}"
+            )
+
+    for task in removed_tasks:
+        db.query(MsTaskLink).filter(
+            (MsTaskLink.task_uid == task.uid) | (MsTaskLink.predecessor_uid == task.uid)
+        ).filter(MsTaskLink.project_id == project.id).delete(synchronize_session=False)
+        db.query(WfTaskEnrichment).filter(
+            WfTaskEnrichment.project_id == project.id,
+            WfTaskEnrichment.task_uid == task.uid,
+        ).delete(synchronize_session=False)
+        task.parent_uid = None
+    db.flush()
+    for task in sorted(removed_tasks, key=lambda item: item.outline_level or 0, reverse=True):
+        db.delete(task)
+    db.flush()
 
     max_uid = (
         db.query(MsTask.uid)
@@ -162,45 +151,48 @@ def generate_planning_structure(
     tasks: list[MsTask] = []
 
     for node in nodes:
-        task = MsTask(
-            project_id=project.id,
-            uid=next_uid,
-            id_display=next_id,
-            structure_key=node.key,
-            structure_kind=node.kind,
-            parent_uid=uid_by_key.get(node.parent_key) if node.parent_key else None,
-            position=node.position,
-            name=node.name,
-            outline_number=node.outline_number,
-            outline_level=node.outline_level,
-            task_type=0,
-            is_summary=node.is_summary,
-            is_milestone=node.is_milestone,
-        )
-        db.add(task)
+        task = existing_by_key.get(node.key)
+        if task is None:
+            task = MsTask(
+                project_id=project.id,
+                uid=next_uid,
+                id_display=next_id,
+                structure_key=node.key,
+                task_type=0,
+            )
+            db.add(task)
+            next_uid += 1
+            next_id += 1
+        task.structure_kind = node.kind
+        task.parent_uid = uid_by_key.get(node.parent_key) if node.parent_key else None
+        task.position = node.position
+        task.name = node.name
+        task.outline_number = node.outline_number
+        task.outline_level = node.outline_level
+        task.is_summary = node.is_summary
+        task.is_milestone = node.is_milestone
         tasks.append(task)
-        uid_by_key[node.key] = next_uid
-        next_uid += 1
-        next_id += 1
+        uid_by_key[node.key] = task.uid
 
     db.flush()
     deliverables_by_lot_key = {
         f"{post.key}/{lot.key}": lot.deliverables for post in payload.posts for lot in post.lots
     }
+    milestone_uids = [uid_by_key[node.key] for node in nodes if node.kind == "milestone"]
+    if milestone_uids:
+        db.query(MsTaskLink).filter(
+            MsTaskLink.project_id == project.id,
+            MsTaskLink.task_uid.in_(milestone_uids),
+        ).delete(synchronize_session=False)
     for node in nodes:
-        if node.kind != "milestone":
+        if node.kind != "milestone" or node.parent_key is None:
             continue
-        milestone_uid = uid_by_key[node.key]
-        lot_key = node.parent_key
-        if lot_key is None:
-            continue
-        for deliverable in deliverables_by_lot_key[lot_key]:
-            deliverable_key = f"{lot_key}/{deliverable.key}"
+        for deliverable in deliverables_by_lot_key[node.parent_key]:
             db.add(
                 MsTaskLink(
                     project_id=project.id,
-                    task_uid=milestone_uid,
-                    predecessor_uid=uid_by_key[deliverable_key],
+                    task_uid=uid_by_key[node.key],
+                    predecessor_uid=uid_by_key[f"{node.parent_key}/{deliverable.key}"],
                     link_type=1,
                     lag_tenth_minute=0,
                     lag_format=7,

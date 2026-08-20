@@ -141,6 +141,27 @@ def test_create_planning_structure_resynchronizes_names() -> None:
         assert tasks[2]["name"] == "Updated requirements"
 
 
+def test_create_planning_structure_reconciles_removed_lots() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        path = f"/projects/{project_id}/planning-structure"
+
+        first = client.post(path, json=_payload(), headers=headers)
+        assert first.status_code == 201
+        payload = _payload()
+        payload["posts"][0]["lots"] = payload["posts"][0]["lots"][:1]
+
+        second = client.post(path, json=payload, headers=headers)
+
+        assert second.status_code == 201
+        listed = client.get(f"/projects/{project_id}/tasks", headers=headers)
+        assert listed.status_code == 200
+        tasks = cast(list[dict[str, Any]], listed.json())
+        assert len(tasks) == 5
+        assert all(task["structure_key"] != "design/validation" for task in tasks)
+
+
 def test_create_planning_structure_rejects_duplicate_keys_without_mutation() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)
