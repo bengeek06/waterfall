@@ -667,6 +667,56 @@ paths:
         '404':
           $ref: '#/components/responses/ProjectNotFound'
 
+  /projects/{projectId}/planning-structure:
+    post:
+      tags: [projects]
+      summary: Generer le squelette de planning depuis une structure metier
+      operationId: createPlanningStructure
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlanningStructureCreate'
+      responses:
+        '201':
+          description: Squelette de planning genere
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanningStructureRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /projects/{projectId}/planning-tree:
+    get:
+      tags: [projects]
+      summary: Lire l'arbre hiérarchique du planning
+      operationId: getPlanningTree
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      responses:
+        '200':
+          description: Arbre hiérarchique du planning
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanningTreeRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+
   /projects/{projectId}/tasks/{taskUid}:
     patch:
       tags: [projects]
@@ -2278,6 +2328,19 @@ components:
         id_display:
           type: integer
           nullable: true
+        structure_key:
+          type: string
+          nullable: true
+        structure_kind:
+          type: string
+          enum: [poste, lot, livrable, milestone, task]
+          nullable: true
+        parent_uid:
+          type: integer
+          nullable: true
+        position:
+          type: integer
+          nullable: true
         name:
           type: string
         outline_number:
@@ -2304,6 +2367,119 @@ components:
         description:
           type: string
           nullable: true
+        predecessor_links:
+          type: array
+          items:
+            $ref: '#/components/schemas/TaskLinkRead'
+
+    TaskLinkRead:
+      type: object
+      required: [predecessor_uid, link_type]
+      properties:
+        predecessor_uid:
+          type: integer
+          minimum: 1
+        link_type:
+          type: integer
+          minimum: 0
+          maximum: 3
+        lag_tenth_minute:
+          type: integer
+          nullable: true
+        lag_format:
+          type: integer
+          nullable: true
+
+    PlanningStructureCreate:
+      type: object
+      required: [posts]
+      properties:
+        posts:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/PlanningPostCreate'
+
+    PlanningPostCreate:
+      type: object
+      required: [key, name, lots]
+      properties:
+        key:
+          type: string
+          minLength: 1
+          maxLength: 40
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
+        name:
+          type: string
+          minLength: 1
+          maxLength: 512
+        lots:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/PlanningLotCreate'
+
+    PlanningLotCreate:
+      type: object
+      required: [key, name, deliverables]
+      properties:
+        key:
+          type: string
+          minLength: 1
+          maxLength: 40
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
+        name:
+          type: string
+          minLength: 1
+          maxLength: 512
+        deliverables:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/PlanningDeliverableCreate'
+
+    PlanningDeliverableCreate:
+      type: object
+      required: [key, name]
+      properties:
+        key:
+          type: string
+          minLength: 1
+          maxLength: 40
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
+        name:
+          type: string
+          minLength: 1
+          maxLength: 512
+
+    PlanningStructureRead:
+      type: object
+      required: [tasks]
+      properties:
+        tasks:
+          type: array
+          items:
+            $ref: '#/components/schemas/TaskRead'
+
+    PlanningTreeRead:
+      type: object
+      required: [tasks]
+      properties:
+        tasks:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlanningTaskTreeRead'
+
+    PlanningTaskTreeRead:
+      allOf:
+        - $ref: '#/components/schemas/TaskRead'
+        - type: object
+          required: [children]
+          properties:
+            children:
+              type: array
+              items:
+                $ref: '#/components/schemas/PlanningTaskTreeRead'
 
     TaskDescriptionUpdate:
       type: object

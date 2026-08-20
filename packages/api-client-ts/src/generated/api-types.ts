@@ -366,6 +366,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{projectId}/planning-structure": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Generer le squelette de planning depuis une structure metier */
+        post: operations["createPlanningStructure"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{projectId}/planning-tree": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lire l'arbre hiérarchique du planning */
+        get: operations["getPlanningTree"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/projects/{projectId}/tasks/{taskUid}": {
         parameters: {
             query?: never;
@@ -1004,6 +1038,11 @@ export interface components {
             project_id: number;
             uid: number;
             id_display?: number | null;
+            structure_key?: string | null;
+            /** @enum {string|null} */
+            structure_kind?: "poste" | "lot" | "livrable" | "milestone" | "task" | null;
+            parent_uid?: number | null;
+            position?: number | null;
             name: string;
             outline_number?: string | null;
             outline_level?: number | null;
@@ -1015,6 +1054,39 @@ export interface components {
             is_summary: boolean;
             is_milestone: boolean;
             description?: string | null;
+            predecessor_links?: components["schemas"]["TaskLinkRead"][];
+        };
+        TaskLinkRead: {
+            predecessor_uid: number;
+            link_type: number;
+            lag_tenth_minute?: number | null;
+            lag_format?: number | null;
+        };
+        PlanningStructureCreate: {
+            posts: components["schemas"]["PlanningPostCreate"][];
+        };
+        PlanningPostCreate: {
+            key: string;
+            name: string;
+            lots: components["schemas"]["PlanningLotCreate"][];
+        };
+        PlanningLotCreate: {
+            key: string;
+            name: string;
+            deliverables: components["schemas"]["PlanningDeliverableCreate"][];
+        };
+        PlanningDeliverableCreate: {
+            key: string;
+            name: string;
+        };
+        PlanningStructureRead: {
+            tasks: components["schemas"]["TaskRead"][];
+        };
+        PlanningTreeRead: {
+            tasks: components["schemas"]["PlanningTaskTreeRead"][];
+        };
+        PlanningTaskTreeRead: components["schemas"]["TaskRead"] & {
+            children: components["schemas"]["PlanningTaskTreeRead"][];
         };
         TaskDescriptionUpdate: {
             description?: string | null;
@@ -2080,6 +2152,61 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+        };
+    };
+    createPlanningStructure: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlanningStructureCreate"];
+            };
+        };
+        responses: {
+            /** @description Squelette de planning genere */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanningStructureRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getPlanningTree: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Arbre hiérarchique du planning */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanningTreeRead"];
+                };
+            };
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["ProjectNotFound"];
         };

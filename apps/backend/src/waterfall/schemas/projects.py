@@ -2,7 +2,9 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+StructureKind = Literal["poste", "lot", "livrable", "milestone", "task"]
 
 
 def _required_text(value: str) -> str:
@@ -64,6 +66,10 @@ class TaskRead(BaseModel):
     project_id: int
     uid: int
     id_display: int | None
+    structure_key: str | None
+    structure_kind: StructureKind | None
+    parent_uid: int | None
+    position: int | None
     name: str
     outline_number: str | None
     outline_level: int | None
@@ -73,6 +79,14 @@ class TaskRead(BaseModel):
     is_summary: bool
     is_milestone: bool
     description: str | None
+    predecessor_links: list["TaskLinkRead"] = Field(default_factory=list)
+
+
+class TaskLinkRead(BaseModel):
+    predecessor_uid: int
+    link_type: int
+    lag_tenth_minute: int | None
+    lag_format: int | None
 
 
 class TaskDescriptionUpdate(BaseModel):
@@ -93,6 +107,67 @@ class TaskCreate(BaseModel):
     is_milestone: bool = False
 
     _normalize_name = field_validator("name")(_required_text)
+
+
+class PlanningDeliverableCreate(BaseModel):
+    key: str = Field(min_length=1, max_length=40, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    name: str = Field(min_length=1, max_length=512)
+
+    _normalize_key = field_validator("key")(_required_text)
+    _normalize_name = field_validator("name")(_required_text)
+
+
+class PlanningLotCreate(BaseModel):
+    key: str = Field(min_length=1, max_length=40, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    name: str = Field(min_length=1, max_length=512)
+    deliverables: list[PlanningDeliverableCreate] = Field(min_length=1)
+
+    _normalize_key = field_validator("key")(_required_text)
+    _normalize_name = field_validator("name")(_required_text)
+
+
+class PlanningPostCreate(BaseModel):
+    key: str = Field(min_length=1, max_length=40, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    name: str = Field(min_length=1, max_length=512)
+    lots: list[PlanningLotCreate] = Field(min_length=1)
+
+    _normalize_key = field_validator("key")(_required_text)
+    _normalize_name = field_validator("name")(_required_text)
+
+
+class PlanningStructureCreate(BaseModel):
+    posts: list[PlanningPostCreate] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_unique_structure_keys(self) -> "PlanningStructureCreate":
+        keys: set[str] = set()
+
+        def add_key(key: str) -> None:
+            if key in keys:
+                raise ValueError(f"Duplicate planning key: {key}")
+            keys.add(key)
+
+        for post in self.posts:
+            add_key(post.key)
+            for lot in post.lots:
+                lot_key = f"{post.key}/{lot.key}"
+                add_key(lot_key)
+                for deliverable in lot.deliverables:
+                    add_key(f"{lot_key}/{deliverable.key}")
+                add_key(f"{lot_key}/completion")
+        return self
+
+
+class PlanningStructureRead(BaseModel):
+    tasks: list[TaskRead]
+
+
+class PlanningTaskTreeRead(TaskRead):
+    children: list["PlanningTaskTreeRead"] = Field(default_factory=list)
+
+
+class PlanningTreeRead(BaseModel):
+    tasks: list[PlanningTaskTreeRead]
 
 
 class TaskRoleAssignmentCreate(BaseModel):

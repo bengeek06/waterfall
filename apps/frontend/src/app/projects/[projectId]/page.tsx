@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   ApiError,
   CostCategory,
+  createPlanningStructure,
   createEstimateCostLine,
   createImportBatch,
   createProjectEstimate,
@@ -39,11 +40,16 @@ import {
   validateProjectEstimate,
 } from "@/lib/backend";
 import { clearSession, getSession, setSession, type SessionTokens } from "@/lib/session";
+import {
+  buildPlanningStructurePayload,
+  type PlanningStructureDraftRow,
+} from "@/lib/planning-structure";
 import { ReadOnlyGantt } from "@/components/read-only-gantt";
 import { ProjectTabs, type ProjectTab } from "@/components/project-tabs";
 
 const TASK_PAGE_SIZE = 200;
 const MAX_IMPORT_FILE_SIZE = 25 * 1024 * 1024;
+let nextStructureRowId = 2;
 export default function ProjectDetailsPage() {
   const router = useRouter();
   const params = useParams<{ projectId: string }>();
@@ -80,6 +86,10 @@ export default function ProjectDetailsPage() {
   const [savingTaskUid, setSavingTaskUid] = useState<number | null>(null);
   const [taskDraft, setTaskDraft] = useState({ name: "", parentTaskId: "", isMilestone: false });
   const [taskBusy, setTaskBusy] = useState(false);
+  const [structureDraft, setStructureDraft] = useState<PlanningStructureDraftRow[]>([
+    { rowId: "row-1", postKey: "post-1", postName: "", lotKey: "lot-1", lotName: "", deliverables: "" },
+  ]);
+  const [structureBusy, setStructureBusy] = useState(false);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -493,6 +503,56 @@ export default function ProjectDetailsPage() {
     }
   }
 
+  async function generatePlanningStructure() {
+    if (!session) {
+      router.push("/login");
+      return;
+    }
+    const rows = structureDraft;
+    const hasIncompleteRow = rows.some(
+      (row) =>
+        !row.postKey.trim() ||
+        !row.postName.trim() ||
+        !row.lotKey.trim() ||
+        !row.lotName.trim() ||
+        !row.deliverables.trim(),
+    );
+    if (!rows.length || hasIncompleteRow) {
+      setError("Renseigne au moins un poste, un lot et un livrable.");
+      return;
+    }
+
+    setStructureBusy(true);
+    setError(null);
+    try {
+      await createPlanningStructure(
+        projectId,
+        buildPlanningStructurePayload(rows),
+        session,
+        onSessionRefresh,
+      );
+      const refreshedTasks = await getProjectTasks(
+        projectId,
+        session,
+        onSessionRefresh,
+        TASK_PAGE_SIZE,
+        0,
+      );
+      setTasks(refreshedTasks);
+      setTaskOffset(0);
+      setDrafts(Object.fromEntries(refreshedTasks.map((task) => [task.uid, task.description ?? ""])))
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      setError(cause instanceof ApiError ? cause.message : "Impossible de générer le squelette.");
+    } finally {
+      setStructureBusy(false);
+    }
+  }
+
   async function removeTask(task: Task) {
     if (!session) {
       return;
@@ -746,6 +806,116 @@ export default function ProjectDetailsPage() {
             >
               {planningExportBusy ? "Export..." : "Export XML"}
             </button>
+          </div>
+        ) : null}
+
+        {activeTab === "planning" ? (
+          <div className="panel" style={{ marginBottom: "1rem" }}>
+            <h2>Structure initiale</h2>
+            <p className="muted">Définis les postes, lots et livrables avant de générer le squelette.</p>
+            {structureDraft.map((row, index) => (
+              <div className="row cost-line-form" key={row.rowId}>
+                <input
+                  aria-label={`Clé poste ${index + 1}`}
+                  placeholder="Clé poste"
+                  value={row.postKey}
+                  onChange={(event) =>
+                    setStructureDraft((previous) =>
+                      previous.map((item, itemIndex) =>
+                        itemIndex === index ? { ...item, postKey: event.target.value } : item,
+                      ),
+                    )
+                  }
+                />
+                <input
+                  aria-label={`Nom poste ${index + 1}`}
+                  placeholder="Poste"
+                  value={row.postName}
+                  onChange={(event) =>
+                    setStructureDraft((previous) =>
+                      previous.map((item, itemIndex) =>
+                        itemIndex === index ? { ...item, postName: event.target.value } : item,
+                      ),
+                    )
+                  }
+                />
+                <input
+                  aria-label={`Clé lot ${index + 1}`}
+                  placeholder="Clé lot"
+                  value={row.lotKey}
+                  onChange={(event) =>
+                    setStructureDraft((previous) =>
+                      previous.map((item, itemIndex) =>
+                        itemIndex === index ? { ...item, lotKey: event.target.value } : item,
+                      ),
+                    )
+                  }
+                />
+                <input
+                  aria-label={`Nom lot ${index + 1}`}
+                  placeholder="Lot"
+                  value={row.lotName}
+                  onChange={(event) =>
+                    setStructureDraft((previous) =>
+                      previous.map((item, itemIndex) =>
+                        itemIndex === index ? { ...item, lotName: event.target.value } : item,
+                      ),
+                    )
+                  }
+                />
+                <input
+                  aria-label={`Livrables ${index + 1}`}
+                  placeholder="Livrables séparés par des virgules"
+                  value={row.deliverables}
+                  onChange={(event) =>
+                    setStructureDraft((previous) =>
+                      previous.map((item, itemIndex) =>
+                        itemIndex === index ? { ...item, deliverables: event.target.value } : item,
+                      ),
+                    )
+                  }
+                />
+                {structureDraft.length > 1 ? (
+                  <button
+                    className="btn btn-danger"
+                    type="button"
+                    aria-label={`Supprimer la ligne ${index + 1}`}
+                    onClick={() => setStructureDraft((previous) => previous.filter((_, itemIndex) => itemIndex !== index))}
+                  >
+                    Supprimer
+                  </button>
+                ) : null}
+              </div>
+            ))}
+            <div className="row">
+              <button
+                className="btn"
+                type="button"
+                onClick={() =>
+                  setStructureDraft((previous) => [
+                    ...previous,
+                    {
+                      rowId: `row-${nextStructureRowId++}`,
+                      postKey: `post-${previous.length + 1}`,
+                      postName: "",
+                      lotKey: `lot-${previous.length + 1}`,
+                      lotName: "",
+                      deliverables: "",
+                    },
+                  ])
+                }
+              >
+                Ajouter une ligne
+              </button>
+              <button
+                className="btn btn-primary"
+                type="button"
+                disabled={structureBusy}
+                onClick={() => void generatePlanningStructure()}
+              >
+                {structureBusy ? "Génération..." : "Générer le squelette"}
+              </button>
+            </div>
           </div>
         ) : null}
 

@@ -29,14 +29,20 @@ from waterfall.schemas.projects import (
     EstimateCostLineRead,
     EstimateCostLineUpdate,
     EstimateTaskRowRead,
+    PlanningStructureCreate,
+    PlanningStructureRead,
+    PlanningTaskTreeRead,
+    PlanningTreeRead,
     ProjectCreate,
     ProjectEstimateCreate,
     ProjectEstimateRead,
     ProjectRead,
     ProjectUpdate,
+    StructureKind,
     SupplyStatus,
     TaskCreate,
     TaskDescriptionUpdate,
+    TaskLinkRead,
     TaskRead,
     TaskRoleAssignmentCreate,
     TaskRoleAssignmentRead,
@@ -47,6 +53,7 @@ from waterfall.services import (
     build_estimate_workbook,
     calculate_estimate_aggregates,
     calculate_estimate_lines,
+    generate_planning_structure,
 )
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -192,12 +199,20 @@ def _get_task_or_404(db: Session, project_id: int, task_uid: int) -> MsTask:
     return task
 
 
-def _to_task_read(task: MsTask, description: str | None) -> TaskRead:
+def _to_task_read(
+    task: MsTask,
+    description: str | None,
+    predecessor_links: list[MsTaskLink] | None = None,
+) -> TaskRead:
     return TaskRead(
         id=task.id,
         project_id=task.project_id,
         uid=task.uid,
         id_display=task.id_display,
+        structure_key=task.structure_key,
+        structure_kind=cast(StructureKind | None, task.structure_kind),
+        parent_uid=task.parent_uid,
+        position=task.position,
         name=task.name,
         outline_number=task.outline_number,
         outline_level=task.outline_level,
@@ -207,6 +222,15 @@ def _to_task_read(task: MsTask, description: str | None) -> TaskRead:
         is_summary=task.is_summary,
         is_milestone=task.is_milestone,
         description=description,
+        predecessor_links=[
+            TaskLinkRead(
+                predecessor_uid=link.predecessor_uid,
+                link_type=link.link_type,
+                lag_tenth_minute=link.lag_tenth_minute,
+                lag_format=link.lag_format,
+            )
+            for link in predecessor_links or []
+        ],
     )
 
 
@@ -229,6 +253,38 @@ def _to_task_role_assignment_read(
         created_at=assignment.created_at,
         updated_at=assignment.updated_at,
     )
+
+
+def _to_task_reads(db: Session, project_id: int, tasks: list[MsTask]) -> list[TaskRead]:
+    task_uids = [task.uid for task in tasks]
+    descriptions_by_uid: dict[int, str | None] = {}
+    links_by_task_uid: dict[int, list[MsTaskLink]] = {}
+    if task_uids:
+        enrichments = (
+            db.query(WfTaskEnrichment)
+            .filter(WfTaskEnrichment.project_id == project_id)
+            .filter(WfTaskEnrichment.task_uid.in_(task_uids))
+            .all()
+        )
+        descriptions_by_uid = {item.task_uid: item.description for item in enrichments}
+        links = (
+            db.query(MsTaskLink)
+            .filter(MsTaskLink.project_id == project_id)
+            .filter(MsTaskLink.task_uid.in_(task_uids))
+            .order_by(MsTaskLink.id.asc())
+            .all()
+        )
+        for link in links:
+            links_by_task_uid.setdefault(link.task_uid, []).append(link)
+
+    return [
+        _to_task_read(
+            task,
+            descriptions_by_uid.get(task.uid),
+            links_by_task_uid.get(task.uid),
+        )
+        for task in tasks
+    ]
 
 
 @router.get("", response_model=list[ProjectRead])
@@ -727,24 +783,64 @@ def list_project_tasks(
     tasks = (
         db.query(MsTask)
         .filter(MsTask.project_id == project_id)
-        .order_by(MsTask.id.asc())
+        .order_by(MsTask.outline_number.asc().nulls_last(), MsTask.id.asc())
         .offset(offset)
         .limit(limit)
         .all()
     )
+    return _to_task_reads(db, project_id, tasks)
 
-    task_uids = [task.uid for task in tasks]
-    descriptions_by_uid: dict[int, str | None] = {}
-    if task_uids:
-        enrichments = (
-            db.query(WfTaskEnrichment)
-            .filter(WfTaskEnrichment.project_id == project_id)
-            .filter(WfTaskEnrichment.task_uid.in_(task_uids))
-            .all()
-        )
-        descriptions_by_uid = {item.task_uid: item.description for item in enrichments}
 
-    return [_to_task_read(task, descriptions_by_uid.get(task.uid)) for task in tasks]
+@router.get("/{project_id}/planning-tree", response_model=PlanningTreeRead)
+def get_planning_tree(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> PlanningTreeRead:
+    _get_project_or_404(db, project_id, current_user.id)
+    stored_tasks = (
+        db.query(MsTask)
+        .filter(MsTask.project_id == project_id)
+        .order_by(MsTask.outline_number.asc().nulls_last(), MsTask.id.asc())
+        .all()
+    )
+    tasks = _to_task_reads(db, project_id, stored_tasks)
+    tree_by_uid = {task.uid: PlanningTaskTreeRead(**task.model_dump()) for task in tasks}
+    roots: list[PlanningTaskTreeRead] = []
+    for task in tree_by_uid.values():
+        if task.parent_uid is not None and task.parent_uid in tree_by_uid:
+            tree_by_uid[task.parent_uid].children.append(task)
+        else:
+            roots.append(task)
+    return PlanningTreeRead(tasks=roots)
+
+
+@router.post(
+    "/{project_id}/planning-structure",
+    response_model=PlanningStructureRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_planning_structure(
+    project_id: int,
+    payload: PlanningStructureCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> PlanningStructureRead:
+    project = _get_project_or_404(db, project_id, current_user.id)
+    try:
+        tasks = generate_planning_structure(db, project, payload)
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Planning structure conflicts with existing project data",
+        ) from exc
+
+    return PlanningStructureRead(tasks=[_to_task_read(task, None) for task in tasks])
 
 
 @router.post("/{project_id}/tasks", response_model=TaskRead, status_code=status.HTTP_201_CREATED)
@@ -787,6 +883,7 @@ def create_project_task(
             .count()
         )
         outline_number = f"{parent_task.outline_number}.{sibling_count + 1}"
+        position = sibling_count + 1
     else:
         outline_level = 1
         root_count = (
@@ -796,11 +893,14 @@ def create_project_task(
             .count()
         )
         outline_number = str(root_count + 1)
+        position = root_count + 1
 
     task = MsTask(
         project_id=project_id,
         uid=(max_uid or 0) + 1,
         id_display=(max_id_display or 0) + 1,
+        parent_uid=parent_task.uid if parent_task is not None else None,
+        position=position,
         name=payload.name.strip(),
         outline_number=outline_number,
         outline_level=outline_level,
