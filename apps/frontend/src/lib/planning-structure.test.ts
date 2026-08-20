@@ -6,6 +6,7 @@ describe("buildPlanningStructurePayload", () => {
   it("groups multiple lots under the same post", () => {
     const rows: PlanningStructureDraftRow[] = [
       {
+        rowId: "row-1",
         postKey: "design",
         postName: "Design",
         lotKey: "specification",
@@ -13,6 +14,7 @@ describe("buildPlanningStructurePayload", () => {
         deliverables: "Requirements, Architecture",
       },
       {
+        rowId: "row-2",
         postKey: "design",
         postName: "Design",
         lotKey: "validation",
@@ -49,6 +51,7 @@ describe("buildPlanningStructurePayload", () => {
   it("removes blank and duplicate deliverables", () => {
     const payload = buildPlanningStructurePayload([
       {
+        rowId: "row-3",
         postKey: "post",
         postName: "Post",
         lotKey: "lot",

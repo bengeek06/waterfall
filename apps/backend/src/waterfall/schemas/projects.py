@@ -110,7 +110,7 @@ class TaskCreate(BaseModel):
 
 
 class PlanningDeliverableCreate(BaseModel):
-    key: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    key: str = Field(min_length=1, max_length=40, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
     name: str = Field(min_length=1, max_length=512)
 
     _normalize_key = field_validator("key")(_required_text)
@@ -118,7 +118,7 @@ class PlanningDeliverableCreate(BaseModel):
 
 
 class PlanningLotCreate(BaseModel):
-    key: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    key: str = Field(min_length=1, max_length=40, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
     name: str = Field(min_length=1, max_length=512)
     deliverables: list[PlanningDeliverableCreate] = Field(min_length=1)
 
@@ -127,7 +127,7 @@ class PlanningLotCreate(BaseModel):
 
 
 class PlanningPostCreate(BaseModel):
-    key: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    key: str = Field(min_length=1, max_length=40, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
     name: str = Field(min_length=1, max_length=512)
     lots: list[PlanningLotCreate] = Field(min_length=1)
 

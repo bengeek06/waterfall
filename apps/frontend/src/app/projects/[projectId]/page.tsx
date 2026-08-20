@@ -49,6 +49,7 @@ import { ProjectTabs, type ProjectTab } from "@/components/project-tabs";
 
 const TASK_PAGE_SIZE = 200;
 const MAX_IMPORT_FILE_SIZE = 25 * 1024 * 1024;
+let nextStructureRowId = 2;
 export default function ProjectDetailsPage() {
   const router = useRouter();
   const params = useParams<{ projectId: string }>();
@@ -86,7 +87,7 @@ export default function ProjectDetailsPage() {
   const [taskDraft, setTaskDraft] = useState({ name: "", parentTaskId: "", isMilestone: false });
   const [taskBusy, setTaskBusy] = useState(false);
   const [structureDraft, setStructureDraft] = useState<PlanningStructureDraftRow[]>([
-    { postKey: "post-1", postName: "", lotKey: "lot-1", lotName: "", deliverables: "" },
+    { rowId: "row-1", postKey: "post-1", postName: "", lotKey: "lot-1", lotName: "", deliverables: "" },
   ]);
   const [structureBusy, setStructureBusy] = useState(false);
   const [busy, setBusy] = useState(true);
@@ -507,10 +508,16 @@ export default function ProjectDetailsPage() {
       router.push("/login");
       return;
     }
-    const rows = structureDraft.filter(
-      (row) => row.postName.trim() && row.lotName.trim() && row.deliverables.trim(),
+    const rows = structureDraft;
+    const hasIncompleteRow = rows.some(
+      (row) =>
+        !row.postKey.trim() ||
+        !row.postName.trim() ||
+        !row.lotKey.trim() ||
+        !row.lotName.trim() ||
+        !row.deliverables.trim(),
     );
-    if (!rows.length) {
+    if (!rows.length || hasIncompleteRow) {
       setError("Renseigne au moins un poste, un lot et un livrable.");
       return;
     }
@@ -518,15 +525,22 @@ export default function ProjectDetailsPage() {
     setStructureBusy(true);
     setError(null);
     try {
-      const result = await createPlanningStructure(
+      await createPlanningStructure(
         projectId,
         buildPlanningStructurePayload(rows),
         session,
         onSessionRefresh,
       );
-      setTasks(result.tasks);
+      const refreshedTasks = await getProjectTasks(
+        projectId,
+        session,
+        onSessionRefresh,
+        TASK_PAGE_SIZE,
+        0,
+      );
+      setTasks(refreshedTasks);
       setTaskOffset(0);
-      setDrafts(Object.fromEntries(result.tasks.map((task) => [task.uid, task.description ?? ""])));
+      setDrafts(Object.fromEntries(refreshedTasks.map((task) => [task.uid, task.description ?? ""])))
     } catch (cause) {
       if (cause instanceof SessionExpiredError) {
         clearSession();
@@ -800,7 +814,7 @@ export default function ProjectDetailsPage() {
             <h2>Structure initiale</h2>
             <p className="muted">Définis les postes, lots et livrables avant de générer le squelette.</p>
             {structureDraft.map((row, index) => (
-              <div className="row cost-line-form" key={`${row.postKey}-${row.lotKey}-${index}`}>
+              <div className="row cost-line-form" key={row.rowId}>
                 <input
                   aria-label={`Clé poste ${index + 1}`}
                   placeholder="Clé poste"
@@ -881,6 +895,7 @@ export default function ProjectDetailsPage() {
                   setStructureDraft((previous) => [
                     ...previous,
                     {
+                      rowId: `row-${nextStructureRowId++}`,
                       postKey: `post-${previous.length + 1}`,
                       postName: "",
                       lotKey: `lot-${previous.length + 1}`,

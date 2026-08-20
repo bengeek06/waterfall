@@ -1,6 +1,7 @@
 import type { PlanningStructureCreate } from "./backend";
 
 export type PlanningStructureDraftRow = {
+  rowId: string;
   postKey: string;
   postName: string;
   lotKey: string;
@@ -26,22 +27,24 @@ export function buildPlanningStructurePayload(
   const posts = new Map<string, PlanningStructurePostDraft>();
 
   for (const row of rows) {
-    if (!row.postKey.trim() || !row.postName.trim() || !row.lotKey.trim() || !row.lotName.trim()) {
+    const postKey = row.postKey.trim();
+    const lotKey = row.lotKey.trim();
+    if (!postKey || !row.postName.trim() || !lotKey || !row.lotName.trim()) {
       continue;
     }
-    let post = posts.get(row.postKey);
+    let post = posts.get(postKey);
     if (!post) {
       post = {
-        key: row.postKey.trim(),
+        key: postKey,
         name: row.postName.trim(),
         lots: new Map<string, PlanningStructureLotDraft>(),
       };
       posts.set(post.key, post);
     }
-    let lot = post.lots.get(row.lotKey);
+    let lot = post.lots.get(lotKey);
     if (!lot) {
       lot = {
-        key: row.lotKey.trim(),
+        key: lotKey,
         name: row.lotName.trim(),
         deliverables: [],
       };
