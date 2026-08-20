@@ -7,7 +7,7 @@ import yaml
 
 from waterfall.main import app
 
-OPENAPI_PATH = Path(__file__).resolve().parents[3] / "openapi" / "import_v1.yaml"
+OPENAPI_PATH = Path(__file__).resolve().parents[3] / "openapi" / "waterfall_v1.yaml"
 PATH_PARAMETER = re.compile(r"\{[^}]+\}")
 DOCUMENTATION_PATHS = {"/docs", "/docs/oauth2-redirect", "/openapi.json", "/redoc"}
 
