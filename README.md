@@ -1,88 +1,231 @@
-# rebirth
+# Waterfall
 
-Monorepo Waterfall avec backend FastAPI et frontend Next.js.
+<p align="center">
+  <img src="apps/frontend/public/waterfall_logo.svg" alt="Waterfall logo" width="320" />
+</p>
 
-## Structure
+<p align="center">
+  <a href="https://www.python.org/">
+    <img alt="Python 3.13" src="https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white" />
+  </a>
+  <a href="https://fastapi.tiangolo.com/">
+    <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-0.116-009688?logo=fastapi&logoColor=white" />
+  </a>
+  <a href="https://nextjs.org/">
+    <img alt="Next.js 16" src="https://img.shields.io/badge/Next.js-16-000000?logo=nextdotjs&logoColor=white" />
+  </a>
+  <a href="https://react.dev/">
+    <img alt="React 19" src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black" />
+  </a>
+  <a href="https://www.sqlalchemy.org/">
+    <img alt="SQLAlchemy" src="https://img.shields.io/badge/SQLAlchemy-2.x-CC2927?logo=sqlalchemy&logoColor=white" />
+  </a>
+  <a href="https://www.openapis.org/">
+    <img alt="OpenAPI" src="https://img.shields.io/badge/OpenAPI-3.x-6BA539?logo=openapiinitiative&logoColor=white" />
+  </a>
+  <a href="https://pytest.org/">
+    <img alt="Pytest" src="https://img.shields.io/badge/Pytest-8.x-0A9EDC?logo=pytest&logoColor=white" />
+  </a>
+  <a href="https://github.com/pytest-dev/pytest-cov">
+    <img alt="Coverage 86.49%" src="https://img.shields.io/badge/Coverage-86.49%25-5C7CFA" />
+  </a>
+</p>
 
-- apps/backend: API Python FastAPI, migrations Alembic, tests.
-- apps/frontend: application web Next.js TypeScript.
-- packages/api-client-ts: client TypeScript genere depuis OpenAPI.
-- openapi: contrat API source de verite.
+Waterfall est une plateforme de pilotage de projets, de ressources et d’estimations. Elle aide à structurer un plan de travail, gérer les ressources, établir des coûts et valider des estimations dans un flux cohérent, depuis la création du projet jusqu’à l’exploitation de l’estimation finale.
 
-## Demarrage rapide
+## Vue d’ensemble produit
 
-1. Activer l'environnement Python:
+Waterfall s’adresse à un besoin très concret : transformer un projet en plan exploitable, analyser les charges, gérer les rôles et les coûts, puis produire une estimation fiable et exportable. Le produit couvre trois grands axes :
+
+- gestion des projets et des tâches
+- gestion des ressources, rôles et catégories de coûts
+- construction d’estimations et de lignes de coût avec aggregation métier
+
+Le cœur fonctionnel repose sur une logique de planning et de coût qui reste cohérente entre :
+
+- le projet
+- les tâches et sous-tâches
+- les rôles affectés
+- les types de coûts
+- les catégories de dépenses
+- les estimations et leurs validations
+
+## Fonctionnalités clés
+
+### Gestion de projet
+- création de projets avec code, description, devise
+- suivi des tâches et hiérarchie de planification
+- description enrichie des tâches
+- export/import de structures de projet et de planning
+
+### Gestion des ressources
+- nœuds de ressource et hiérarchie
+- rôles, capacités et affectations
+- catégories de coûts, types de coûts et taux horaires
+- gestion des taux d’inflation et des coûts associés
+
+### Estimation et budget
+- création d’estimations par projet
+- versionnement des estimations
+- lignes de coût par tâche et catégorie
+- agrégation de coûts, unités, heures et budgets
+- validation de l’estimation selon les règles métier
+
+### API et intégration
+- API REST documentée via OpenAPI
+- schémas de validation stricts en Pydantic
+- contrat API stable et versionné par code
+- génération de client TypeScript à partir du contrat OpenAPI
+
+## Architecture technique
+
+### Monorepo
+
+```text
+.
+├── apps/
+│   ├── backend/      # API FastAPI + modèles SQLAlchemy + tests
+│   └── frontend/     # application web Next.js + interface utilisateur
+├── packages/
+│   └── api-client-ts # client TypeScript généré
+├── openapi/          # spécification OpenAPI
+├── docs/             # documentation métier et checklists
+├── excel/            # modèles import/export de données
+├── schemas/          # schémas de référence et fichiers XML
+├── infra/            # infrastructure / déploiement
+├── package.json      # scripts racine du workspace
+├── README.md         # documentation principale
+└── Makefile          # tâches de dev et d’intégration
+```
+
+### Backend
+Le backend est construit sur :
+
+- Python 3.13
+- FastAPI pour les routes API et la documentation interactive
+- SQLAlchemy 2.x pour le modèle ORM
+- Pydantic v2 pour validation et schémas
+- Alembic pour les migrations
+- pytest + pytest-cov pour validation et couverture
+- ruff + pyright pour qualité et typage
+
+### Frontend
+Le frontend est construit sur :
+
+- Next.js 16
+- React 19
+- TypeScript
+- Radix UI primitives
+- Vitest + Testing Library pour les tests UI
+
+### API et contrat
+Le projet est pensé comme une application de type API-first :
+
+- le backend expose une API REST stricte
+- le contrat est documenté et vérifié par OpenAPI
+- le client TypeScript est généré à partir de cette spécification
+- les validations métier sont centralisées dans les schémas Pydantic
+
+## Stack produit
+
+| Domaine | Technologie |
+| --- | --- |
+| Backend | FastAPI, Python 3.13 |
+| ORM | SQLAlchemy 2.x |
+| Validation | Pydantic v2 |
+| Base de données | SQLite dev, compatible PostgreSQL/enterprise |
+| Frontend | Next.js 16, React 19 |
+| Typage | TypeScript, Pyright |
+| Qualité | Ruff, ESLint |
+| Tests | pytest, Vitest |
+| Couverture | pytest-cov |
+| Contrat API | OpenAPI + client généré |
+
+## Démarrage rapide
+
+### 1) Prérequis
+- Python 3.13+
+- Node.js 20+
+- npm
+
+### 2) Installation
 
 ```bash
 source .venv/bin/activate
-```
-
-2. Installer les dependances backend:
-
-```bash
-make install-backend
-```
-
-3. Installer les dependances frontend/workspaces:
-
-```bash
+python -m pip install -e apps/backend[dev]
 npm install
 ```
 
-## Commandes utiles
-
-Backend:
+### 3) Lancer le backend
 
 ```bash
-make lint-backend
-make typecheck-backend
-make test-backend
-make run-backend
-make seed-admin
+cd apps/backend
+uvicorn waterfall.main:app --app-dir src --reload
 ```
 
-Frontend:
+### 4) Lancer le frontend
 
 ```bash
-npm run frontend:lint
-npm run frontend:build
 npm run frontend:dev
 ```
 
-Client API TypeScript:
+### 5) Vérifications
 
 ```bash
-npm run api-client:generate
-npm run api-client:build
+cd apps/backend
+ruff check .
+pyright
+pytest
 ```
-
-Docker (dev: API + Postgres):
 
 ```bash
-make compose-up-dev
+npm run frontend:lint
+npm run frontend:test
+npm run frontend:build
 ```
 
-Docker (full: API + Postgres + Frontend + DB viewer + Observabilite):
+## Qualité et couverture
 
-```bash
-make compose-up-full
-```
+Le backend est couverte par une suite de tests automatisés. La couverture actuelle mesurée est de :
 
-Arret et nettoyage des volumes docker:
+- 86.49% de couverture globale
+- validation de la qualité via ruff et pyright
+- couverture minimale de 80% configurée dans pytest
 
-```bash
-make compose-down
-```
+## Points de conception importants
 
-Services utiles en mode full:
+Le projet est structuré pour rester lisible et évolutif :
 
-- Frontend: http://localhost:3000
-- API: http://localhost:8000
-- PgAdmin (DB viewer): http://localhost:5050
-- Prometheus: http://localhost:9090
-- Grafana: http://localhost:3001
+- validation métier au niveau des schémas
+- séparation nette entre API, modèles, services et UI
+- logique de calcul et règles métier distinctes de la couche de présentation
+- contrat API stable pour éviter les dérives de données entre backend et frontend
 
-Comptes par defaut mode full (a changer en environnement partage):
+## Déploiement et environnement
 
-- PgAdmin: admin@waterfall.local / admin
-- Grafana: admin / admin
+Le dépôt inclut des éléments d’environnement de développement et d’exploitation :
+
+- conteneurisation backend
+- configuration d’outils de monitoring et observabilité
+- environnement de dev local avec services annexes
+- scripts de setup et de seed admin
+
+## Rôles du projet
+
+Waterfall vise à devenir une base solide pour :
+
+- piloter des projets de planification
+- calculer les coûts et budgets
+- gérer les ressources et affectations
+- centraliser les données de devis et d’estimation
+- exporter les données vers des formats de travail standardisés
+
+## Licence et statut
+
+Ce dépôt est un projet de développement interne / applicatif orienté produit. Le code et la structure sont pensés pour évoluer vers une solution de gestion de planification et de budget en environnement professionnel.
+
+---
+
+Pour une documentation plus orientée métier, consultez :
+- [docs/push-ready-checklist.md](docs/push-ready-checklist.md)
+- [apps/backend/README.md](apps/backend/README.md)
