@@ -40,6 +40,10 @@ import {
   validateProjectEstimate,
 } from "@/lib/backend";
 import { clearSession, getSession, setSession, type SessionTokens } from "@/lib/session";
+import {
+  buildPlanningStructurePayload,
+  type PlanningStructureDraftRow,
+} from "@/lib/planning-structure";
 import { ReadOnlyGantt } from "@/components/read-only-gantt";
 import { ProjectTabs, type ProjectTab } from "@/components/project-tabs";
 
@@ -81,7 +85,7 @@ export default function ProjectDetailsPage() {
   const [savingTaskUid, setSavingTaskUid] = useState<number | null>(null);
   const [taskDraft, setTaskDraft] = useState({ name: "", parentTaskId: "", isMilestone: false });
   const [taskBusy, setTaskBusy] = useState(false);
-  const [structureDraft, setStructureDraft] = useState([
+  const [structureDraft, setStructureDraft] = useState<PlanningStructureDraftRow[]>([
     { postKey: "post-1", postName: "", lotKey: "lot-1", lotName: "", deliverables: "" },
   ]);
   const [structureBusy, setStructureBusy] = useState(false);
@@ -511,32 +515,12 @@ export default function ProjectDetailsPage() {
       return;
     }
 
-    const posts = new Map<string, { key: string; name: string; lots: Map<string, { key: string; name: string; deliverables: { key: string; name: string }[] }> }>();
-    for (const row of rows) {
-      const post = posts.get(row.postKey) ?? { key: row.postKey, name: row.postName.trim(), lots: new Map() };
-      const lot = post.lots.get(row.lotKey) ?? {
-        key: row.lotKey,
-        name: row.lotName.trim(),
-        deliverables: [],
-      };
-      for (const [index, name] of row.deliverables.split(",").map((value) => value.trim()).filter(Boolean).entries()) {
-        lot.deliverables.push({ key: `deliverable-${index + 1}`, name });
-      }
-      post.lots.set(row.lotKey, lot);
-      posts.set(row.postKey, post);
-    }
-
     setStructureBusy(true);
     setError(null);
     try {
       const result = await createPlanningStructure(
         projectId,
-        {
-          posts: Array.from(posts.values()).map((post) => ({
-            ...post,
-            lots: Array.from(post.lots.values()),
-          })),
-        },
+        buildPlanningStructurePayload(rows),
         session,
         onSessionRefresh,
       );
@@ -818,7 +802,19 @@ export default function ProjectDetailsPage() {
             {structureDraft.map((row, index) => (
               <div className="row cost-line-form" key={`${row.postKey}-${row.lotKey}-${index}`}>
                 <input
-                  aria-label={`Poste ${index + 1}`}
+                  aria-label={`Clé poste ${index + 1}`}
+                  placeholder="Clé poste"
+                  value={row.postKey}
+                  onChange={(event) =>
+                    setStructureDraft((previous) =>
+                      previous.map((item, itemIndex) =>
+                        itemIndex === index ? { ...item, postKey: event.target.value } : item,
+                      ),
+                    )
+                  }
+                />
+                <input
+                  aria-label={`Nom poste ${index + 1}`}
                   placeholder="Poste"
                   value={row.postName}
                   onChange={(event) =>
@@ -830,7 +826,19 @@ export default function ProjectDetailsPage() {
                   }
                 />
                 <input
-                  aria-label={`Lot ${index + 1}`}
+                  aria-label={`Clé lot ${index + 1}`}
+                  placeholder="Clé lot"
+                  value={row.lotKey}
+                  onChange={(event) =>
+                    setStructureDraft((previous) =>
+                      previous.map((item, itemIndex) =>
+                        itemIndex === index ? { ...item, lotKey: event.target.value } : item,
+                      ),
+                    )
+                  }
+                />
+                <input
+                  aria-label={`Nom lot ${index + 1}`}
                   placeholder="Lot"
                   value={row.lotName}
                   onChange={(event) =>
