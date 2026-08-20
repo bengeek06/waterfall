@@ -91,6 +91,16 @@ def test_create_planning_structure_generates_hierarchy_and_links() -> None:
         assert links_response.status_code == 200
         assert links_response.content.count(b"<PredecessorLink>") == 3
 
+        tree_response = client.get(
+            f"/projects/{project_id}/planning-tree",
+            headers=headers,
+        )
+        assert tree_response.status_code == 200
+        roots = cast(list[dict[str, Any]], tree_response.json()["tasks"])
+        assert len(roots) == 1
+        assert len(roots[0]["children"]) == 2
+        assert len(roots[0]["children"][0]["children"]) == 3
+
 
 def test_create_planning_structure_is_idempotent() -> None:
     with TestClient(app) as client:

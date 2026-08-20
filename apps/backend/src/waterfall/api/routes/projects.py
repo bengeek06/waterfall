@@ -31,6 +31,8 @@ from waterfall.schemas.projects import (
     EstimateTaskRowRead,
     PlanningStructureCreate,
     PlanningStructureRead,
+    PlanningTaskTreeRead,
+    PlanningTreeRead,
     ProjectCreate,
     ProjectEstimateCreate,
     ProjectEstimateRead,
@@ -746,14 +748,18 @@ def list_project_tasks(
 ) -> list[TaskRead]:
     _get_project_or_404(db, project_id, current_user.id)
 
-    tasks = (
+    all_tasks = (
         db.query(MsTask)
         .filter(MsTask.project_id == project_id)
-        .order_by(MsTask.id.asc())
-        .offset(offset)
-        .limit(limit)
         .all()
     )
+    tasks = sorted(
+        all_tasks,
+        key=lambda task: (
+            tuple(int(part) for part in (task.outline_number or "").split(".")),
+            task.id,
+        ),
+    )[offset : offset + limit]
 
     task_uids = [task.uid for task in tasks]
     descriptions_by_uid: dict[int, str | None] = {}
@@ -786,6 +792,32 @@ def list_project_tasks(
         )
         for task in tasks
     ]
+
+
+@router.get("/{project_id}/planning-tree", response_model=PlanningTreeRead)
+def get_planning_tree(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> PlanningTreeRead:
+    tasks = list_project_tasks(
+        project_id,
+        limit=2000,
+        offset=0,
+        db=db,
+        current_user=current_user,
+    )
+    tree_by_uid = {
+        task.uid: PlanningTaskTreeRead(**task.model_dump())
+        for task in tasks
+    }
+    roots: list[PlanningTaskTreeRead] = []
+    for task in tree_by_uid.values():
+        if task.parent_uid is not None and task.parent_uid in tree_by_uid:
+            tree_by_uid[task.parent_uid].children.append(task)
+        else:
+            roots.append(task)
+    return PlanningTreeRead(tasks=roots)
 
 
 @router.post(

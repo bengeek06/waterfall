@@ -383,6 +383,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{projectId}/planning-tree": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lire l'arbre hiérarchique du planning */
+        get: operations["getPlanningTree"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/projects/{projectId}/tasks/{taskUid}": {
         parameters: {
             query?: never;
@@ -1064,6 +1081,12 @@ export interface components {
         };
         PlanningStructureRead: {
             tasks: components["schemas"]["TaskRead"][];
+        };
+        PlanningTreeRead: {
+            tasks: components["schemas"]["PlanningTaskTreeRead"][];
+        };
+        PlanningTaskTreeRead: components["schemas"]["TaskRead"] & {
+            children: components["schemas"]["PlanningTaskTreeRead"][];
         };
         TaskDescriptionUpdate: {
             description?: string | null;
@@ -2161,6 +2184,31 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["ProjectNotFound"];
             409: components["responses"]["Conflict"];
+        };
+    };
+    getPlanningTree: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Arbre hiérarchique du planning */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanningTreeRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
         };
     };
     deleteProjectTask: {

@@ -143,6 +143,14 @@ class PlanningStructureRead(BaseModel):
     tasks: list[TaskRead]
 
 
+class PlanningTaskTreeRead(TaskRead):
+    children: list["PlanningTaskTreeRead"] = Field(default_factory=list)
+
+
+class PlanningTreeRead(BaseModel):
+    tasks: list[PlanningTaskTreeRead]
+
+
 class TaskRoleAssignmentCreate(BaseModel):
     role_id: int = Field(gt=0)
     quantity: Decimal = Field(gt=0, max_digits=10, decimal_places=2)

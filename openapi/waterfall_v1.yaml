@@ -696,6 +696,27 @@ paths:
         '409':
           $ref: '#/components/responses/Conflict'
 
+  /projects/{projectId}/planning-tree:
+    get:
+      tags: [projects]
+      summary: Lire l'arbre hiérarchique du planning
+      operationId: getPlanningTree
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      responses:
+        '200':
+          description: Arbre hiérarchique du planning
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanningTreeRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+
   /projects/{projectId}/tasks/{taskUid}:
     patch:
       tags: [projects]
@@ -2439,6 +2460,26 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/TaskRead'
+
+    PlanningTreeRead:
+      type: object
+      required: [tasks]
+      properties:
+        tasks:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlanningTaskTreeRead'
+
+    PlanningTaskTreeRead:
+      allOf:
+        - $ref: '#/components/schemas/TaskRead'
+        - type: object
+          required: [children]
+          properties:
+            children:
+              type: array
+              items:
+                $ref: '#/components/schemas/PlanningTaskTreeRead'
 
     TaskDescriptionUpdate:
       type: object
