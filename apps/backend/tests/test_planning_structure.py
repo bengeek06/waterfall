@@ -154,7 +154,7 @@ def test_create_planning_structure_rejects_duplicate_keys_without_mutation() -> 
             headers=headers,
         )
 
-        assert response.status_code == 409
+        assert response.status_code == 422
         listed = client.get(f"/projects/{project_id}/tasks", headers=headers)
         assert listed.status_code == 200
         assert listed.json() == []

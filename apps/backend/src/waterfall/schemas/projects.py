@@ -2,7 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 StructureKind = Literal["poste", "lot", "livrable", "milestone", "task"]
 
@@ -137,6 +137,25 @@ class PlanningPostCreate(BaseModel):
 
 class PlanningStructureCreate(BaseModel):
     posts: list[PlanningPostCreate] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_unique_structure_keys(self) -> "PlanningStructureCreate":
+        keys: set[str] = set()
+
+        def add_key(key: str) -> None:
+            if key in keys:
+                raise ValueError(f"Duplicate planning key: {key}")
+            keys.add(key)
+
+        for post in self.posts:
+            add_key(post.key)
+            for lot in post.lots:
+                lot_key = f"{post.key}/{lot.key}"
+                add_key(lot_key)
+                for deliverable in lot.deliverables:
+                    add_key(f"{lot_key}/{deliverable.key}")
+                add_key(f"{lot_key}/completion")
+        return self
 
 
 class PlanningStructureRead(BaseModel):
