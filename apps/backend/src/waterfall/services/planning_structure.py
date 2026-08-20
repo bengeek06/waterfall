@@ -103,6 +103,47 @@ def generate_planning_structure(
         existing_by_key = {task.structure_key: task for task in existing}
         if set(existing_by_key) != set(keys):
             raise ValueError("Project contains an incomplete planning structure")
+        uid_by_key = {node.key: existing_by_key[node.key].uid for node in nodes}
+        deliverables_by_lot_key = {
+            f"{post.key}/{lot.key}": lot.deliverables
+            for post in payload.posts
+            for lot in post.lots
+        }
+        existing_links = (
+            db.query(MsTaskLink)
+            .filter(MsTaskLink.project_id == project.id)
+            .filter(MsTaskLink.task_uid.in_(uid_by_key.values()))
+            .all()
+        )
+        existing_link_keys = {
+            (link.task_uid, link.predecessor_uid, link.link_type) for link in existing_links
+        }
+        for node in nodes:
+            task = existing_by_key[node.key]
+            task.name = node.name
+            task.structure_kind = node.kind
+            task.parent_uid = uid_by_key.get(node.parent_key) if node.parent_key else None
+            task.position = node.position
+            task.outline_number = node.outline_number
+            task.outline_level = node.outline_level
+            task.is_summary = node.is_summary
+            task.is_milestone = node.is_milestone
+            if node.kind != "milestone" or node.parent_key is None:
+                continue
+            for deliverable in deliverables_by_lot_key[node.parent_key]:
+                predecessor_uid = uid_by_key[f"{node.parent_key}/{deliverable.key}"]
+                link_key = (task.uid, predecessor_uid, 1)
+                if link_key not in existing_link_keys:
+                    db.add(
+                        MsTaskLink(
+                            project_id=project.id,
+                            task_uid=task.uid,
+                            predecessor_uid=predecessor_uid,
+                            link_type=1,
+                            lag_tenth_minute=0,
+                            lag_format=7,
+                        )
+                    )
         return [existing_by_key[node.key] for node in nodes]
 
     max_uid = (

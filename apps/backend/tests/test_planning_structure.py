@@ -113,6 +113,24 @@ def test_create_planning_structure_is_idempotent() -> None:
         assert len(listed_tasks) == len(first_tasks)
 
 
+def test_create_planning_structure_resynchronizes_names() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        path = f"/projects/{project_id}/planning-structure"
+
+        first = client.post(path, json=_payload(), headers=headers)
+        assert first.status_code == 201
+        payload = _payload()
+        payload["posts"][0]["lots"][0]["deliverables"][0]["name"] = "Updated requirements"
+
+        second = client.post(path, json=payload, headers=headers)
+
+        assert second.status_code == 201
+        tasks = cast(list[dict[str, Any]], second.json()["tasks"])
+        assert tasks[2]["name"] == "Updated requirements"
+
+
 def test_create_planning_structure_rejects_duplicate_keys_without_mutation() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)
