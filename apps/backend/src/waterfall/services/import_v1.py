@@ -31,6 +31,23 @@ def _datetime(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value) if value is not None else None
 
 
+def _populate_parent_metadata(tasks: list[MsTask]) -> None:
+    by_outline = {
+        task.outline_number: task
+        for task in tasks
+        if task.outline_number and all(part.isdigit() for part in task.outline_number.split("."))
+    }
+    for task in tasks:
+        outline = task.outline_number
+        if not outline or not all(part.isdigit() for part in outline.split(".")):
+            continue
+        parts = outline.split(".")
+        task.position = int(parts[-1])
+        parent_outline = ".".join(parts[:-1])
+        parent = by_outline.get(parent_outline)
+        task.parent_uid = parent.uid if parent is not None else None
+
+
 def import_tasks_and_links(db: Session, xml_bytes: bytes, project: MsProject) -> tuple[int, int]:
     root = ET.fromstring(xml_bytes)
     save_version = _integer(_text(root, "ms:SaveVersion")) or 16
@@ -112,6 +129,7 @@ def import_tasks_and_links(db: Session, xml_bytes: bytes, project: MsProject) ->
 
     db.add_all(tasks)
     db.flush()
+    _populate_parent_metadata(tasks)
     db.add_all(enrichments)
     db.flush()
     db.add_all(links)
