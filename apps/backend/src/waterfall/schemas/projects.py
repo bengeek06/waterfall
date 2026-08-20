@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+StructureKind = Literal["poste", "lot", "livrable", "milestone", "task"]
+
 
 def _required_text(value: str) -> str:
     normalized = value.strip()
@@ -64,6 +66,10 @@ class TaskRead(BaseModel):
     project_id: int
     uid: int
     id_display: int | None
+    structure_key: str | None
+    structure_kind: StructureKind | None
+    parent_uid: int | None
+    position: int | None
     name: str
     outline_number: str | None
     outline_level: int | None
@@ -73,6 +79,14 @@ class TaskRead(BaseModel):
     is_summary: bool
     is_milestone: bool
     description: str | None
+    predecessor_links: list["TaskLinkRead"] = Field(default_factory=list)
+
+
+class TaskLinkRead(BaseModel):
+    predecessor_uid: int
+    link_type: int
+    lag_tenth_minute: int | None
+    lag_format: int | None
 
 
 class TaskDescriptionUpdate(BaseModel):
@@ -93,6 +107,40 @@ class TaskCreate(BaseModel):
     is_milestone: bool = False
 
     _normalize_name = field_validator("name")(_required_text)
+
+
+class PlanningDeliverableCreate(BaseModel):
+    key: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    name: str = Field(min_length=1, max_length=512)
+
+    _normalize_key = field_validator("key")(_required_text)
+    _normalize_name = field_validator("name")(_required_text)
+
+
+class PlanningLotCreate(BaseModel):
+    key: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    name: str = Field(min_length=1, max_length=512)
+    deliverables: list[PlanningDeliverableCreate] = Field(min_length=1)
+
+    _normalize_key = field_validator("key")(_required_text)
+    _normalize_name = field_validator("name")(_required_text)
+
+
+class PlanningPostCreate(BaseModel):
+    key: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    name: str = Field(min_length=1, max_length=512)
+    lots: list[PlanningLotCreate] = Field(min_length=1)
+
+    _normalize_key = field_validator("key")(_required_text)
+    _normalize_name = field_validator("name")(_required_text)
+
+
+class PlanningStructureCreate(BaseModel):
+    posts: list[PlanningPostCreate] = Field(min_length=1)
+
+
+class PlanningStructureRead(BaseModel):
+    tasks: list[TaskRead]
 
 
 class TaskRoleAssignmentCreate(BaseModel):
