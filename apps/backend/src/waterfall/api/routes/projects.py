@@ -748,11 +748,7 @@ def list_project_tasks(
 ) -> list[TaskRead]:
     _get_project_or_404(db, project_id, current_user.id)
 
-    all_tasks = (
-        db.query(MsTask)
-        .filter(MsTask.project_id == project_id)
-        .all()
-    )
+    all_tasks = db.query(MsTask).filter(MsTask.project_id == project_id).all()
     tasks = sorted(
         all_tasks,
         key=lambda task: (
@@ -807,10 +803,7 @@ def get_planning_tree(
         db=db,
         current_user=current_user,
     )
-    tree_by_uid = {
-        task.uid: PlanningTaskTreeRead(**task.model_dump())
-        for task in tasks
-    }
+    tree_by_uid = {task.uid: PlanningTaskTreeRead(**task.model_dump()) for task in tasks}
     roots: list[PlanningTaskTreeRead] = []
     for task in tree_by_uid.values():
         if task.parent_uid is not None and task.parent_uid in tree_by_uid:
