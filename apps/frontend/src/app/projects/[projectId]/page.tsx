@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   ApiError,
   CostCategory,
+  createPlanningStructure,
   createEstimateCostLine,
   createImportBatch,
   createProjectEstimate,
@@ -80,6 +81,10 @@ export default function ProjectDetailsPage() {
   const [savingTaskUid, setSavingTaskUid] = useState<number | null>(null);
   const [taskDraft, setTaskDraft] = useState({ name: "", parentTaskId: "", isMilestone: false });
   const [taskBusy, setTaskBusy] = useState(false);
+  const [structureDraft, setStructureDraft] = useState([
+    { postKey: "post-1", postName: "", lotKey: "lot-1", lotName: "", deliverables: "" },
+  ]);
+  const [structureBusy, setStructureBusy] = useState(false);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -493,6 +498,63 @@ export default function ProjectDetailsPage() {
     }
   }
 
+  async function generatePlanningStructure() {
+    if (!session) {
+      router.push("/login");
+      return;
+    }
+    const rows = structureDraft.filter(
+      (row) => row.postName.trim() && row.lotName.trim() && row.deliverables.trim(),
+    );
+    if (!rows.length) {
+      setError("Renseigne au moins un poste, un lot et un livrable.");
+      return;
+    }
+
+    const posts = new Map<string, { key: string; name: string; lots: Map<string, { key: string; name: string; deliverables: { key: string; name: string }[] }> }>();
+    for (const row of rows) {
+      const post = posts.get(row.postKey) ?? { key: row.postKey, name: row.postName.trim(), lots: new Map() };
+      const lot = post.lots.get(row.lotKey) ?? {
+        key: row.lotKey,
+        name: row.lotName.trim(),
+        deliverables: [],
+      };
+      for (const [index, name] of row.deliverables.split(",").map((value) => value.trim()).filter(Boolean).entries()) {
+        lot.deliverables.push({ key: `deliverable-${index + 1}`, name });
+      }
+      post.lots.set(row.lotKey, lot);
+      posts.set(row.postKey, post);
+    }
+
+    setStructureBusy(true);
+    setError(null);
+    try {
+      const result = await createPlanningStructure(
+        projectId,
+        {
+          posts: Array.from(posts.values()).map((post) => ({
+            ...post,
+            lots: Array.from(post.lots.values()),
+          })),
+        },
+        session,
+        onSessionRefresh,
+      );
+      setTasks(result.tasks);
+      setTaskOffset(0);
+      setDrafts(Object.fromEntries(result.tasks.map((task) => [task.uid, task.description ?? ""])));
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      setError(cause instanceof ApiError ? cause.message : "Impossible de générer le squelette.");
+    } finally {
+      setStructureBusy(false);
+    }
+  }
+
   async function removeTask(task: Task) {
     if (!session) {
       return;
@@ -746,6 +808,91 @@ export default function ProjectDetailsPage() {
             >
               {planningExportBusy ? "Export..." : "Export XML"}
             </button>
+          </div>
+        ) : null}
+
+        {activeTab === "planning" ? (
+          <div className="panel" style={{ marginBottom: "1rem" }}>
+            <h2>Structure initiale</h2>
+            <p className="muted">Définis les postes, lots et livrables avant de générer le squelette.</p>
+            {structureDraft.map((row, index) => (
+              <div className="row cost-line-form" key={`${row.postKey}-${row.lotKey}-${index}`}>
+                <input
+                  aria-label={`Poste ${index + 1}`}
+                  placeholder="Poste"
+                  value={row.postName}
+                  onChange={(event) =>
+                    setStructureDraft((previous) =>
+                      previous.map((item, itemIndex) =>
+                        itemIndex === index ? { ...item, postName: event.target.value } : item,
+                      ),
+                    )
+                  }
+                />
+                <input
+                  aria-label={`Lot ${index + 1}`}
+                  placeholder="Lot"
+                  value={row.lotName}
+                  onChange={(event) =>
+                    setStructureDraft((previous) =>
+                      previous.map((item, itemIndex) =>
+                        itemIndex === index ? { ...item, lotName: event.target.value } : item,
+                      ),
+                    )
+                  }
+                />
+                <input
+                  aria-label={`Livrables ${index + 1}`}
+                  placeholder="Livrables séparés par des virgules"
+                  value={row.deliverables}
+                  onChange={(event) =>
+                    setStructureDraft((previous) =>
+                      previous.map((item, itemIndex) =>
+                        itemIndex === index ? { ...item, deliverables: event.target.value } : item,
+                      ),
+                    )
+                  }
+                />
+                {structureDraft.length > 1 ? (
+                  <button
+                    className="btn btn-danger"
+                    type="button"
+                    aria-label={`Supprimer la ligne ${index + 1}`}
+                    onClick={() => setStructureDraft((previous) => previous.filter((_, itemIndex) => itemIndex !== index))}
+                  >
+                    Supprimer
+                  </button>
+                ) : null}
+              </div>
+            ))}
+            <div className="row">
+              <button
+                className="btn"
+                type="button"
+                onClick={() =>
+                  setStructureDraft((previous) => [
+                    ...previous,
+                    {
+                      postKey: `post-${previous.length + 1}`,
+                      postName: "",
+                      lotKey: `lot-${previous.length + 1}`,
+                      lotName: "",
+                      deliverables: "",
+                    },
+                  ])
+                }
+              >
+                Ajouter une ligne
+              </button>
+              <button
+                className="btn btn-primary"
+                type="button"
+                disabled={structureBusy}
+                onClick={() => void generatePlanningStructure()}
+              >
+                {structureBusy ? "Génération..." : "Générer le squelette"}
+              </button>
+            </div>
           </div>
         ) : null}
 
