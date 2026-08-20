@@ -69,6 +69,11 @@ class MsTask(Base):
     __table_args__ = (
         UniqueConstraint("project_id", "uid", name="uq_ms_task_project_uid"),
         UniqueConstraint("project_id", "structure_key", name="uq_ms_task_project_structure_key"),
+        ForeignKeyConstraint(
+            ["project_id", "parent_uid"],
+            ["ms_task.project_id", "ms_task.uid"],
+            name="fk_ms_task_parent",
+        ),
         CheckConstraint("task_type IN (0, 1, 2) OR task_type IS NULL", name="ck_ms_task_type"),
         CheckConstraint(
             "structure_kind IN ('poste', 'lot', 'livrable', 'milestone', 'task') "
