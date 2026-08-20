@@ -8,32 +8,45 @@ export type PlanningStructureDraftRow = {
   deliverables: string;
 };
 
+type PlanningStructureLotDraft = {
+  key: string;
+  name: string;
+  deliverables: { key: string; name: string }[];
+};
+
+type PlanningStructurePostDraft = {
+  key: string;
+  name: string;
+  lots: Map<string, PlanningStructureLotDraft>;
+};
+
 export function buildPlanningStructurePayload(
   rows: PlanningStructureDraftRow[],
 ): PlanningStructureCreate {
-  const posts = new Map<
-    string,
-    {
-      key: string;
-      name: string;
-      lots: Map<string, { key: string; name: string; deliverables: { key: string; name: string }[] }>;
-    }
-  >();
+  const posts = new Map<string, PlanningStructurePostDraft>();
 
   for (const row of rows) {
     if (!row.postKey.trim() || !row.postName.trim() || !row.lotKey.trim() || !row.lotName.trim()) {
       continue;
     }
-    const post = posts.get(row.postKey) ?? {
-      key: row.postKey.trim(),
-      name: row.postName.trim(),
-      lots: new Map(),
-    };
-    const lot = post.lots.get(row.lotKey) ?? {
-      key: row.lotKey.trim(),
-      name: row.lotName.trim(),
-      deliverables: [],
-    };
+    let post = posts.get(row.postKey);
+    if (!post) {
+      post = {
+        key: row.postKey.trim(),
+        name: row.postName.trim(),
+        lots: new Map<string, PlanningStructureLotDraft>(),
+      };
+      posts.set(post.key, post);
+    }
+    let lot = post.lots.get(row.lotKey);
+    if (!lot) {
+      lot = {
+        key: row.lotKey.trim(),
+        name: row.lotName.trim(),
+        deliverables: [],
+      };
+      post.lots.set(lot.key, lot);
+    }
     const existingNames = new Set(lot.deliverables.map((deliverable) => deliverable.name));
     for (const name of row.deliverables.split(",").map((value) => value.trim()).filter(Boolean)) {
       if (existingNames.has(name)) {
@@ -45,8 +58,6 @@ export function buildPlanningStructurePayload(
       });
       existingNames.add(name);
     }
-    post.lots.set(lot.key, lot);
-    posts.set(post.key, post);
   }
 
   return {
