@@ -22,6 +22,12 @@ def _required_text(value: str) -> str:
     return normalized
 
 
+def _optional_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return _required_text(value)
+
+
 class ResourceNodeBase(BaseModel):
     code: str = Field(min_length=1, max_length=64)
     name: str = Field(min_length=1, max_length=255)
@@ -40,8 +46,8 @@ class ResourceNodeUpdate(BaseModel):
     parent_id: int | None = Field(default=None, gt=0)
     is_active: bool | None = None
 
-    _normalize_code = field_validator("code")(_required_text)
-    _normalize_name = field_validator("name")(_required_text)
+    _normalize_code = field_validator("code")(_optional_text)
+    _normalize_name = field_validator("name")(_optional_text)
 
 
 class ResourceNodeRead(ResourceNodeBase):
@@ -73,7 +79,7 @@ class ResourceRoleUpdate(BaseModel):
     cost_category_id: int | None = Field(default=None, gt=0)
     is_active: bool | None = None
 
-    _normalize_name = field_validator("name")(_required_text)
+    _normalize_name = field_validator("name")(_optional_text)
 
 
 class ResourceRoleRead(ResourceRoleBase):
@@ -104,7 +110,7 @@ class CostTypeUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     is_active: bool | None = None
 
-    _normalize_name = field_validator("name")(_required_text)
+    _normalize_name = field_validator("name")(_optional_text)
 
 
 class CostTypeRead(CostTypeBase):
@@ -125,6 +131,14 @@ class CostCategoryBase(BaseModel):
     _normalize_accounting_code = field_validator("accounting_code")(_required_text)
     _normalize_name = field_validator("name")(_required_text)
 
+    @field_validator("category_code", mode="before")
+    @classmethod
+    def normalize_category_code(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
 
 class CostCategoryCreate(CostCategoryBase):
     pass
@@ -137,8 +151,16 @@ class CostCategoryUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     is_active: bool | None = None
 
-    _normalize_name = field_validator("name")(_required_text)
-    _normalize_accounting_code = field_validator("accounting_code")(_required_text)
+    _normalize_name = field_validator("name")(_optional_text)
+    _normalize_accounting_code = field_validator("accounting_code")(_optional_text)
+
+    @field_validator("category_code", mode="before")
+    @classmethod
+    def normalize_category_code(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
 
 class CostCategoryRead(CostCategoryBase):
@@ -172,7 +194,9 @@ class CostRateUpdate(BaseModel):
     @field_validator("currency_code", mode="before")
     @classmethod
     def normalize_currency_code(cls, value: str | None) -> str | None:
-        return _required_text(value).upper() if value is not None else None
+        if value is None:
+            return None
+        return _required_text(value).upper()
 
 
 class CostRateRead(CostRateBase):
@@ -243,11 +267,27 @@ class TaskRoleAssignmentCreate(TaskRoleAssignmentBase):
     task_id: int = Field(gt=0)
     role_id: int = Field(gt=0)
 
+    @field_validator("comment", mode="before")
+    @classmethod
+    def normalize_comment(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
 
 class TaskRoleAssignmentUpdate(BaseModel):
     quantity: Decimal | None = Field(default=None, gt=0, max_digits=10, decimal_places=2)
     hours: Decimal | None = Field(default=None, ge=0, max_digits=14, decimal_places=2)
     comment: str | None = Field(default=None, max_length=10000)
+
+    @field_validator("comment", mode="before")
+    @classmethod
+    def normalize_comment(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
 
 class TaskRoleAssignmentRead(TaskRoleAssignmentBase):
@@ -264,6 +304,11 @@ class EstimateBase(BaseModel):
     kind: EstimateKind
     currency_code: str = Field(min_length=3, max_length=3)
     note: str | None = Field(default=None, max_length=10000)
+
+    @field_validator("kind", mode="before")
+    @classmethod
+    def normalize_kind(cls, value: str) -> str:
+        return _required_text(value).lower()
 
     @field_validator("currency_code", mode="before")
     @classmethod

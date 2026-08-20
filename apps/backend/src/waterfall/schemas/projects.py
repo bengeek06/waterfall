@@ -2,7 +2,20 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+def _required_text(value: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError("must not be blank")
+    return normalized
+
+
+def _optional_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return _required_text(value)
 
 
 class ProjectRead(BaseModel):
@@ -24,11 +37,26 @@ class ProjectCreate(BaseModel):
     short_description: str | None = Field(default=None, max_length=500)
     currency_code: str | None = Field(default=None, min_length=3, max_length=3)
 
+    _normalize_name = field_validator("name")(_required_text)
+    _normalize_code = field_validator("code")(_optional_text)
+    _normalize_short_description = field_validator("short_description")(_optional_text)
+
+    @field_validator("currency_code", mode="before")
+    @classmethod
+    def normalize_currency_code(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _required_text(value).upper()
+
 
 class ProjectUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     code: str | None = Field(default=None, max_length=64)
     short_description: str | None = Field(default=None, max_length=500)
+
+    _normalize_name = field_validator("name")(_optional_text)
+    _normalize_code = field_validator("code")(_optional_text)
+    _normalize_short_description = field_validator("short_description")(_optional_text)
 
 
 class TaskRead(BaseModel):
@@ -50,11 +78,21 @@ class TaskRead(BaseModel):
 class TaskDescriptionUpdate(BaseModel):
     description: str | None = Field(default=None, max_length=10000)
 
+    @field_validator("description", mode="before")
+    @classmethod
+    def normalize_description(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
 
 class TaskCreate(BaseModel):
     name: str = Field(min_length=1, max_length=512)
     parent_task_id: int | None = Field(default=None, gt=0)
     is_milestone: bool = False
+
+    _normalize_name = field_validator("name")(_required_text)
 
 
 class TaskRoleAssignmentCreate(BaseModel):
@@ -63,11 +101,27 @@ class TaskRoleAssignmentCreate(BaseModel):
     hours: Decimal = Field(ge=0, max_digits=14, decimal_places=2)
     comment: str | None = Field(default=None, max_length=10000)
 
+    @field_validator("comment", mode="before")
+    @classmethod
+    def normalize_comment(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
 
 class TaskRoleAssignmentUpdate(BaseModel):
     quantity: Decimal | None = Field(default=None, gt=0, max_digits=10, decimal_places=2)
     hours: Decimal | None = Field(default=None, ge=0, max_digits=14, decimal_places=2)
     comment: str | None = Field(default=None, max_length=10000)
+
+    @field_validator("comment", mode="before")
+    @classmethod
+    def normalize_comment(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
 
 class TaskRoleAssignmentRead(BaseModel):
@@ -90,6 +144,24 @@ class ProjectEstimateCreate(BaseModel):
     currency_code: str = Field(min_length=3, max_length=3)
     reference_estimate_id: int | None = Field(default=None, gt=0)
     note: str | None = Field(default=None, max_length=10000)
+
+    @field_validator("kind", mode="before")
+    @classmethod
+    def normalize_kind(cls, value: str) -> str:
+        return _required_text(value).lower()
+
+    @field_validator("currency_code", mode="before")
+    @classmethod
+    def normalize_currency_code(cls, value: str) -> str:
+        return _required_text(value).upper()
+
+    @field_validator("note", mode="before")
+    @classmethod
+    def normalize_note(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
 
 class ProjectEstimateRead(BaseModel):
@@ -128,6 +200,18 @@ class EstimateCostLineCreate(BaseModel):
     unit_cost: Decimal = Field(ge=0, max_digits=16, decimal_places=2)
     supply_status: SupplyStatus | None = None
 
+    @field_validator("supply_status", mode="before")
+    @classmethod
+    def normalize_supply_status(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _required_text(value).lower()
+
+    @field_validator("label", mode="before")
+    @classmethod
+    def normalize_label(cls, value: str) -> str:
+        return _required_text(value)
+
 
 class EstimateCostLineUpdate(BaseModel):
     task_id: int | None = Field(default=None, gt=0)
@@ -136,6 +220,20 @@ class EstimateCostLineUpdate(BaseModel):
     quantity: Decimal | None = Field(default=None, gt=0, max_digits=14, decimal_places=2)
     unit_cost: Decimal | None = Field(default=None, ge=0, max_digits=16, decimal_places=2)
     supply_status: SupplyStatus | None = None
+
+    @field_validator("supply_status", mode="before")
+    @classmethod
+    def normalize_supply_status(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _required_text(value).lower()
+
+    @field_validator("label", mode="before")
+    @classmethod
+    def normalize_label(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _required_text(value)
 
 
 class EstimateCostLineRead(BaseModel):
