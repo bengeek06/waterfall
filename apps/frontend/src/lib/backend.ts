@@ -16,6 +16,8 @@ export type ProjectEstimate = components["schemas"]["ProjectEstimateRead"];
 export type EstimateTaskRow = components["schemas"]["EstimateTaskRowRead"];
 export type EstimateCostLine = components["schemas"]["EstimateCostLineRead"];
 export type Task = components["schemas"]["TaskRead"];
+export type PlanningStructureCreate = components["schemas"]["PlanningStructureCreate"];
+export type PlanningStructureRead = components["schemas"]["PlanningStructureRead"];
 export type TaskRoleAssignment = components["schemas"]["TaskRoleAssignmentRead"];
 export type ImportBatch = components["schemas"]["ImportBatchResponse"];
 export type ImportBatchStatus = components["schemas"]["ImportBatchStatusResponse"];
@@ -839,6 +841,24 @@ export function getProjectTasks(
     `/projects/${projectId}/tasks?limit=${limit}&offset=${offset}`,
     tokens,
     { method: "GET" },
+    onSessionRefresh,
+  );
+}
+
+export function createPlanningStructure(
+  projectId: number,
+  payload: PlanningStructureCreate,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<PlanningStructureRead>(
+    `/projects/${projectId}/planning-structure`,
+    tokens,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
     onSessionRefresh,
   );
 }
