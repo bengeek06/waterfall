@@ -105,9 +105,7 @@ def generate_planning_structure(
             raise ValueError("Project contains an incomplete planning structure")
         uid_by_key = {node.key: existing_by_key[node.key].uid for node in nodes}
         deliverables_by_lot_key = {
-            f"{post.key}/{lot.key}": lot.deliverables
-            for post in payload.posts
-            for lot in post.lots
+            f"{post.key}/{lot.key}": lot.deliverables for post in payload.posts for lot in post.lots
         }
         existing_links = (
             db.query(MsTaskLink)
