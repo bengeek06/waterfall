@@ -29,11 +29,21 @@ def upgrade() -> None:
             "structure_kind IN ('poste', 'lot', 'livrable', 'milestone', 'task') "
             "OR structure_kind IS NULL",
         )
+        batch_op.create_check_constraint(
+            "ck_ms_task_parent_uid_positive",
+            "parent_uid IS NULL OR parent_uid > 0",
+        )
+        batch_op.create_check_constraint(
+            "ck_ms_task_position_positive",
+            "position IS NULL OR position > 0",
+        )
 
 
 def downgrade() -> None:
     with op.batch_alter_table("ms_task") as batch_op:
         batch_op.drop_constraint("ck_ms_task_structure_kind", type_="check")
+        batch_op.drop_constraint("ck_ms_task_parent_uid_positive", type_="check")
+        batch_op.drop_constraint("ck_ms_task_position_positive", type_="check")
         batch_op.drop_constraint("uq_ms_task_project_structure_key", type_="unique")
         batch_op.drop_column("position")
         batch_op.drop_column("parent_uid")

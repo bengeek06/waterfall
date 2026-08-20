@@ -76,6 +76,14 @@ class MsTask(Base):
             name="ck_ms_task_structure_kind",
         ),
         CheckConstraint(
+            "parent_uid IS NULL OR parent_uid > 0",
+            name="ck_ms_task_parent_uid_positive",
+        ),
+        CheckConstraint(
+            "position IS NULL OR position > 0",
+            name="ck_ms_task_position_positive",
+        ),
+        CheckConstraint(
             "percent_complete BETWEEN 0 AND 100 OR percent_complete IS NULL",
             name="ck_ms_task_percent_complete",
         ),
