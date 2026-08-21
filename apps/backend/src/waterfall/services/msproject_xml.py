@@ -153,6 +153,8 @@ def parse_msproject_xml(xml_bytes: bytes) -> ParsedProject:
     minutes_per_day = _integer(_text(root, "MinutesPerDay"), "MinutesPerDay", issues) or 480
     minutes_per_week = _integer(_text(root, "MinutesPerWeek"), "MinutesPerWeek", issues) or 2400
     days_per_month = _integer(_text(root, "DaysPerMonth"), "DaysPerMonth", issues) or 20
+    start_date = _datetime(_text(root, "StartDate"), "Project StartDate", issues)
+    finish_date = _datetime(_text(root, "FinishDate"), "Project FinishDate", issues)
     tasks: list[ParsedTask] = []
     links: list[ParsedLink] = []
     task_uids: set[int] = set()
@@ -299,8 +301,8 @@ def parse_msproject_xml(xml_bytes: bytes) -> ParsedProject:
         external_uid=_text(root, "GUID"),
         name=_text(root, "Name"),
         schedule_from_start=_text(root, "ScheduleFromStart") == "1",
-        start_date=_datetime(_text(root, "StartDate"), "Project StartDate", issues),
-        finish_date=_datetime(_text(root, "FinishDate"), "Project FinishDate", issues),
+        start_date=start_date,
+        finish_date=finish_date,
         calendar_uid=_integer(_text(root, "CalendarUID"), "CalendarUID", issues),
         minutes_per_day=minutes_per_day,
         minutes_per_week=minutes_per_week,

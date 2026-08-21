@@ -33,7 +33,7 @@ from waterfall.schemas.imports import (
 )
 from waterfall.services.import_diff import build_import_diff
 from waterfall.services.import_v1 import import_tasks_and_links
-from waterfall.services.msproject_xml import parse_msproject_xml
+from waterfall.services.msproject_xml import MsProjectValidationError, parse_msproject_xml
 
 router = APIRouter(prefix="/imports/v1/batches", tags=["imports-v1"])
 UPLOAD_CHUNK_SIZE = 1024 * 1024
@@ -339,12 +339,12 @@ def run_batch(
         failed_batch = _get_batch_or_404(db, batch_id, current_user.id)
         failed_batch.status = "failed"
         failed_batch.finished_at = datetime.now(UTC)
-        failed_batch.log_json = json.dumps(
-            {
-                "error": str(exc),
-                "errors": [{"code": "IMPORT_FAILED", "message": str(exc)}],
-            }
+        issues = (
+            exc.issues
+            if isinstance(exc, MsProjectValidationError)
+            else [{"code": "IMPORT_FAILED", "message": str(exc)}]
         )
+        failed_batch.log_json = json.dumps({"error": str(exc), "errors": issues})
         db.add(failed_batch)
         db.commit()
         raise HTTPException(

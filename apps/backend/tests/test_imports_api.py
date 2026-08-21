@@ -214,6 +214,32 @@ def test_import_diff_is_non_mutating_and_requires_confirmation() -> None:
         assert confirmation_response.status_code == 409
 
 
+def test_invalid_import_exposes_structured_validation_errors() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client, "import.invalid@example.com")
+        project_id = _create_project(client, headers)
+        response = client.post(
+            "/imports/v1/batches",
+            json={"projectId": project_id, "importMode": "standard"},
+            headers=headers,
+        )
+        batch_id = response.json()["id"]
+        client.post(
+            f"/imports/v1/batches/{batch_id}/xml",
+            files={"file": ("invalid.xml", b"<Project", "application/xml")},
+            headers=headers,
+        )
+        run = client.post(
+            f"/imports/v1/batches/{batch_id}/run",
+            json={"confirm": True},
+            headers=headers,
+        )
+        assert run.status_code == 400
+        errors = client.get(f"/imports/v1/batches/{batch_id}/errors", headers=headers)
+        assert errors.status_code == 200
+        assert errors.json()["items"][0]["code"] == "MALFORMED_XML"
+
+
 def test_identical_source_is_detected_without_reapplying() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client, "import.identical@example.com")
