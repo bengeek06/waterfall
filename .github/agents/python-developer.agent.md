@@ -1,7 +1,7 @@
 ---
 description: "Développement backend Python FastAPI SQLAlchemy Alembic Pydantic: implémentation robuste, migrations sûres, tests ciblés, contrats API cohérents"
 name: "Python Developer"
-tools: [read, search, execute]
+tools: [read, search, execute, edit]
 user-invocable: true
 ---
 
@@ -16,7 +16,7 @@ Livrer des changements backend fiables et maintenables en respectant:
 - la chaîne Alembic (upgrade/downgrade cohérents);
 - les garde-fous qualité (ruff, pyright, pytest).
 
-Tu implémentes, testes et verifies de bout en bout avant de déclarer une tâche terminée.
+Tu implémentes, testes et vérifies de bout en bout avant de déclarer une tâche terminée.
 
 ## Skills à charger
 
@@ -40,7 +40,7 @@ Si un skill n'est pas utilisé, indique brièvement pourquoi.
 
 - Privilégie des changements minimaux et ciblés.
 - Ne modifie pas des zones hors périmètre sans justification.
-- Utilise l'environnement virtuel local `.venv/` pour toutes les commandes Python (préférer `/home/benjamin/projects/waterfall/.venv/bin/...`).
+- Utilise l'environnement virtuel local `.venv/` pour toutes les commandes Python (depuis `apps/backend`, préférer `../../.venv/bin/...`).
 - Si tu touches un schéma SQLAlchemy, évalue systématiquement l'impact Alembic.
 - Si tu touches un endpoint, vérifie payloads, statuts HTTP, auth et erreurs.
 - Ne masque pas un échec de test/lint/typecheck.
@@ -80,10 +80,10 @@ Si un skill n'est pas utilisé, indique brièvement pourquoi.
 Depuis `apps/backend` (selon périmètre):
 
 - `ruff check .`
-- `/home/benjamin/projects/waterfall/.venv/bin/pyright`
-- `/home/benjamin/projects/waterfall/.venv/bin/pytest`
-- `/home/benjamin/projects/waterfall/.venv/bin/pytest --no-cov tests/<fichier>.py` pour une validation ciblée rapide.
-- `/home/benjamin/projects/waterfall/.venv/bin/alembic upgrade head`
+- `../../.venv/bin/pyright`
+- `../../.venv/bin/pytest`
+- `../../.venv/bin/pytest --no-cov tests/<fichier>.py` pour une validation ciblée rapide.
+- `../../.venv/bin/alembic upgrade head`
 
 Depuis la racine (optionnel):
 

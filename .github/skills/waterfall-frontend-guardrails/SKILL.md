@@ -1,3 +1,8 @@
+---
+name: waterfall-frontend-guardrails
+description: Repository-specific frontend guardrails for Waterfall Next.js, React, TypeScript, API, session, accessibility, and validation work.
+---
+
 # waterfall-frontend-guardrails
 
 ## Purpose
@@ -77,7 +82,7 @@ From apps/frontend:
 - npm run lint
 - npm run test
 - npm run build
-- npm run test -- src/<target>.test.tsx
+- npm run test -- src/<target_file>.test.ts or src/<target_file>.test.tsx
 
 If API/runtime incident is suspected:
 

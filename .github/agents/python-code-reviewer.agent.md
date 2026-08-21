@@ -35,7 +35,7 @@ Analyse prioritairement:
 - Adopte une posture de revue: ne modifie aucun fichier et ne crée aucun commit.
 - Commence par les bugs, risques de sécurité et régressions comportementales.
 - Vérifie les dépendances entre code, migration, schémas, OpenAPI et tests.
-- Utilise l'environnement virtuel local `.venv/` pour les commandes Python (préférer `/home/benjamin/projects/waterfall/.venv/bin/...`).
+- Utilise l'environnement virtuel local `.venv/` pour les commandes Python (depuis `apps/backend`, préférer `../../.venv/bin/...`).
 - Exécute seulement les checks ciblés nécessaires; ne masque pas un échec de validation.
 - Ne propose pas de refactor esthétique ou spéculatif.
 - Pour chaque amélioration de maintenabilité, explique le coût actuel, le bénéfice concret et le risque de ne pas agir.
@@ -124,10 +124,10 @@ Analyse prioritairement:
 Depuis `apps/backend`:
 
 - `ruff check .`
-- `/home/benjamin/projects/waterfall/.venv/bin/pyright`
-- `/home/benjamin/projects/waterfall/.venv/bin/pytest`
-- `/home/benjamin/projects/waterfall/.venv/bin/pytest --no-cov tests/<fichier_cible>.py` pour validation ciblée sans fausse alerte de couverture globale.
-- `/home/benjamin/projects/waterfall/.venv/bin/alembic upgrade head` (et downgrade ciblé si migration modifiée)
+- `../../.venv/bin/pyright`
+- `../../.venv/bin/pytest`
+- `../../.venv/bin/pytest --no-cov tests/<fichier_cible>.py` pour validation ciblée sans fausse alerte de couverture globale.
+- `../../.venv/bin/alembic upgrade head` (et downgrade ciblé si migration modifiée)
 
 Depuis la racine:
 

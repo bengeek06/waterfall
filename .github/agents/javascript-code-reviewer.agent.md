@@ -101,7 +101,7 @@ Depuis `apps/frontend`:
 - `npm run lint`
 - `npm run test`
 - `npm run build`
-- `npm run test -- src/<fichier_cible>.test.tsx`
+- `npm run test -- src/<fichier_cible>.test.ts` ou `npm run test -- src/<fichier_cible>.test.tsx`
 
 En cas d'incident API/network suspect:
 

@@ -1,7 +1,7 @@
 ---
 description: "Développement frontend JavaScript TypeScript Next.js React: implémentation robuste, contrats API cohérents, UX fiable, tests ciblés"
 name: "JavaScript Developer"
-tools: [read, search, execute]
+tools: [read, search, execute, edit]
 user-invocable: true
 ---
 
@@ -76,7 +76,7 @@ Depuis la racine:
 
 Depuis `apps/frontend` (ciblé):
 
-- `npm run test -- src/<fichier>.test.tsx`
+- `npm run test -- src/<fichier_cible>.test.ts` ou `npm run test -- src/<fichier_cible>.test.tsx`
 
 En cas d'incident API/network:
 

@@ -1,3 +1,8 @@
+---
+name: waterfall-backend-guardrails
+description: Repository-specific backend guardrails for Waterfall FastAPI, SQLAlchemy, Alembic, OpenAPI, and Docker Compose work.
+---
+
 # waterfall-backend-guardrails
 
 ## Purpose
@@ -40,7 +45,7 @@ Waterfall backend relies on:
 
 6. Use repository virtual environment consistently.
 - Run Python tooling from `.venv/` to avoid host-path drift.
-- Prefer explicit binaries: `/home/benjamin/projects/waterfall/.venv/bin/...`.
+- Prefer the repository-relative virtual environment: `../../.venv/bin/...` when running from `apps/backend`.
 
 ## Verification checklist
 
@@ -74,10 +79,10 @@ Waterfall backend relies on:
 From apps/backend:
 
 - ruff check .
-- /home/benjamin/projects/waterfall/.venv/bin/pyright
-- /home/benjamin/projects/waterfall/.venv/bin/pytest
-- /home/benjamin/projects/waterfall/.venv/bin/pytest --no-cov tests/<target_file>.py
-- /home/benjamin/projects/waterfall/.venv/bin/alembic upgrade head
+- ../../.venv/bin/pyright
+- ../../.venv/bin/pytest
+- ../../.venv/bin/pytest --no-cov tests/<target_file>.py
+- ../../.venv/bin/alembic upgrade head
 
 From repository root:
 
