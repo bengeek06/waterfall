@@ -2237,6 +2237,7 @@ export interface operations {
             query?: {
                 limit?: number;
                 offset?: number;
+                include_archived?: boolean;
             };
             header?: never;
             path?: never;

@@ -520,9 +520,10 @@ export function getProjects(
   onSessionRefresh: (next: SessionTokens) => void,
   limit = 50,
   offset = 0,
+  includeArchived = false,
 ) {
   return authRequest<Project[]>(
-    `/projects?limit=${limit}&offset=${offset}`,
+    `/projects?limit=${limit}&offset=${offset}&include_archived=${includeArchived}`,
     tokens,
     { method: "GET" },
     onSessionRefresh,
