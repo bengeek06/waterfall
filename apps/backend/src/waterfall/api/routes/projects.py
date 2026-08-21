@@ -93,6 +93,7 @@ def _to_project_read(project: MsProject) -> ProjectRead:
     return ProjectRead(
         id=project.id,
         name=project.name,
+        status=project.status,
         code=project.code,
         short_description=project.short_description,
         source_version=project.source_version,

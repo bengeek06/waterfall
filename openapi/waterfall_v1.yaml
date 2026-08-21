@@ -2320,6 +2320,7 @@ components:
       required:
         - id
         - name
+        - status
         - source_version
         - save_version_out
         - schedule_from_start
@@ -2329,6 +2330,9 @@ components:
           minimum: 1
         name:
           type: string
+        status:
+          type: string
+          enum: [draft, active, archived]
         code:
           type: string
           nullable: true

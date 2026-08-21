@@ -23,6 +23,7 @@ def _optional_text(value: str | None) -> str | None:
 class ProjectRead(BaseModel):
     id: int
     name: str
+    status: str
     code: str | None
     short_description: str | None
     source_version: int

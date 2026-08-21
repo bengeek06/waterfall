@@ -34,9 +34,13 @@ class MsProject(Base):
             name="ck_ms_project_schedule_dates",
         ),
         Index("idx_ms_project_name", "name"),
+        CheckConstraint(
+            "status IN ('draft', 'active', 'archived')",
+            name="ck_ms_project_status",
+        ),
     )
 
-    id: Mapped[int] = mapped_column(primary_key=True)
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     owner_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     external_uid: Mapped[str | None] = mapped_column(String(16), nullable=True)
     code: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -61,6 +65,13 @@ class MsProject(Base):
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(UTC),
+    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft")
+    planning_reference_id: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    displayed_planning_id: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
     )
 
 

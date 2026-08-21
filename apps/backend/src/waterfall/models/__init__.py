@@ -1,4 +1,5 @@
 from waterfall.models.ms_core import MsProject, MsTask, MsTaskLink
+from waterfall.models.planning import WfPlanning, WfPlanningLinkSnapshot, WfPlanningTaskSnapshot
 from waterfall.models.resources import (
     CostCategory,
     CostRate,
@@ -25,6 +26,9 @@ __all__ = [
     "MsProject",
     "MsTask",
     "MsTaskLink",
+    "WfPlanning",
+    "WfPlanningTaskSnapshot",
+    "WfPlanningLinkSnapshot",
     "ResourceNode",
     "ResourceRole",
     "CostCategory",
