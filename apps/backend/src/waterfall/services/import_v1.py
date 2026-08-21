@@ -6,7 +6,12 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from waterfall.models.ms_core import MsProject, MsTask, MsTaskLink
-from waterfall.models.resources import EstimateCostLine, EstimateTaskRow, TaskRoleAssignment
+from waterfall.models.resources import (
+    EstimateCostLine,
+    EstimateLine,
+    EstimateTaskRow,
+    TaskRoleAssignment,
+)
 from waterfall.models.wf_core import WfChargeLine, WfTaskEnrichment
 from waterfall.services.msproject_xml import ParsedProject, parse_msproject_xml
 
@@ -59,6 +64,7 @@ def _task_kwargs(task: Any, project_id: int) -> dict[str, object]:
         "percent_complete": task.percent_complete,
         "is_summary": task.is_summary,
         "is_milestone": task.is_milestone,
+        "is_manual": task.is_manual,
         "calendar_uid": task.calendar_uid,
     }
 
@@ -78,6 +84,7 @@ def import_tasks_and_links(db: Session, xml_bytes: bytes, project: MsProject) ->
         referenced = (
             db.query(TaskRoleAssignment.id).filter(TaskRoleAssignment.task_id == task.id).first()
             or db.query(EstimateCostLine.id).filter(EstimateCostLine.task_id == task.id).first()
+            or db.query(EstimateLine.id).filter(EstimateLine.task_id == task.id).first()
             or db.query(EstimateTaskRow.id).filter(EstimateTaskRow.task_id == task.id).first()
             or db.query(WfChargeLine.id)
             .filter(WfChargeLine.project_id == project.id, WfChargeLine.task_uid == task.uid)
@@ -115,6 +122,7 @@ def import_tasks_and_links(db: Session, xml_bytes: bytes, project: MsProject) ->
             task.structure_key = structure_key
             task.structure_kind = structure_kind
         task.parent_uid = None
+        task.position = None
         tasks.append(task)
     db.flush()
     _populate_parent_metadata(tasks)
