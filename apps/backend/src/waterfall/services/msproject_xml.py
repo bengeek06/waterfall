@@ -4,6 +4,10 @@ import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime
+from functools import lru_cache
+from pathlib import Path
+
+from lxml import etree
 
 SUPPORTED_NAMESPACES = {
     "http://schemas.microsoft.com/project",
@@ -15,6 +19,14 @@ _DURATION_RE = re.compile(
     r"(?:T(?:(?P<hours>\d+(?:\.\d+)?)H)?"
     r"(?:(?P<minutes>\d+(?:\.\d+)?)M)?"
     r"(?:(?P<seconds>\d+(?:\.\d+)?)S)?)?$"
+)
+CANONICAL_NAMESPACE = "http://schemas.microsoft.com/project/2007"
+CANONICAL_SCHEMA_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "resources"
+    / "msproject-schemas"
+    / "canonical"
+    / "waterfall_msproject_subset.xsd"
 )
 
 
@@ -133,6 +145,25 @@ def format_duration(minutes: int | None) -> str | None:
     return f"PT{minutes}M"
 
 
+@lru_cache(maxsize=1)
+def _canonical_schema() -> etree.XMLSchema:
+    return etree.XMLSchema(etree.parse(str(CANONICAL_SCHEMA_PATH)))
+
+
+def validate_canonical_xml(xml_bytes: bytes) -> None:
+    document = etree.fromstring(xml_bytes)
+    if document.nsmap.get(None) != CANONICAL_NAMESPACE:
+        raise MsProjectValidationError(
+            [{"code": "UNSUPPORTED_NAMESPACE", "message": "Canonical export requires /2007"}]
+        )
+    if not _canonical_schema().validate(document):
+        issues = [
+            {"code": "XSD_VALIDATION", "message": str(error)}
+            for error in _canonical_schema().error_log
+        ]
+        raise MsProjectValidationError(issues)
+
+
 def parse_msproject_xml(xml_bytes: bytes) -> ParsedProject:
     try:
         root = ET.fromstring(xml_bytes)
@@ -140,6 +171,8 @@ def parse_msproject_xml(xml_bytes: bytes) -> ParsedProject:
         raise MsProjectValidationError([{"code": "MALFORMED_XML", "message": str(exc)}]) from exc
 
     namespace = root.tag[1:].split("}", 1)[0] if root.tag.startswith("{") else ""
+    if namespace == CANONICAL_NAMESPACE:
+        validate_canonical_xml(xml_bytes)
     issues: list[dict[str, object]] = []
     if namespace not in SUPPORTED_NAMESPACES:
         issues.append(

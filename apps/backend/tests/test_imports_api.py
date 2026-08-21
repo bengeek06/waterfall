@@ -144,7 +144,7 @@ def test_import_batch_minimal_flow() -> None:
             headers=headers,
         )
         assert run_response.status_code == 202, errors_response.text
-        assert run_response.json()["status"] == "success"
+        assert run_response.json()["status"] == "pending"
 
         status_response: Response = client.get(
             f"/imports/v1/batches/{batch_id}",
@@ -153,8 +153,8 @@ def test_import_batch_minimal_flow() -> None:
         assert status_response.status_code == 200
         status_payload = status_response.json()
         assert status_payload["id"] == batch_id
-        assert status_payload["status"] == "success"
-        assert status_payload["counters"]["tasks"] == 1
+        assert status_payload["status"] == "pending"
+        assert status_payload["counters"]["tasks"] == 0
         assert "counters" in status_payload
         assert "warnings" in status_payload
 
@@ -167,14 +167,15 @@ def test_import_batch_minimal_flow() -> None:
             json={"dryRun": True},
             headers=headers,
         )
-        assert rerun_response.status_code == 409
+        assert rerun_response.status_code == 202
+        assert rerun_response.json()["status"] == "pending"
 
         reupload_response: Response = client.post(
             f"/imports/v1/batches/{batch_id}/xml",
             files={"file": ("planning_test.xml", minimal_valid_xml, "application/xml")},
             headers=headers,
         )
-        assert reupload_response.status_code == 409
+        assert reupload_response.status_code == 202
 
         assert errors_response.status_code == 200
         assert isinstance(errors_response.json()["items"], list)

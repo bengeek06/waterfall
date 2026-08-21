@@ -263,6 +263,14 @@ def run_batch(
     xml_bytes = _read_source_xml(batch)
 
     accepted_at = datetime.now(UTC)
+    if run_request.dry_run:
+        parse_msproject_xml(xml_bytes)
+        return ImportRunAcceptedResponse(
+            batchId=batch.id,
+            status="pending",
+            acceptedAt=accepted_at,
+        )
+
     updated = (
         db.query(WfImportBatch)
         .filter(WfImportBatch.id == batch.id)
@@ -309,28 +317,12 @@ def run_batch(
                 status="success",
                 acceptedAt=accepted_at,
             )
-        if run_request.dry_run:
-            savepoint = db.begin_nested()
-            try:
-                task_count, link_count = import_tasks_and_links(
-                    db,
-                    xml_bytes,
-                    project,
-                )
-            finally:
-                savepoint.rollback()
-                db.expire_all()
-        else:
-            task_count, link_count = import_tasks_and_links(
-                db,
-                xml_bytes,
-                project,
-            )
+        task_count, link_count = import_tasks_and_links(db, xml_bytes, project)
         batch.status = "success"
         batch.finished_at = datetime.now(UTC)
         payload["counters"] = {"tasks": task_count, "links": link_count}
         payload["errors"] = []
-        payload["dry_run"] = run_request.dry_run
+        payload["dry_run"] = False
         batch.log_json = json.dumps(payload)
         db.add(batch)
         db.commit()

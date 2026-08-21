@@ -1,6 +1,10 @@
 import pytest
 
-from waterfall.services.msproject_xml import MsProjectValidationError, parse_msproject_xml
+from waterfall.services.msproject_xml import (
+    MsProjectValidationError,
+    parse_msproject_xml,
+    validate_canonical_xml,
+)
 
 
 def _xml(tasks: str, namespace: str = "http://schemas.microsoft.com/project") -> bytes:
@@ -39,3 +43,8 @@ def test_validator_parses_iso_duration() -> None:
         _xml("<Task><UID>1</UID><ID>1</ID><Name>A</Name><Duration>PT8H</Duration></Task>")
     )
     assert parsed.tasks[0].duration_minutes == 480
+
+
+def test_canonical_schema_accepts_minimal_project() -> None:
+    xml = b'<Project xmlns="http://schemas.microsoft.com/project/2007"><SaveVersion>16</SaveVersion><Tasks><Task><UID>1</UID><Name>One</Name><Duration>PT480M</Duration></Task></Tasks></Project>'
+    validate_canonical_xml(xml)
