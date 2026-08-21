@@ -6,8 +6,9 @@ from fastapi.testclient import TestClient
 from httpx import Response
 
 from waterfall.main import app
+from waterfall.services.msproject_xml import parse_msproject_xml
 
-NS = {"ms": "http://schemas.microsoft.com/project"}
+NS = {"ms": "http://schemas.microsoft.com/project/2007"}
 EXAMPLE_XML = Path(__file__).resolve().parent / "planning_test.xml"
 
 
@@ -125,6 +126,12 @@ def test_export_xml_contains_task_notes_from_description() -> None:
 
         xml_content = cast(bytes, export_response.content)
         root = ET.fromstring(xml_content)
+        assert root.tag == "{http://schemas.microsoft.com/project/2007}Project"
+        round_trip = parse_msproject_xml(xml_content)
+        assert {task.uid for task in round_trip.tasks} == {
+            cast(int, task["uid"]) for task in tasks_payload
+        }
+        assert len(round_trip.links) == 1
         notes_by_uid: dict[int, str] = {}
         for task_node in root.findall("ms:Tasks/ms:Task", NS):
             uid_node = task_node.find("ms:UID", NS)

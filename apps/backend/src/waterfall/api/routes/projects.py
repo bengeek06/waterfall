@@ -55,9 +55,10 @@ from waterfall.services import (
     calculate_estimate_lines,
     generate_planning_structure,
 )
+from waterfall.services.msproject_xml import format_duration
 
 router = APIRouter(prefix="/projects", tags=["projects"])
-MSP_NS = "http://schemas.microsoft.com/project"
+MSP_NS = "http://schemas.microsoft.com/project/2007"
 
 
 def _bool_to_msp_flag(value: bool) -> str:
@@ -1169,6 +1170,8 @@ def export_project_xml(
     root = ET.Element(f"{{{MSP_NS}}}Project")
 
     ET.SubElement(root, f"{{{MSP_NS}}}SaveVersion").text = str(project.save_version_out)
+    if project.external_uid is not None:
+        ET.SubElement(root, f"{{{MSP_NS}}}GUID").text = project.external_uid
     ET.SubElement(root, f"{{{MSP_NS}}}Name").text = project.name
     ET.SubElement(root, f"{{{MSP_NS}}}ScheduleFromStart").text = _bool_to_msp_flag(
         project.schedule_from_start
@@ -1215,6 +1218,15 @@ def export_project_xml(
         finish_at = _dt_to_msp_text(task.finish_at)
         if finish_at is not None:
             ET.SubElement(task_node, f"{{{MSP_NS}}}Finish").text = finish_at
+
+        duration = format_duration(task.duration_minutes)
+        if duration is not None:
+            ET.SubElement(task_node, f"{{{MSP_NS}}}Duration").text = duration
+
+        if task.duration_format is not None:
+            ET.SubElement(task_node, f"{{{MSP_NS}}}DurationFormat").text = str(
+                task.duration_format
+            )
 
         if task.percent_complete is not None:
             ET.SubElement(task_node, f"{{{MSP_NS}}}PercentComplete").text = str(
