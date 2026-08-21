@@ -35,6 +35,7 @@ from waterfall.schemas.imports import (
 from waterfall.services.import_diff import build_import_diff
 from waterfall.services.import_v1 import import_tasks_and_links
 from waterfall.services.msproject_xml import MsProjectValidationError, parse_msproject_xml
+from waterfall.services.project_lifecycle import ensure_project_mutable
 
 router = APIRouter(prefix="/imports/v1/batches", tags=["imports-v1"])
 UPLOAD_CHUNK_SIZE = 1024 * 1024
@@ -165,6 +166,7 @@ def create_batch(
     )
     if project is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    ensure_project_mutable(project)
 
     batch = WfImportBatch(
         project_id=project.id,
@@ -206,6 +208,9 @@ async def upload_xml(
         )
 
     batch = _get_batch_or_404(db, batch_id, current_user.id)
+    project = db.get(MsProject, batch.project_id)
+    if project is not None:
+        ensure_project_mutable(project)
     if batch.status != "pending":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -254,6 +259,9 @@ def run_batch(
     current_user: User = Depends(get_current_active_user),
 ) -> ImportRunAcceptedResponse:
     batch = _get_batch_or_404(db, batch_id, current_user.id)
+    project = db.get(MsProject, batch.project_id)
+    if project is not None:
+        ensure_project_mutable(project)
     if batch.status != "pending":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Batch is not pending")
 

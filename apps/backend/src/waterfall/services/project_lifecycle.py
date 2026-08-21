@@ -43,15 +43,8 @@ def validate_project_status_transition(
             detail="Archived project statuses cannot transition",
         )
     allowed = {
-        "cree": {
-            "initialise",
-            "en_reponse_appel_offre",
-            "en_cours",
-            "termine",
-            "perdu",
-            "abandonne",
-        },
-        "initialise": {"en_reponse_appel_offre", "en_cours", "perdu", "abandonne"},
+        "cree": {"initialise", "perdu", "abandonne"},
+        "initialise": {"en_reponse_appel_offre", "perdu", "abandonne"},
         "en_reponse_appel_offre": {"en_cours", "perdu", "abandonne"},
         "en_cours": {"termine", "abandonne"},
     }

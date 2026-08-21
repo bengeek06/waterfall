@@ -29,8 +29,8 @@ def upgrade() -> None:
         batch_op.alter_column("status", server_default="cree")
     op.execute(
         sa.text(
-            "UPDATE ms_project SET status = 'cree' "
-            "WHERE status IN ('draft', 'active', 'archived')"
+            "UPDATE ms_project SET status = CASE status "
+            "WHEN 'active' THEN 'initialise' ELSE 'cree' END"
         )
     )
     with op.batch_alter_table("ms_project") as batch_op:
@@ -63,4 +63,5 @@ def downgrade() -> None:
         batch_op.create_check_constraint(
             "ck_ms_project_status", "status IN ('draft', 'active', 'archived')"
         )
+        batch_op.alter_column("status", type_=sa.String(length=16))
         batch_op.alter_column("status", server_default="draft")

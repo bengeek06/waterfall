@@ -116,6 +116,8 @@ export default function ProjectDetailsPage() {
   );
 
   useEffect(() => {
+    let cancelled = false;
+
     async function load() {
       if (!session || Number.isNaN(projectId)) {
         if (!session) {
@@ -138,6 +140,9 @@ export default function ProjectDetailsPage() {
           listProjectEstimates(projectId, session, onSessionRefresh),
           listPlannings(projectId, session, onSessionRefresh),
         ]);
+        if (cancelled) {
+          return;
+        }
         setProject(projectData);
         setEstimates(estimatesData);
         setPlannings(planningsData);
@@ -147,6 +152,9 @@ export default function ProjectDetailsPage() {
         );
         setSelectedEstimateId((current) => current ?? estimatesData.at(-1)?.id ?? null);
       } catch (cause) {
+        if (cancelled) {
+          return;
+        }
         if (cause instanceof SessionExpiredError) {
           clearSession();
           router.push("/login");
@@ -163,11 +171,16 @@ export default function ProjectDetailsPage() {
           setError("Erreur inattendue lors du chargement du projet.");
         }
       } finally {
-        setBusy(false);
+        if (!cancelled) {
+          setBusy(false);
+        }
       }
     }
 
     void load();
+    return () => {
+      cancelled = true;
+    };
   }, [onSessionRefresh, projectId, router, session]);
 
   useEffect(() => {
@@ -286,8 +299,8 @@ export default function ProjectDetailsPage() {
     if (!session || planningId === selectedPlanningId) {
       return;
     }
-    setSelectedPlanningId(planningId);
     if (isReadOnlyProject) {
+      setSelectedPlanningId(planningId);
       return;
     }
     setPlanningBusy(true);
@@ -299,6 +312,7 @@ export default function ProjectDetailsPage() {
         session,
         onSessionRefresh,
       );
+      setSelectedPlanningId(planningId);
       setProject(updatedProject);
     } catch (cause) {
       if (cause instanceof SessionExpiredError) {
@@ -351,12 +365,9 @@ export default function ProjectDetailsPage() {
         session,
         onSessionRefresh,
       );
+      const planningMetadata = await listPlannings(projectId, session, onSessionRefresh);
       setProject(updatedProject);
-      setPlannings((previous) =>
-        previous.map((item) =>
-          item.id === selectedPlanning.id ? { ...item, status: "validated" } : item,
-        ),
-      );
+      setPlannings(planningMetadata);
     } catch (cause) {
       if (cause instanceof SessionExpiredError) {
         clearSession();
@@ -663,7 +674,7 @@ export default function ProjectDetailsPage() {
     }
   }
 
-  async function persistPlanningStructure(closeEditor: boolean) {
+  async function generatePlanningStructure() {
     if (!session || isReadOnlyProject) {
       router.push("/login");
       return;
@@ -693,7 +704,7 @@ export default function ProjectDetailsPage() {
       );
       setTasks(savedStructure.tasks);
       setPlanningDetail((current) => current ? { ...current, tasks: savedStructure.tasks } : current);
-      setStructureOpen(!closeEditor);
+      setStructureOpen(false);
       const [updatedProject, planningMetadata] = await Promise.all([
         getProject(projectId, session, onSessionRefresh),
         listPlannings(projectId, session, onSessionRefresh),
@@ -711,14 +722,6 @@ export default function ProjectDetailsPage() {
     } finally {
       setStructureBusy(false);
     }
-  }
-
-  async function savePlanningStructure() {
-    await persistPlanningStructure(false);
-  }
-
-  async function generatePlanningStructure() {
-    await persistPlanningStructure(true);
   }
 
   async function removeTask(task: Task) {
@@ -982,7 +985,9 @@ export default function ProjectDetailsPage() {
         {activeTab === "planning" && structureOpen && !isReadOnlyProject ? (
           <div className="panel" style={{ marginBottom: "1rem" }}>
             <h2>Structure initiale</h2>
-            <p className="muted">Définis les postes, lots et livrables avant de générer le squelette.</p>
+            <p className="muted">
+              Définis les postes, lots et livrables. L&apos;API enregistre la structure en générant le squelette.
+            </p>
             {structureDraft.map((row, index) => (
               <div className="row cost-line-form" key={row.rowId}>
                 <input
@@ -1081,17 +1086,9 @@ export default function ProjectDetailsPage() {
                 className="btn btn-primary"
                 type="button"
                 disabled={structureBusy}
-                onClick={() => void savePlanningStructure()}
-              >
-                {structureBusy ? "Enregistrement..." : "Enregistrer la structure"}
-              </button>
-              <button
-                className="btn btn-primary"
-                type="button"
-                disabled={structureBusy}
                 onClick={() => void generatePlanningStructure()}
               >
-                {structureBusy ? "Génération..." : "Générer le squelette"}
+                {structureBusy ? "Enregistrement..." : "Enregistrer et générer le squelette"}
               </button>
             </div>
           </div>
@@ -1115,7 +1112,7 @@ export default function ProjectDetailsPage() {
                     <select
                       aria-label="Version affichée"
                       value={selectedPlanningId ?? ""}
-                      disabled={planningBusy || isReadOnlyProject}
+                      disabled={planningBusy}
                       onChange={(event) => void selectPlanning(Number(event.target.value))}
                     >
                       {plannings.map((planning) => (

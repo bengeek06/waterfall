@@ -336,20 +336,24 @@ def test_import_api_writes_draft_snapshots_and_preserves_validated_history() -> 
         )
         assert first_create.status_code == 201
         first_batch_id = cast(int, first_create.json()["id"])
-        assert client.post(
-            f"/imports/v1/batches/{first_batch_id}/xml",
-            files={"file": ("first.xml", source, "application/xml")},
-            headers=headers,
-        ).status_code == 202
-        assert client.post(
-            f"/imports/v1/batches/{first_batch_id}/run",
-            json={"confirm": True},
-            headers=headers,
-        ).status_code == 202
-
-        first_planning_response = client.get(
-            f"/projects/{project_id}/plannings", headers=headers
+        assert (
+            client.post(
+                f"/imports/v1/batches/{first_batch_id}/xml",
+                files={"file": ("first.xml", source, "application/xml")},
+                headers=headers,
+            ).status_code
+            == 202
         )
+        assert (
+            client.post(
+                f"/imports/v1/batches/{first_batch_id}/run",
+                json={"confirm": True},
+                headers=headers,
+            ).status_code
+            == 202
+        )
+
+        first_planning_response = client.get(f"/projects/{project_id}/plannings", headers=headers)
         assert first_planning_response.status_code == 200
         first_planning_items = cast(list[dict[str, Any]], first_planning_response.json())
         assert len(first_planning_items) == 1
@@ -368,20 +372,24 @@ def test_import_api_writes_draft_snapshots_and_preserves_validated_history() -> 
         )
         assert second_create.status_code == 201
         second_batch_id = cast(int, second_create.json()["id"])
-        assert client.post(
-            f"/imports/v1/batches/{second_batch_id}/xml",
-            files={"file": ("second.xml", updated_source, "application/xml")},
-            headers=headers,
-        ).status_code == 202
-        assert client.post(
-            f"/imports/v1/batches/{second_batch_id}/run",
-            json={"confirm": True},
-            headers=headers,
-        ).status_code == 202
-
-        status_response = client.get(
-            f"/imports/v1/batches/{second_batch_id}", headers=headers
+        assert (
+            client.post(
+                f"/imports/v1/batches/{second_batch_id}/xml",
+                files={"file": ("second.xml", updated_source, "application/xml")},
+                headers=headers,
+            ).status_code
+            == 202
         )
+        assert (
+            client.post(
+                f"/imports/v1/batches/{second_batch_id}/run",
+                json={"confirm": True},
+                headers=headers,
+            ).status_code
+            == 202
+        )
+
+        status_response = client.get(f"/imports/v1/batches/{second_batch_id}", headers=headers)
         assert status_response.status_code == 200
         assert status_response.json()["counters"] == {"tasks": 2, "links": 1}
 
@@ -401,16 +409,27 @@ def test_import_api_writes_draft_snapshots_and_preserves_validated_history() -> 
                 .count()
                 == 1
             )
-            assert session.query(WfPlanningTaskSnapshot).filter(
-                WfPlanningTaskSnapshot.planning_id == plannings[1].id
-            ).count() == 2
-            assert session.query(WfPlanningTaskSnapshot).filter(
-                WfPlanningTaskSnapshot.planning_id == plannings[1].id,
-                WfPlanningTaskSnapshot.name == "Etude documentaire v2",
-            ).count() == 1
-            assert session.query(WfPlanningLinkSnapshot).filter(
-                WfPlanningLinkSnapshot.planning_id == plannings[1].id
-            ).count() == 1
+            assert (
+                session.query(WfPlanningTaskSnapshot)
+                .filter(WfPlanningTaskSnapshot.planning_id == plannings[1].id)
+                .count()
+                == 2
+            )
+            assert (
+                session.query(WfPlanningTaskSnapshot)
+                .filter(
+                    WfPlanningTaskSnapshot.planning_id == plannings[1].id,
+                    WfPlanningTaskSnapshot.name == "Etude documentaire v2",
+                )
+                .count()
+                == 1
+            )
+            assert (
+                session.query(WfPlanningLinkSnapshot)
+                .filter(WfPlanningLinkSnapshot.planning_id == plannings[1].id)
+                .count()
+                == 1
+            )
 
 
 def test_import_batch_isolated_by_project_owner() -> None:

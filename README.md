@@ -214,9 +214,10 @@ respectent cette sélection. La création initiale d'une structure initialise le
 La réouverture crée un nouveau brouillon à partir de la référence validée, ou réutilise
 le brouillon existant.
 
-Les imports MS Project restent des brouillons jusqu'à validation explicite. Une validation
-produit une nouvelle version; lorsqu'un brouillon existe déjà, l'import avertit puis le
-remplace dans ce brouillon, sans modifier les versions validées.
+Les imports MS Project restent des brouillons jusqu'à validation explicite. La validation
+rend le brouillon courant `validated`; elle ne crée pas de nouvelle version. Lorsqu'un
+brouillon existe déjà, l'import avertit puis le remplace dans ce brouillon, sans modifier
+les versions validées.
 
 ## Déploiement et environnement
 

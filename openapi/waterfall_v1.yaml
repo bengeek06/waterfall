@@ -714,6 +714,14 @@ paths:
       parameters:
         - $ref: '#/components/parameters/ProjectId'
         - $ref: '#/components/parameters/PlanningId'
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 2000, default: 200 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
       responses:
         '200':
           description: Version de planning
@@ -831,6 +839,13 @@ paths:
             type: integer
             minimum: 0
             default: 0
+        - name: planning_id
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            nullable: true
       responses:
         '200':
           description: Liste de taches
@@ -933,6 +948,18 @@ paths:
         - bearerAuth: []
       parameters:
         - $ref: '#/components/parameters/ProjectId'
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 2000, default: 200 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: planning_id
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, nullable: true }
       responses:
         '200':
           description: Arbre hiérarchique du planning
@@ -1373,6 +1400,18 @@ paths:
         - bearerAuth: []
       parameters:
         - $ref: '#/components/parameters/ProjectId'
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 2000, default: 2000 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: planning_id
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, nullable: true }
       responses:
         '200':
           description: XML du projet
@@ -2979,6 +3018,7 @@ components:
       required:
         - id
         - project_id
+        - planning_id
         - version_number
         - kind
         - status
@@ -2991,6 +3031,10 @@ components:
         project_id:
           type: integer
           minimum: 1
+        planning_id:
+          type: integer
+          minimum: 1
+          nullable: true
         reference_estimate_id:
           type: integer
           minimum: 1

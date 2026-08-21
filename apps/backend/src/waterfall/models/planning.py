@@ -123,7 +123,10 @@ class WfPlanningLinkSnapshot(Base):
             name="fk_wf_planning_link_snapshot_pred",
         ),
         UniqueConstraint(
-            "planning_id", "task_uid", "predecessor_uid", "link_type",
+            "planning_id",
+            "task_uid",
+            "predecessor_uid",
+            "link_type",
             name="uq_wf_planning_link_snapshot",
         ),
         CheckConstraint("link_type IN (0, 1, 2, 3)", name="ck_wf_planning_link_snapshot_type"),

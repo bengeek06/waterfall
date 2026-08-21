@@ -194,14 +194,20 @@ def test_structure_versions_validated_planning_is_immutable_and_reopenable() -> 
         first_planning_id = project["displayed_planning_id"]
         assert first_planning_id is not None
 
-        assert client.post(
-            f"/projects/{project_id}/plannings/{first_planning_id}/validate",
-            headers=headers,
-        ).status_code == 200
-        assert client.post(
-            f"/projects/{project_id}/plannings/{first_planning_id}/reference",
-            headers=headers,
-        ).status_code == 200
+        assert (
+            client.post(
+                f"/projects/{project_id}/plannings/{first_planning_id}/validate",
+                headers=headers,
+            ).status_code
+            == 200
+        )
+        assert (
+            client.post(
+                f"/projects/{project_id}/plannings/{first_planning_id}/reference",
+                headers=headers,
+            ).status_code
+            == 200
+        )
 
         reopened_from_validated = client.post(
             f"/projects/{project_id}/planning-structure/reopen", headers=headers
@@ -263,9 +269,7 @@ def test_structure_versions_validated_planning_is_immutable_and_reopenable() -> 
             for item in planning_items
         )
 
-        reopened = client.post(
-            f"/projects/{project_id}/planning-structure/reopen", headers=headers
-        )
+        reopened = client.post(f"/projects/{project_id}/planning-structure/reopen", headers=headers)
         assert reopened.status_code == 200
         reopened_payload = cast(dict[str, Any], reopened.json())
         assert reopened_payload["status"] == "initialise"

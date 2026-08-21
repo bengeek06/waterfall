@@ -758,12 +758,18 @@ def test_planning_lifecycle_snapshots_reference_and_display_selection() -> None:
         assert second_response.status_code == 201
         second_id = second_response.json()["id"]
         assert second_response.json()["tasks"][0]["name"] == "Task One"
-        assert client.post(
-            f"/projects/{project_id}/plannings/{second_id}/validate", headers=headers
-        ).status_code == 200
-        assert client.post(
-            f"/projects/{project_id}/plannings/{second_id}/reference", headers=headers
-        ).status_code == 200
+        assert (
+            client.post(
+                f"/projects/{project_id}/plannings/{second_id}/validate", headers=headers
+            ).status_code
+            == 200
+        )
+        assert (
+            client.post(
+                f"/projects/{project_id}/plannings/{second_id}/reference", headers=headers
+            ).status_code
+            == 200
+        )
 
         with get_session_factory()() as session:
             first = session.get(WfPlanning, planning_id)
@@ -796,21 +802,23 @@ def test_project_status_requires_references_and_excludes_archived_by_default() -
             json={"status": "termine"},
             headers=headers,
         )
-        assert completed.status_code == 200
-        assert completed.json()["status"] == "termine"
+        assert completed.status_code == 409
+        lost = client.patch(
+            f"/projects/{project_id}/status",
+            json={"status": "perdu"},
+            headers=headers,
+        )
+        assert lost.status_code == 200
+        assert lost.json()["status"] == "perdu"
         active_projects = cast(
             list[dict[str, Any]], client.get("/projects", headers=headers).json()
         )
-        assert all(
-            item["id"] != project_id for item in active_projects
-        )
+        assert all(item["id"] != project_id for item in active_projects)
         archived_projects = cast(
             list[dict[str, Any]],
             client.get("/projects?include_archived=true", headers=headers).json(),
         )
-        assert any(
-            item["id"] == project_id for item in archived_projects
-        )
+        assert any(item["id"] == project_id for item in archived_projects)
 
 
 def test_project_can_enter_in_progress_after_both_references_are_set() -> None:
@@ -821,12 +829,18 @@ def test_project_can_enter_in_progress_after_both_references_are_set() -> None:
         planning = client.post(f"/projects/{project_id}/plannings", json={}, headers=headers)
         assert planning.status_code == 201
         planning_id = planning.json()["id"]
-        assert client.post(
-            f"/projects/{project_id}/plannings/{planning_id}/validate", headers=headers
-        ).status_code == 200
-        assert client.post(
-            f"/projects/{project_id}/plannings/{planning_id}/reference", headers=headers
-        ).status_code == 200
+        assert (
+            client.post(
+                f"/projects/{project_id}/plannings/{planning_id}/validate", headers=headers
+            ).status_code
+            == 200
+        )
+        assert (
+            client.post(
+                f"/projects/{project_id}/plannings/{planning_id}/reference", headers=headers
+            ).status_code
+            == 200
+        )
 
         estimate = client.post(
             f"/projects/{project_id}/estimates",
@@ -835,12 +849,35 @@ def test_project_can_enter_in_progress_after_both_references_are_set() -> None:
         )
         assert estimate.status_code == 201
         estimate_id = estimate.json()["id"]
-        assert client.post(
-            f"/projects/{project_id}/estimates/{estimate_id}/validate", headers=headers
-        ).status_code == 200
-        assert client.post(
-            f"/projects/{project_id}/estimates/{estimate_id}/reference", headers=headers
-        ).status_code == 200
+        assert (
+            client.post(
+                f"/projects/{project_id}/estimates/{estimate_id}/validate", headers=headers
+            ).status_code
+            == 200
+        )
+        assert (
+            client.post(
+                f"/projects/{project_id}/estimates/{estimate_id}/reference", headers=headers
+            ).status_code
+            == 200
+        )
+
+        assert (
+            client.patch(
+                f"/projects/{project_id}/status",
+                json={"status": "initialise"},
+                headers=headers,
+            ).status_code
+            == 200
+        )
+        assert (
+            client.patch(
+                f"/projects/{project_id}/status",
+                json={"status": "en_reponse_appel_offre"},
+                headers=headers,
+            ).status_code
+            == 200
+        )
 
         response = client.patch(
             f"/projects/{project_id}/status",

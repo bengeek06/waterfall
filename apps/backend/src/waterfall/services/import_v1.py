@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from waterfall.models.ms_core import MsProject
 from waterfall.models.planning import WfPlanning, WfPlanningLinkSnapshot, WfPlanningTaskSnapshot
 from waterfall.services.msproject_xml import ParsedProject, parse_msproject_xml
+from waterfall.services.project_lifecycle import ensure_project_mutable
 
 
 def _populate_parent_metadata(tasks: list[WfPlanningTaskSnapshot]) -> None:
@@ -27,6 +28,7 @@ def _populate_parent_metadata(tasks: list[WfPlanningTaskSnapshot]) -> None:
         parent = by_outline.get(".".join(parts[:-1]))
         task.parent_uid = parent.uid if parent is not None else None
 
+
 def _apply_project_metadata(project: MsProject, parsed: ParsedProject) -> None:
     project.external_uid = parsed.external_uid
     project.source_version = parsed.source_version
@@ -39,6 +41,7 @@ def _apply_project_metadata(project: MsProject, parsed: ParsedProject) -> None:
     project.minutes_per_week = parsed.minutes_per_week
     project.days_per_month = parsed.days_per_month
     project.currency_code = parsed.currency_code
+
 
 def _task_kwargs(task: Any, planning_id: int) -> dict[str, object]:
     return {
@@ -64,6 +67,7 @@ def _task_kwargs(task: Any, planning_id: int) -> dict[str, object]:
 
 
 def import_tasks_and_links(db: Session, xml_bytes: bytes, project: MsProject) -> tuple[int, int]:
+    ensure_project_mutable(project)
     parsed = parse_msproject_xml(xml_bytes)
     _apply_project_metadata(project, parsed)
     db.add(project)

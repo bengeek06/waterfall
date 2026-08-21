@@ -1348,6 +1348,7 @@ export interface components {
         ProjectEstimateRead: {
             id: number;
             project_id: number;
+            planning_id: number | null;
             reference_estimate_id?: number | null;
             version_number: number;
             /** @enum {string} */
@@ -2448,7 +2449,10 @@ export interface operations {
     };
     getPlanning: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
             header?: never;
             path: {
                 /** @description Identifiant technique ms_project.id */
@@ -2589,6 +2593,7 @@ export interface operations {
             query?: {
                 limit?: number;
                 offset?: number;
+                planning_id?: number | null;
             };
             header?: never;
             path: {
@@ -2700,7 +2705,11 @@ export interface operations {
     };
     getPlanningTree: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number;
+                offset?: number;
+                planning_id?: number | null;
+            };
             header?: never;
             path: {
                 /** @description Identifiant technique ms_project.id */
@@ -3217,7 +3226,11 @@ export interface operations {
     };
     exportProjectXml: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number;
+                offset?: number;
+                planning_id?: number | null;
+            };
             header?: never;
             path: {
                 /** @description Identifiant technique ms_project.id */

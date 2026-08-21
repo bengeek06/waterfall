@@ -91,10 +91,15 @@ def test_import_service_replaces_draft_and_preserves_validated_history() -> None
         draft = session.get(WfPlanning, first_planning_id)
         assert draft is not None
         assert session.query(WfPlanning).filter(WfPlanning.project_id == project.id).count() == 1
-        assert session.query(WfPlanningTaskSnapshot).filter(
-            WfPlanningTaskSnapshot.planning_id == first_planning_id,
-            WfPlanningTaskSnapshot.name == "Etude documentaire v2",
-        ).count() == 1
+        assert (
+            session.query(WfPlanningTaskSnapshot)
+            .filter(
+                WfPlanningTaskSnapshot.planning_id == first_planning_id,
+                WfPlanningTaskSnapshot.name == "Etude documentaire v2",
+            )
+            .count()
+            == 1
+        )
 
         draft.status = "validated"
         session.flush()
