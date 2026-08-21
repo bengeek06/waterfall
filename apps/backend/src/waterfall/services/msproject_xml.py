@@ -157,9 +157,8 @@ def validate_canonical_xml(xml_bytes: bytes) -> None:
             [{"code": "UNSUPPORTED_NAMESPACE", "message": "Canonical export requires /2007"}]
         )
     if not _canonical_schema().validate(document):
-        issues = [
-            {"code": "XSD_VALIDATION", "message": str(error)}
-            for error in _canonical_schema().error_log
+        issues: list[dict[str, object]] = [
+            {"code": "XSD_VALIDATION", "message": str(_canonical_schema().error_log)}
         ]
         raise MsProjectValidationError(issues)
 
