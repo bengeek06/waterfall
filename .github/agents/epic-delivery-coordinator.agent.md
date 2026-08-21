@@ -1,7 +1,7 @@
 ---
 description: "Piloter l'implémentation d'un EPIC Waterfall structuré en issues, coordonner les développeurs spécialisés, les dépendances, les validations et la revue finale"
 name: "Epic Delivery Coordinator"
-tools: [read, search, agent, execute]
+tools: [read, search, agent, execute, github]
 agents: [Python Developer, JavaScript Developer, Review Coordinator]
 user-invocable: true
 ---
