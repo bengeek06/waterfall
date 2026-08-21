@@ -6,6 +6,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from waterfall.models.ms_core import MsProject, MsTask, MsTaskLink
+from waterfall.models.resources import EstimateCostLine, EstimateTaskRow, TaskRoleAssignment
 from waterfall.models.wf_core import WfTaskEnrichment
 from waterfall.services.msproject_xml import ParsedProject, parse_msproject_xml
 
@@ -64,17 +65,62 @@ def _task_kwargs(task: Any, project_id: int) -> dict[str, object]:
 
 def import_tasks_and_links(db: Session, xml_bytes: bytes, project: MsProject) -> tuple[int, int]:
     parsed = parse_msproject_xml(xml_bytes)
-    if db.query(MsTask.id).filter(MsTask.project_id == project.id).first() is not None:
-        raise ValueError("Project already contains tasks")
-
     _apply_project_metadata(project, parsed)
     db.add(project)
     db.flush()
     now = datetime.now(UTC)
-    tasks = [MsTask(**_task_kwargs(task, project.id)) for task in parsed.tasks]
-    db.add_all(tasks)
+    incoming_by_uid = {task.uid: task for task in parsed.tasks}
+    existing_by_uid = {
+        task.uid: task for task in db.query(MsTask).filter(MsTask.project_id == project.id).all()
+    }
+    removed = [task for uid, task in existing_by_uid.items() if uid not in incoming_by_uid]
+    for task in removed:
+        referenced = (
+            db.query(TaskRoleAssignment.id).filter(TaskRoleAssignment.task_id == task.id).first()
+            or db.query(EstimateCostLine.id).filter(EstimateCostLine.task_id == task.id).first()
+            or db.query(EstimateTaskRow.id).filter(EstimateTaskRow.task_id == task.id).first()
+        )
+        if referenced:
+            raise ValueError(f"Task UID {task.uid} is referenced and cannot be removed")
+    for task in removed:
+        task.parent_uid = None
+        db.query(MsTaskLink).filter(
+            MsTaskLink.project_id == project.id,
+            (MsTaskLink.task_uid == task.uid) | (MsTaskLink.predecessor_uid == task.uid),
+        ).delete(synchronize_session=False)
+        db.query(WfTaskEnrichment).filter(
+            WfTaskEnrichment.project_id == project.id,
+            WfTaskEnrichment.task_uid == task.uid,
+        ).delete(synchronize_session=False)
+    db.flush()
+    for task in removed:
+        db.delete(task)
+    db.flush()
+
+    tasks: list[MsTask] = []
+    for parsed_task in parsed.tasks:
+        task = existing_by_uid.get(parsed_task.uid)
+        if task is None:
+            task = MsTask(**_task_kwargs(parsed_task, project.id))
+            db.add(task)
+        else:
+            structure_key = task.structure_key
+            structure_kind = task.structure_kind
+            for field, value in _task_kwargs(parsed_task, project.id).items():
+                if field not in {"project_id", "uid"}:
+                    setattr(task, field, value)
+            task.structure_key = structure_key
+            task.structure_kind = structure_kind
+        task.parent_uid = None
+        tasks.append(task)
     db.flush()
     _populate_parent_metadata(tasks)
+    db.query(MsTaskLink).filter(MsTaskLink.project_id == project.id).delete(
+        synchronize_session=False
+    )
+    db.query(WfTaskEnrichment).filter(WfTaskEnrichment.project_id == project.id).delete(
+        synchronize_session=False
+    )
     db.add_all(
         [
             WfTaskEnrichment(
@@ -88,18 +134,6 @@ def import_tasks_and_links(db: Session, xml_bytes: bytes, project: MsProject) ->
             if task.notes is not None
         ]
     )
-    db.add_all(
-        [
-            MsTaskLink(
-                project_id=project.id,
-                task_uid=link.task_uid,
-                predecessor_uid=link.predecessor_uid,
-                link_type=link.link_type,
-                lag_tenth_minute=link.lag_tenth_minute,
-                lag_format=link.lag_format,
-            )
-            for link in parsed.links
-        ]
-    )
+    db.add_all([MsTaskLink(project_id=project.id, **link.__dict__) for link in parsed.links])
     db.flush()
     return len(parsed.tasks), len(parsed.links)
