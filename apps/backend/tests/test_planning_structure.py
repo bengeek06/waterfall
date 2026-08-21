@@ -179,3 +179,58 @@ def test_create_planning_structure_rejects_duplicate_keys_without_mutation() -> 
         listed = client.get(f"/projects/{project_id}/tasks", headers=headers)
         assert listed.status_code == 200
         assert listed.json() == []
+
+
+def test_structure_versions_validated_planning_is_immutable_and_reopenable() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        path = f"/projects/{project_id}/planning-structure"
+
+        first = client.post(path, json=_payload(), headers=headers)
+        assert first.status_code == 201
+        project = client.get(f"/projects/{project_id}", headers=headers).json()
+        assert project["status"] == "initialise"
+        first_planning_id = project["displayed_planning_id"]
+        assert first_planning_id is not None
+
+        assert client.post(
+            f"/projects/{project_id}/plannings/{first_planning_id}/validate",
+            headers=headers,
+        ).status_code == 200
+        assert client.post(
+            f"/projects/{project_id}/plannings/{first_planning_id}/reference",
+            headers=headers,
+        ).status_code == 200
+
+        reopened_from_validated = client.post(
+            f"/projects/{project_id}/planning-structure/reopen", headers=headers
+        )
+        assert reopened_from_validated.status_code == 200
+        reopened_planning_id = reopened_from_validated.json()["displayed_planning_id"]
+        assert reopened_planning_id not in {first_planning_id, None}
+
+        changed = _payload()
+        changed["posts"][0]["lots"] = changed["posts"][0]["lots"][:1]
+        second = client.post(path, json=changed, headers=headers)
+        assert second.status_code == 201
+        second_planning_id = client.get(f"/projects/{project_id}", headers=headers).json()[
+            "displayed_planning_id"
+        ]
+        assert second_planning_id != first_planning_id
+        second_tasks = cast(list[dict[str, Any]], second.json()["tasks"])
+        assert len(second_tasks) == 5
+
+        original = client.get(
+            f"/projects/{project_id}/plannings/{first_planning_id}", headers=headers
+        )
+        assert original.status_code == 200
+        original_tasks = cast(list[dict[str, Any]], original.json()["tasks"])
+        assert len(original_tasks) == 8
+
+        reopened = client.post(
+            f"/projects/{project_id}/planning-structure/reopen", headers=headers
+        )
+        assert reopened.status_code == 200
+        assert reopened.json()["status"] == "initialise"
+        assert reopened.json()["displayed_planning_id"] == second_planning_id

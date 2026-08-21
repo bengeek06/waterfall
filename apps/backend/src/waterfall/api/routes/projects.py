@@ -59,6 +59,7 @@ from waterfall.services import (
     build_estimate_workbook,
     calculate_estimate_aggregates,
     calculate_estimate_lines,
+    generate_planning_snapshot,
     generate_planning_structure,
 )
 from waterfall.services.msproject_xml import (
@@ -659,6 +660,108 @@ def set_displayed_planning(
     return _to_project_read(project)
 
 
+@router.post("/{project_id}/planning-structure/reopen", response_model=ProjectRead)
+def reopen_planning_structure(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> ProjectRead:
+    project = _get_project_or_404(db, project_id, current_user.id)
+    existing_draft = db.query(WfPlanning).filter(
+        WfPlanning.project_id == project_id, WfPlanning.status == "draft"
+    ).order_by(WfPlanning.version_number.desc()).first()
+    if existing_draft is not None:
+        project.displayed_planning_id = existing_draft.id
+        project.status = "initialise"
+        db.commit()
+        db.refresh(project)
+        return _to_project_read(project)
+    if project.planning_reference_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A validated planning is required to reopen the structure",
+        )
+    source = _get_planning_or_404(db, project_id, project.planning_reference_id)
+    if source.status != "validated":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Planning reference must be validated",
+        )
+    version_number = db.query(func.max(WfPlanning.version_number)).filter(
+        WfPlanning.project_id == project_id
+    ).scalar() or 0
+    planning = WfPlanning(
+        project_id=project_id,
+        version_number=version_number + 1,
+        status="draft",
+        note="Structure reopened",
+        created_at=datetime.now(UTC),
+    )
+    db.add(planning)
+    db.flush()
+    source_tasks = db.query(WfPlanningTaskSnapshot).filter(
+        WfPlanningTaskSnapshot.planning_id == source.id
+    ).all()
+    cloned_tasks = [
+        WfPlanningTaskSnapshot(
+            planning_id=planning.id,
+            uid=task.uid,
+            id_display=task.id_display,
+            structure_key=task.structure_key,
+            structure_kind=task.structure_kind,
+            parent_uid=None,
+            position=task.position,
+            name=task.name,
+            task_type=task.task_type,
+            outline_number=task.outline_number,
+            outline_level=task.outline_level,
+            wbs=task.wbs,
+            start_at=task.start_at,
+            finish_at=task.finish_at,
+            duration_minutes=task.duration_minutes,
+            duration_format=task.duration_format,
+            work_minutes=task.work_minutes,
+            percent_complete=task.percent_complete,
+            is_summary=task.is_summary,
+            is_milestone=task.is_milestone,
+            is_manual=task.is_manual,
+            calendar_uid=task.calendar_uid,
+        )
+        for task in source_tasks
+    ]
+    db.add_all(cloned_tasks)
+    db.flush()
+    parent_by_uid = {task.uid: task.parent_uid for task in source_tasks}
+    for task in cloned_tasks:
+        task.parent_uid = parent_by_uid[task.uid]
+    db.flush()
+    source_links = db.query(WfPlanningLinkSnapshot).filter(
+        WfPlanningLinkSnapshot.planning_id == source.id
+    ).all()
+    db.add_all(
+        WfPlanningLinkSnapshot(
+            planning_id=planning.id,
+            task_uid=link.task_uid,
+            predecessor_uid=link.predecessor_uid,
+            link_type=link.link_type,
+            lag_tenth_minute=link.lag_tenth_minute,
+            lag_format=link.lag_format,
+        )
+        for link in source_links
+    )
+    project.displayed_planning_id = planning.id
+    project.status = "initialise"
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Planning reopen conflict"
+        ) from exc
+    db.refresh(project)
+    return _to_project_read(project)
+
+
 @router.get("/{project_id}/estimates", response_model=list[ProjectEstimateRead])
 def list_project_estimates(
     project_id: int,
@@ -1230,7 +1333,28 @@ def create_planning_structure(
 ) -> PlanningStructureRead:
     project = _get_project_or_404(db, project_id, current_user.id)
     try:
-        tasks = generate_planning_structure(db, project, payload)
+        planning = db.query(WfPlanning).filter(
+            WfPlanning.project_id == project_id, WfPlanning.status == "draft"
+        ).order_by(WfPlanning.version_number.desc()).first()
+        if planning is None:
+            version_number = db.query(func.max(WfPlanning.version_number)).filter(
+                WfPlanning.project_id == project_id
+            ).scalar() or 0
+            planning = WfPlanning(
+                project_id=project_id,
+                version_number=version_number + 1,
+                status="draft",
+                note="Generated from planning structure",
+                created_at=datetime.now(UTC),
+            )
+            db.add(planning)
+            db.flush()
+        snapshots = generate_planning_snapshot(db, project, payload, planning)
+        if project.planning_reference_id is None:
+            generate_planning_structure(db, project, payload)
+        project.displayed_planning_id = planning.id
+        if project.status == "cree":
+            project.status = "initialise"
         db.commit()
     except ValueError as exc:
         db.rollback()
@@ -1242,7 +1366,9 @@ def create_planning_structure(
             detail="Planning structure conflicts with existing project data",
         ) from exc
 
-    return PlanningStructureRead(tasks=[_to_task_read(task, None) for task in tasks])
+    return PlanningStructureRead(
+        tasks=[_to_snapshot_task_read(snapshot, [], project_id) for snapshot in snapshots]
+    )
 
 
 @router.post("/{project_id}/tasks", response_model=TaskRead, status_code=status.HTTP_201_CREATED)

@@ -895,6 +895,29 @@ paths:
         '409':
           $ref: '#/components/responses/Conflict'
 
+  /projects/{projectId}/planning-structure/reopen:
+    post:
+      tags: [projects]
+      summary: Rouvrir la structure de planning dans un nouveau brouillon
+      operationId: reopenPlanningStructure
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      responses:
+        '200':
+          description: Projet rouvert dans un brouillon
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
   /projects/{projectId}/planning-tree:
     get:
       tags: [projects]
