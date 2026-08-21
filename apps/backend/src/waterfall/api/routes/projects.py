@@ -55,7 +55,11 @@ from waterfall.services import (
     calculate_estimate_lines,
     generate_planning_structure,
 )
-from waterfall.services.msproject_xml import format_duration
+from waterfall.services.msproject_xml import (
+    MsProjectValidationError,
+    format_duration,
+    parse_msproject_xml,
+)
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 MSP_NS = "http://schemas.microsoft.com/project/2007"
@@ -1256,4 +1260,11 @@ def export_project_xml(
                 )
 
     xml_content = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    try:
+        parse_msproject_xml(xml_content)
+    except MsProjectValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"code": "EXPORT_VALIDATION_FAILED", "issues": exc.issues},
+        ) from exc
     return Response(content=xml_content, media_type="application/xml")
