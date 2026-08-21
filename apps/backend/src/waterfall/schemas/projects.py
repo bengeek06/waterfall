@@ -78,6 +78,7 @@ class TaskRead(BaseModel):
     percent_complete: int | None
     is_summary: bool
     is_milestone: bool
+    is_manual: bool | None
     description: str | None
     predecessor_links: list["TaskLinkRead"] = Field(default_factory=list)
 

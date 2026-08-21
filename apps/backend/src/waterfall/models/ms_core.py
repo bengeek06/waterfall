@@ -125,6 +125,7 @@ class MsTask(Base):
     percent_complete: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
     is_summary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_milestone: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_manual: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     calendar_uid: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

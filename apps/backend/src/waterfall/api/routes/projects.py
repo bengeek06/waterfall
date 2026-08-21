@@ -226,6 +226,7 @@ def _to_task_read(
         percent_complete=task.percent_complete,
         is_summary=task.is_summary,
         is_milestone=task.is_milestone,
+        is_manual=task.is_manual,
         description=description,
         predecessor_links=[
             TaskLinkRead(
@@ -1239,6 +1240,8 @@ def export_project_xml(
         ET.SubElement(task_node, f"{{{MSP_NS}}}Milestone").text = _bool_to_msp_flag(
             task.is_milestone
         )
+        if task.is_manual is not None:
+            ET.SubElement(task_node, f"{{{MSP_NS}}}Manual").text = _bool_to_msp_flag(task.is_manual)
 
         description = descriptions_by_uid.get(task.uid)
         if description:
