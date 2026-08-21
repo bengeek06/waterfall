@@ -35,7 +35,8 @@ class MsProject(Base):
         ),
         Index("idx_ms_project_name", "name"),
         CheckConstraint(
-            "status IN ('draft', 'active', 'archived')",
+            "status IN ('cree', 'initialise', 'en_reponse_appel_offre', 'perdu', "
+            "'en_cours', 'termine', 'abandonne')",
             name="ck_ms_project_status",
         ),
     )
@@ -66,13 +67,10 @@ class MsProject(Base):
         nullable=False,
         default=lambda: datetime.now(UTC),
     )
-    status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft")
-    planning_reference_id: Mapped[int | None] = mapped_column(
-        Integer, nullable=True
-    )
-    displayed_planning_id: Mapped[int | None] = mapped_column(
-        Integer, nullable=True
-    )
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="cree")
+    planning_reference_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    displayed_planning_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reference_estimate_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class MsTask(Base):

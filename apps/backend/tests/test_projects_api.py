@@ -8,6 +8,7 @@ from httpx import Response
 from waterfall.db.session import get_session_factory
 from waterfall.main import app
 from waterfall.models.ms_core import MsProject, MsTask
+from waterfall.models.planning import WfPlanning
 from waterfall.models.resources import CostCategory, CostType, ResourceNode, ResourceRole
 from waterfall.models.wf_core import WfTaskEnrichment
 
@@ -712,6 +713,104 @@ def test_project_estimate_snapshots_tasks_and_validates() -> None:
             headers=headers,
         )
         assert validate_again_response.status_code == 409
+
+
+def test_planning_lifecycle_snapshots_reference_and_display_selection() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        create_response = client.post(
+            f"/projects/{project_id}/plannings",
+            json={"note": "Version initiale"},
+            headers=headers,
+        )
+        assert create_response.status_code == 201
+        draft = cast(dict[str, Any], create_response.json())
+        planning_id = cast(int, draft["id"])
+        assert draft["status"] == "draft"
+        assert [task["uid"] for task in draft["tasks"]] == [1001, 1002]
+
+        invalid_reference = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/reference",
+            headers=headers,
+        )
+        assert invalid_reference.status_code == 409
+
+        validate_response = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/validate",
+            headers=headers,
+        )
+        assert validate_response.status_code == 200
+
+        first_reference = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/reference",
+            headers=headers,
+        )
+        assert first_reference.status_code == 200
+        assert first_reference.json()["planning_reference_id"] == planning_id
+
+        second_response = client.post(
+            f"/projects/{project_id}/plannings",
+            json={"source_planning_id": planning_id},
+            headers=headers,
+        )
+        assert second_response.status_code == 201
+        second_id = second_response.json()["id"]
+        assert second_response.json()["tasks"][0]["name"] == "Task One"
+        assert client.post(
+            f"/projects/{project_id}/plannings/{second_id}/validate", headers=headers
+        ).status_code == 200
+        assert client.post(
+            f"/projects/{project_id}/plannings/{second_id}/reference", headers=headers
+        ).status_code == 200
+
+        with get_session_factory()() as session:
+            first = session.get(WfPlanning, planning_id)
+            assert first is not None
+            assert first.status == "superseded"
+
+        displayed = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/display", headers=headers
+        )
+        assert displayed.status_code == 200
+        tasks = client.get(f"/projects/{project_id}/tasks", headers=headers)
+        assert tasks.status_code == 200
+        assert tasks.json()[0]["name"] == "Task One"
+
+
+def test_project_status_requires_references_and_excludes_archived_by_default() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        blocked = client.patch(
+            f"/projects/{project_id}/status",
+            json={"status": "en_cours"},
+            headers=headers,
+        )
+        assert blocked.status_code == 409
+
+        completed = client.patch(
+            f"/projects/{project_id}/status",
+            json={"status": "termine"},
+            headers=headers,
+        )
+        assert completed.status_code == 200
+        assert completed.json()["status"] == "termine"
+        active_projects = cast(
+            list[dict[str, Any]], client.get("/projects", headers=headers).json()
+        )
+        assert all(
+            item["id"] != project_id for item in active_projects
+        )
+        archived_projects = cast(
+            list[dict[str, Any]],
+            client.get("/projects?include_archived=true", headers=headers).json(),
+        )
+        assert any(
+            item["id"] == project_id for item in archived_projects
+        )
 
 
 def test_estimate_cost_lines_support_non_labor_costs_and_draft_locking() -> None:

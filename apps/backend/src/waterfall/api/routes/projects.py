@@ -1,6 +1,6 @@
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
-from typing import cast
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from waterfall.api.dependencies import get_current_active_user
 from waterfall.db.session import get_db
 from waterfall.models.ms_core import MsProject, MsTask, MsTaskLink
+from waterfall.models.planning import WfPlanning, WfPlanningLinkSnapshot, WfPlanningTaskSnapshot
 from waterfall.models.resources import (
     CostCategory,
     CostType,
@@ -29,6 +30,9 @@ from waterfall.schemas.projects import (
     EstimateCostLineRead,
     EstimateCostLineUpdate,
     EstimateTaskRowRead,
+    PlanningCreate,
+    PlanningDetailRead,
+    PlanningRead,
     PlanningStructureCreate,
     PlanningStructureRead,
     PlanningTaskTreeRead,
@@ -37,6 +41,8 @@ from waterfall.schemas.projects import (
     ProjectEstimateCreate,
     ProjectEstimateRead,
     ProjectRead,
+    ProjectStatus,
+    ProjectStatusUpdate,
     ProjectUpdate,
     StructureKind,
     SupplyStatus,
@@ -93,7 +99,7 @@ def _to_project_read(project: MsProject) -> ProjectRead:
     return ProjectRead(
         id=project.id,
         name=project.name,
-        status=project.status,
+        status=cast(ProjectStatus, project.status),
         code=project.code,
         short_description=project.short_description,
         source_version=project.source_version,
@@ -102,6 +108,102 @@ def _to_project_read(project: MsProject) -> ProjectRead:
         start_date=project.start_date,
         finish_date=project.finish_date,
         currency_code=project.currency_code,
+        planning_reference_id=project.planning_reference_id,
+        displayed_planning_id=project.displayed_planning_id,
+        reference_estimate_id=project.reference_estimate_id,
+    )
+
+
+def _get_planning_or_404(db: Session, project_id: int, planning_id: int) -> WfPlanning:
+    planning = (
+        db.query(WfPlanning)
+        .filter(WfPlanning.id == planning_id, WfPlanning.project_id == project_id)
+        .first()
+    )
+    if planning is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Planning not found")
+    return planning
+
+
+def _to_snapshot_task_read(
+    task: WfPlanningTaskSnapshot,
+    links: list[WfPlanningLinkSnapshot],
+    project_id: int,
+) -> TaskRead:
+    return TaskRead(
+        id=task.id,
+        project_id=project_id,
+        uid=task.uid,
+        id_display=task.id_display,
+        structure_key=task.structure_key,
+        structure_kind=cast(StructureKind | None, task.structure_kind),
+        parent_uid=task.parent_uid,
+        position=task.position,
+        name=task.name,
+        outline_number=task.outline_number,
+        outline_level=task.outline_level,
+        start_at=task.start_at,
+        finish_at=task.finish_at,
+        percent_complete=task.percent_complete,
+        is_summary=task.is_summary,
+        is_milestone=task.is_milestone,
+        is_manual=task.is_manual,
+        description=None,
+        predecessor_links=[
+            TaskLinkRead(
+                predecessor_uid=link.predecessor_uid,
+                link_type=link.link_type,
+                lag_tenth_minute=link.lag_tenth_minute,
+                lag_format=link.lag_format,
+            )
+            for link in links
+        ],
+    )
+
+
+def _to_planning_read(planning: WfPlanning) -> PlanningRead:
+    return PlanningRead(
+        id=planning.id,
+        project_id=planning.project_id,
+        version_number=planning.version_number,
+        status=cast(Any, planning.status),
+        note=planning.note,
+        created_at=planning.created_at,
+        validated_at=planning.validated_at,
+    )
+
+
+def _planning_detail(db: Session, planning: WfPlanning) -> PlanningDetailRead:
+    snapshots = (
+        db.query(WfPlanningTaskSnapshot)
+        .filter(WfPlanningTaskSnapshot.planning_id == planning.id)
+        .order_by(WfPlanningTaskSnapshot.position.asc().nulls_last(), WfPlanningTaskSnapshot.id)
+        .all()
+    )
+    links = (
+        db.query(WfPlanningLinkSnapshot)
+        .filter(WfPlanningLinkSnapshot.planning_id == planning.id)
+        .order_by(WfPlanningLinkSnapshot.id)
+        .all()
+    )
+    links_by_uid: dict[int, list[WfPlanningLinkSnapshot]] = {}
+    for link in links:
+        links_by_uid.setdefault(link.task_uid, []).append(link)
+    return PlanningDetailRead(
+        **_to_planning_read(planning).model_dump(),
+        tasks=[
+            _to_snapshot_task_read(task, links_by_uid.get(task.uid, []), planning.project_id)
+            for task in snapshots
+        ],
+        links=[
+            TaskLinkRead(
+                predecessor_uid=link.predecessor_uid,
+                link_type=link.link_type,
+                lag_tenth_minute=link.lag_tenth_minute,
+                lag_format=link.lag_format,
+            )
+            for link in links
+        ],
     )
 
 
@@ -298,17 +400,14 @@ def _to_task_reads(db: Session, project_id: int, tasks: list[MsTask]) -> list[Ta
 def list_projects(
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    include_archived: bool = Query(default=False),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> list[ProjectRead]:
-    projects = (
-        db.query(MsProject)
-        .filter(MsProject.owner_id == current_user.id)
-        .order_by(MsProject.id.asc())
-        .offset(offset)
-        .limit(limit)
-        .all()
-    )
+    query = db.query(MsProject).filter(MsProject.owner_id == current_user.id)
+    if not include_archived:
+        query = query.filter(MsProject.status.notin_(["perdu", "termine", "abandonne"]))
+    projects = query.order_by(MsProject.id.asc()).offset(offset).limit(limit).all()
     return [_to_project_read(project) for project in projects]
 
 
@@ -335,8 +434,226 @@ def create_project(
         minutes_per_week=2400,
         days_per_month=20,
         currency_code=payload.currency_code.upper() if payload.currency_code else None,
+        status=cast(ProjectStatus, "cree"),
     )
     db.add(project)
+    db.commit()
+    db.refresh(project)
+    return _to_project_read(project)
+
+
+@router.get("/{project_id}/plannings", response_model=list[PlanningRead])
+def list_plannings(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> list[PlanningRead]:
+    _get_project_or_404(db, project_id, current_user.id)
+    plannings = (
+        db.query(WfPlanning)
+        .filter(WfPlanning.project_id == project_id)
+        .order_by(WfPlanning.version_number.asc())
+        .all()
+    )
+    return [_to_planning_read(planning) for planning in plannings]
+
+
+@router.post(
+    "/{project_id}/plannings",
+    response_model=PlanningDetailRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_planning(
+    project_id: int,
+    payload: PlanningCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> PlanningDetailRead:
+    project = _get_project_or_404(db, project_id, current_user.id)
+    source_id = payload.source_planning_id or project.displayed_planning_id
+    source: WfPlanning | None = None
+    if source_id is not None:
+        source = _get_planning_or_404(db, project_id, source_id)
+    version_number = (
+        db.query(func.max(WfPlanning.version_number))
+        .filter(WfPlanning.project_id == project_id)
+        .scalar()
+        or 0
+    ) + 1
+    planning = WfPlanning(
+        project_id=project_id,
+        version_number=version_number,
+        status="draft",
+        note=payload.note,
+        created_at=datetime.now(UTC),
+    )
+    db.add(planning)
+    db.flush()
+
+    if source is not None:
+        source_tasks = db.query(WfPlanningTaskSnapshot).filter(
+            WfPlanningTaskSnapshot.planning_id == source.id
+        ).all()
+        source_links = db.query(WfPlanningLinkSnapshot).filter(
+            WfPlanningLinkSnapshot.planning_id == source.id
+        ).all()
+        db.add_all([
+            WfPlanningTaskSnapshot(
+                planning_id=planning.id,
+                uid=task.uid,
+                id_display=task.id_display,
+                structure_key=task.structure_key,
+                structure_kind=task.structure_kind,
+                parent_uid=task.parent_uid,
+                position=task.position,
+                name=task.name,
+                task_type=task.task_type,
+                outline_number=task.outline_number,
+                outline_level=task.outline_level,
+                wbs=task.wbs,
+                start_at=task.start_at,
+                finish_at=task.finish_at,
+                duration_minutes=task.duration_minutes,
+                duration_format=task.duration_format,
+                work_minutes=task.work_minutes,
+                percent_complete=task.percent_complete,
+                is_summary=task.is_summary,
+                is_milestone=task.is_milestone,
+                is_manual=task.is_manual,
+                calendar_uid=task.calendar_uid,
+            )
+            for task in source_tasks
+        ])
+        db.add_all([
+            WfPlanningLinkSnapshot(
+                planning_id=planning.id,
+                task_uid=link.task_uid,
+                predecessor_uid=link.predecessor_uid,
+                link_type=link.link_type,
+                lag_tenth_minute=link.lag_tenth_minute,
+                lag_format=link.lag_format,
+            )
+            for link in source_links
+        ])
+    else:
+        tasks = db.query(MsTask).filter(MsTask.project_id == project_id).all()
+        db.add_all([
+            WfPlanningTaskSnapshot(
+                planning_id=planning.id,
+                uid=task.uid,
+                id_display=task.id_display,
+                structure_key=task.structure_key,
+                structure_kind=task.structure_kind,
+                parent_uid=task.parent_uid,
+                position=task.position,
+                name=task.name,
+                task_type=task.task_type,
+                outline_number=task.outline_number,
+                outline_level=task.outline_level,
+                wbs=task.wbs,
+                start_at=task.start_at,
+                finish_at=task.finish_at,
+                duration_minutes=task.duration_minutes,
+                duration_format=task.duration_format,
+                work_minutes=task.work_minutes,
+                percent_complete=task.percent_complete,
+                is_summary=task.is_summary,
+                is_milestone=task.is_milestone,
+                is_manual=task.is_manual,
+                calendar_uid=task.calendar_uid,
+            )
+            for task in tasks
+        ])
+        links = db.query(MsTaskLink).filter(MsTaskLink.project_id == project_id).all()
+        db.add_all([
+            WfPlanningLinkSnapshot(
+                planning_id=planning.id,
+                task_uid=link.task_uid,
+                predecessor_uid=link.predecessor_uid,
+                link_type=link.link_type,
+                lag_tenth_minute=link.lag_tenth_minute,
+                lag_format=link.lag_format,
+            )
+            for link in links
+        ])
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Planning version conflicts with existing project data",
+        ) from exc
+    db.refresh(planning)
+    return _planning_detail(db, planning)
+
+
+@router.get("/{project_id}/plannings/{planning_id}", response_model=PlanningDetailRead)
+def get_planning(
+    project_id: int,
+    planning_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> PlanningDetailRead:
+    _get_project_or_404(db, project_id, current_user.id)
+    return _planning_detail(db, _get_planning_or_404(db, project_id, planning_id))
+
+
+@router.post("/{project_id}/plannings/{planning_id}/validate", response_model=PlanningRead)
+def validate_planning(
+    project_id: int,
+    planning_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> PlanningRead:
+    _get_project_or_404(db, project_id, current_user.id)
+    planning = _get_planning_or_404(db, project_id, planning_id)
+    if planning.status != "draft":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Planning is not a draft")
+    planning.status = "validated"
+    planning.validated_at = datetime.now(UTC)
+    db.commit()
+    db.refresh(planning)
+    return _to_planning_read(planning)
+
+
+@router.post("/{project_id}/plannings/{planning_id}/reference", response_model=ProjectRead)
+def set_planning_reference(
+    project_id: int,
+    planning_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> ProjectRead:
+    project = _get_project_or_404(db, project_id, current_user.id)
+    planning = _get_planning_or_404(db, project_id, planning_id)
+    if planning.status != "validated":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Planning must be validated",
+        )
+    previous = project.planning_reference_id
+    if previous is not None and previous != planning.id:
+        old = db.get(WfPlanning, previous)
+        if old is not None:
+            old.status = "superseded"
+    project.planning_reference_id = planning.id
+    if project.displayed_planning_id is None:
+        project.displayed_planning_id = planning.id
+    db.commit()
+    db.refresh(project)
+    return _to_project_read(project)
+
+
+@router.post("/{project_id}/plannings/{planning_id}/display", response_model=ProjectRead)
+def set_displayed_planning(
+    project_id: int,
+    planning_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> ProjectRead:
+    project = _get_project_or_404(db, project_id, current_user.id)
+    _get_planning_or_404(db, project_id, planning_id)
+    project.displayed_planning_id = planning_id
     db.commit()
     db.refresh(project)
     return _to_project_read(project)
@@ -479,6 +796,26 @@ def validate_project_estimate(
     db.commit()
     db.refresh(estimate)
     return _to_project_estimate_read(estimate)
+
+
+@router.post("/{project_id}/estimates/{estimate_id}/reference", response_model=ProjectRead)
+def set_estimate_reference(
+    project_id: int,
+    estimate_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> ProjectRead:
+    project = _get_project_or_404(db, project_id, current_user.id)
+    estimate = _get_estimate_or_404(db, project_id, estimate_id)
+    if estimate.status != "validated":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Estimate must be validated",
+        )
+    project.reference_estimate_id = estimate.id
+    db.commit()
+    db.refresh(project)
+    return _to_project_read(project)
 
 
 @router.get(
@@ -713,11 +1050,43 @@ def update_project(
         project.short_description = (
             values["short_description"].strip() if values["short_description"] else None
         )
+    if "status" in values and values["status"] is not None:
+        new_status = values["status"]
+        if (
+            new_status == "en_cours"
+            and (project.planning_reference_id is None or project.reference_estimate_id is None)
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Project requires planning and estimate references before en_cours",
+            )
+        project.status = new_status
 
     db.add(project)
     db.commit()
     db.refresh(project)
 
+    return _to_project_read(project)
+
+
+@router.patch("/{project_id}/status", response_model=ProjectRead)
+def update_project_status(
+    project_id: int,
+    payload: ProjectStatusUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> ProjectRead:
+    project = _get_project_or_404(db, project_id, current_user.id)
+    if payload.status == "en_cours" and (
+        project.planning_reference_id is None or project.reference_estimate_id is None
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Project requires planning and estimate references before en_cours",
+        )
+    project.status = payload.status
+    db.commit()
+    db.refresh(project)
     return _to_project_read(project)
 
 
@@ -728,6 +1097,19 @@ def delete_project(
     current_user: User = Depends(get_current_active_user),
 ) -> Response:
     project = _get_project_or_404(db, project_id, current_user.id)
+    planning_ids = [
+        row[0] for row in db.query(WfPlanning.id).filter(WfPlanning.project_id == project_id).all()
+    ]
+    if planning_ids:
+        db.query(WfPlanningLinkSnapshot).filter(
+            WfPlanningLinkSnapshot.planning_id.in_(planning_ids)
+        ).delete(synchronize_session=False)
+        db.query(WfPlanningTaskSnapshot).filter(
+            WfPlanningTaskSnapshot.planning_id.in_(planning_ids)
+        ).delete(synchronize_session=False)
+        db.query(WfPlanning).filter(WfPlanning.id.in_(planning_ids)).delete(
+            synchronize_session=False
+        )
 
     estimate_ids = [
         row[0] for row in db.query(Estimate.id).filter(Estimate.project_id == project_id).all()
@@ -748,6 +1130,7 @@ def delete_project(
             {Estimate.reference_estimate_id: None}, synchronize_session=False
         )
         db.query(Estimate).filter(Estimate.id.in_(estimate_ids)).delete(synchronize_session=False)
+    project.reference_estimate_id = None
 
     db.query(TaskRoleAssignment).filter(
         TaskRoleAssignment.task_id.in_(
@@ -782,10 +1165,16 @@ def list_project_tasks(
     project_id: int,
     limit: int = Query(default=200, ge=1, le=2000),
     offset: int = Query(default=0, ge=0),
+    planning_id: int | None = Query(default=None, gt=0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> list[TaskRead]:
-    _get_project_or_404(db, project_id, current_user.id)
+    project = _get_project_or_404(db, project_id, current_user.id)
+    selected_id = planning_id or project.displayed_planning_id
+    if selected_id is not None:
+        planning = _get_planning_or_404(db, project_id, selected_id)
+        detail = _planning_detail(db, planning)
+        return detail.tasks[offset : offset + limit]
 
     tasks = (
         db.query(MsTask)
@@ -801,17 +1190,23 @@ def list_project_tasks(
 @router.get("/{project_id}/planning-tree", response_model=PlanningTreeRead)
 def get_planning_tree(
     project_id: int,
+    planning_id: int | None = Query(default=None, gt=0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> PlanningTreeRead:
-    _get_project_or_404(db, project_id, current_user.id)
-    stored_tasks = (
-        db.query(MsTask)
-        .filter(MsTask.project_id == project_id)
-        .order_by(MsTask.outline_number.asc().nulls_last(), MsTask.id.asc())
-        .all()
-    )
-    tasks = _to_task_reads(db, project_id, stored_tasks)
+    project = _get_project_or_404(db, project_id, current_user.id)
+    selected_id = planning_id or project.displayed_planning_id
+    if selected_id is not None:
+        detail = _planning_detail(db, _get_planning_or_404(db, project_id, selected_id))
+        tasks = detail.tasks
+    else:
+        stored_tasks = (
+            db.query(MsTask)
+            .filter(MsTask.project_id == project_id)
+            .order_by(MsTask.outline_number.asc().nulls_last(), MsTask.id.asc())
+            .all()
+        )
+        tasks = _to_task_reads(db, project_id, stored_tasks)
     tree_by_uid = {task.uid: PlanningTaskTreeRead(**task.model_dump()) for task in tasks}
     roots: list[PlanningTaskTreeRead] = []
     for task in tree_by_uid.values():

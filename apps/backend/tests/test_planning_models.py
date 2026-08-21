@@ -51,7 +51,7 @@ def test_project_and_planning_defaults_and_snapshot_references() -> None:
         )
         session.commit()
 
-        assert project.status == "draft"
+        assert project.status == "cree"
         assert planning.status == "validated"
         session.refresh(project)
         assert project.planning_reference_id == planning.id

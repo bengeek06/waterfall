@@ -5,6 +5,15 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 StructureKind = Literal["poste", "lot", "livrable", "milestone", "task"]
+ProjectStatus = Literal[
+    "cree",
+    "initialise",
+    "en_reponse_appel_offre",
+    "perdu",
+    "en_cours",
+    "termine",
+    "abandonne",
+]
 
 
 def _required_text(value: str) -> str:
@@ -23,7 +32,7 @@ def _optional_text(value: str | None) -> str | None:
 class ProjectRead(BaseModel):
     id: int
     name: str
-    status: str
+    status: ProjectStatus
     code: str | None
     short_description: str | None
     source_version: int
@@ -32,6 +41,9 @@ class ProjectRead(BaseModel):
     start_date: datetime | None
     finish_date: datetime | None
     currency_code: str | None
+    planning_reference_id: int | None
+    displayed_planning_id: int | None
+    reference_estimate_id: int | None
 
 
 class ProjectCreate(BaseModel):
@@ -56,6 +68,7 @@ class ProjectUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     code: str | None = Field(default=None, max_length=64)
     short_description: str | None = Field(default=None, max_length=500)
+    status: ProjectStatus | None = None
 
     _normalize_name = field_validator("name")(_optional_text)
     _normalize_code = field_validator("code")(_optional_text)
@@ -162,6 +175,38 @@ class PlanningStructureCreate(BaseModel):
 
 class PlanningStructureRead(BaseModel):
     tasks: list[TaskRead]
+
+
+class PlanningRead(BaseModel):
+    id: int
+    project_id: int
+    version_number: int
+    status: Literal["draft", "validated", "superseded"]
+    note: str | None
+    created_at: datetime
+    validated_at: datetime | None
+
+
+class PlanningDetailRead(PlanningRead):
+    tasks: list[TaskRead]
+    links: list["TaskLinkRead"]
+
+
+class PlanningCreate(BaseModel):
+    note: str | None = Field(default=None, max_length=10000)
+    source_planning_id: int | None = Field(default=None, gt=0)
+
+    @field_validator("note", mode="before")
+    @classmethod
+    def normalize_note(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+
+class ProjectStatusUpdate(BaseModel):
+    status: ProjectStatus
 
 
 class PlanningTaskTreeRead(TaskRead):

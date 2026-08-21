@@ -605,12 +605,9 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProjectRead'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/ProjectNotFound'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/ProjectNotFound' }
     delete:
       tags: [projects]
       summary: Supprimer un projet
@@ -622,10 +619,187 @@ paths:
       responses:
         '204':
           description: Projet supprime
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/ProjectNotFound' }
+
+  /projects/{projectId}/status:
+    patch:
+      tags: [projects]
+      summary: Modifier le statut d'un projet
+      operationId: updateProjectStatus
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectStatusUpdate'
+      responses:
+        '200':
+          description: Projet mis a jour
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/ProjectNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /projects/{projectId}/plannings:
+    get:
+      tags: [projects]
+      summary: Lister les versions de planning
+      operationId: listPlannings
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      responses:
+        '200':
+          description: Versions de planning
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PlanningRead'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/ProjectNotFound' }
+    post:
+      tags: [projects]
+      summary: Creer un brouillon de planning
+      operationId: createPlanning
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlanningCreate'
+      responses:
+        '201':
+          description: Brouillon cree
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanningDetailRead'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/ProjectNotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /projects/{projectId}/plannings/{planningId}:
+    get:
+      tags: [projects]
+      summary: Lire une version de planning
+      operationId: getPlanning
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/PlanningId'
+      responses:
+        '200':
+          description: Version de planning
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanningDetailRead'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/PlanningNotFound' }
+
+  /projects/{projectId}/plannings/{planningId}/validate:
+    post:
+      tags: [projects]
+      summary: Valider une version de planning
+      operationId: validatePlanning
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/PlanningId'
+      responses:
+        '200':
+          description: Version validee
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanningRead'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/PlanningNotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /projects/{projectId}/plannings/{planningId}/reference:
+    post:
+      tags: [projects]
+      summary: Definir la reference planning
+      operationId: setPlanningReference
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/PlanningId'
+      responses:
+        '200':
+          description: Projet mis a jour
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectRead'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/PlanningNotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /projects/{projectId}/plannings/{planningId}/display:
+    post:
+      tags: [projects]
+      summary: Selectionner le planning affiche
+      operationId: setDisplayedPlanning
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/PlanningId'
+      responses:
+        '200':
+          description: Projet mis a jour
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectRead'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/PlanningNotFound' }
+
+  /projects/{projectId}/estimates/{estimateId}/reference:
+    post:
+      tags: [projects]
+      summary: Definir le devis de reference
+      operationId: setEstimateReference
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/EstimateId'
+      responses:
+        '200':
+          description: Projet mis a jour
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectRead'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/EstimateNotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
 
   /projects/{projectId}/tasks:
     get:
@@ -1856,6 +2030,14 @@ components:
         type: integer
         minimum: 1
       description: Identifiant technique de la version de devis
+    PlanningId:
+      name: planningId
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+      description: Identifiant technique de la version de planning
     CostLineId:
       name: costLineId
       in: path
@@ -1963,6 +2145,18 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
     ProjectNotFound:
       description: Projet introuvable
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    PlanningNotFound:
+      description: Planning introuvable
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    EstimateNotFound:
+      description: Devis introuvable
       content:
         application/json:
           schema:
@@ -2332,7 +2526,7 @@ components:
           type: string
         status:
           type: string
-          enum: [draft, active, archived]
+          enum: [cree, initialise, en_reponse_appel_offre, perdu, en_cours, termine, abandonne]
         code:
           type: string
           nullable: true
@@ -2357,6 +2551,15 @@ components:
           nullable: true
         currency_code:
           type: string
+          nullable: true
+        planning_reference_id:
+          type: integer
+          nullable: true
+        displayed_planning_id:
+          type: integer
+          nullable: true
+        reference_estimate_id:
+          type: integer
           nullable: true
 
     ProjectCreate:
@@ -2396,6 +2599,50 @@ components:
           type: string
           maxLength: 500
           nullable: true
+        status:
+          type: string
+          enum: [cree, initialise, en_reponse_appel_offre, perdu, en_cours, termine, abandonne]
+
+    ProjectStatusUpdate:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [cree, initialise, en_reponse_appel_offre, perdu, en_cours, termine, abandonne]
+
+    PlanningRead:
+      type: object
+      required: [id, project_id, version_number, status, created_at]
+      properties:
+        id: { type: integer, minimum: 1 }
+        project_id: { type: integer, minimum: 1 }
+        version_number: { type: integer, minimum: 1 }
+        status: { type: string, enum: [draft, validated, superseded] }
+        note: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        validated_at: { type: string, format: date-time, nullable: true }
+
+    PlanningCreate:
+      type: object
+      properties:
+        note: { type: string, maxLength: 10000, nullable: true }
+        source_planning_id: { type: integer, minimum: 1, nullable: true }
+
+    PlanningDetailRead:
+      allOf:
+        - $ref: '#/components/schemas/PlanningRead'
+        - type: object
+          required: [tasks, links]
+          properties:
+            tasks:
+              type: array
+              items:
+                $ref: '#/components/schemas/TaskRead'
+            links:
+              type: array
+              items:
+                $ref: '#/components/schemas/TaskLinkRead'
 
     TaskRead:
       type: object
