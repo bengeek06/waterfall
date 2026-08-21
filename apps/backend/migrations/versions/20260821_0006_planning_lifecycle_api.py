@@ -46,6 +46,20 @@ def downgrade() -> None:
         batch_op.drop_constraint("fk_ms_project_reference_estimate", type_="foreignkey")
         batch_op.drop_column("reference_estimate_id")
         batch_op.drop_constraint("ck_ms_project_status", type_="check")
+    op.execute(
+        sa.text(
+            "UPDATE ms_project SET status = CASE status "
+            "WHEN 'cree' THEN 'draft' "
+            "WHEN 'initialise' THEN 'active' "
+            "WHEN 'en_reponse_appel_offre' THEN 'active' "
+            "WHEN 'perdu' THEN 'archived' "
+            "WHEN 'en_cours' THEN 'active' "
+            "WHEN 'termine' THEN 'archived' "
+            "WHEN 'abandonne' THEN 'archived' "
+            "ELSE 'draft' END"
+        )
+    )
+    with op.batch_alter_table("ms_project") as batch_op:
         batch_op.create_check_constraint(
             "ck_ms_project_status", "status IN ('draft', 'active', 'archived')"
         )

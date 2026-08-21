@@ -92,6 +92,7 @@ class WfPlanningTaskSnapshot(Base):
     parent_uid: Mapped[int | None] = mapped_column(Integer, nullable=True)
     position: Mapped[int | None] = mapped_column(Integer, nullable=True)
     name: Mapped[str] = mapped_column(String(512), nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     task_type: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
     outline_number: Mapped[str | None] = mapped_column(String(512), nullable=True)
     outline_level: Mapped[int | None] = mapped_column(Integer, nullable=True)

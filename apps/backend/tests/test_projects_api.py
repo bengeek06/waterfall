@@ -813,6 +813,44 @@ def test_project_status_requires_references_and_excludes_archived_by_default() -
         )
 
 
+def test_project_can_enter_in_progress_after_both_references_are_set() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        planning = client.post(f"/projects/{project_id}/plannings", json={}, headers=headers)
+        assert planning.status_code == 201
+        planning_id = planning.json()["id"]
+        assert client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/validate", headers=headers
+        ).status_code == 200
+        assert client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/reference", headers=headers
+        ).status_code == 200
+
+        estimate = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate.status_code == 201
+        estimate_id = estimate.json()["id"]
+        assert client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/validate", headers=headers
+        ).status_code == 200
+        assert client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/reference", headers=headers
+        ).status_code == 200
+
+        response = client.patch(
+            f"/projects/{project_id}/status",
+            json={"status": "en_cours"},
+            headers=headers,
+        )
+        assert response.status_code == 200
+        assert response.json()["status"] == "en_cours"
+
+
 def test_estimate_cost_lines_support_non_labor_costs_and_draft_locking() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)

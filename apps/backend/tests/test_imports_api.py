@@ -9,6 +9,7 @@ from httpx import Response
 from waterfall.core.config import get_settings
 from waterfall.db.session import get_session_factory
 from waterfall.main import app
+from waterfall.models.planning import WfPlanning, WfPlanningLinkSnapshot, WfPlanningTaskSnapshot
 from waterfall.models.wf_core import WfImportBatch
 
 NS = {"ms": "http://schemas.microsoft.com/project"}
@@ -318,6 +319,98 @@ def test_import_batch_real_examples_via_api_with_counters(xml_path: Path) -> Non
         assert status_payload["status"] == "success"
         assert status_payload["counters"]["tasks"] == expected_tasks
         assert status_payload["counters"]["links"] == expected_links
+
+
+def test_import_api_writes_draft_snapshots_and_preserves_validated_history() -> None:
+    source = EXAMPLE_XML.read_bytes()
+    updated_source = source.replace(b"Etude documentaire", b"Etude documentaire v2")
+
+    with TestClient(app) as client:
+        headers = _auth_headers(client, "import.lifecycle@example.com")
+        project_id = _create_project(client, headers)
+
+        first_create = client.post(
+            "/imports/v1/batches",
+            json={"projectId": project_id, "importMode": "standard"},
+            headers=headers,
+        )
+        assert first_create.status_code == 201
+        first_batch_id = cast(int, first_create.json()["id"])
+        assert client.post(
+            f"/imports/v1/batches/{first_batch_id}/xml",
+            files={"file": ("first.xml", source, "application/xml")},
+            headers=headers,
+        ).status_code == 202
+        assert client.post(
+            f"/imports/v1/batches/{first_batch_id}/run",
+            json={"confirm": True},
+            headers=headers,
+        ).status_code == 202
+
+        first_planning_response = client.get(
+            f"/projects/{project_id}/plannings", headers=headers
+        )
+        assert first_planning_response.status_code == 200
+        first_planning_items = cast(list[dict[str, Any]], first_planning_response.json())
+        assert len(first_planning_items) == 1
+        first_planning_id = cast(int, first_planning_items[0]["id"])
+
+        validate_response = client.post(
+            f"/projects/{project_id}/plannings/{first_planning_id}/validate",
+            headers=headers,
+        )
+        assert validate_response.status_code == 200
+
+        second_create = client.post(
+            "/imports/v1/batches",
+            json={"projectId": project_id, "importMode": "standard"},
+            headers=headers,
+        )
+        assert second_create.status_code == 201
+        second_batch_id = cast(int, second_create.json()["id"])
+        assert client.post(
+            f"/imports/v1/batches/{second_batch_id}/xml",
+            files={"file": ("second.xml", updated_source, "application/xml")},
+            headers=headers,
+        ).status_code == 202
+        assert client.post(
+            f"/imports/v1/batches/{second_batch_id}/run",
+            json={"confirm": True},
+            headers=headers,
+        ).status_code == 202
+
+        status_response = client.get(
+            f"/imports/v1/batches/{second_batch_id}", headers=headers
+        )
+        assert status_response.status_code == 200
+        assert status_response.json()["counters"] == {"tasks": 2, "links": 1}
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            plannings = (
+                session.query(WfPlanning)
+                .filter(WfPlanning.project_id == project_id)
+                .order_by(WfPlanning.version_number)
+                .all()
+            )
+            assert [planning.status for planning in plannings] == ["validated", "draft"]
+            assert (
+                session.query(WfPlanningTaskSnapshot)
+                .filter(WfPlanningTaskSnapshot.planning_id == plannings[0].id)
+                .filter(WfPlanningTaskSnapshot.name == "Etude documentaire")
+                .count()
+                == 1
+            )
+            assert session.query(WfPlanningTaskSnapshot).filter(
+                WfPlanningTaskSnapshot.planning_id == plannings[1].id
+            ).count() == 2
+            assert session.query(WfPlanningTaskSnapshot).filter(
+                WfPlanningTaskSnapshot.planning_id == plannings[1].id,
+                WfPlanningTaskSnapshot.name == "Etude documentaire v2",
+            ).count() == 1
+            assert session.query(WfPlanningLinkSnapshot).filter(
+                WfPlanningLinkSnapshot.planning_id == plannings[1].id
+            ).count() == 1
 
 
 def test_import_batch_isolated_by_project_owner() -> None:

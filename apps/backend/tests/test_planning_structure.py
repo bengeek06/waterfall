@@ -228,9 +228,58 @@ def test_structure_versions_validated_planning_is_immutable_and_reopenable() -> 
         original_tasks = cast(list[dict[str, Any]], original.json()["tasks"])
         assert len(original_tasks) == 8
 
+        default_tasks = client.get(f"/projects/{project_id}/tasks", headers=headers)
+        assert default_tasks.status_code == 200
+        default_task_items = cast(list[dict[str, Any]], default_tasks.json())
+        assert len(default_task_items) == 5
+        selected_original = client.get(
+            f"/projects/{project_id}/tasks?planning_id={first_planning_id}", headers=headers
+        )
+        assert selected_original.status_code == 200
+        selected_original_items = cast(list[dict[str, Any]], selected_original.json())
+        assert len(selected_original_items) == 8
+        paged_original = client.get(
+            f"/projects/{project_id}/plannings/{first_planning_id}?limit=1&offset=1",
+            headers=headers,
+        )
+        assert paged_original.status_code == 200
+        paged_original_payload = cast(dict[str, Any], paged_original.json())
+        assert len(cast(list[dict[str, Any]], paged_original_payload["tasks"])) == 1
+
+        plannings = client.get(f"/projects/{project_id}/plannings", headers=headers)
+        assert plannings.status_code == 200
+        planning_items = cast(list[dict[str, Any]], plannings.json())
+        assert all(
+            set(item)
+            == {
+                "id",
+                "project_id",
+                "version_number",
+                "status",
+                "note",
+                "created_at",
+                "validated_at",
+            }
+            for item in planning_items
+        )
+
         reopened = client.post(
             f"/projects/{project_id}/planning-structure/reopen", headers=headers
         )
         assert reopened.status_code == 200
-        assert reopened.json()["status"] == "initialise"
-        assert reopened.json()["displayed_planning_id"] == second_planning_id
+        reopened_payload = cast(dict[str, Any], reopened.json())
+        assert reopened_payload["status"] == "initialise"
+        assert reopened_payload["displayed_planning_id"] == second_planning_id
+
+        first_export = client.get(
+            f"/projects/{project_id}/export.xml?planning_id={first_planning_id}",
+            headers=headers,
+        )
+        second_export = client.get(
+            f"/projects/{project_id}/export.xml?planning_id={second_planning_id}",
+            headers=headers,
+        )
+        assert first_export.status_code == 200
+        assert second_export.status_code == 200
+        assert b"Validation" in first_export.content
+        assert b"Validation" not in second_export.content

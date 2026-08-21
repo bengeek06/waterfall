@@ -289,6 +289,7 @@ class ProjectEstimateCreate(BaseModel):
 class ProjectEstimateRead(BaseModel):
     id: int
     project_id: int
+    planning_id: int | None
     reference_estimate_id: int | None
     version_number: int
     kind: str

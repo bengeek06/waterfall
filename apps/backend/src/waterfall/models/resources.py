@@ -198,6 +198,7 @@ class Estimate(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("ms_project.id"), nullable=False)
+    planning_id: Mapped[int | None] = mapped_column(ForeignKey("wf_planning.id"), nullable=True)
     reference_estimate_id: Mapped[int | None] = mapped_column(
         ForeignKey("wf_estimate.id"), nullable=True
     )

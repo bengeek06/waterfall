@@ -13,7 +13,8 @@ from sqlalchemy.orm import Session
 from waterfall.api.dependencies import get_current_active_user
 from waterfall.core.config import get_settings
 from waterfall.db.session import get_db
-from waterfall.models.ms_core import MsProject, MsTask, MsTaskLink
+from waterfall.models.ms_core import MsProject
+from waterfall.models.planning import WfPlanning, WfPlanningLinkSnapshot, WfPlanningTaskSnapshot
 from waterfall.models.user import User
 from waterfall.models.wf_core import WfImportBatch
 from waterfall.schemas.imports import (
@@ -120,6 +121,26 @@ def _get_batch_or_404(db: Session, batch_id: int, owner_id: int) -> WfImportBatc
     if batch is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found")
     return batch
+
+
+def _planning_counters(db: Session, planning_id: int) -> tuple[int, int]:
+    task_count = (
+        db.scalar(
+            select(func.count())
+            .select_from(WfPlanningTaskSnapshot)
+            .where(WfPlanningTaskSnapshot.planning_id == planning_id)
+        )
+        or 0
+    )
+    link_count = (
+        db.scalar(
+            select(func.count())
+            .select_from(WfPlanningLinkSnapshot)
+            .where(WfPlanningLinkSnapshot.planning_id == planning_id)
+        )
+        or 0
+    )
+    return task_count, link_count
 
 
 @router.post(
@@ -312,8 +333,12 @@ def run_batch(
             is not None
         )
         if identical_source:
-            task_count = db.query(MsTask.id).filter(MsTask.project_id == project.id).count()
-            link_count = db.query(MsTaskLink.id).filter(MsTaskLink.project_id == project.id).count()
+            planning = (
+                db.query(WfPlanning)
+                .filter(WfPlanning.id == project.displayed_planning_id)
+                .one_or_none()
+            )
+            task_count, link_count = _planning_counters(db, planning.id) if planning else (0, 0)
             batch.status = "success"
             batch.finished_at = datetime.now(UTC)
             payload["counters"] = {"tasks": task_count, "links": link_count}
@@ -422,30 +447,22 @@ def get_batch(
         except json.JSONDecodeError:
             pass
 
-    is_dry_run = log_payload.get("dry_run") is True
     saved_counters = log_payload.get("counters")
-    if is_dry_run and isinstance(saved_counters, dict):
+    if isinstance(saved_counters, dict):
         task_value = saved_counters.get("tasks")
         link_value = saved_counters.get("links")
         task_count = task_value if isinstance(task_value, int) else 0
         link_count = link_value if isinstance(link_value, int) else 0
-    elif batch.project_id is not None:
-        task_count = (
-            db.scalar(
-                select(func.count())
-                .select_from(MsTask)
-                .where(MsTask.project_id == batch.project_id)
-            )
-            or 0
+    elif batch.status == "success" and batch.project_id is not None:
+        planning = (
+            db.query(WfPlanning)
+            .join(MsProject, WfPlanning.project_id == MsProject.id)
+            .filter(WfPlanning.project_id == batch.project_id)
+            .filter(WfPlanning.id == MsProject.displayed_planning_id)
+            .one_or_none()
         )
-        link_count = (
-            db.scalar(
-                select(func.count())
-                .select_from(MsTaskLink)
-                .where(MsTaskLink.project_id == batch.project_id)
-            )
-            or 0
-        )
+        if planning is not None:
+            task_count, link_count = _planning_counters(db, planning.id)
 
     return ImportBatchStatusResponse(
         **batch_response.model_dump(by_alias=True),

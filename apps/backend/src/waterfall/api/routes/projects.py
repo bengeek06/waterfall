@@ -149,7 +149,7 @@ def _to_snapshot_task_read(
         is_summary=task.is_summary,
         is_milestone=task.is_milestone,
         is_manual=task.is_manual,
-        description=None,
+        description=task.notes,
         predecessor_links=[
             TaskLinkRead(
                 predecessor_uid=link.predecessor_uid,
@@ -174,18 +174,29 @@ def _to_planning_read(planning: WfPlanning) -> PlanningRead:
     )
 
 
-def _planning_detail(db: Session, planning: WfPlanning) -> PlanningDetailRead:
-    snapshots = (
+def _planning_detail(
+    db: Session,
+    planning: WfPlanning,
+    offset: int = 0,
+    limit: int | None = None,
+) -> PlanningDetailRead:
+    snapshot_query = (
         db.query(WfPlanningTaskSnapshot)
         .filter(WfPlanningTaskSnapshot.planning_id == planning.id)
         .order_by(WfPlanningTaskSnapshot.position.asc().nulls_last(), WfPlanningTaskSnapshot.id)
-        .all()
     )
+    if limit is not None:
+        snapshot_query = snapshot_query.offset(offset).limit(limit)
+    snapshots = snapshot_query.all()
+    task_uids = [task.uid for task in snapshots]
     links = (
         db.query(WfPlanningLinkSnapshot)
         .filter(WfPlanningLinkSnapshot.planning_id == planning.id)
+        .filter(WfPlanningLinkSnapshot.task_uid.in_(task_uids))
         .order_by(WfPlanningLinkSnapshot.id)
         .all()
+        if task_uids
+        else []
     )
     links_by_uid: dict[int, list[WfPlanningLinkSnapshot]] = {}
     for link in links:
@@ -224,6 +235,7 @@ def _to_project_estimate_read(estimate: Estimate) -> ProjectEstimateRead:
     return ProjectEstimateRead(
         id=estimate.id,
         project_id=estimate.project_id,
+        planning_id=estimate.planning_id,
         reference_estimate_id=estimate.reference_estimate_id,
         version_number=estimate.version_number,
         kind=estimate.kind,
@@ -593,11 +605,15 @@ def create_planning(
 def get_planning(
     project_id: int,
     planning_id: int,
+    limit: int = Query(default=200, ge=1, le=2000),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> PlanningDetailRead:
     _get_project_or_404(db, project_id, current_user.id)
-    return _planning_detail(db, _get_planning_or_404(db, project_id, planning_id))
+    return _planning_detail(
+        db, _get_planning_or_404(db, project_id, planning_id), offset=offset, limit=limit
+    )
 
 
 @router.post("/{project_id}/plannings/{planning_id}/validate", response_model=PlanningRead)
@@ -789,7 +805,7 @@ def create_project_estimate(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> ProjectEstimateRead:
-    _get_project_or_404(db, project_id, current_user.id)
+    project = _get_project_or_404(db, project_id, current_user.id)
     if payload.kind == "forecast_remaining" and payload.reference_estimate_id is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -806,6 +822,7 @@ def create_project_estimate(
     next_version = (current_version or 0) + 1
     estimate = Estimate(
         project_id=project_id,
+        planning_id=project.displayed_planning_id,
         reference_estimate_id=payload.reference_estimate_id,
         version_number=next_version,
         kind=payload.kind,
@@ -816,7 +833,26 @@ def create_project_estimate(
     db.add(estimate)
     db.flush()
 
-    tasks = db.query(MsTask).filter(MsTask.project_id == project_id).order_by(MsTask.id).all()
+    source_planning = (
+        _get_planning_or_404(db, project_id, project.displayed_planning_id)
+        if project.displayed_planning_id is not None
+        else None
+    )
+    tasks = (
+        db.query(MsTask).filter(MsTask.project_id == project_id).order_by(MsTask.id).all()
+        if source_planning is None
+        else db.query(MsTask)
+        .filter(MsTask.project_id == project_id)
+        .filter(
+            MsTask.uid.in_(
+                db.query(WfPlanningTaskSnapshot.uid).filter(
+                    WfPlanningTaskSnapshot.planning_id == source_planning.id
+                )
+            )
+        )
+        .order_by(MsTask.id)
+        .all()
+    )
     task_id_by_outline = {task.outline_number: task.id for task in tasks if task.outline_number}
     rows: list[EstimateTaskRow] = []
     for position, task in enumerate(tasks, start=1):
@@ -1276,8 +1312,7 @@ def list_project_tasks(
     selected_id = planning_id or project.displayed_planning_id
     if selected_id is not None:
         planning = _get_planning_or_404(db, project_id, selected_id)
-        detail = _planning_detail(db, planning)
-        return detail.tasks[offset : offset + limit]
+        return _planning_detail(db, planning, offset=offset, limit=limit).tasks
 
     tasks = (
         db.query(MsTask)
@@ -1449,7 +1484,32 @@ def update_task_description(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> TaskRead:
-    _get_project_or_404(db, project_id, current_user.id)
+    project = _get_project_or_404(db, project_id, current_user.id)
+    displayed_planning = (
+        db.query(WfPlanning)
+        .filter(WfPlanning.id == project.displayed_planning_id)
+        .first()
+        if project.displayed_planning_id is not None
+        else None
+    )
+    if displayed_planning is not None:
+        if displayed_planning.status != "draft":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Displayed planning is not a draft",
+            )
+        snapshot = (
+            db.query(WfPlanningTaskSnapshot)
+            .filter(WfPlanningTaskSnapshot.planning_id == displayed_planning.id)
+            .filter(WfPlanningTaskSnapshot.uid == task_uid)
+            .first()
+        )
+        if snapshot is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+        snapshot.notes = payload.description
+        db.commit()
+        return _to_snapshot_task_read(snapshot, [], project_id)
+
     task = (
         db.query(MsTask)
         .filter(MsTask.project_id == project_id)
@@ -1672,24 +1732,50 @@ def delete_task_role_assignment(
 @router.get("/{project_id}/export.xml")
 def export_project_xml(
     project_id: int,
+    planning_id: int | None = Query(default=None, gt=0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> Response:
     project = _get_project_or_404(db, project_id, current_user.id)
 
-    tasks = db.query(MsTask).filter(MsTask.project_id == project_id).order_by(MsTask.id.asc()).all()
-    links = (
-        db.query(MsTaskLink)
-        .filter(MsTaskLink.project_id == project_id)
-        .order_by(MsTaskLink.id.asc())
-        .all()
+    selected_planning_id = planning_id or project.displayed_planning_id
+    selected_planning = (
+        _get_planning_or_404(db, project_id, selected_planning_id)
+        if selected_planning_id is not None
+        else None
     )
+    if selected_planning is not None:
+        tasks = (
+            db.query(WfPlanningTaskSnapshot)
+            .filter(WfPlanningTaskSnapshot.planning_id == selected_planning.id)
+            .order_by(WfPlanningTaskSnapshot.position.asc().nulls_last(), WfPlanningTaskSnapshot.id)
+            .all()
+        )
+        links = (
+            db.query(WfPlanningLinkSnapshot)
+            .filter(WfPlanningLinkSnapshot.planning_id == selected_planning.id)
+            .order_by(WfPlanningLinkSnapshot.id.asc())
+            .all()
+        )
+    else:
+        tasks = (
+            db.query(MsTask)
+            .filter(MsTask.project_id == project_id)
+            .order_by(MsTask.id.asc())
+            .all()
+        )
+        links = (
+            db.query(MsTaskLink)
+            .filter(MsTaskLink.project_id == project_id)
+            .order_by(MsTaskLink.id.asc())
+            .all()
+        )
     enrichments = db.query(WfTaskEnrichment).filter(WfTaskEnrichment.project_id == project_id).all()
 
     descriptions_by_uid = {
         enrichment.task_uid: enrichment.description for enrichment in enrichments
     }
-    links_by_task_uid: dict[int, list[MsTaskLink]] = {}
+    links_by_task_uid: dict[int, list[Any]] = {}
     for link in links:
         links_by_task_uid.setdefault(link.task_uid, []).append(link)
 
@@ -1765,7 +1851,7 @@ def export_project_xml(
         if task.is_manual is not None:
             ET.SubElement(task_node, f"{{{MSP_NS}}}Manual").text = _bool_to_msp_flag(task.is_manual)
 
-        description = descriptions_by_uid.get(task.uid)
+        description = getattr(task, "notes", None) or descriptions_by_uid.get(task.uid)
         if description:
             ET.SubElement(task_node, f"{{{MSP_NS}}}Notes").text = description
 
