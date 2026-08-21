@@ -33,6 +33,21 @@ class ImportRunRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     dry_run: bool = Field(default=False, alias="dryRun")
+    confirm: bool = Field(default=True)
+
+
+class ImportDiffItem(BaseModel):
+    kind: Literal["added", "modified", "removed", "conflict"]
+    uid: int
+    message: str
+    fields: list[str] = Field(default_factory=list)
+
+
+class ImportDiffResponse(BaseModel):
+    batch_id: int = Field(alias="batchId")
+    source_sha256: str | None = Field(default=None, alias="sourceSha256")
+    identical_source: bool = Field(alias="identicalSource")
+    items: list[ImportDiffItem]
 
 
 class ImportRunAcceptedResponse(BaseModel):

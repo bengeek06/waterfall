@@ -180,6 +180,72 @@ def test_import_batch_minimal_flow() -> None:
         assert isinstance(errors_response.json()["items"], list)
 
 
+def test_import_diff_is_non_mutating_and_requires_confirmation() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client, "import.diff@example.com")
+        project_id = _create_project(client, headers)
+        xml = b'<Project xmlns="http://schemas.microsoft.com/project"><SaveVersion>16</SaveVersion><ScheduleFromStart>1</ScheduleFromStart><StartDate>2026-01-01T08:00:00</StartDate><Tasks><Task><UID>1</UID><ID>1</ID><Name>One</Name></Task></Tasks></Project>'
+        create_response = client.post(
+            "/imports/v1/batches",
+            json={"projectId": project_id, "importMode": "standard"},
+            headers=headers,
+        )
+        batch_id = create_response.json()["id"]
+        upload_response = client.post(
+            f"/imports/v1/batches/{batch_id}/xml",
+            files={"file": ("diff.xml", xml, "application/xml")},
+            headers=headers,
+        )
+        assert upload_response.status_code == 202
+
+        diff_response = client.get(
+            f"/imports/v1/batches/{batch_id}/diff",
+            headers=headers,
+        )
+        assert diff_response.status_code == 200
+        assert diff_response.json()["items"][0]["kind"] == "added"
+        assert client.get(f"/projects/{project_id}/tasks", headers=headers).json() == []
+
+        confirmation_response = client.post(
+            f"/imports/v1/batches/{batch_id}/run",
+            json={"dryRun": False, "confirm": False},
+            headers=headers,
+        )
+        assert confirmation_response.status_code == 409
+
+
+def test_identical_source_is_detected_without_reapplying() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client, "import.identical@example.com")
+        project_id = _create_project(client, headers)
+        xml = b'<Project xmlns="http://schemas.microsoft.com/project"><SaveVersion>16</SaveVersion><ScheduleFromStart>1</ScheduleFromStart><StartDate>2026-01-01T08:00:00</StartDate><Tasks><Task><UID>1</UID><ID>1</ID><Name>One</Name></Task></Tasks></Project>'
+        batch_ids: list[int] = []
+        for index in range(2):
+            response = client.post(
+                "/imports/v1/batches",
+                json={"projectId": project_id, "importMode": "standard"},
+                headers=headers,
+            )
+            batch_id = response.json()["id"]
+            batch_ids.append(batch_id)
+            upload = client.post(
+                f"/imports/v1/batches/{batch_id}/xml",
+                files={"file": (f"same-{index}.xml", xml, "application/xml")},
+                headers=headers,
+            )
+            assert upload.status_code == 202
+            run = client.post(
+                f"/imports/v1/batches/{batch_id}/run",
+                json={"confirm": True},
+                headers=headers,
+            )
+            assert run.status_code == 202
+
+        status = client.get(f"/imports/v1/batches/{batch_ids[1]}", headers=headers)
+        assert status.status_code == 200
+        assert status.json()["counters"]["tasks"] == 1
+
+
 @pytest.mark.parametrize("xml_path", EXAMPLE_XML_FILES, ids=lambda p: p.name)
 def test_import_batch_real_examples_via_api_with_counters(xml_path: Path) -> None:
     expected_tasks, expected_links = _xml_expected_counters(xml_path)
