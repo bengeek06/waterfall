@@ -1224,9 +1224,7 @@ def export_project_xml(
             ET.SubElement(task_node, f"{{{MSP_NS}}}Duration").text = duration
 
         if task.duration_format is not None:
-            ET.SubElement(task_node, f"{{{MSP_NS}}}DurationFormat").text = str(
-                task.duration_format
-            )
+            ET.SubElement(task_node, f"{{{MSP_NS}}}DurationFormat").text = str(task.duration_format)
 
         if task.percent_complete is not None:
             ET.SubElement(task_node, f"{{{MSP_NS}}}PercentComplete").text = str(
