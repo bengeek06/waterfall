@@ -121,6 +121,12 @@ def generate_planning_structure(
                 f"Planning task is referenced and cannot be removed: {task.structure_key}"
             )
 
+    removed_uids = [task.uid for task in removed_tasks]
+    if removed_uids:
+        db.query(MsTask).filter(
+            MsTask.project_id == project.id,
+            MsTask.parent_uid.in_(removed_uids),
+        ).update({MsTask.parent_uid: None}, synchronize_session=False)
     for task in removed_tasks:
         db.query(MsTaskLink).filter(
             (MsTaskLink.task_uid == task.uid) | (MsTaskLink.predecessor_uid == task.uid)
@@ -211,36 +217,50 @@ def generate_planning_snapshot(
     planning: WfPlanning,
 ) -> list[WfPlanningTaskSnapshot]:
     nodes = _build_nodes(payload)
-    existing = db.query(WfPlanningTaskSnapshot).filter(
-        WfPlanningTaskSnapshot.planning_id == planning.id
-    ).all()
+    existing = (
+        db.query(WfPlanningTaskSnapshot)
+        .filter(WfPlanningTaskSnapshot.planning_id == planning.id)
+        .all()
+    )
     existing_by_key = {task.structure_key: task for task in existing}
     source = None
     if not existing and project.displayed_planning_id not in (None, planning.id):
-        source = db.query(WfPlanningTaskSnapshot).filter(
-            WfPlanningTaskSnapshot.planning_id == project.displayed_planning_id
-        ).all()
+        source = (
+            db.query(WfPlanningTaskSnapshot)
+            .filter(WfPlanningTaskSnapshot.planning_id == project.displayed_planning_id)
+            .all()
+        )
         existing_by_key.update({task.structure_key: task for task in source})
 
-    max_uid = db.query(func.max(WfPlanningTaskSnapshot.uid)).filter(
-        WfPlanningTaskSnapshot.planning_id == planning.id
-    ).scalar() or 0
+    max_uid = (
+        db.query(func.max(WfPlanningTaskSnapshot.uid))
+        .filter(WfPlanningTaskSnapshot.planning_id == planning.id)
+        .scalar()
+        or 0
+    )
     if source:
         max_uid = max(max_uid, max(task.uid for task in source))
     uid_by_key: dict[str, int] = {}
     snapshots: list[WfPlanningTaskSnapshot] = []
     incoming_keys = {node.key for node in nodes}
-    db.query(WfPlanningLinkSnapshot).filter(
-        WfPlanningLinkSnapshot.planning_id == planning.id
-    ).delete(synchronize_session=False)
+    links = (
+        db.query(WfPlanningLinkSnapshot)
+        .filter(WfPlanningLinkSnapshot.planning_id == planning.id)
+        .all()
+    )
+    existing_uids = {task.uid for task in existing if task.structure_key in incoming_keys}
+    for link in links:
+        if link.task_uid not in existing_uids or link.predecessor_uid not in existing_uids:
+            db.delete(link)
     removed_ids = [task.id for task in existing if task.structure_key not in incoming_keys]
+    db.query(WfPlanningTaskSnapshot).filter(
+        WfPlanningTaskSnapshot.planning_id == planning.id
+    ).update({WfPlanningTaskSnapshot.parent_uid: None}, synchronize_session=False)
+    db.flush()
     if removed_ids:
-        db.query(WfPlanningTaskSnapshot).filter(
-            WfPlanningTaskSnapshot.id.in_(removed_ids)
-        ).update({WfPlanningTaskSnapshot.parent_uid: None}, synchronize_session=False)
-        db.query(WfPlanningTaskSnapshot).filter(
-            WfPlanningTaskSnapshot.id.in_(removed_ids)
-        ).delete(synchronize_session=False)
+        db.query(WfPlanningTaskSnapshot).filter(WfPlanningTaskSnapshot.id.in_(removed_ids)).delete(
+            synchronize_session=False
+        )
     db.flush()
 
     for node in nodes:
@@ -267,6 +287,12 @@ def generate_planning_snapshot(
         uid_by_key[node.key] = task.uid
 
     db.flush()
+    milestone_uids = [task.uid for task in snapshots if task.is_milestone]
+    if milestone_uids:
+        db.query(WfPlanningLinkSnapshot).filter(
+            WfPlanningLinkSnapshot.planning_id == planning.id,
+            WfPlanningLinkSnapshot.task_uid.in_(milestone_uids),
+        ).delete(synchronize_session=False)
     deliverables_by_lot_key = {
         f"{post.key}/{lot.key}": lot.deliverables for post in payload.posts for lot in post.lots
     }
