@@ -2175,7 +2175,7 @@ components:
           description: Valide le fichier sans persister en base (optionnel)
         confirm:
           type: boolean
-          default: true
+          default: false
           description: Confirme l'application du diff
 
     ImportDiffItem:
@@ -2194,6 +2194,30 @@ components:
           type: array
           items:
             type: string
+        linkChanges:
+          type: array
+          items:
+            $ref: '#/components/schemas/ImportLinkChange'
+
+    ImportLinkChange:
+      type: object
+      required: [action, taskUid, predecessorUid, linkType]
+      properties:
+        action:
+          type: string
+          enum: [added, removed]
+        taskUid:
+          type: integer
+        predecessorUid:
+          type: integer
+        linkType:
+          type: integer
+        lagTenthMinute:
+          type: integer
+          nullable: true
+        lagFormat:
+          type: integer
+          nullable: true
 
     ImportDiffResponse:
       type: object
@@ -2427,6 +2451,9 @@ components:
           type: boolean
         is_milestone:
           type: boolean
+        is_manual:
+          type: boolean
+          nullable: true
         description:
           type: string
           nullable: true

@@ -990,7 +990,7 @@ export interface components {
             dryRun: boolean;
             /**
              * @description Confirme l'application du diff
-             * @default true
+             * @default false
              */
             confirm: boolean;
         };
@@ -1000,6 +1000,16 @@ export interface components {
             uid: number;
             message: string;
             fields: string[];
+            linkChanges?: components["schemas"]["ImportLinkChange"][];
+        };
+        ImportLinkChange: {
+            /** @enum {string} */
+            action: "added" | "removed";
+            taskUid: number;
+            predecessorUid: number;
+            linkType: number;
+            lagTenthMinute?: number | null;
+            lagFormat?: number | null;
         };
         ImportDiffResponse: {
             batchId: number;
@@ -1088,6 +1098,7 @@ export interface components {
             percent_complete?: number | null;
             is_summary: boolean;
             is_milestone: boolean;
+            is_manual?: boolean | null;
             description?: string | null;
             predecessor_links?: components["schemas"]["TaskLinkRead"][];
         };

@@ -3,7 +3,12 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from waterfall.models.ms_core import MsProject, MsTask, MsTaskLink
-from waterfall.models.resources import EstimateCostLine, EstimateTaskRow, TaskRoleAssignment
+from waterfall.models.resources import (
+    EstimateCostLine,
+    EstimateLine,
+    EstimateTaskRow,
+    TaskRoleAssignment,
+)
 from waterfall.models.wf_core import WfChargeLine
 from waterfall.services.msproject_xml import ParsedProject
 
@@ -16,11 +21,23 @@ def build_import_diff(
     }
     incoming = {task.uid: task for task in parsed.tasks}
     current_links = {
-        (link.task_uid, link.predecessor_uid, link.link_type, link.lag_tenth_minute)
+        (
+            link.task_uid,
+            link.predecessor_uid,
+            link.link_type,
+            link.lag_tenth_minute,
+            link.lag_format,
+        )
         for link in db.query(MsTaskLink).filter(MsTaskLink.project_id == project.id).all()
     }
     incoming_links = {
-        (link.task_uid, link.predecessor_uid, link.link_type, link.lag_tenth_minute)
+        (
+            link.task_uid,
+            link.predecessor_uid,
+            link.link_type,
+            link.lag_tenth_minute,
+            link.lag_format,
+        )
         for link in parsed.links
     }
     items: list[dict[str, object]] = []
@@ -38,6 +55,7 @@ def build_import_diff(
         referenced = (
             db.query(TaskRoleAssignment.id).filter(TaskRoleAssignment.task_id == task.id).first()
             or db.query(EstimateCostLine.id).filter(EstimateCostLine.task_id == task.id).first()
+            or db.query(EstimateLine.id).filter(EstimateLine.task_id == task.id).first()
             or db.query(EstimateTaskRow.id).filter(EstimateTaskRow.task_id == task.id).first()
             or db.query(WfChargeLine.id)
             .filter(WfChargeLine.project_id == project.id, WfChargeLine.task_uid == uid)
@@ -73,6 +91,7 @@ def build_import_diff(
         affected_uids = sorted(
             {link[0] for link in current_links.symmetric_difference(incoming_links)}
         )
+        changes = current_links.symmetric_difference(incoming_links)
         for uid in affected_uids:
             items.append(
                 {
@@ -80,6 +99,18 @@ def build_import_diff(
                     "uid": uid,
                     "message": f"Task UID {uid} predecessor links will be updated",
                     "fields": ["predecessor_links"],
+                    "link_changes": [
+                        {
+                            "action": "removed" if link in current_links else "added",
+                            "taskUid": link[0],
+                            "predecessorUid": link[1],
+                            "linkType": link[2],
+                            "lagTenthMinute": link[3],
+                            "lagFormat": link[4],
+                        }
+                        for link in changes
+                        if link[0] == uid
+                    ],
                 }
             )
     return items
