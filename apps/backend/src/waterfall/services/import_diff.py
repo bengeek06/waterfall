@@ -10,8 +10,7 @@ def build_import_diff(
     db: Session, project: MsProject, parsed: ParsedProject
 ) -> list[dict[str, object]]:
     current = {
-        task.uid: task
-        for task in db.query(MsTask).filter(MsTask.project_id == project.id).all()
+        task.uid: task for task in db.query(MsTask).filter(MsTask.project_id == project.id).all()
     }
     incoming = {task.uid: task for task in parsed.tasks}
     items: list[dict[str, object]] = []
