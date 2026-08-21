@@ -290,7 +290,9 @@ def run_batch(
     db.refresh(batch)
 
     try:
-        project = db.query(MsProject).filter(MsProject.id == batch.project_id).one()
+        project = (
+            db.query(MsProject).filter(MsProject.id == batch.project_id).with_for_update().one()
+        )
         identical_source = (
             db.query(WfImportBatch.id)
             .filter(WfImportBatch.project_id == batch.project_id)

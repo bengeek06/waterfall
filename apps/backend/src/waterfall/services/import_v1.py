@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from waterfall.models.ms_core import MsProject, MsTask, MsTaskLink
 from waterfall.models.resources import EstimateCostLine, EstimateTaskRow, TaskRoleAssignment
-from waterfall.models.wf_core import WfTaskEnrichment
+from waterfall.models.wf_core import WfChargeLine, WfTaskEnrichment
 from waterfall.services.msproject_xml import ParsedProject, parse_msproject_xml
 
 
@@ -79,6 +79,9 @@ def import_tasks_and_links(db: Session, xml_bytes: bytes, project: MsProject) ->
             db.query(TaskRoleAssignment.id).filter(TaskRoleAssignment.task_id == task.id).first()
             or db.query(EstimateCostLine.id).filter(EstimateCostLine.task_id == task.id).first()
             or db.query(EstimateTaskRow.id).filter(EstimateTaskRow.task_id == task.id).first()
+            or db.query(WfChargeLine.id)
+            .filter(WfChargeLine.project_id == project.id, WfChargeLine.task_uid == task.uid)
+            .first()
         )
         if referenced:
             raise ValueError(f"Task UID {task.uid} is referenced and cannot be removed")
