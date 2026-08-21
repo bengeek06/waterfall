@@ -264,7 +264,16 @@ def run_batch(
 
     accepted_at = datetime.now(UTC)
     if run_request.dry_run:
-        parse_msproject_xml(xml_bytes)
+        try:
+            parse_msproject_xml(xml_bytes)
+        except MsProjectValidationError as exc:
+            batch.log_json = json.dumps({"error": str(exc), "errors": exc.issues})
+            db.add(batch)
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Import validation failed",
+            ) from exc
         return ImportRunAcceptedResponse(
             batchId=batch.id,
             status="pending",
@@ -361,7 +370,13 @@ def get_batch_diff(
 ) -> ImportDiffResponse:
     batch = _get_batch_or_404(db, batch_id, current_user.id)
     xml_bytes = _read_source_xml(batch)
-    parsed = parse_msproject_xml(xml_bytes)
+    try:
+        parsed = parse_msproject_xml(xml_bytes)
+    except MsProjectValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "IMPORT_VALIDATION_FAILED", "issues": exc.issues},
+        ) from exc
     project = db.query(MsProject).filter(MsProject.id == batch.project_id).one()
     previous = (
         db.query(WfImportBatch)

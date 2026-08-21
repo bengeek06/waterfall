@@ -304,7 +304,7 @@ def test_import_batch_real_examples_via_api_with_counters(xml_path: Path) -> Non
 
         run_response: Response = client.post(
             f"/imports/v1/batches/{batch_id}/run",
-            json={"dryRun": False},
+            json={"dryRun": False, "confirm": True},
             headers=headers,
         )
         assert run_response.status_code == 202

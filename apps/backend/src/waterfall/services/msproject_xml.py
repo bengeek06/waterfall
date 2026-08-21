@@ -46,6 +46,7 @@ class ParsedTask:
     percent_complete: int | None
     is_summary: bool
     is_milestone: bool
+    is_manual: bool | None
     calendar_uid: int | None
     notes: str | None
 
@@ -102,6 +103,15 @@ def _text(node: ET.Element, name: str) -> str | None:
         return None
     value = child.text.strip()
     return value or None
+
+
+def _boolean(value: str | None, field: str, issues: list[dict[str, object]]) -> bool:
+    if value in {"1", "true"}:
+        return True
+    if value in {"0", "false", None}:
+        return False
+    issues.append({"code": "INVALID_BOOLEAN", "message": f"{field} is invalid"})
+    return False
 
 
 def _integer(value: str | None, field: str, issues: list[dict[str, object]]) -> int | None:
@@ -233,11 +243,29 @@ def parse_msproject_xml(xml_bytes: bytes) -> ParsedProject:
                 duration = parse_duration(duration_text, minutes_per_day)
             except ValueError as exc:
                 issues.append({"code": "INVALID_DURATION", "message": str(exc), "taskUid": uid})
+        task_type = _integer(_text(task_node, "Type"), "Task Type", issues)
+        if task_type is not None and task_type not in (0, 1, 2):
+            issues.append(
+                {
+                    "code": "INVALID_TASK_TYPE",
+                    "message": f"Task UID {uid} has invalid Type",
+                    "taskUid": uid,
+                }
+            )
+        percent_complete = _integer(_text(task_node, "PercentComplete"), "PercentComplete", issues)
+        if percent_complete is not None and not 0 <= percent_complete <= 100:
+            issues.append(
+                {
+                    "code": "INVALID_PERCENT_COMPLETE",
+                    "message": f"Task UID {uid} has invalid completion",
+                    "taskUid": uid,
+                }
+            )
         task = ParsedTask(
             uid=uid,
             id_display=_integer(_text(task_node, "ID"), "Task ID", issues),
             name=_text(task_node, "Name") or f"Task {uid}",
-            task_type=_integer(_text(task_node, "Type"), "Task Type", issues),
+            task_type=task_type,
             outline_number=outline,
             outline_level=level,
             wbs=_text(task_node, "WBS"),
@@ -245,11 +273,14 @@ def parse_msproject_xml(xml_bytes: bytes) -> ParsedProject:
             finish_at=_datetime(_text(task_node, "Finish"), "Task Finish", issues),
             duration_minutes=duration,
             duration_format=_integer(_text(task_node, "DurationFormat"), "DurationFormat", issues),
-            percent_complete=_integer(
-                _text(task_node, "PercentComplete"), "PercentComplete", issues
+            percent_complete=percent_complete,
+            is_summary=_boolean(_text(task_node, "Summary"), "Summary", issues),
+            is_milestone=_boolean(_text(task_node, "Milestone"), "Milestone", issues),
+            is_manual=(
+                _boolean(_text(task_node, "Manual"), "Manual", issues)
+                if _text(task_node, "Manual") is not None
+                else None
             ),
-            is_summary=_text(task_node, "Summary") == "1",
-            is_milestone=_text(task_node, "Milestone") == "1",
             calendar_uid=_integer(_text(task_node, "CalendarUID"), "CalendarUID", issues),
             notes=_text(task_node, "Notes"),
         )
@@ -258,6 +289,13 @@ def parse_msproject_xml(xml_bytes: bytes) -> ParsedProject:
             predecessor_uid = _integer(_text(link_node, "PredecessorUID"), "PredecessorUID", issues)
             link_type = _integer(_text(link_node, "Type"), "Link Type", issues)
             if predecessor_uid is None or link_type is None:
+                issues.append(
+                    {
+                        "code": "INCOMPLETE_LINK",
+                        "message": f"Task UID {uid} has an incomplete predecessor link",
+                        "taskUid": uid,
+                    }
+                )
                 continue
             if link_type not in (0, 1, 2, 3):
                 issues.append(
@@ -267,15 +305,27 @@ def parse_msproject_xml(xml_bytes: bytes) -> ParsedProject:
                         "taskUid": uid,
                     }
                 )
-            links.append(
-                ParsedLink(
-                    task_uid=uid,
-                    predecessor_uid=predecessor_uid,
-                    link_type=link_type,
-                    lag_tenth_minute=_integer(_text(link_node, "LinkLag"), "LinkLag", issues),
-                    lag_format=_integer(_text(link_node, "LagFormat"), "LagFormat", issues),
-                )
+            link = ParsedLink(
+                task_uid=uid,
+                predecessor_uid=predecessor_uid,
+                link_type=link_type,
+                lag_tenth_minute=_integer(_text(link_node, "LinkLag"), "LinkLag", issues),
+                lag_format=_integer(_text(link_node, "LagFormat"), "LagFormat", issues),
             )
+            links.append(link)
+
+    link_keys = set()
+    for link in links:
+        key = (link.task_uid, link.predecessor_uid, link.link_type)
+        if key in link_keys:
+            issues.append(
+                {
+                    "code": "DUPLICATE_LINK",
+                    "message": f"Duplicate link for task UID {link.task_uid}",
+                    "taskUid": link.task_uid,
+                }
+            )
+        link_keys.add(key)
 
     for link in links:
         if link.predecessor_uid not in task_uids:
@@ -323,6 +373,15 @@ def parse_msproject_xml(xml_bytes: bytes) -> ParsedProject:
 
     for uid in task_uids:
         visit(uid)
+    schedule_from_start = _boolean(_text(root, "ScheduleFromStart"), "ScheduleFromStart", issues)
+    if schedule_from_start and start_date is None:
+        issues.append(
+            {"code": "MISSING_START_DATE", "message": "ScheduleFromStart requires StartDate"}
+        )
+    if not schedule_from_start and finish_date is None:
+        issues.append(
+            {"code": "MISSING_FINISH_DATE", "message": "ScheduleFromFinish requires FinishDate"}
+        )
     if issues:
         raise MsProjectValidationError(issues)
 
@@ -332,7 +391,7 @@ def parse_msproject_xml(xml_bytes: bytes) -> ParsedProject:
         source_version=source_version,
         external_uid=_text(root, "GUID"),
         name=_text(root, "Name"),
-        schedule_from_start=_text(root, "ScheduleFromStart") == "1",
+        schedule_from_start=schedule_from_start,
         start_date=start_date,
         finish_date=finish_date,
         calendar_uid=_integer(_text(root, "CalendarUID"), "CalendarUID", issues),

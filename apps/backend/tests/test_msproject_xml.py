@@ -40,11 +40,11 @@ def test_validator_rejects_cycles_and_bad_namespace() -> None:
 
 def test_validator_parses_iso_duration() -> None:
     parsed = parse_msproject_xml(
-        _xml("<Task><UID>1</UID><ID>1</ID><Name>A</Name><Duration>PT8H</Duration></Task>")
+        b'<Project xmlns="http://schemas.microsoft.com/project"><SaveVersion>16</SaveVersion><ScheduleFromStart>1</ScheduleFromStart><StartDate>2026-01-01T08:00:00</StartDate><Tasks><Task><UID>1</UID><ID>1</ID><Name>A</Name><Duration>PT8H</Duration></Task></Tasks></Project>'
     )
     assert parsed.tasks[0].duration_minutes == 480
 
 
 def test_canonical_schema_accepts_minimal_project() -> None:
-    xml = b'<Project xmlns="http://schemas.microsoft.com/project/2007"><SaveVersion>16</SaveVersion><Tasks><Task><UID>1</UID><Name>One</Name><Duration>PT480M</Duration></Task></Tasks></Project>'
+    xml = b'<Project xmlns="http://schemas.microsoft.com/project/2007"><SaveVersion>16</SaveVersion><ScheduleFromStart>true</ScheduleFromStart><StartDate>2026-01-01T08:00:00</StartDate><Tasks><Task><UID>1</UID><Name>One</Name><Duration>PT480M</Duration></Task></Tasks></Project>'
     validate_canonical_xml(xml)
