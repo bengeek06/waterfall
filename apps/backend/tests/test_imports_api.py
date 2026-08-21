@@ -226,7 +226,7 @@ def test_identical_source_is_detected_without_reapplying() -> None:
                 json={"projectId": project_id, "importMode": "standard"},
                 headers=headers,
             )
-            batch_id = response.json()["id"]
+            batch_id = cast(int, response.json()["id"])
             batch_ids.append(batch_id)
             upload = client.post(
                 f"/imports/v1/batches/{batch_id}/xml",

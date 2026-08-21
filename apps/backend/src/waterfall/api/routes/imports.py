@@ -4,7 +4,7 @@ import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy import func, select
@@ -23,6 +23,7 @@ from waterfall.schemas.imports import (
     ImportBatchResponse,
     ImportBatchStatusResponse,
     ImportCounters,
+    ImportDiffItem,
     ImportDiffResponse,
     ImportErrorListResponse,
     ImportIssue,
@@ -376,7 +377,10 @@ def get_batch_diff(
         .filter(WfImportBatch.id != batch.id)
         .first()
     )
-    items = build_import_diff(db, project, parsed)
+    items = [
+        ImportDiffItem(**cast(dict[str, Any], item))
+        for item in build_import_diff(db, project, parsed)
+    ]
     return ImportDiffResponse(
         batchId=batch.id,
         sourceSha256=batch.source_sha256,
