@@ -123,7 +123,7 @@ Analyse prioritairement:
 
 Depuis `apps/backend`:
 
-- `ruff check .`
+- `../../.venv/bin/ruff check .`
 - `../../.venv/bin/pyright`
 - `../../.venv/bin/pytest`
 - `../../.venv/bin/pytest --no-cov tests/<fichier_cible>.py` pour validation ciblée sans fausse alerte de couverture globale.

@@ -46,7 +46,7 @@ Backend coupling specifics:
 - Guard async flows against partial UI state updates after failures.
 
 5. Respect Next.js 16 environment constraints.
-- Follow `apps/frontend/AGENTS.md` guidance for potential API/convention changes.
+- Before any frontend code change, read `apps/frontend/AGENTS.md` and the relevant guide in `apps/frontend/node_modules/next/dist/docs/` as required by that file.
 
 ## Verification checklist
 

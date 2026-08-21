@@ -79,7 +79,7 @@ Si un skill n'est pas utilisé, indique brièvement pourquoi.
 
 Depuis `apps/backend` (selon périmètre):
 
-- `ruff check .`
+- `../../.venv/bin/ruff check .`
 - `../../.venv/bin/pyright`
 - `../../.venv/bin/pytest`
 - `../../.venv/bin/pytest --no-cov tests/<fichier>.py` pour une validation ciblée rapide.

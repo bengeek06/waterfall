@@ -29,7 +29,7 @@ Waterfall backend relies on:
 2. Keep schema, models, and API aligned.
 - SQLAlchemy model changes require migration impact assessment.
 - Pydantic constraints must match DB constraints and business rules.
-- Route changes require OpenAPI parity checks.
+- Route or OpenAPI changes require parity checks and regeneration of the committed TypeScript client with `npm run api-client:generate`; verify the generated diff is committed.
 
 3. Avoid non-traceable database hotfixes.
 - Prefer Alembic workflows over ad-hoc SQL patches.
@@ -78,7 +78,7 @@ Waterfall backend relies on:
 
 From apps/backend:
 
-- ruff check .
+- ../../.venv/bin/ruff check .
 - ../../.venv/bin/pyright
 - ../../.venv/bin/pytest
 - ../../.venv/bin/pytest --no-cov tests/<target_file>.py
