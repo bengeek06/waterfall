@@ -4,7 +4,7 @@ import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy import func, select
@@ -23,13 +23,17 @@ from waterfall.schemas.imports import (
     ImportBatchResponse,
     ImportBatchStatusResponse,
     ImportCounters,
+    ImportDiffItem,
+    ImportDiffResponse,
     ImportErrorListResponse,
     ImportIssue,
     ImportMode,
     ImportRunAcceptedResponse,
     ImportRunRequest,
 )
+from waterfall.services.import_diff import build_import_diff
 from waterfall.services.import_v1 import import_tasks_and_links
+from waterfall.services.msproject_xml import MsProjectValidationError, parse_msproject_xml
 
 router = APIRouter(prefix="/imports/v1/batches", tags=["imports-v1"])
 UPLOAD_CHUNK_SIZE = 1024 * 1024
@@ -233,6 +237,11 @@ def run_batch(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Batch is not pending")
 
     run_request = payload or ImportRunRequest()
+    if not run_request.dry_run and not run_request.confirm:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Import requires explicit confirmation",
+        )
 
     if not batch.log_json:
         raise HTTPException(
@@ -254,6 +263,23 @@ def run_batch(
     xml_bytes = _read_source_xml(batch)
 
     accepted_at = datetime.now(UTC)
+    if run_request.dry_run:
+        try:
+            parse_msproject_xml(xml_bytes)
+        except MsProjectValidationError as exc:
+            batch.log_json = json.dumps({"error": str(exc), "errors": exc.issues})
+            db.add(batch)
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Import validation failed",
+            ) from exc
+        return ImportRunAcceptedResponse(
+            batchId=batch.id,
+            status="pending",
+            acceptedAt=accepted_at,
+        )
+
     updated = (
         db.query(WfImportBatch)
         .filter(WfImportBatch.id == batch.id)
@@ -273,29 +299,41 @@ def run_batch(
     db.refresh(batch)
 
     try:
-        project = db.query(MsProject).filter(MsProject.id == batch.project_id).one()
-        if run_request.dry_run:
-            savepoint = db.begin_nested()
-            try:
-                task_count, link_count = import_tasks_and_links(
-                    db,
-                    xml_bytes,
-                    project,
-                )
-            finally:
-                savepoint.rollback()
-                db.expire_all()
-        else:
-            task_count, link_count = import_tasks_and_links(
-                db,
-                xml_bytes,
-                project,
+        project = (
+            db.query(MsProject).filter(MsProject.id == batch.project_id).with_for_update().one()
+        )
+        identical_source = (
+            db.query(WfImportBatch.id)
+            .filter(WfImportBatch.project_id == batch.project_id)
+            .filter(WfImportBatch.status == "success")
+            .filter(WfImportBatch.source_sha256 == batch.source_sha256)
+            .filter(WfImportBatch.id != batch.id)
+            .first()
+            is not None
+        )
+        if identical_source:
+            task_count = db.query(MsTask.id).filter(MsTask.project_id == project.id).count()
+            link_count = db.query(MsTaskLink.id).filter(MsTaskLink.project_id == project.id).count()
+            batch.status = "success"
+            batch.finished_at = datetime.now(UTC)
+            payload["counters"] = {"tasks": task_count, "links": link_count}
+            payload["errors"] = []
+            payload["dry_run"] = run_request.dry_run
+            payload["identical_source"] = True
+            batch.log_json = json.dumps(payload)
+            db.add(batch)
+            db.commit()
+            return ImportRunAcceptedResponse(
+                batchId=batch.id,
+                status="success",
+                acceptedAt=accepted_at,
             )
+        task_count, link_count = import_tasks_and_links(db, xml_bytes, project)
         batch.status = "success"
         batch.finished_at = datetime.now(UTC)
         payload["counters"] = {"tasks": task_count, "links": link_count}
         payload["errors"] = []
-        payload["dry_run"] = run_request.dry_run
+        payload["dry_run"] = False
         batch.log_json = json.dumps(payload)
         db.add(batch)
         db.commit()
@@ -304,12 +342,12 @@ def run_batch(
         failed_batch = _get_batch_or_404(db, batch_id, current_user.id)
         failed_batch.status = "failed"
         failed_batch.finished_at = datetime.now(UTC)
-        failed_batch.log_json = json.dumps(
-            {
-                "error": str(exc),
-                "errors": [{"code": "IMPORT_FAILED", "message": str(exc)}],
-            }
+        issues = (
+            exc.issues
+            if isinstance(exc, MsProjectValidationError)
+            else [{"code": "IMPORT_FAILED", "message": str(exc)}]
         )
+        failed_batch.log_json = json.dumps({"error": str(exc), "errors": issues})
         db.add(failed_batch)
         db.commit()
         raise HTTPException(
@@ -321,6 +359,42 @@ def run_batch(
         batchId=batch.id,
         status="success",
         acceptedAt=accepted_at,
+    )
+
+
+@router.get("/{batch_id}/diff", response_model=ImportDiffResponse)
+def get_batch_diff(
+    batch_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> ImportDiffResponse:
+    batch = _get_batch_or_404(db, batch_id, current_user.id)
+    xml_bytes = _read_source_xml(batch)
+    try:
+        parsed = parse_msproject_xml(xml_bytes)
+    except MsProjectValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "IMPORT_VALIDATION_FAILED", "issues": exc.issues},
+        ) from exc
+    project = db.query(MsProject).filter(MsProject.id == batch.project_id).one()
+    previous = (
+        db.query(WfImportBatch)
+        .filter(WfImportBatch.project_id == batch.project_id)
+        .filter(WfImportBatch.status == "success")
+        .filter(WfImportBatch.source_sha256 == batch.source_sha256)
+        .filter(WfImportBatch.id != batch.id)
+        .first()
+    )
+    items = [
+        ImportDiffItem(**cast(dict[str, Any], item))
+        for item in build_import_diff(db, project, parsed)
+    ]
+    return ImportDiffResponse(
+        batchId=batch.id,
+        sourceSha256=batch.source_sha256,
+        identicalSource=previous is not None,
+        items=items,
     )
 
 

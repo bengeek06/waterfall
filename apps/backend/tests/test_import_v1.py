@@ -48,3 +48,32 @@ def test_import_service_persists_tasks_links_and_notes() -> None:
             .one()
         )
         assert enrichment.description == "description de l'étude"
+
+
+def test_import_service_upserts_by_uid_on_replay() -> None:
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        project = MsProject(
+            owner_id=None,
+            source_version=2016,
+            save_version_out=16,
+            name="Sync target",
+            schedule_from_start=True,
+            start_date=datetime(2026, 1, 1, tzinfo=UTC),
+            finish_date=datetime(2026, 1, 1, tzinfo=UTC),
+            minutes_per_day=480,
+            minutes_per_week=2400,
+            days_per_month=20,
+        )
+        session.add(project)
+        session.flush()
+
+        source = EXAMPLE_XML.read_bytes()
+        import_tasks_and_links(session, source, project)
+        changed = source.replace(b"Etude documentaire", b"Etude documentaire v2")
+        import_tasks_and_links(session, changed, project)
+        session.commit()
+
+        assert session.query(MsTask).filter(MsTask.project_id == project.id).count() == 2
+        task = session.query(MsTask).filter(MsTask.uid == 1).one()
+        assert task.name == "Etude documentaire v2"

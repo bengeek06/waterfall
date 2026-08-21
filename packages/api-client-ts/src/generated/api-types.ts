@@ -277,6 +277,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/imports/v1/batches/{batchId}/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Previsualiser les changements d'un import */
+        get: operations["getImportBatchDiffV1"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/imports/v1/batches/{batchId}": {
         parameters: {
             query?: never;
@@ -971,6 +988,34 @@ export interface components {
              * @default false
              */
             dryRun: boolean;
+            /**
+             * @description Confirme l'application du diff
+             * @default false
+             */
+            confirm: boolean;
+        };
+        ImportDiffItem: {
+            /** @enum {string} */
+            kind: "added" | "modified" | "removed" | "conflict";
+            uid: number;
+            message: string;
+            fields: string[];
+            linkChanges?: components["schemas"]["ImportLinkChange"][];
+        };
+        ImportLinkChange: {
+            /** @enum {string} */
+            action: "added" | "removed";
+            taskUid: number;
+            predecessorUid: number;
+            linkType: number;
+            lagTenthMinute?: number | null;
+            lagFormat?: number | null;
+        };
+        ImportDiffResponse: {
+            batchId: number;
+            sourceSha256?: string | null;
+            identicalSource: boolean;
+            items: components["schemas"]["ImportDiffItem"][];
         };
         ImportRunAcceptedResponse: {
             batchId: number;
@@ -1053,6 +1098,7 @@ export interface components {
             percent_complete?: number | null;
             is_summary: boolean;
             is_milestone: boolean;
+            is_manual?: boolean | null;
             description?: string | null;
             predecessor_links?: components["schemas"]["TaskLinkRead"][];
         };
@@ -1919,6 +1965,33 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+        };
+    };
+    getImportBatchDiffV1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique wf_import_batch.id */
+                batchId: components["parameters"]["BatchId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Diff d'import */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportDiffResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["BatchNotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     getImportBatchV1: {

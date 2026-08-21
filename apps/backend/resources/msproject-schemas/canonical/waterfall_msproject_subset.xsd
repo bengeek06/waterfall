@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="http://schemas.microsoft.com/project/2007" xmlns="http://schemas.microsoft.com/project/2007" elementFormDefault="qualified">
+  <xs:element name="Project">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="SaveVersion" type="xs:integer"/>
+        <xs:element name="GUID" type="xs:string" minOccurs="0"/>
+        <xs:element name="Name" type="xs:string" minOccurs="0"/>
+        <xs:element name="ScheduleFromStart" type="xs:boolean" minOccurs="0"/>
+        <xs:element name="StartDate" type="xs:dateTime" minOccurs="0"/>
+        <xs:element name="FinishDate" type="xs:dateTime" minOccurs="0"/>
+        <xs:element name="CalendarUID" type="xs:integer" minOccurs="0"/>
+        <xs:element name="MinutesPerDay" type="xs:positiveInteger" minOccurs="0"/>
+        <xs:element name="MinutesPerWeek" type="xs:positiveInteger" minOccurs="0"/>
+        <xs:element name="DaysPerMonth" type="xs:positiveInteger" minOccurs="0"/>
+        <xs:element name="CurrencyCode" type="xs:string" minOccurs="0"/>
+        <xs:element name="Tasks" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Task" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="UID" type="xs:positiveInteger"/>
+                    <xs:element name="ID" type="xs:positiveInteger" minOccurs="0"/>
+                    <xs:element name="Name" type="xs:string" minOccurs="0"/>
+                    <xs:element name="Type" minOccurs="0">
+                      <xs:simpleType><xs:restriction base="xs:integer"><xs:enumeration value="0"/><xs:enumeration value="1"/><xs:enumeration value="2"/></xs:restriction></xs:simpleType>
+                    </xs:element>
+                    <xs:element name="OutlineNumber" type="xs:string" minOccurs="0"/>
+                    <xs:element name="OutlineLevel" type="xs:positiveInteger" minOccurs="0"/>
+                    <xs:element name="Start" type="xs:dateTime" minOccurs="0"/>
+                    <xs:element name="Finish" type="xs:dateTime" minOccurs="0"/>
+                    <xs:element name="Duration" type="xs:duration" minOccurs="0"/>
+                    <xs:element name="DurationFormat" type="xs:integer" minOccurs="0"/>
+                    <xs:element name="PercentComplete" minOccurs="0"><xs:simpleType><xs:restriction base="xs:integer"><xs:minInclusive value="0"/><xs:maxInclusive value="100"/></xs:restriction></xs:simpleType></xs:element>
+                    <xs:element name="Summary" type="xs:boolean" minOccurs="0"/>
+                    <xs:element name="Milestone" type="xs:boolean" minOccurs="0"/>
+                    <xs:element name="Manual" type="xs:boolean" minOccurs="0"/>
+                    <xs:element name="Notes" type="xs:string" minOccurs="0"/>
+                    <xs:element name="PredecessorLink" minOccurs="0" maxOccurs="unbounded">
+                      <xs:complexType>
+                        <xs:sequence>
+                          <xs:element name="PredecessorUID" type="xs:positiveInteger"/>
+                          <xs:element name="Type">
+                            <xs:simpleType>
+                              <xs:restriction base="xs:integer">
+                                <xs:enumeration value="0"/>
+                                <xs:enumeration value="1"/>
+                                <xs:enumeration value="2"/>
+                                <xs:enumeration value="3"/>
+                              </xs:restriction>
+                            </xs:simpleType>
+                          </xs:element>
+                          <xs:element name="LinkLag" type="xs:integer" minOccurs="0"/>
+                          <xs:element name="LagFormat" type="xs:integer" minOccurs="0"/>
+                        </xs:sequence>
+                      </xs:complexType>
+                    </xs:element>
+                  </xs:sequence>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>

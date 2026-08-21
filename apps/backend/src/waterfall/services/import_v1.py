@@ -1,34 +1,19 @@
 from __future__ import annotations
 
-import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy.orm import Session
 
 from waterfall.models.ms_core import MsProject, MsTask, MsTaskLink
-from waterfall.models.wf_core import WfTaskEnrichment
-
-NS = {"ms": "http://schemas.microsoft.com/project"}
-
-
-def _text(node: ET.Element, path: str) -> str | None:
-    found = node.find(path, NS)
-    if found is None or found.text is None:
-        return None
-    value = found.text.strip()
-    return value if value else None
-
-
-def _integer(value: str | None) -> int | None:
-    return int(value) if value is not None else None
-
-
-def _boolean(value: str | None) -> bool:
-    return value == "1"
-
-
-def _datetime(value: str | None) -> datetime | None:
-    return datetime.fromisoformat(value) if value is not None else None
+from waterfall.models.resources import (
+    EstimateCostLine,
+    EstimateLine,
+    EstimateTaskRow,
+    TaskRoleAssignment,
+)
+from waterfall.models.wf_core import WfChargeLine, WfTaskEnrichment
+from waterfall.services.msproject_xml import ParsedProject, parse_msproject_xml
 
 
 def _populate_parent_metadata(tasks: list[MsTask]) -> None:
@@ -38,100 +23,128 @@ def _populate_parent_metadata(tasks: list[MsTask]) -> None:
         if task.outline_number and all(part.isdigit() for part in task.outline_number.split("."))
     }
     for task in tasks:
-        outline = task.outline_number
-        if not outline or not all(part.isdigit() for part in outline.split(".")):
+        if not task.outline_number or not all(
+            part.isdigit() for part in task.outline_number.split(".")
+        ):
             continue
-        parts = outline.split(".")
+        parts = task.outline_number.split(".")
         task.position = int(parts[-1])
-        parent_outline = ".".join(parts[:-1])
-        parent = by_outline.get(parent_outline)
+        parent = by_outline.get(".".join(parts[:-1]))
         task.parent_uid = parent.uid if parent is not None else None
 
 
+def _apply_project_metadata(project: MsProject, parsed: ParsedProject) -> None:
+    project.external_uid = parsed.external_uid
+    project.source_version = parsed.source_version
+    project.save_version_out = parsed.save_version
+    project.schedule_from_start = parsed.schedule_from_start
+    project.start_date = parsed.start_date
+    project.finish_date = parsed.finish_date
+    project.calendar_uid = parsed.calendar_uid
+    project.minutes_per_day = parsed.minutes_per_day
+    project.minutes_per_week = parsed.minutes_per_week
+    project.days_per_month = parsed.days_per_month
+    project.currency_code = parsed.currency_code
+
+
+def _task_kwargs(task: Any, project_id: int) -> dict[str, object]:
+    return {
+        "project_id": project_id,
+        "uid": task.uid,
+        "id_display": task.id_display,
+        "name": task.name,
+        "task_type": task.task_type,
+        "outline_number": task.outline_number,
+        "outline_level": task.outline_level,
+        "wbs": task.wbs,
+        "start_at": task.start_at,
+        "finish_at": task.finish_at,
+        "duration_minutes": task.duration_minutes,
+        "duration_format": task.duration_format,
+        "percent_complete": task.percent_complete,
+        "is_summary": task.is_summary,
+        "is_milestone": task.is_milestone,
+        "is_manual": task.is_manual,
+        "calendar_uid": task.calendar_uid,
+    }
+
+
 def import_tasks_and_links(db: Session, xml_bytes: bytes, project: MsProject) -> tuple[int, int]:
-    root = ET.fromstring(xml_bytes)
-    save_version = _integer(_text(root, "ms:SaveVersion")) or 16
-    source_version = {14: 2010, 15: 2013, 16: 2016}.get(save_version, 2016)
-
-    if db.query(MsTask.id).filter(MsTask.project_id == project.id).first() is not None:
-        raise ValueError("Project already contains tasks")
-
-    project.external_uid = _text(root, "ms:GUID")
-    project.source_version = source_version
-    project.save_version_out = save_version if save_version in (14, 15, 16) else 16
-    project.schedule_from_start = _boolean(_text(root, "ms:ScheduleFromStart"))
-    project.start_date = _datetime(_text(root, "ms:StartDate"))
-    project.finish_date = _datetime(_text(root, "ms:FinishDate"))
-    project.calendar_uid = _integer(_text(root, "ms:CalendarUID"))
-    project.minutes_per_day = _integer(_text(root, "ms:MinutesPerDay")) or 480
-    project.minutes_per_week = _integer(_text(root, "ms:MinutesPerWeek")) or 2400
-    project.days_per_month = _integer(_text(root, "ms:DaysPerMonth")) or 20
-    project.currency_code = _text(root, "ms:CurrencyCode")
+    parsed = parse_msproject_xml(xml_bytes)
+    _apply_project_metadata(project, parsed)
     db.add(project)
+    db.flush()
+    now = datetime.now(UTC)
+    incoming_by_uid = {task.uid: task for task in parsed.tasks}
+    existing_by_uid = {
+        task.uid: task for task in db.query(MsTask).filter(MsTask.project_id == project.id).all()
+    }
+    removed = [task for uid, task in existing_by_uid.items() if uid not in incoming_by_uid]
+    for task in removed:
+        referenced = (
+            db.query(TaskRoleAssignment.id).filter(TaskRoleAssignment.task_id == task.id).first()
+            or db.query(EstimateCostLine.id).filter(EstimateCostLine.task_id == task.id).first()
+            or db.query(EstimateLine.id).filter(EstimateLine.task_id == task.id).first()
+            or db.query(EstimateTaskRow.id).filter(EstimateTaskRow.task_id == task.id).first()
+            or db.query(WfChargeLine.id)
+            .filter(WfChargeLine.project_id == project.id, WfChargeLine.task_uid == task.uid)
+            .first()
+        )
+        if referenced:
+            raise ValueError(f"Task UID {task.uid} is referenced and cannot be removed")
+    for task in removed:
+        task.parent_uid = None
+        db.query(MsTaskLink).filter(
+            MsTaskLink.project_id == project.id,
+            (MsTaskLink.task_uid == task.uid) | (MsTaskLink.predecessor_uid == task.uid),
+        ).delete(synchronize_session=False)
+        db.query(WfTaskEnrichment).filter(
+            WfTaskEnrichment.project_id == project.id,
+            WfTaskEnrichment.task_uid == task.uid,
+        ).delete(synchronize_session=False)
+    db.flush()
+    for task in removed:
+        db.delete(task)
     db.flush()
 
     tasks: list[MsTask] = []
-    links: list[MsTaskLink] = []
-    enrichments: list[WfTaskEnrichment] = []
-    now = datetime.now(UTC)
-
-    for task_node in root.findall("ms:Tasks/ms:Task", NS):
-        uid = _integer(_text(task_node, "ms:UID"))
-        if uid is None:
-            continue
-
-        tasks.append(
-            MsTask(
-                project_id=project.id,
-                uid=uid,
-                id_display=_integer(_text(task_node, "ms:ID")),
-                name=_text(task_node, "ms:Name") or f"Task {uid}",
-                task_type=_integer(_text(task_node, "ms:Type")),
-                outline_number=_text(task_node, "ms:OutlineNumber"),
-                outline_level=_integer(_text(task_node, "ms:OutlineLevel")),
-                wbs=_text(task_node, "ms:WBS"),
-                start_at=_datetime(_text(task_node, "ms:Start")),
-                finish_at=_datetime(_text(task_node, "ms:Finish")),
-                duration_format=_integer(_text(task_node, "ms:DurationFormat")),
-                percent_complete=_integer(_text(task_node, "ms:PercentComplete")),
-                is_summary=_boolean(_text(task_node, "ms:Summary")),
-                is_milestone=_boolean(_text(task_node, "ms:Milestone")),
-                calendar_uid=_integer(_text(task_node, "ms:CalendarUID")),
-            )
-        )
-
-        notes = _text(task_node, "ms:Notes")
-        if notes is not None:
-            enrichments.append(
-                WfTaskEnrichment(
-                    project_id=project.id,
-                    task_uid=uid,
-                    description=notes,
-                    created_at=now,
-                    updated_at=now,
-                )
-            )
-
-        for predecessor_node in task_node.findall("ms:PredecessorLink", NS):
-            predecessor_uid = _integer(_text(predecessor_node, "ms:PredecessorUID"))
-            if predecessor_uid is None:
-                continue
-            links.append(
-                MsTaskLink(
-                    project_id=project.id,
-                    task_uid=uid,
-                    predecessor_uid=predecessor_uid,
-                    link_type=_integer(_text(predecessor_node, "ms:Type")) or 1,
-                    lag_tenth_minute=_integer(_text(predecessor_node, "ms:LinkLag")),
-                    lag_format=_integer(_text(predecessor_node, "ms:LagFormat")),
-                )
-            )
-
-    db.add_all(tasks)
+    for parsed_task in parsed.tasks:
+        task = existing_by_uid.get(parsed_task.uid)
+        if task is None:
+            task = MsTask(**_task_kwargs(parsed_task, project.id))
+            db.add(task)
+        else:
+            structure_key = task.structure_key
+            structure_kind = task.structure_kind
+            for field, value in _task_kwargs(parsed_task, project.id).items():
+                if field not in {"project_id", "uid"}:
+                    setattr(task, field, value)
+            task.structure_key = structure_key
+            task.structure_kind = structure_kind
+        task.parent_uid = None
+        task.position = None
+        tasks.append(task)
     db.flush()
     _populate_parent_metadata(tasks)
-    db.add_all(enrichments)
+    db.query(MsTaskLink).filter(MsTaskLink.project_id == project.id).delete(
+        synchronize_session=False
+    )
+    db.query(WfTaskEnrichment).filter(WfTaskEnrichment.project_id == project.id).delete(
+        synchronize_session=False
+    )
+    db.add_all(
+        [
+            WfTaskEnrichment(
+                project_id=project.id,
+                task_uid=task.uid,
+                description=task.notes,
+                created_at=now,
+                updated_at=now,
+            )
+            for task in parsed.tasks
+            if task.notes is not None
+        ]
+    )
+    db.add_all([MsTaskLink(project_id=project.id, **link.__dict__) for link in parsed.links])
     db.flush()
-    db.add_all(links)
-    db.flush()
-    return len(tasks), len(links)
+    return len(parsed.tasks), len(parsed.links)

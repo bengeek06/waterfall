@@ -55,9 +55,14 @@ from waterfall.services import (
     calculate_estimate_lines,
     generate_planning_structure,
 )
+from waterfall.services.msproject_xml import (
+    MsProjectValidationError,
+    format_duration,
+    parse_msproject_xml,
+)
 
 router = APIRouter(prefix="/projects", tags=["projects"])
-MSP_NS = "http://schemas.microsoft.com/project"
+MSP_NS = "http://schemas.microsoft.com/project/2007"
 
 
 def _bool_to_msp_flag(value: bool) -> str:
@@ -221,6 +226,7 @@ def _to_task_read(
         percent_complete=task.percent_complete,
         is_summary=task.is_summary,
         is_milestone=task.is_milestone,
+        is_manual=task.is_manual,
         description=description,
         predecessor_links=[
             TaskLinkRead(
@@ -1169,6 +1175,8 @@ def export_project_xml(
     root = ET.Element(f"{{{MSP_NS}}}Project")
 
     ET.SubElement(root, f"{{{MSP_NS}}}SaveVersion").text = str(project.save_version_out)
+    if project.external_uid is not None:
+        ET.SubElement(root, f"{{{MSP_NS}}}GUID").text = project.external_uid
     ET.SubElement(root, f"{{{MSP_NS}}}Name").text = project.name
     ET.SubElement(root, f"{{{MSP_NS}}}ScheduleFromStart").text = _bool_to_msp_flag(
         project.schedule_from_start
@@ -1216,6 +1224,13 @@ def export_project_xml(
         if finish_at is not None:
             ET.SubElement(task_node, f"{{{MSP_NS}}}Finish").text = finish_at
 
+        duration = format_duration(task.duration_minutes)
+        if duration is not None:
+            ET.SubElement(task_node, f"{{{MSP_NS}}}Duration").text = duration
+
+        if task.duration_format is not None:
+            ET.SubElement(task_node, f"{{{MSP_NS}}}DurationFormat").text = str(task.duration_format)
+
         if task.percent_complete is not None:
             ET.SubElement(task_node, f"{{{MSP_NS}}}PercentComplete").text = str(
                 task.percent_complete
@@ -1225,6 +1240,8 @@ def export_project_xml(
         ET.SubElement(task_node, f"{{{MSP_NS}}}Milestone").text = _bool_to_msp_flag(
             task.is_milestone
         )
+        if task.is_manual is not None:
+            ET.SubElement(task_node, f"{{{MSP_NS}}}Manual").text = _bool_to_msp_flag(task.is_manual)
 
         description = descriptions_by_uid.get(task.uid)
         if description:
@@ -1246,4 +1263,11 @@ def export_project_xml(
                 )
 
     xml_content = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    try:
+        parse_msproject_xml(xml_content)
+    except MsProjectValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"code": "EXPORT_VALIDATION_FAILED", "issues": exc.issues},
+        ) from exc
     return Response(content=xml_content, media_type="application/xml")

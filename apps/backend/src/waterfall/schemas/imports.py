@@ -33,6 +33,31 @@ class ImportRunRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     dry_run: bool = Field(default=False, alias="dryRun")
+    confirm: bool = Field(default=False)
+
+
+class ImportDiffItem(BaseModel):
+    kind: Literal["added", "modified", "removed", "conflict"]
+    uid: int
+    message: str
+    fields: list[str] = Field(default_factory=list)
+    link_changes: list["ImportLinkChange"] = Field(default_factory=list, alias="linkChanges")
+
+
+class ImportLinkChange(BaseModel):
+    action: Literal["added", "removed"]
+    task_uid: int = Field(alias="taskUid")
+    predecessor_uid: int = Field(alias="predecessorUid")
+    link_type: int = Field(alias="linkType")
+    lag_tenth_minute: int | None = Field(default=None, alias="lagTenthMinute")
+    lag_format: int | None = Field(default=None, alias="lagFormat")
+
+
+class ImportDiffResponse(BaseModel):
+    batch_id: int = Field(alias="batchId")
+    source_sha256: str | None = Field(default=None, alias="sourceSha256")
+    identical_source: bool = Field(alias="identicalSource")
+    items: list[ImportDiffItem]
 
 
 class ImportRunAcceptedResponse(BaseModel):

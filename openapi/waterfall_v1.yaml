@@ -441,6 +441,31 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /imports/v1/batches/{batchId}/diff:
+    get:
+      tags: [imports-v1]
+      summary: Previsualiser les changements d'un import
+      operationId: getImportBatchDiffV1
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/BatchId'
+      responses:
+        '200':
+          description: Diff d'import
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportDiffResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/BatchNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
   /imports/v1/batches/{batchId}:
     get:
       tags: [imports-v1]
@@ -2148,6 +2173,68 @@ components:
           type: boolean
           default: false
           description: Valide le fichier sans persister en base (optionnel)
+        confirm:
+          type: boolean
+          default: false
+          description: Confirme l'application du diff
+
+    ImportDiffItem:
+      type: object
+      required: [kind, uid, message, fields]
+      properties:
+        kind:
+          type: string
+          enum: [added, modified, removed, conflict]
+        uid:
+          type: integer
+          minimum: 1
+        message:
+          type: string
+        fields:
+          type: array
+          items:
+            type: string
+        linkChanges:
+          type: array
+          items:
+            $ref: '#/components/schemas/ImportLinkChange'
+
+    ImportLinkChange:
+      type: object
+      required: [action, taskUid, predecessorUid, linkType]
+      properties:
+        action:
+          type: string
+          enum: [added, removed]
+        taskUid:
+          type: integer
+        predecessorUid:
+          type: integer
+        linkType:
+          type: integer
+        lagTenthMinute:
+          type: integer
+          nullable: true
+        lagFormat:
+          type: integer
+          nullable: true
+
+    ImportDiffResponse:
+      type: object
+      required: [batchId, identicalSource, items]
+      properties:
+        batchId:
+          type: integer
+          minimum: 1
+        sourceSha256:
+          type: string
+          nullable: true
+        identicalSource:
+          type: boolean
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ImportDiffItem'
 
     ImportRunAcceptedResponse:
       type: object
@@ -2364,6 +2451,9 @@ components:
           type: boolean
         is_milestone:
           type: boolean
+        is_manual:
+          type: boolean
+          nullable: true
         description:
           type: string
           nullable: true
