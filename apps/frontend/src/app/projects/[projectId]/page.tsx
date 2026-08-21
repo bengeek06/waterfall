@@ -22,21 +22,29 @@ import {
   getCostTypes,
   getEstimateAggregates,
   getImportBatchStatus,
+  getPlanning,
   getProject,
+  listPlannings,
   listEstimateCostLines,
   listEstimateTaskRows,
   listProjectEstimates,
   Project,
+  Planning,
+  PlanningDetail,
   ProjectEstimate,
   runImportBatch,
   SessionExpiredError,
   Task,
   getProjectTasks,
   restoreSession,
+  reopenPlanningStructure,
+  setDisplayedPlanning,
+  setPlanningReference,
   updateEstimateCostLine,
   updateProject,
   updateTaskDescription,
   uploadImportSourceXml,
+  validatePlanning,
   validateProjectEstimate,
 } from "@/lib/backend";
 import { clearSession, getSession, setSession, type SessionTokens } from "@/lib/session";
@@ -58,6 +66,12 @@ export default function ProjectDetailsPage() {
   const [session, setSessionState] = useState<SessionTokens | null>(() => getSession());
   const [tasks, setTasks] = useState<Task[]>([]);
   const [project, setProject] = useState<Project | null>(null);
+  const [plannings, setPlannings] = useState<Planning[]>([]);
+  const [selectedPlanningId, setSelectedPlanningId] = useState<number | null>(null);
+  const [planningDetail, setPlanningDetail] = useState<PlanningDetail | null>(null);
+  const [planningBusy, setPlanningBusy] = useState(false);
+  const [planningDetailBusy, setPlanningDetailBusy] = useState(false);
+  const [structureOpen, setStructureOpen] = useState(false);
   const [editingProjectInfo, setEditingProjectInfo] = useState(false);
   const [projectInfoDraft, setProjectInfoDraft] = useState({ name: "", shortDescription: "" });
   const [projectInfoBusy, setProjectInfoBusy] = useState(false);
@@ -119,26 +133,19 @@ export default function ProjectDetailsPage() {
       setBusy(true);
       setError(null);
       try {
-        const [projectData, estimatesData] = await Promise.all([
+        const [projectData, estimatesData, planningsData] = await Promise.all([
           getProject(projectId, session, onSessionRefresh),
           listProjectEstimates(projectId, session, onSessionRefresh),
+          listPlannings(projectId, session, onSessionRefresh),
         ]);
         setProject(projectData);
         setEstimates(estimatesData);
-        setSelectedEstimateId((current) => current ?? estimatesData.at(-1)?.id ?? null);
-        const tasksData = await getProjectTasks(
-          projectId,
-          session,
-          onSessionRefresh,
-          TASK_PAGE_SIZE,
-          taskOffset,
+        setPlannings(planningsData);
+        setStructureOpen(projectData.status === "cree");
+        setSelectedPlanningId(
+          projectData.displayed_planning_id ?? planningsData.at(-1)?.id ?? null,
         );
-        setTasks(tasksData);
-        const initialDrafts: Record<number, string> = {};
-        for (const task of tasksData) {
-          initialDrafts[task.uid] = task.description ?? "";
-        }
-        setDrafts(initialDrafts);
+        setSelectedEstimateId((current) => current ?? estimatesData.at(-1)?.id ?? null);
       } catch (cause) {
         if (cause instanceof SessionExpiredError) {
           clearSession();
@@ -153,7 +160,7 @@ export default function ProjectDetailsPage() {
           }
           setError(cause.message);
         } else {
-          setError("Erreur inattendue lors du chargement des tâches");
+          setError("Erreur inattendue lors du chargement du projet.");
         }
       } finally {
         setBusy(false);
@@ -161,7 +168,46 @@ export default function ProjectDetailsPage() {
     }
 
     void load();
-  }, [onSessionRefresh, projectId, router, session, taskOffset]);
+  }, [onSessionRefresh, projectId, router, session]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadPlanningDetail() {
+      if (!session || selectedPlanningId === null) {
+        setPlanningDetail(null);
+        setPlanningDetailBusy(false);
+        return;
+      }
+      setPlanningDetail(null);
+      setPlanningDetailBusy(true);
+      try {
+        const detail = await getPlanning(projectId, selectedPlanningId, session, onSessionRefresh);
+        if (!cancelled) {
+          setPlanningDetail(detail);
+        }
+      } catch (cause) {
+        if (cancelled) {
+          return;
+        }
+        if (cause instanceof SessionExpiredError) {
+          clearSession();
+          router.push("/login");
+          return;
+        }
+        setError(cause instanceof ApiError ? cause.message : "Impossible de charger le planning.");
+      } finally {
+        if (!cancelled) {
+          setPlanningDetailBusy(false);
+        }
+      }
+    }
+
+    void loadPlanningDetail();
+    return () => {
+      cancelled = true;
+    };
+  }, [onSessionRefresh, projectId, router, selectedPlanningId, session]);
 
   useEffect(() => {
     async function loadEstimateDetails() {
@@ -232,7 +278,121 @@ export default function ProjectDetailsPage() {
   }, [activeTab, onSessionRefresh, projectId, router, selectedEstimateId, session]);
 
   const selectedEstimate = estimates.find((estimate) => estimate.id === selectedEstimateId) ?? null;
-  const canEditEstimate = selectedEstimate?.status === "draft";
+  const isReadOnlyProject = project?.status === "perdu" || project?.status === "termine" || project?.status === "abandonne";
+  const canEditEstimate = selectedEstimate?.status === "draft" && !isReadOnlyProject;
+  const selectedPlanning = plannings.find((planning) => planning.id === selectedPlanningId) ?? null;
+
+  async function selectPlanning(planningId: number) {
+    if (!session || planningId === selectedPlanningId) {
+      return;
+    }
+    setSelectedPlanningId(planningId);
+    if (isReadOnlyProject) {
+      return;
+    }
+    setPlanningBusy(true);
+    setError(null);
+    try {
+      const updatedProject = await setDisplayedPlanning(
+        projectId,
+        planningId,
+        session,
+        onSessionRefresh,
+      );
+      setProject(updatedProject);
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      setError(cause instanceof ApiError ? cause.message : "Impossible de sélectionner le planning.");
+    } finally {
+      setPlanningBusy(false);
+    }
+  }
+
+  async function validateSelectedPlanning() {
+    if (!session || !selectedPlanning || selectedPlanning.status !== "draft" || isReadOnlyProject) {
+      return;
+    }
+    setPlanningBusy(true);
+    setError(null);
+    try {
+      const validated = await validatePlanning(
+        projectId,
+        selectedPlanning.id,
+        session,
+        onSessionRefresh,
+      );
+      setPlannings((previous) => previous.map((item) => (item.id === validated.id ? validated : item)));
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      setError(cause instanceof ApiError ? cause.message : "Impossible de valider le planning.");
+    } finally {
+      setPlanningBusy(false);
+    }
+  }
+
+  async function setSelectedPlanningAsReference() {
+    if (!session || !selectedPlanning || selectedPlanning.status !== "validated" || isReadOnlyProject) {
+      return;
+    }
+    setPlanningBusy(true);
+    setError(null);
+    try {
+      const updatedProject = await setPlanningReference(
+        projectId,
+        selectedPlanning.id,
+        session,
+        onSessionRefresh,
+      );
+      setProject(updatedProject);
+      setPlannings((previous) =>
+        previous.map((item) =>
+          item.id === selectedPlanning.id ? { ...item, status: "validated" } : item,
+        ),
+      );
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      setError(cause instanceof ApiError ? cause.message : "Impossible de définir la référence.");
+    } finally {
+      setPlanningBusy(false);
+    }
+  }
+
+  async function reopenStructure() {
+    if (!session || isReadOnlyProject) {
+      return;
+    }
+    setPlanningBusy(true);
+    setError(null);
+    try {
+      const updatedProject = await reopenPlanningStructure(projectId, session, onSessionRefresh);
+      const planningMetadata = await listPlannings(projectId, session, onSessionRefresh);
+      setProject(updatedProject);
+      setPlannings(planningMetadata);
+      setSelectedPlanningId(updatedProject.displayed_planning_id ?? null);
+      setStructureOpen(true);
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      setError(cause instanceof ApiError ? cause.message : "Impossible de rouvrir la structure.");
+    } finally {
+      setPlanningBusy(false);
+    }
+  }
 
   async function exportExcel() {
     if (!session || selectedEstimateId === null) {
@@ -503,8 +663,8 @@ export default function ProjectDetailsPage() {
     }
   }
 
-  async function generatePlanningStructure() {
-    if (!session) {
+  async function persistPlanningStructure(closeEditor: boolean) {
+    if (!session || isReadOnlyProject) {
       router.push("/login");
       return;
     }
@@ -525,32 +685,40 @@ export default function ProjectDetailsPage() {
     setStructureBusy(true);
     setError(null);
     try {
-      await createPlanningStructure(
+      const savedStructure = await createPlanningStructure(
         projectId,
         buildPlanningStructurePayload(rows),
         session,
         onSessionRefresh,
       );
-      const refreshedTasks = await getProjectTasks(
-        projectId,
-        session,
-        onSessionRefresh,
-        TASK_PAGE_SIZE,
-        0,
-      );
-      setTasks(refreshedTasks);
-      setTaskOffset(0);
-      setDrafts(Object.fromEntries(refreshedTasks.map((task) => [task.uid, task.description ?? ""])))
+      setTasks(savedStructure.tasks);
+      setPlanningDetail((current) => current ? { ...current, tasks: savedStructure.tasks } : current);
+      setStructureOpen(!closeEditor);
+      const [updatedProject, planningMetadata] = await Promise.all([
+        getProject(projectId, session, onSessionRefresh),
+        listPlannings(projectId, session, onSessionRefresh),
+      ]);
+      setProject(updatedProject);
+      setPlannings(planningMetadata);
+      setSelectedPlanningId(updatedProject.displayed_planning_id ?? null);
     } catch (cause) {
       if (cause instanceof SessionExpiredError) {
         clearSession();
         router.push("/login");
         return;
       }
-      setError(cause instanceof ApiError ? cause.message : "Impossible de générer le squelette.");
+      setError(cause instanceof ApiError ? cause.message : "Impossible d'enregistrer la structure.");
     } finally {
       setStructureBusy(false);
     }
+  }
+
+  async function savePlanningStructure() {
+    await persistPlanningStructure(false);
+  }
+
+  async function generatePlanningStructure() {
+    await persistPlanningStructure(true);
   }
 
   async function removeTask(task: Task) {
@@ -749,9 +917,11 @@ export default function ProjectDetailsPage() {
                 <p className="subtitle">
                   {project?.short_description ?? "Pilotage du planning et des versions de devis."}
                 </p>
-                <button className="btn" type="button" onClick={startEditProjectInfo}>
-                  Modifier
-                </button>
+                {!isReadOnlyProject ? (
+                  <button className="btn" type="button" onClick={startEditProjectInfo}>
+                    Modifier
+                  </button>
+                ) : null}
               </>
             )}
           </div>
@@ -767,7 +937,7 @@ export default function ProjectDetailsPage() {
         {busy ? <p className="muted" role="status">Chargement...</p> : null}
         {error ? <p className="error" role="alert">{error}</p> : null}
 
-        {activeTab === "planning" ? (
+        {activeTab === "planning" && !isReadOnlyProject ? (
           <div className="row cost-line-form" style={{ marginBottom: "1rem", justifyContent: "space-between" }}>
             <div className="row">
               <div className="field" style={{ marginBottom: 0 }}>
@@ -809,7 +979,7 @@ export default function ProjectDetailsPage() {
           </div>
         ) : null}
 
-        {activeTab === "planning" ? (
+        {activeTab === "planning" && structureOpen && !isReadOnlyProject ? (
           <div className="panel" style={{ marginBottom: "1rem" }}>
             <h2>Structure initiale</h2>
             <p className="muted">Définis les postes, lots et livrables avant de générer le squelette.</p>
@@ -911,6 +1081,14 @@ export default function ProjectDetailsPage() {
                 className="btn btn-primary"
                 type="button"
                 disabled={structureBusy}
+                onClick={() => void savePlanningStructure()}
+              >
+                {structureBusy ? "Enregistrement..." : "Enregistrer la structure"}
+              </button>
+              <button
+                className="btn btn-primary"
+                type="button"
+                disabled={structureBusy}
                 onClick={() => void generatePlanningStructure()}
               >
                 {structureBusy ? "Génération..." : "Générer le squelette"}
@@ -919,7 +1097,101 @@ export default function ProjectDetailsPage() {
           </div>
         ) : null}
 
-        {activeTab === "planning" ? (
+        {activeTab === "planning" && !structureOpen ? (
+          <div className="tab-content">
+            <div className="row" style={{ justifyContent: "space-between" }}>
+              <div>
+                <h2>Planning affiché</h2>
+                <p className="muted">
+                  {selectedPlanning
+                    ? `Version ${selectedPlanning.version_number} - ${selectedPlanning.status}`
+                    : "Aucune version de planning."}
+                </p>
+              </div>
+              <div className="row">
+                {plannings.length ? (
+                  <label className="estimate-select-label">
+                    Version affichée
+                    <select
+                      aria-label="Version affichée"
+                      value={selectedPlanningId ?? ""}
+                      disabled={planningBusy || isReadOnlyProject}
+                      onChange={(event) => void selectPlanning(Number(event.target.value))}
+                    >
+                      {plannings.map((planning) => (
+                        <option key={planning.id} value={planning.id}>
+                          V{planning.version_number} ({planning.status})
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+                {selectedPlanning?.status === "draft" ? (
+                  <button
+                    className="btn"
+                    type="button"
+                    disabled={planningBusy || isReadOnlyProject}
+                    onClick={() => void validateSelectedPlanning()}
+                  >
+                    Valider le planning
+                  </button>
+                ) : null}
+                {selectedPlanning?.status === "validated" && project?.planning_reference_id !== selectedPlanning.id ? (
+                  <button
+                    className="btn"
+                    type="button"
+                    disabled={planningBusy || isReadOnlyProject}
+                    onClick={() => void setSelectedPlanningAsReference()}
+                  >
+                    Définir comme référence
+                  </button>
+                ) : null}
+                {project?.planning_reference_id && !isReadOnlyProject ? (
+                  <button
+                    className="btn"
+                    type="button"
+                    disabled={planningBusy || isReadOnlyProject}
+                    onClick={() => void reopenStructure()}
+                  >
+                    Rouvrir la structure
+                  </button>
+                ) : null}
+              </div>
+            </div>
+            {planningDetailBusy ? <p className="muted" role="status">Chargement du planning...</p> : null}
+            {!planningDetailBusy && !planningDetail ? <p className="muted empty-state">Aucun planning sélectionné.</p> : null}
+            {planningDetail?.tasks.length ? <ReadOnlyGantt tasks={planningDetail.tasks} /> : null}
+            {planningDetail && !planningDetail.tasks.length ? <p className="muted empty-state">Le planning ne contient aucune tâche.</p> : null}
+            {planningDetail?.tasks.length ? (
+              <div className="table-scroll">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th scope="col">WBS</th>
+                      <th scope="col">Nom</th>
+                      <th scope="col">Début</th>
+                      <th scope="col">Fin</th>
+                      <th scope="col">Avancement</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {planningDetail.tasks.map((task) => (
+                      <tr key={task.uid}>
+                        <td>{task.outline_number ?? task.uid}</td>
+                        <td>{task.is_milestone ? "◆ " : ""}{task.name}</td>
+                        <td>{task.start_at ? new Date(task.start_at).toLocaleDateString("fr-FR") : "-"}</td>
+                        <td>{task.finish_at ? new Date(task.finish_at).toLocaleDateString("fr-FR") : "-"}</td>
+                        <td>{task.percent_complete ?? 0}%</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {false && activeTab === "planning" ? (
           <div className="row cost-line-form" style={{ marginBottom: "1rem" }}>
             <div className="field">
               <label htmlFor="task-name">Nom de la tâche</label>
@@ -961,9 +1233,9 @@ export default function ProjectDetailsPage() {
           </div>
         ) : null}
 
-        {activeTab === "planning" && !busy && !tasks.length ? <p className="muted">Aucune tâche.</p> : null}
+        {false && activeTab === "planning" && !busy && !tasks.length ? <p className="muted">Aucune tâche.</p> : null}
 
-        {activeTab === "planning" && !busy && tasks.length ? (
+        {false && activeTab === "planning" && !busy && tasks.length ? (
           <div className="table-scroll">
           <table className="table">
             <thead>
@@ -1026,7 +1298,7 @@ export default function ProjectDetailsPage() {
           </div>
         ) : null}
 
-        {activeTab === "planning" && !busy ? (
+        {false && activeTab === "planning" && !busy ? (
           <div className="row" style={{ marginTop: "1rem", justifyContent: "space-between" }}>
             <span className="muted">
               {tasks.length ? `Tâches ${taskOffset + 1} à ${taskOffset + tasks.length}` : ""}
@@ -1052,7 +1324,7 @@ export default function ProjectDetailsPage() {
           </div>
         ) : null}
 
-        {activeTab === "planning" && !busy && tasks.length ? <ReadOnlyGantt tasks={tasks} /> : null}
+        {false && activeTab === "planning" && !busy && tasks.length ? <ReadOnlyGantt tasks={tasks} /> : null}
 
         {activeTab === "estimate" ? (
           <div className="tab-content">
@@ -1081,14 +1353,16 @@ export default function ProjectDetailsPage() {
                     </select>
                   </label>
                 ) : null}
-                <button className="btn btn-primary" type="button" onClick={() => void createDraftEstimate()}>
-                  Nouveau brouillon
-                </button>
+                {!isReadOnlyProject ? (
+                  <button className="btn btn-primary" type="button" onClick={() => void createDraftEstimate()}>
+                    Nouveau brouillon
+                  </button>
+                ) : null}
                 {estimates.length ? (
                   <button
                     className="btn"
                     type="button"
-                    disabled={exportBusy}
+                    disabled={exportBusy || isReadOnlyProject}
                     onClick={() => void exportExcel()}
                   >
                     {exportBusy ? "Export..." : "Export Excel"}

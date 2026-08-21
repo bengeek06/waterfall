@@ -18,6 +18,8 @@ export type EstimateCostLine = components["schemas"]["EstimateCostLineRead"];
 export type Task = components["schemas"]["TaskRead"];
 export type PlanningStructureCreate = components["schemas"]["PlanningStructureCreate"];
 export type PlanningStructureRead = components["schemas"]["PlanningStructureRead"];
+export type Planning = components["schemas"]["PlanningRead"];
+export type PlanningDetail = components["schemas"]["PlanningDetailRead"];
 export type TaskRoleAssignment = components["schemas"]["TaskRoleAssignmentRead"];
 export type ImportBatch = components["schemas"]["ImportBatchResponse"];
 export type ImportBatchStatus = components["schemas"]["ImportBatchStatusResponse"];
@@ -860,6 +862,88 @@ export function createPlanningStructure(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     },
+    onSessionRefresh,
+  );
+}
+
+export function listPlannings(
+  projectId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<Planning[]>(
+    `/projects/${projectId}/plannings`,
+    tokens,
+    { method: "GET" },
+    onSessionRefresh,
+  );
+}
+
+export function getPlanning(
+  projectId: number,
+  planningId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<PlanningDetail>(
+    `/projects/${projectId}/plannings/${planningId}`,
+    tokens,
+    { method: "GET" },
+    onSessionRefresh,
+  );
+}
+
+export function validatePlanning(
+  projectId: number,
+  planningId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<Planning>(
+    `/projects/${projectId}/plannings/${planningId}/validate`,
+    tokens,
+    { method: "POST" },
+    onSessionRefresh,
+  );
+}
+
+export function setPlanningReference(
+  projectId: number,
+  planningId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<Project>(
+    `/projects/${projectId}/plannings/${planningId}/reference`,
+    tokens,
+    { method: "POST" },
+    onSessionRefresh,
+  );
+}
+
+export function setDisplayedPlanning(
+  projectId: number,
+  planningId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<Project>(
+    `/projects/${projectId}/plannings/${planningId}/display`,
+    tokens,
+    { method: "POST" },
+    onSessionRefresh,
+  );
+}
+
+export function reopenPlanningStructure(
+  projectId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<Project>(
+    `/projects/${projectId}/planning-structure/reopen`,
+    tokens,
+    { method: "POST" },
     onSessionRefresh,
   );
 }
