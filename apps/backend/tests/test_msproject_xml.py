@@ -4,7 +4,10 @@ from waterfall.services.msproject_xml import MsProjectValidationError, parse_msp
 
 
 def _xml(tasks: str, namespace: str = "http://schemas.microsoft.com/project") -> bytes:
-    return f"""<Project xmlns=\"{namespace}\"><SaveVersion>16</SaveVersion><MinutesPerDay>480</MinutesPerDay><Tasks>{tasks}</Tasks></Project>""".encode()
+    return (
+        f'<Project xmlns="{namespace}"><SaveVersion>16</SaveVersion>'
+        f"<MinutesPerDay>480</MinutesPerDay><Tasks>{tasks}</Tasks></Project>"
+    ).encode()
 
 
 def test_validator_rejects_duplicate_uid_and_orphan_link() -> None:
@@ -33,8 +36,6 @@ def test_validator_rejects_cycles_and_bad_namespace() -> None:
 
 def test_validator_parses_iso_duration() -> None:
     parsed = parse_msproject_xml(
-        _xml(
-            "<Task><UID>1</UID><ID>1</ID><Name>A</Name><Duration>PT8H</Duration></Task>"
-        )
+        _xml("<Task><UID>1</UID><ID>1</ID><Name>A</Name><Duration>PT8H</Duration></Task>")
     )
     assert parsed.tasks[0].duration_minutes == 480
