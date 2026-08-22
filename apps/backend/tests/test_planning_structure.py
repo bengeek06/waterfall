@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 from typing import Any, cast
+from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 from httpx import Response
 
+from waterfall.db.session import get_session_factory
 from waterfall.main import app
+from waterfall.models.ms_core import MsProject
 
 
 def _auth_headers(client: TestClient) -> dict[str, str]:
-    email = "planning.structure@example.com"
+    email = f"planning.structure.{uuid4().hex}@example.com"
     password = "SuperSecret123!"
     register_response: Response = client.post(
         "/auth/register",
@@ -287,3 +291,68 @@ def test_structure_versions_validated_planning_is_immutable_and_reopenable() -> 
         assert second_export.status_code == 200
         assert b"Validation" in first_export.content
         assert b"Validation" not in second_export.content
+
+
+@pytest.mark.parametrize(
+    ("project_status", "expected_status"),
+    [
+        ("cree", "initialise"),
+        ("initialise", "initialise"),
+        ("en_reponse_appel_offre", "en_reponse_appel_offre"),
+        ("en_cours", "en_cours"),
+    ],
+)
+def test_reopen_existing_draft_preserves_engaged_project_status(
+    project_status: str, expected_status: str
+) -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        assert (
+            client.post(
+                f"/projects/{project_id}/planning-structure",
+                json=_payload(),
+                headers=headers,
+            ).status_code
+            == 201
+        )
+
+        with get_session_factory()() as session:
+            project = session.get(MsProject, project_id)
+            assert project is not None
+            project.status = project_status
+            session.commit()
+
+        response = client.post(f"/projects/{project_id}/planning-structure/reopen", headers=headers)
+
+        assert response.status_code == 200
+        assert response.json()["status"] == expected_status
+
+
+@pytest.mark.parametrize("project_status", ["en_reponse_appel_offre", "en_cours"])
+def test_reopen_status_transition_back_to_initialise_is_rejected(project_status: str) -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        assert (
+            client.post(
+                f"/projects/{project_id}/planning-structure",
+                json=_payload(),
+                headers=headers,
+            ).status_code
+            == 201
+        )
+
+        with get_session_factory()() as session:
+            project = session.get(MsProject, project_id)
+            assert project is not None
+            project.status = project_status
+            session.commit()
+
+        response = client.patch(
+            f"/projects/{project_id}/status",
+            json={"status": "initialise"},
+            headers=headers,
+        )
+
+        assert response.status_code == 409

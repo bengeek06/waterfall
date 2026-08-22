@@ -719,7 +719,9 @@ def reopen_planning_structure(
     )
     if existing_draft is not None:
         project.displayed_planning_id = existing_draft.id
-        project.status = "initialise"
+        if project.status == "cree":
+            validate_project_status_transition(db, project, "initialise")
+            project.status = "initialise"
         db.commit()
         db.refresh(project)
         return _to_project_read(project)
