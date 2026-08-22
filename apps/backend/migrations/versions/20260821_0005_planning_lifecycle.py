@@ -18,12 +18,14 @@ depends_on = None
 def upgrade() -> None:
     with op.batch_alter_table("ms_project") as batch_op:
         batch_op.add_column(
-            sa.Column("status", sa.String(length=16), nullable=False, server_default="draft")
+            sa.Column("status", sa.String(length=24), nullable=False, server_default="cree")
         )
         batch_op.add_column(sa.Column("planning_reference_id", sa.Integer(), nullable=True))
         batch_op.add_column(sa.Column("displayed_planning_id", sa.Integer(), nullable=True))
         batch_op.create_check_constraint(
-            "ck_ms_project_status", "status IN ('draft', 'active', 'archived')"
+            "ck_ms_project_status",
+            "status IN ('cree', 'initialise', 'en_reponse_appel_offre', 'perdu', "
+            "'en_cours', 'termine', 'abandonne')",
         )
 
     op.create_table(
@@ -187,7 +189,7 @@ def upgrade() -> None:
     )
     op.execute(
         sa.text(
-            "UPDATE ms_project SET status = 'active' "
+            "UPDATE ms_project SET status = 'initialise' "
             "WHERE EXISTS (SELECT 1 FROM ms_task t WHERE t.project_id = ms_project.id)"
         )
     )

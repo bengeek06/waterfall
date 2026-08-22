@@ -27,12 +27,6 @@ def upgrade() -> None:
             ["id"],
         )
         batch_op.alter_column("status", server_default="cree")
-    op.execute(
-        sa.text(
-            "UPDATE ms_project SET status = CASE status "
-            "WHEN 'active' THEN 'initialise' ELSE 'cree' END"
-        )
-    )
     with op.batch_alter_table("ms_project") as batch_op:
         batch_op.create_check_constraint(
             "ck_ms_project_status",
