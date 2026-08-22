@@ -291,6 +291,9 @@ def run_batch(
 
     xml_bytes = _read_source_xml(batch)
 
+    project = db.query(MsProject).filter(MsProject.id == batch.project_id).with_for_update().one()
+    ensure_project_mutable(project)
+
     accepted_at = datetime.now(UTC)
     if run_request.dry_run:
         try:
@@ -328,9 +331,6 @@ def run_batch(
     db.refresh(batch)
 
     try:
-        project = (
-            db.query(MsProject).filter(MsProject.id == batch.project_id).with_for_update().one()
-        )
         identical_source = (
             db.query(WfImportBatch.id)
             .filter(WfImportBatch.project_id == batch.project_id)

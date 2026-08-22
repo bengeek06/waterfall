@@ -176,7 +176,13 @@ def upgrade() -> None:
         sa.text(
             "UPDATE ms_project SET displayed_planning_id = "
             "(SELECT w.id FROM wf_planning w WHERE w.project_id = ms_project.id) "
-            "WHERE EXISTS (SELECT 1 FROM ms_task t WHERE t.project_id = ms_project.id)"
+            "WHERE EXISTS (SELECT 1 FROM wf_planning w WHERE w.project_id = ms_project.id)"
+        )
+    )
+    op.execute(
+        sa.text(
+            "UPDATE ms_project SET planning_reference_id = displayed_planning_id "
+            "WHERE displayed_planning_id IS NOT NULL"
         )
     )
     op.execute(

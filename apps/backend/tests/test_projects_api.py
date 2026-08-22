@@ -8,7 +8,7 @@ from httpx import Response
 from waterfall.db.session import get_session_factory
 from waterfall.main import app
 from waterfall.models.ms_core import MsProject, MsTask
-from waterfall.models.planning import WfPlanning
+from waterfall.models.planning import WfPlanning, WfPlanningTaskSnapshot
 from waterfall.models.resources import CostCategory, CostType, ResourceNode, ResourceRole
 from waterfall.models.wf_core import WfTaskEnrichment
 
@@ -713,6 +713,54 @@ def test_project_estimate_snapshots_tasks_and_validates() -> None:
             headers=headers,
         )
         assert validate_again_response.status_code == 409
+
+
+def test_project_estimate_can_snapshot_planning_without_legacy_tasks() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client, "projects.snapshot-only@example.com")
+        project_response = client.post(
+            "/projects",
+            json={"name": "Snapshot-only project"},
+            headers=headers,
+        )
+        assert project_response.status_code == 201
+        project_payload = cast(dict[str, Any], project_response.json())
+        project_id = cast(int, project_payload["id"])
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            planning = WfPlanning(project_id=project_id, version_number=1, status="draft")
+            session.add(planning)
+            session.flush()
+            session.add(
+                WfPlanningTaskSnapshot(
+                    planning_id=planning.id,
+                    uid=9001,
+                    name="Snapshot task",
+                    position=1,
+                    is_summary=False,
+                    is_milestone=False,
+                )
+            )
+            project = session.query(MsProject).filter(MsProject.id == project_id).one()
+            project.displayed_planning_id = planning.id
+            session.commit()
+
+        estimate_response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate_response.status_code == 201
+        estimate_id = estimate_response.json()["id"]
+
+        rows_response = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/task-rows",
+            headers=headers,
+        )
+        assert rows_response.status_code == 200
+        assert rows_response.json()[0]["task_id"] is None
+        assert rows_response.json()[0]["task_name"] == "Snapshot task"
 
 
 def test_planning_lifecycle_snapshots_reference_and_display_selection() -> None:

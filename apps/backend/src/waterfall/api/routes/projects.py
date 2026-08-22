@@ -32,6 +32,7 @@ from waterfall.schemas.projects import (
     EstimateTaskRowRead,
     PlanningCreate,
     PlanningDetailRead,
+    PlanningLinkRead,
     PlanningRead,
     PlanningStructureCreate,
     PlanningStructureRead,
@@ -212,7 +213,8 @@ def _planning_detail(
             for task in snapshots
         ],
         links=[
-            TaskLinkRead(
+            PlanningLinkRead(
+                task_uid=link.task_uid,
                 predecessor_uid=link.predecessor_uid,
                 link_type=link.link_type,
                 lag_tenth_minute=link.lag_tenth_minute,
@@ -886,7 +888,7 @@ def create_project_estimate(
     )
     legacy_tasks = db.query(MsTask).filter(MsTask.project_id == project_id).all()
     task_by_uid = {task.uid: task for task in legacy_tasks}
-    tasks = [task for task in snapshots if task.uid in task_by_uid] or legacy_tasks
+    tasks = snapshots or legacy_tasks
     task_id_by_uid = {
         task.uid: task_by_uid[task.uid].id for task in snapshots if task.uid in task_by_uid
     }
@@ -900,7 +902,13 @@ def create_project_estimate(
         rows.append(
             EstimateTaskRow(
                 estimate_id=estimate.id,
-                task_id=task_by_uid[task.uid].id if source_planning is not None else task.id,
+                task_id=(
+                    task_by_uid[task.uid].id
+                    if source_planning is not None and task.uid in task_by_uid
+                    else None
+                    if source_planning is not None
+                    else task.id
+                ),
                 parent_task_id=parent_id,
                 position=position,
                 task_name=task.name,
@@ -922,8 +930,7 @@ def get_project_estimate(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> ProjectEstimateRead:
-    project = _get_project_or_404(db, project_id, current_user.id)
-    ensure_project_mutable(project)
+    _get_project_or_404(db, project_id, current_user.id)
     return _to_project_estimate_read(_get_estimate_or_404(db, project_id, estimate_id))
 
 
@@ -1264,6 +1271,7 @@ def delete_project(
     current_user: User = Depends(get_current_active_user),
 ) -> Response:
     project = _get_project_or_404(db, project_id, current_user.id)
+    ensure_project_mutable(project)
     planning_ids = [
         row[0] for row in db.query(WfPlanning.id).filter(WfPlanning.project_id == project_id).all()
     ]
@@ -1780,8 +1788,6 @@ def delete_task_role_assignment(
 @router.get("/{project_id}/export.xml")
 def export_project_xml(
     project_id: int,
-    limit: int = Query(default=2000, ge=1, le=2000),
-    offset: int = Query(default=0, ge=0),
     planning_id: int | None = Query(default=None, gt=0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
@@ -1799,8 +1805,6 @@ def export_project_xml(
             db.query(WfPlanningTaskSnapshot)
             .filter(WfPlanningTaskSnapshot.planning_id == selected_planning.id)
             .order_by(WfPlanningTaskSnapshot.position.asc().nulls_last(), WfPlanningTaskSnapshot.id)
-            .offset(offset)
-            .limit(limit)
             .all()
         )
         links = (

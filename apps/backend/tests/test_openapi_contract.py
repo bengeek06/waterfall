@@ -126,7 +126,16 @@ def test_static_openapi_matches_runtime_operation_ids_and_components() -> None:
     runtime_document = app.openapi()
     static_components = cast(dict[str, Any], static_document["components"])["schemas"]
     runtime_components = cast(dict[str, Any], runtime_document["components"])["schemas"]
-    for schema_name in ("ProjectRead", "ProjectStatusUpdate", "PlanningRead"):
+    assert static_components["PlanningCreate"].get("required") == runtime_components[
+        "PlanningCreate"
+    ].get("required")
+    for schema_name in (
+        "ProjectRead",
+        "ProjectStatusUpdate",
+        "PlanningRead",
+        "PlanningCreate",
+        "PlanningLinkRead",
+    ):
         assert schema_name in runtime_components
         assert schema_name in static_components
         static_schema = cast(dict[str, Any], static_components[schema_name])
@@ -201,6 +210,7 @@ def test_planning_contract_matches_runtime_shapes() -> None:
         "PlanningDetailRead",
         "PlanningTreeRead",
         "TaskRead",
+        "PlanningLinkRead",
         "ProjectEstimateRead",
     )
     static_schemas = cast(dict[str, Any], static_document["components"])["schemas"]

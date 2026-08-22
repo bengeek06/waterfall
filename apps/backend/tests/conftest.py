@@ -31,5 +31,10 @@ def reset_database() -> None:
     from waterfall.db.session import get_engine
 
     engine = get_engine()
-    Base.metadata.drop_all(bind=engine)
+    with engine.begin() as connection:
+        if engine.dialect.name == "sqlite":
+            connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        Base.metadata.drop_all(bind=connection)
+        if engine.dialect.name == "sqlite":
+            connection.exec_driver_sql("PRAGMA foreign_keys=ON")
     Base.metadata.create_all(bind=engine)

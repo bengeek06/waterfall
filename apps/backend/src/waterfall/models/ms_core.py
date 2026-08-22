@@ -39,6 +39,21 @@ class MsProject(Base):
             "'en_cours', 'termine', 'abandonne')",
             name="ck_ms_project_status",
         ),
+        ForeignKeyConstraint(
+            ["id", "planning_reference_id"],
+            ["wf_planning.project_id", "wf_planning.id"],
+            name="fk_ms_project_planning_reference",
+        ),
+        ForeignKeyConstraint(
+            ["id", "displayed_planning_id"],
+            ["wf_planning.project_id", "wf_planning.id"],
+            name="fk_ms_project_displayed_planning",
+        ),
+        ForeignKeyConstraint(
+            ["reference_estimate_id"],
+            ["wf_estimate.id"],
+            name="fk_ms_project_reference_estimate",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)

@@ -1244,7 +1244,7 @@ export interface components {
         };
         PlanningDetailRead: components["schemas"]["PlanningRead"] & {
             tasks: components["schemas"]["TaskRead"][];
-            links: components["schemas"]["TaskLinkRead"][];
+            links: components["schemas"]["PlanningLinkRead"][];
         };
         TaskRead: {
             id: number;
@@ -1271,6 +1271,13 @@ export interface components {
             predecessor_links?: components["schemas"]["TaskLinkRead"][];
         };
         TaskLinkRead: {
+            predecessor_uid: number;
+            link_type: number;
+            lag_tenth_minute?: number | null;
+            lag_format?: number | null;
+        };
+        PlanningLinkRead: {
+            task_uid: number;
             predecessor_uid: number;
             link_type: number;
             lag_tenth_minute?: number | null;
@@ -2127,7 +2134,7 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": components["schemas"]["ImportRunRequest"];
             };
@@ -2427,7 +2434,7 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": components["schemas"]["PlanningCreate"];
             };
@@ -3227,8 +3234,6 @@ export interface operations {
     exportProjectXml: {
         parameters: {
             query?: {
-                limit?: number;
-                offset?: number;
                 planning_id?: number | null;
             };
             header?: never;

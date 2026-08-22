@@ -104,6 +104,10 @@ class TaskLinkRead(BaseModel):
     lag_format: int | None
 
 
+class PlanningLinkRead(TaskLinkRead):
+    task_uid: int
+
+
 class TaskDescriptionUpdate(BaseModel):
     description: str | None = Field(default=None, max_length=10000)
 
@@ -189,7 +193,7 @@ class PlanningRead(BaseModel):
 
 class PlanningDetailRead(PlanningRead):
     tasks: list[TaskRead]
-    links: list["TaskLinkRead"]
+    links: list["PlanningLinkRead"]
 
 
 class PlanningCreate(BaseModel):
@@ -303,7 +307,7 @@ class ProjectEstimateRead(BaseModel):
 class EstimateTaskRowRead(BaseModel):
     id: int
     estimate_id: int
-    task_id: int
+    task_id: int | None
     parent_task_id: int | None
     position: int
     task_name: str
