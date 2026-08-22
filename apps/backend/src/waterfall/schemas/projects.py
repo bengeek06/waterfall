@@ -312,12 +312,12 @@ class ProjectEstimateRead(BaseModel):
 class EstimateTaskRowRead(BaseModel):
     id: int
     estimate_id: int
-    task_id: int | None
-    parent_task_id: int | None
+    task_id: int | None = None
+    parent_task_id: int | None = None
     position: int
     task_name: str
-    outline_number: str | None
-    outline_level: int | None
+    outline_number: str | None = None
+    outline_level: int | None = None
     is_milestone: bool
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from waterfall.models.ms_core import MsProject, MsTask, MsTaskLink
+from waterfall.models.ms_core import MsProject, MsTask
 from waterfall.models.planning import WfPlanning, WfPlanningLinkSnapshot, WfPlanningTaskSnapshot
 from waterfall.models.resources import (
     EstimateCostLine,
@@ -33,17 +33,13 @@ def build_import_diff(
         else []
     )
     current = {task.uid: task for task in snapshot_tasks}
-    legacy_tasks = (
-        db.query(MsTask).filter(MsTask.project_id == project.id).all() if displayed is None else []
-    )
-    if displayed is None:
-        current = {task.uid: task for task in legacy_tasks}
     incoming = {task.uid: task for task in parsed.tasks}
     link_query = (
         db.query(WfPlanningLinkSnapshot).filter(WfPlanningLinkSnapshot.planning_id == displayed.id)
         if displayed is not None
-        else db.query(MsTaskLink).filter(MsTaskLink.project_id == project.id)
+        else None
     )
+    current_link_rows = link_query.all() if link_query is not None else []
     current_links = {
         (
             link.task_uid,
@@ -52,7 +48,7 @@ def build_import_diff(
             link.lag_tenth_minute,
             link.lag_format,
         )
-        for link in link_query.all()
+        for link in current_link_rows
     }
     incoming_links = {
         (
@@ -75,10 +71,8 @@ def build_import_diff(
             }
         )
     for uid in sorted(current.keys() - incoming.keys()):
-        task = current[uid]
-        legacy_task_id = next(
-            (legacy.id for legacy in legacy_tasks if legacy.uid == uid),
-            task.id if displayed is None else None,
+        legacy_task_id = (
+            db.query(MsTask.id).filter(MsTask.project_id == project.id, MsTask.uid == uid).scalar()
         )
         referenced = (
             legacy_task_id is not None

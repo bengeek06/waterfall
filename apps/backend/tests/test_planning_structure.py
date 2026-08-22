@@ -342,6 +342,62 @@ def test_structure_versions_validated_planning_is_immutable_and_reopenable() -> 
         assert b"Validation" not in second_export.content
 
 
+@pytest.mark.parametrize("project_status", ["en_reponse_appel_offre", "en_cours"])
+def test_reopen_from_validated_reference_preserves_engaged_project_status(
+    project_status: str,
+) -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        path = f"/projects/{project_id}/planning-structure"
+        created = client.post(path, json=_payload(), headers=headers)
+        assert created.status_code == 201
+        planning_id = client.get(f"/projects/{project_id}", headers=headers).json()[
+            "displayed_planning_id"
+        ]
+        assert (
+            client.post(
+                f"/projects/{project_id}/plannings/{planning_id}/validate", headers=headers
+            ).status_code
+            == 200
+        )
+        assert (
+            client.post(
+                f"/projects/{project_id}/plannings/{planning_id}/reference", headers=headers
+            ).status_code
+            == 200
+        )
+        with get_session_factory()() as session:
+            project = session.get(MsProject, project_id)
+            assert project is not None
+            project.status = project_status
+            session.commit()
+
+        reopened = client.post(f"/projects/{project_id}/planning-structure/reopen", headers=headers)
+
+        assert reopened.status_code == 200
+        assert reopened.json()["status"] == project_status
+
+
+def test_planning_tree_returns_complete_tree_without_pagination() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        response = client.post(
+            f"/projects/{project_id}/planning-structure", json=_payload(), headers=headers
+        )
+        assert response.status_code == 201
+
+        tree = client.get(f"/projects/{project_id}/planning-tree?limit=1", headers=headers)
+
+        assert tree.status_code == 200
+        tree_payload = cast(dict[str, Any], tree.json())
+        roots = cast(list[dict[str, Any]], tree_payload["tasks"])
+        lots = cast(list[dict[str, Any]], roots[0]["children"])
+        assert len(lots) == 2
+        assert len(cast(list[dict[str, Any]], lots[0]["children"])) == 3
+
+
 @pytest.mark.parametrize(
     ("project_status", "expected_status"),
     [

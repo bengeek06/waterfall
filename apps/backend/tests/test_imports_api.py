@@ -10,6 +10,7 @@ from httpx import Response
 from waterfall.core.config import get_settings
 from waterfall.db.session import get_session_factory
 from waterfall.main import app
+from waterfall.models.ms_core import MsTask
 from waterfall.models.planning import WfPlanning, WfPlanningLinkSnapshot, WfPlanningTaskSnapshot
 from waterfall.models.wf_core import WfImportBatch
 
@@ -215,6 +216,44 @@ def test_import_diff_is_non_mutating_and_requires_confirmation() -> None:
             headers=headers,
         )
         assert confirmation_response.status_code == 409
+
+
+def test_import_diff_ignores_legacy_tasks_without_an_imported_snapshot() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client, "import.diff.snapshot@example.com")
+        project_id = _create_project(client, headers)
+        with get_session_factory()() as session:
+            session.add(
+                MsTask(
+                    project_id=project_id,
+                    uid=1,
+                    name="Legacy only",
+                    is_summary=False,
+                    is_milestone=False,
+                )
+            )
+            session.commit()
+
+        batch = client.post(
+            "/imports/v1/batches",
+            json={"projectId": project_id, "importMode": "standard"},
+            headers=headers,
+        )
+        batch_id = batch.json()["id"]
+        xml = b'<Project xmlns="http://schemas.microsoft.com/project"><SaveVersion>16</SaveVersion><ScheduleFromStart>1</ScheduleFromStart><StartDate>2026-01-01T08:00:00</StartDate><Tasks><Task><UID>2</UID><ID>1</ID><Name>Incoming</Name></Task></Tasks></Project>'
+        assert (
+            client.post(
+                f"/imports/v1/batches/{batch_id}/xml",
+                files={"file": ("diff.xml", xml, "application/xml")},
+                headers=headers,
+            ).status_code
+            == 202
+        )
+
+        diff = client.get(f"/imports/v1/batches/{batch_id}/diff", headers=headers)
+
+        assert diff.status_code == 200
+        assert [item["uid"] for item in diff.json()["items"]] == [2]
 
 
 def test_invalid_import_exposes_structured_validation_errors() -> None:

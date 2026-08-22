@@ -81,8 +81,20 @@ def test_planning_lifecycle_migration_backfills_statuses_and_downgrades() -> Non
             assert projects[0][0:2] == (1, "initialise")
             assert projects[0][2] is not None
             assert projects[0][3:] == (1, 1)
+            assert (
+                connection.execute(
+                    text("SELECT status FROM wf_planning WHERE project_id = 1")
+                ).scalar_one()
+                == "validated"
+            )
             assert projects[1][0:2] == (2, "cree")
             assert projects[1][2:] == (None, None, None)
+            assert (
+                connection.execute(
+                    text("SELECT status FROM wf_planning WHERE project_id = 2")
+                ).scalar_one()
+                == "draft"
+            )
             assert connection.scalar(text("SELECT COUNT(*) FROM wf_planning")) == 2
             assert connection.scalar(text("SELECT COUNT(*) FROM wf_planning_task_snapshot")) == 1
 

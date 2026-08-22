@@ -1,4 +1,8 @@
-"""allow estimate task rows to originate from planning snapshots"""
+"""Allow estimate task rows to originate from planning snapshots.
+
+Downgrade is intentionally refused while NULL task references exist because no
+reversible mapping to the legacy MS Project task table is available.
+"""
 
 from __future__ import annotations
 

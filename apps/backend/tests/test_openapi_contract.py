@@ -233,3 +233,24 @@ def test_generated_client_contains_every_static_operation() -> None:
     generated_client = GENERATED_CLIENT_PATH.read_text(encoding="utf-8")
     generated_operation_ids = set(re.findall(r'operations\["([^\"]+)"\]', generated_client))
     assert static_operation_ids <= generated_operation_ids
+
+
+def test_import_and_estimate_contracts_match_runtime_nullability_and_aliases() -> None:
+    raw_document: object = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
+    static_document = cast(dict[str, Any], raw_document)
+    static_schemas = cast(dict[str, Any], static_document["components"])["schemas"]
+    runtime_schemas = cast(dict[str, Any], app.openapi()["components"])["schemas"]
+
+    for schema_name in ("ImportRunRequest", "EstimateTaskRowRead"):
+        assert set(static_schemas[schema_name]["properties"]) == set(
+            runtime_schemas[schema_name]["properties"]
+        )
+        assert set(static_schemas[schema_name].get("required", [])) == set(
+            runtime_schemas[schema_name].get("required", [])
+        )
+    assert "dryRun" in runtime_schemas["ImportRunRequest"]["properties"]
+    assert "task_id" not in runtime_schemas["EstimateTaskRowRead"].get("required", [])
+    assert runtime_schemas["EstimateTaskRowRead"]["properties"]["task_id"]["anyOf"] == [
+        {"type": "integer"},
+        {"type": "null"},
+    ]

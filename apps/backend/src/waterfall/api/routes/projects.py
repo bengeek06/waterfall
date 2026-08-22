@@ -810,7 +810,9 @@ def reopen_planning_structure(
         for link in source_links
     )
     project.displayed_planning_id = planning.id
-    project.status = "initialise"
+    if project.status == "cree":
+        validate_project_status_transition(db, project, "initialise")
+        project.status = "initialise"
     try:
         db.commit()
     except IntegrityError as exc:
