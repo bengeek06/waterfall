@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   getImportBatchDiff: vi.fn(),
   setDisplayedPlanning: vi.fn(),
   setPlanningReference: vi.fn(),
+  savePlanningStructureDraft: vi.fn(),
   createPlanningStructure: vi.fn(),
   router: { push: vi.fn() },
 }));
@@ -45,6 +46,7 @@ vi.mock("@/lib/backend", async () => {
     getImportBatchDiff: mocks.getImportBatchDiff,
     setDisplayedPlanning: mocks.setDisplayedPlanning,
     setPlanningReference: mocks.setPlanningReference,
+    savePlanningStructureDraft: mocks.savePlanningStructureDraft,
     createPlanningStructure: mocks.createPlanningStructure,
     getCostCategories: vi.fn().mockResolvedValue([]),
     getCostTypes: vi.fn().mockResolvedValue([]),
@@ -124,10 +126,12 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     mocks.getImportBatchDiff.mockReset();
     mocks.setDisplayedPlanning.mockReset();
     mocks.setPlanningReference.mockReset();
+    mocks.savePlanningStructureDraft.mockReset();
     mocks.createPlanningStructure.mockReset();
     mocks.listProjectEstimates.mockResolvedValue([]);
     mocks.listPlannings.mockResolvedValue([]);
     mocks.createPlanningStructure.mockResolvedValue({ tasks: [] });
+    mocks.savePlanningStructureDraft.mockResolvedValue({ planning_id: 2, structure: { posts: [] } });
     mocks.createImportBatch.mockResolvedValue({ id: 42 });
     mocks.uploadImportSourceXml.mockResolvedValue({ id: 42 });
     mocks.runImportBatch.mockResolvedValue({ batchId: 42 });
@@ -149,7 +153,81 @@ describe("ProjectDetailsPage planning lifecycle", () => {
 
     expect(await screen.findByRole("heading", { name: "Structure initiale" })).toBeInTheDocument();
     expect(screen.queryByText("Aucune tâche.")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Enregistrer et générer le squelette" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Enregistrer la structure" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Générer le squelette" })).toBeInTheDocument();
+  });
+
+  it("saves the structure draft without closing the form or generating a planning", async () => {
+    mocks.getProject.mockResolvedValue(project());
+    mocks.listPlannings.mockResolvedValue([]);
+    mocks.createPlanningStructure.mockResolvedValue({ tasks: [] });
+
+    render(<ProjectDetailsPage />);
+
+    await screen.findByRole("heading", { name: "Structure initiale" });
+    fireEvent.change(screen.getByLabelText("Nom poste 1"), { target: { value: "Poste" } });
+    fireEvent.change(screen.getByLabelText("Nom lot 1"), { target: { value: "Lot" } });
+    fireEvent.change(screen.getByLabelText("Livrables 1"), { target: { value: "Livrable" } });
+    fireEvent.click(screen.getByRole("button", { name: "Enregistrer la structure" }));
+
+    await waitFor(() => expect(mocks.savePlanningStructureDraft).toHaveBeenCalledTimes(1));
+    expect(mocks.savePlanningStructureDraft).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ posts: expect.any(Array) }),
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(mocks.createPlanningStructure).not.toHaveBeenCalled();
+    expect(screen.getByRole("heading", { name: "Structure initiale" })).toBeInTheDocument();
+  });
+
+  it("uses the generation action and closes the structure form", async () => {
+    mocks.getProject.mockResolvedValue(project());
+    mocks.listPlannings.mockResolvedValue([]);
+    mocks.createPlanningStructure.mockResolvedValue({ tasks: [] });
+
+    render(<ProjectDetailsPage />);
+
+    await screen.findByRole("heading", { name: "Structure initiale" });
+    fireEvent.change(screen.getByLabelText("Nom poste 1"), { target: { value: "Poste" } });
+    fireEvent.change(screen.getByLabelText("Nom lot 1"), { target: { value: "Lot" } });
+    fireEvent.change(screen.getByLabelText("Livrables 1"), { target: { value: "Livrable" } });
+    fireEvent.click(screen.getByRole("button", { name: "Générer le squelette" }));
+
+    await waitFor(() => expect(mocks.createPlanningStructure).toHaveBeenCalledTimes(1));
+    expect(mocks.createPlanningStructure).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ posts: expect.any(Array) }),
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(mocks.savePlanningStructureDraft).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(screen.queryByRole("heading", { name: "Structure initiale" })).not.toBeInTheDocument(),
+    );
+  });
+
+  it("allows reopening an existing draft without a planning reference", async () => {
+    const draft = planning({ id: 3, status: "draft" });
+    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draft.id }));
+    mocks.listPlannings.mockResolvedValue([draft]);
+    mocks.getPlanning.mockResolvedValue(detail(draft));
+
+    render(<ProjectDetailsPage />);
+
+    expect(await screen.findByRole("button", { name: "Rouvrir la structure" })).toBeInTheDocument();
+  });
+
+  it("does not allow reopening a draft in a read-only project", async () => {
+    const draft = planning({ id: 3, status: "draft" });
+    mocks.getProject.mockResolvedValue(project({ status: "perdu", displayed_planning_id: draft.id }));
+    mocks.listPlannings.mockResolvedValue([draft]);
+    mocks.getPlanning.mockResolvedValue(detail(draft));
+
+    render(<ProjectDetailsPage />);
+
+    expect(await screen.findByText("Tâche 1")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Rouvrir la structure" })).not.toBeInTheDocument();
   });
 
   it("loads and persists the selected planning without showing the previous detail", async () => {

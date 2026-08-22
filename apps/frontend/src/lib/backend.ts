@@ -18,6 +18,7 @@ export type EstimateCostLine = components["schemas"]["EstimateCostLineRead"];
 export type Task = components["schemas"]["TaskRead"];
 export type PlanningStructureCreate = components["schemas"]["PlanningStructureCreate"];
 export type PlanningStructureRead = components["schemas"]["PlanningStructureRead"];
+export type PlanningStructureDraftRead = components["schemas"]["PlanningStructureDraftRead"];
 export type Planning = components["schemas"]["PlanningRead"];
 export type PlanningDetail = components["schemas"]["PlanningDetailRead"];
 export type TaskRoleAssignment = components["schemas"]["TaskRoleAssignmentRead"];
@@ -882,6 +883,24 @@ export function createPlanningStructure(
   );
 }
 
+export function savePlanningStructureDraft(
+  projectId: number,
+  payload: PlanningStructureCreate,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<PlanningStructureDraftRead>(
+    `/projects/${projectId}/planning-structure/draft`,
+    tokens,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    onSessionRefresh,
+  );
+}
+
 export function listPlannings(
   projectId: number,
   tokens: SessionTokens,
@@ -927,6 +946,7 @@ async function getCompletePlanning(
     } else {
       completePlanning = Object.assign({}, completePlanning, {
         tasks: [...completePlanning.tasks, ...page.tasks],
+        links: [...completePlanning.links, ...page.links],
       });
     }
     if (page.tasks.length < PLANNING_PAGE_SIZE) {

@@ -32,6 +32,7 @@ import {
   PlanningDetail,
   ProjectEstimate,
   runImportBatch,
+  savePlanningStructureDraft,
   SessionExpiredError,
   type ImportDiff,
   restoreSession,
@@ -593,10 +594,10 @@ export default function ProjectDetailsPage() {
     }
   }
 
-  async function generatePlanningStructure() {
+  function getPlanningStructurePayload() {
     if (!session || isReadOnlyProject) {
       router.push("/login");
-      return;
+      return null;
     }
     const rows = structureDraft;
     const hasIncompleteRow = rows.some(
@@ -609,6 +610,36 @@ export default function ProjectDetailsPage() {
     );
     if (!rows.length || hasIncompleteRow) {
       setError("Renseigne au moins un poste, un lot et un livrable.");
+      return null;
+    }
+    return buildPlanningStructurePayload(rows);
+  }
+
+  async function savePlanningStructure() {
+    const payload = getPlanningStructurePayload();
+    if (!session || !payload) {
+      return;
+    }
+
+    setStructureBusy(true);
+    setError(null);
+    try {
+      await savePlanningStructureDraft(projectId, payload, session, onSessionRefresh);
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      setError(cause instanceof ApiError ? cause.message : "Impossible d'enregistrer la structure.");
+    } finally {
+      setStructureBusy(false);
+    }
+  }
+
+  async function generatePlanningStructure() {
+    const payload = getPlanningStructurePayload();
+    if (!session || !payload) {
       return;
     }
 
@@ -617,7 +648,7 @@ export default function ProjectDetailsPage() {
     try {
       const savedStructure = await createPlanningStructure(
         projectId,
-        buildPlanningStructurePayload(rows),
+        payload,
         session,
         onSessionRefresh,
       );
@@ -1033,9 +1064,17 @@ export default function ProjectDetailsPage() {
                 className="btn btn-primary"
                 type="button"
                 disabled={structureBusy}
+                onClick={() => void savePlanningStructure()}
+              >
+                {structureBusy ? "Enregistrement..." : "Enregistrer la structure"}
+              </button>
+              <button
+                className="btn btn-primary"
+                type="button"
+                disabled={structureBusy}
                 onClick={() => void generatePlanningStructure()}
               >
-                {structureBusy ? "Enregistrement..." : "Enregistrer et générer le squelette"}
+                {structureBusy ? "Génération..." : "Générer le squelette"}
               </button>
             </div>
           </div>
@@ -1090,7 +1129,7 @@ export default function ProjectDetailsPage() {
                     Définir comme référence
                   </button>
                 ) : null}
-                {project?.planning_reference_id && !isReadOnlyProject ? (
+                {plannings.some((planning) => planning.status === "draft") && !isReadOnlyProject ? (
                   <button
                     className="btn"
                     type="button"
