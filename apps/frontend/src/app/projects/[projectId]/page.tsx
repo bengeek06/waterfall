@@ -11,9 +11,7 @@ import {
   createEstimateCostLine,
   createImportBatch,
   createProjectEstimate,
-  createProjectTask,
   deleteEstimateCostLine,
-  deleteProjectTask,
   EstimateAggregates,
   EstimateCostLine,
   exportEstimateExcel,
@@ -22,6 +20,7 @@ import {
   getCostTypes,
   getEstimateAggregates,
   getImportBatchStatus,
+  getImportBatchDiff,
   getPlanning,
   getProject,
   listPlannings,
@@ -34,15 +33,13 @@ import {
   ProjectEstimate,
   runImportBatch,
   SessionExpiredError,
-  Task,
-  getProjectTasks,
+  type ImportDiff,
   restoreSession,
   reopenPlanningStructure,
   setDisplayedPlanning,
   setPlanningReference,
   updateEstimateCostLine,
   updateProject,
-  updateTaskDescription,
   uploadImportSourceXml,
   validatePlanning,
   validateProjectEstimate,
@@ -55,7 +52,6 @@ import {
 import { ReadOnlyGantt } from "@/components/read-only-gantt";
 import { ProjectTabs, type ProjectTab } from "@/components/project-tabs";
 
-const TASK_PAGE_SIZE = 200;
 const MAX_IMPORT_FILE_SIZE = 25 * 1024 * 1024;
 let nextStructureRowId = 2;
 export default function ProjectDetailsPage() {
@@ -64,7 +60,6 @@ export default function ProjectDetailsPage() {
   const projectId = Number(params.projectId);
 
   const [session, setSessionState] = useState<SessionTokens | null>(() => getSession());
-  const [tasks, setTasks] = useState<Task[]>([]);
   const [project, setProject] = useState<Project | null>(null);
   const [plannings, setPlannings] = useState<Planning[]>([]);
   const [selectedPlanningId, setSelectedPlanningId] = useState<number | null>(null);
@@ -78,6 +73,7 @@ export default function ProjectDetailsPage() {
   const [planningExportBusy, setPlanningExportBusy] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importBusy, setImportBusy] = useState(false);
+  const [importReview, setImportReview] = useState<{ batchId: number; diff: ImportDiff } | null>(null);
   const [estimates, setEstimates] = useState<ProjectEstimate[]>([]);
   const [selectedEstimateId, setSelectedEstimateId] = useState<number | null>(null);
   const [estimateTaskRowCount, setEstimateTaskRowCount] = useState(0);
@@ -95,11 +91,6 @@ export default function ProjectDetailsPage() {
   const [aggregates, setAggregates] = useState<EstimateAggregates | null>(null);
   const [exportBusy, setExportBusy] = useState(false);
   const [activeTab, setActiveTab] = useState<ProjectTab>("planning");
-  const [taskOffset, setTaskOffset] = useState(0);
-  const [drafts, setDrafts] = useState<Record<number, string>>({});
-  const [savingTaskUid, setSavingTaskUid] = useState<number | null>(null);
-  const [taskDraft, setTaskDraft] = useState({ name: "", parentTaskId: "", isMilestone: false });
-  const [taskBusy, setTaskBusy] = useState(false);
   const [structureDraft, setStructureDraft] = useState<PlanningStructureDraftRow[]>([
     { rowId: "row-1", postKey: "post-1", postName: "", lotKey: "lot-1", lotName: "", deliverables: "" },
   ]);
@@ -602,78 +593,6 @@ export default function ProjectDetailsPage() {
     }
   }
 
-  async function saveDescription(task: Task) {
-    if (!session) {
-      return;
-    }
-    if (savingTaskUid === task.uid) {
-      return;
-    }
-
-    const draft = (drafts[task.uid] ?? "").trim();
-    const description = draft.length ? draft : null;
-
-    setSavingTaskUid(task.uid);
-    try {
-      const updated = await updateTaskDescription(
-        projectId,
-        task.uid,
-        description,
-        session,
-        onSessionRefresh,
-      );
-      setTasks((prev) => prev.map((item) => (item.uid === updated.uid ? updated : item)));
-      setDrafts((prev) => ({ ...prev, [task.uid]: updated.description ?? "" }));
-    } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
-        clearSession();
-        router.push("/login");
-        return;
-      }
-      setError(cause instanceof ApiError ? cause.message : "Sauvegarde impossible");
-    } finally {
-      setSavingTaskUid(null);
-    }
-  }
-
-  async function addTask() {
-    if (!session) {
-      router.push("/login");
-      return;
-    }
-    if (!taskDraft.name.trim()) {
-      setError("Le nom de la tâche est obligatoire.");
-      return;
-    }
-
-    setTaskBusy(true);
-    setError(null);
-    try {
-      const created = await createProjectTask(
-        projectId,
-        {
-          name: taskDraft.name.trim(),
-          parent_task_id: taskDraft.parentTaskId ? Number(taskDraft.parentTaskId) : null,
-          is_milestone: taskDraft.isMilestone,
-        },
-        session,
-        onSessionRefresh,
-      );
-      setTasks((previous) => [...previous, created]);
-      setDrafts((previous) => ({ ...previous, [created.uid]: "" }));
-      setTaskDraft({ name: "", parentTaskId: "", isMilestone: false });
-    } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
-        clearSession();
-        router.push("/login");
-        return;
-      }
-      setError(cause instanceof ApiError ? cause.message : "Impossible d'ajouter la tâche.");
-    } finally {
-      setTaskBusy(false);
-    }
-  }
-
   async function generatePlanningStructure() {
     if (!session || isReadOnlyProject) {
       router.push("/login");
@@ -702,7 +621,6 @@ export default function ProjectDetailsPage() {
         session,
         onSessionRefresh,
       );
-      setTasks(savedStructure.tasks);
       setPlanningDetail((current) => current ? { ...current, tasks: savedStructure.tasks } : current);
       setStructureOpen(false);
       const [updatedProject, planningMetadata] = await Promise.all([
@@ -721,32 +639,6 @@ export default function ProjectDetailsPage() {
       setError(cause instanceof ApiError ? cause.message : "Impossible d'enregistrer la structure.");
     } finally {
       setStructureBusy(false);
-    }
-  }
-
-  async function removeTask(task: Task) {
-    if (!session) {
-      return;
-    }
-    const confirmed = window.confirm(`Supprimer la tâche "${task.name}" ?`);
-    if (!confirmed) {
-      return;
-    }
-
-    setTaskBusy(true);
-    setError(null);
-    try {
-      await deleteProjectTask(projectId, task.uid, session, onSessionRefresh);
-      setTasks((previous) => previous.filter((item) => item.uid !== task.uid));
-    } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
-        clearSession();
-        router.push("/login");
-        return;
-      }
-      setError(cause instanceof ApiError ? cause.message : "Impossible de supprimer la tâche.");
-    } finally {
-      setTaskBusy(false);
     }
   }
 
@@ -821,7 +713,7 @@ export default function ProjectDetailsPage() {
     }
   }
 
-  async function importPlanningXml() {
+  async function preparePlanningImport() {
     if (!session || !project || !importFile) {
       return;
     }
@@ -830,7 +722,7 @@ export default function ProjectDetailsPage() {
     try {
       const batch = await createImportBatch(projectId, project.name, session, onSessionRefresh);
       await uploadImportSourceXml(batch.id, importFile, session, onSessionRefresh);
-      await runImportBatch(batch.id, session, onSessionRefresh);
+      await runImportBatch(batch.id, session, onSessionRefresh, true, false);
 
       let batchStatus = await getImportBatchStatus(batch.id, session, onSessionRefresh);
       for (let index = 0; index < 20; index += 1) {
@@ -841,22 +733,56 @@ export default function ProjectDetailsPage() {
         batchStatus = await getImportBatchStatus(batch.id, session, onSessionRefresh);
       }
       if (batchStatus.status !== "success") {
+        throw new Error(batchStatus.errorMessage ?? "La prévisualisation de l'import a échoué.");
+      }
+      const diff = await getImportBatchDiff(batch.id, session, onSessionRefresh);
+      setImportReview({ batchId: batch.id, diff });
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      setError(cause instanceof ApiError ? cause.message : "Impossible d'importer le planning.");
+    } finally {
+      setImportBusy(false);
+    }
+  }
+
+  async function confirmPlanningImport() {
+    if (!session || !project || !importReview) {
+      return;
+    }
+    setImportBusy(true);
+    setError(null);
+    try {
+      await runImportBatch(importReview.batchId, session, onSessionRefresh, false, true);
+      let batchStatus = await getImportBatchStatus(importReview.batchId, session, onSessionRefresh);
+      for (let index = 0; index < 20; index += 1) {
+        if (batchStatus.status === "success" || batchStatus.status === "failed") {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        batchStatus = await getImportBatchStatus(importReview.batchId, session, onSessionRefresh);
+      }
+      if (batchStatus.status !== "success") {
         throw new Error(batchStatus.errorMessage ?? "Import en échec.");
       }
 
-      const tasksData = await getProjectTasks(
-        projectId,
-        session,
-        onSessionRefresh,
-        TASK_PAGE_SIZE,
-        taskOffset,
-      );
-      setTasks(tasksData);
-      const refreshedDrafts: Record<number, string> = {};
-      for (const task of tasksData) {
-        refreshedDrafts[task.uid] = task.description ?? "";
-      }
-      setDrafts(refreshedDrafts);
+      const [updatedProject, planningMetadata] = await Promise.all([
+        getProject(projectId, session, onSessionRefresh),
+        listPlannings(projectId, session, onSessionRefresh),
+      ]);
+      const nextPlanningId =
+        updatedProject.displayed_planning_id ?? planningMetadata.at(-1)?.id ?? null;
+      const updatedDetail = nextPlanningId
+        ? await getPlanning(projectId, nextPlanningId, session, onSessionRefresh)
+        : null;
+      setProject(updatedProject);
+      setPlannings(planningMetadata);
+      setSelectedPlanningId(nextPlanningId);
+      setPlanningDetail(updatedDetail);
+      setImportReview(null);
       setImportFile(null);
     } catch (cause) {
       if (cause instanceof SessionExpiredError) {
@@ -966,9 +892,9 @@ export default function ProjectDetailsPage() {
                 className="btn btn-primary"
                 type="button"
                 disabled={!importFile || importBusy}
-                onClick={() => void importPlanningXml()}
+                onClick={() => void preparePlanningImport()}
               >
-                {importBusy ? "Import..." : "Importer"}
+                {importBusy ? "Prévisualisation..." : "Prévisualiser l'import"}
               </button>
             </div>
             <button
@@ -978,6 +904,27 @@ export default function ProjectDetailsPage() {
               onClick={() => void exportPlanningXml()}
             >
               {planningExportBusy ? "Export..." : "Export XML"}
+            </button>
+          </div>
+        ) : null}
+
+        {activeTab === "planning" && importReview ? (
+          <div className="panel" role="alert" style={{ marginBottom: "1rem" }}>
+            <h2>Remplacement à confirmer</h2>
+            <p>
+              Cette prévisualisation contient {importReview.diff.items.length} changement(s).
+              Le planning actuel ne sera remplacé qu&apos;après confirmation explicite.
+            </p>
+            {importReview.diff.identicalSource ? (
+              <p className="muted">La source est identique à la dernière importation.</p>
+            ) : null}
+            <button
+              className="btn btn-danger"
+              type="button"
+              disabled={importBusy}
+              onClick={() => void confirmPlanningImport()}
+            >
+              {importBusy ? "Import..." : "Confirmer le remplacement"}
             </button>
           </div>
         ) : null}
@@ -1187,141 +1134,6 @@ export default function ProjectDetailsPage() {
             ) : null}
           </div>
         ) : null}
-
-        {false && activeTab === "planning" ? (
-          <div className="row cost-line-form" style={{ marginBottom: "1rem" }}>
-            <div className="field">
-              <label htmlFor="task-name">Nom de la tâche</label>
-              <input
-                id="task-name"
-                value={taskDraft.name}
-                onChange={(event) => setTaskDraft((prev) => ({ ...prev, name: event.target.value }))}
-              />
-            </div>
-            <label className="estimate-select-label">
-              Tâche parente
-              <select
-                value={taskDraft.parentTaskId}
-                onChange={(event) =>
-                  setTaskDraft((prev) => ({ ...prev, parentTaskId: event.target.value }))
-                }
-              >
-                <option value="">Aucune (racine)</option>
-                {tasks.map((task) => (
-                  <option key={task.id} value={task.id}>
-                    {task.outline_number ?? task.uid} — {task.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="row" style={{ gap: "0.4rem" }}>
-              <input
-                type="checkbox"
-                checked={taskDraft.isMilestone}
-                onChange={(event) =>
-                  setTaskDraft((prev) => ({ ...prev, isMilestone: event.target.checked }))
-                }
-              />
-              Jalon
-            </label>
-            <button className="btn btn-primary" type="button" disabled={taskBusy} onClick={() => void addTask()}>
-              Ajouter la tâche
-            </button>
-          </div>
-        ) : null}
-
-        {false && activeTab === "planning" && !busy && !tasks.length ? <p className="muted">Aucune tâche.</p> : null}
-
-        {false && activeTab === "planning" && !busy && tasks.length ? (
-          <div className="table-scroll">
-          <table className="table">
-            <thead>
-              <tr>
-                <th scope="col">UID</th>
-                <th scope="col">Nom</th>
-                <th scope="col">Début</th>
-                <th scope="col">Fin</th>
-                <th scope="col">Avancement</th>
-                <th scope="col">Description</th>
-                <th scope="col">Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {tasks.map((task) => (
-                <tr key={task.uid}>
-                  <td>{task.uid}</td>
-                  <td>
-                    <strong>
-                      {task.is_milestone ? "◆ " : ""}
-                      {task.name}
-                    </strong>
-                    <div className="muted">{task.outline_number ?? "-"}</div>
-                  </td>
-                  <td>{task.start_at ? new Date(task.start_at).toLocaleDateString("fr-FR") : "-"}</td>
-                  <td>{task.finish_at ? new Date(task.finish_at).toLocaleDateString("fr-FR") : "-"}</td>
-                  <td>{task.percent_complete ?? 0}%</td>
-                  <td style={{ minWidth: "280px" }}>
-                    <textarea
-                      rows={3}
-                      value={drafts[task.uid] ?? ""}
-                      onChange={(event) =>
-                        setDrafts((prev) => ({ ...prev, [task.uid]: event.target.value }))
-                      }
-                    />
-                  </td>
-                  <td>
-                    <div className="row">
-                      <button
-                        className="btn btn-primary"
-                        disabled={savingTaskUid === task.uid}
-                        onClick={() => void saveDescription(task)}
-                      >
-                        {savingTaskUid === task.uid ? "Sauvegarde..." : "Sauver"}
-                      </button>
-                      <button
-                        className="btn btn-danger"
-                        type="button"
-                        disabled={taskBusy}
-                        onClick={() => void removeTask(task)}
-                      >
-                        Supprimer
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          </div>
-        ) : null}
-
-        {false && activeTab === "planning" && !busy ? (
-          <div className="row" style={{ marginTop: "1rem", justifyContent: "space-between" }}>
-            <span className="muted">
-              {tasks.length ? `Tâches ${taskOffset + 1} à ${taskOffset + tasks.length}` : ""}
-            </span>
-            <div className="row">
-              <button
-                className="btn"
-                type="button"
-                disabled={taskOffset === 0}
-                onClick={() => setTaskOffset((current) => Math.max(0, current - TASK_PAGE_SIZE))}
-              >
-                Précédent
-              </button>
-              <button
-                className="btn"
-                type="button"
-                disabled={tasks.length < TASK_PAGE_SIZE}
-                onClick={() => setTaskOffset((current) => current + TASK_PAGE_SIZE)}
-              >
-                Suivant
-              </button>
-            </div>
-          </div>
-        ) : null}
-
-        {false && activeTab === "planning" && !busy && tasks.length ? <ReadOnlyGantt tasks={tasks} /> : null}
 
         {activeTab === "estimate" ? (
           <div className="tab-content">

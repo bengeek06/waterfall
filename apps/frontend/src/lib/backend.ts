@@ -23,6 +23,7 @@ export type PlanningDetail = components["schemas"]["PlanningDetailRead"];
 export type TaskRoleAssignment = components["schemas"]["TaskRoleAssignmentRead"];
 export type ImportBatch = components["schemas"]["ImportBatchResponse"];
 export type ImportBatchStatus = components["schemas"]["ImportBatchStatusResponse"];
+export type ImportDiff = components["schemas"]["ImportDiffResponse"];
 export type TokenResponse = components["schemas"]["Token"];
 
 export class ApiError extends Error {
@@ -805,6 +806,8 @@ export function runImportBatch(
   batchId: number,
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
+  dryRun = false,
+  confirm = false,
 ) {
   return authRequest<{ batchId: number }>(
     `/imports/v1/batches/${batchId}/run`,
@@ -814,8 +817,21 @@ export function runImportBatch(
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ dryRun: false }),
+      body: JSON.stringify({ dryRun, confirm }),
     },
+    onSessionRefresh,
+  );
+}
+
+export function getImportBatchDiff(
+  batchId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<ImportDiff>(
+    `/imports/v1/batches/${batchId}/diff`,
+    tokens,
+    { method: "GET" },
     onSessionRefresh,
   );
 }
@@ -885,12 +901,39 @@ export function getPlanning(
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
 ) {
-  return authRequest<PlanningDetail>(
-    `/projects/${projectId}/plannings/${planningId}`,
-    tokens,
-    { method: "GET" },
-    onSessionRefresh,
-  );
+  return getCompletePlanning(projectId, planningId, tokens, onSessionRefresh);
+}
+
+const PLANNING_PAGE_SIZE = 200;
+
+async function getCompletePlanning(
+  projectId: number,
+  planningId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  let offset = 0;
+  let completePlanning: PlanningDetail | null = null;
+
+  while (true) {
+    const page = await authRequest<PlanningDetail>(
+      `/projects/${projectId}/plannings/${planningId}?limit=${PLANNING_PAGE_SIZE}&offset=${offset}`,
+      tokens,
+      { method: "GET" },
+      onSessionRefresh,
+    );
+    if (!completePlanning) {
+      completePlanning = page;
+    } else {
+      completePlanning = Object.assign({}, completePlanning, {
+        tasks: [...completePlanning.tasks, ...page.tasks],
+      });
+    }
+    if (page.tasks.length < PLANNING_PAGE_SIZE) {
+      return completePlanning;
+    }
+    offset += PLANNING_PAGE_SIZE;
+  }
 }
 
 export function validatePlanning(

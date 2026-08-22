@@ -56,10 +56,15 @@ export default function ProjectsPage() {
   );
 
   useEffect(() => {
+    let cancelled = false;
+
     async function load() {
       if (!session) {
         try {
           const restoredSession = await restoreSession();
+          if (cancelled) {
+            return;
+          }
           setSession(restoredSession);
           setSessionState(restoredSession);
         } catch {
@@ -79,9 +84,15 @@ export default function ProjectsPage() {
           projectOffset,
           includeArchived,
         );
+        if (cancelled) {
+          return;
+        }
         setProjects(projectsData);
         setSelectedIds(new Set());
       } catch (cause) {
+        if (cancelled) {
+          return;
+        }
         if (cause instanceof SessionExpiredError) {
           clearSession();
           router.push("/login");
@@ -98,11 +109,16 @@ export default function ProjectsPage() {
           setError("Erreur inattendue lors du chargement des projets");
         }
       } finally {
-        setBusy(false);
+        if (!cancelled) {
+          setBusy(false);
+        }
       }
     }
 
     void load();
+    return () => {
+      cancelled = true;
+    };
   }, [includeArchived, onSessionRefresh, projectOffset, router, session]);
 
   function toggleIncludeArchived() {

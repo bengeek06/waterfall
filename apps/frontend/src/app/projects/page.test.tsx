@@ -98,4 +98,28 @@ describe("ProjectsPage", () => {
     expect(screen.getByRole("checkbox", { name: "Sélectionner Projet perdu" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Supprimer la sélection" })).toBeDisabled();
   });
+
+  it("ignores a stale response after changing the archived filter", async () => {
+    let resolveActive!: (projects: Project[]) => void;
+    let resolveArchived!: (projects: Project[]) => void;
+    getProjects.mockImplementation((_tokens, _refresh, _limit, _offset, includeArchived) =>
+      new Promise((resolve) => {
+        if (includeArchived) {
+          resolveArchived = resolve;
+        } else {
+          resolveActive = resolve;
+        }
+      }),
+    );
+
+    render(<ProjectsPage />);
+    fireEvent.click(screen.getByRole("checkbox", { name: /Inclure les projets/ }));
+    await waitFor(() => expect(getProjects).toHaveBeenCalledTimes(2));
+    resolveArchived([project({ id: 2, name: "Projet archivé", status: "termine" })]);
+    await waitFor(() => expect(screen.getByText("Projet archivé")).toBeInTheDocument());
+
+    resolveActive([project({ id: 3, name: "Réponse obsolète" })]);
+    await waitFor(() => expect(screen.queryByText("Réponse obsolète")).not.toBeInTheDocument());
+    expect(screen.getByText("Projet archivé")).toBeInTheDocument();
+  });
 });

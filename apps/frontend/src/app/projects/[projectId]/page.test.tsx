@@ -8,6 +8,11 @@ const mocks = vi.hoisted(() => ({
   listProjectEstimates: vi.fn(),
   listPlannings: vi.fn(),
   getPlanning: vi.fn(),
+  createImportBatch: vi.fn(),
+  uploadImportSourceXml: vi.fn(),
+  runImportBatch: vi.fn(),
+  getImportBatchStatus: vi.fn(),
+  getImportBatchDiff: vi.fn(),
   setDisplayedPlanning: vi.fn(),
   setPlanningReference: vi.fn(),
   createPlanningStructure: vi.fn(),
@@ -33,6 +38,11 @@ vi.mock("@/lib/backend", async () => {
     listProjectEstimates: mocks.listProjectEstimates,
     listPlannings: mocks.listPlannings,
     getPlanning: mocks.getPlanning,
+    createImportBatch: mocks.createImportBatch,
+    uploadImportSourceXml: mocks.uploadImportSourceXml,
+    runImportBatch: mocks.runImportBatch,
+    getImportBatchStatus: mocks.getImportBatchStatus,
+    getImportBatchDiff: mocks.getImportBatchDiff,
     setDisplayedPlanning: mocks.setDisplayedPlanning,
     setPlanningReference: mocks.setPlanningReference,
     createPlanningStructure: mocks.createPlanningStructure,
@@ -107,12 +117,22 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     mocks.listProjectEstimates.mockReset();
     mocks.listPlannings.mockReset();
     mocks.getPlanning.mockReset();
+    mocks.createImportBatch.mockReset();
+    mocks.uploadImportSourceXml.mockReset();
+    mocks.runImportBatch.mockReset();
+    mocks.getImportBatchStatus.mockReset();
+    mocks.getImportBatchDiff.mockReset();
     mocks.setDisplayedPlanning.mockReset();
     mocks.setPlanningReference.mockReset();
     mocks.createPlanningStructure.mockReset();
     mocks.listProjectEstimates.mockResolvedValue([]);
     mocks.listPlannings.mockResolvedValue([]);
     mocks.createPlanningStructure.mockResolvedValue({ tasks: [] });
+    mocks.createImportBatch.mockResolvedValue({ id: 42 });
+    mocks.uploadImportSourceXml.mockResolvedValue({ id: 42 });
+    mocks.runImportBatch.mockResolvedValue({ batchId: 42 });
+    mocks.getImportBatchStatus.mockResolvedValue({ status: "success" });
+    mocks.getImportBatchDiff.mockResolvedValue({ batchId: 42, identicalSource: false, items: [] });
     mocks.setPlanningReference.mockResolvedValue(project({ status: "initialise" }));
     mocks.setDisplayedPlanning.mockImplementation(async (_projectId, planningId) =>
       project({ status: "initialise", displayed_planning_id: planningId }),
@@ -241,5 +261,43 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     expect(screen.queryByRole("button", { name: "Valider le planning" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Rouvrir la structure" })).not.toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Version affichée" })).not.toBeDisabled();
+  });
+
+  it("previews an import and refreshes the selected planning after confirmation", async () => {
+    const current = planning({ id: 2, version_number: 2, status: "validated" });
+    mocks.getProject
+      .mockResolvedValueOnce(project({ status: "initialise", displayed_planning_id: current.id }))
+      .mockResolvedValueOnce(project({ status: "initialise", displayed_planning_id: current.id }));
+    mocks.listPlannings
+      .mockResolvedValueOnce([current])
+      .mockResolvedValueOnce([current]);
+    mocks.getPlanning.mockResolvedValue(detail(current));
+
+    render(<ProjectDetailsPage />);
+    const file = new File(["<Project />"], "planning.xml", { type: "application/xml" });
+    fireEvent.change(await screen.findByLabelText("Importer un planning MS Project (.xml)"), {
+      target: { files: [file] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Prévisualiser l'import" }));
+
+    await waitFor(() => expect(mocks.getImportBatchDiff).toHaveBeenCalledWith(
+      42,
+      expect.anything(),
+      expect.anything(),
+    ));
+    expect(screen.getByRole("heading", { name: "Remplacement à confirmer" })).toBeInTheDocument();
+    expect(mocks.runImportBatch).toHaveBeenCalledWith(42, expect.anything(), expect.anything(), true, false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Confirmer le remplacement" }));
+    await waitFor(() => expect(mocks.runImportBatch).toHaveBeenLastCalledWith(
+      42,
+      expect.anything(),
+      expect.anything(),
+      false,
+      true,
+    ));
+    await waitFor(() => expect(mocks.listPlannings).toHaveBeenCalledTimes(2));
+    expect(mocks.getPlanning).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("heading", { name: "Remplacement à confirmer" })).not.toBeInTheDocument();
   });
 });
