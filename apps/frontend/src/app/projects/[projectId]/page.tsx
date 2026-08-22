@@ -76,6 +76,7 @@ export default function ProjectDetailsPage() {
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importBusy, setImportBusy] = useState(false);
   const [importReview, setImportReview] = useState<{ batchId: number; diff: ImportDiff } | null>(null);
+  const [importFeedback, setImportFeedback] = useState<string | null>(null);
   const [estimates, setEstimates] = useState<ProjectEstimate[]>([]);
   const [selectedEstimateId, setSelectedEstimateId] = useState<number | null>(null);
   const [estimateTaskRowCount, setEstimateTaskRowCount] = useState(0);
@@ -195,7 +196,17 @@ export default function ProjectDetailsPage() {
             plannings.find((planning) => planning.id === selectedPlanningId) ?? null,
             detail,
           );
-          if (rows.length) {
+          if (
+            rows.length &&
+            rows.every(
+              (row) =>
+                row.postKey.trim() &&
+                row.postName.trim() &&
+                row.lotKey.trim() &&
+                row.lotName.trim() &&
+                row.deliverables.trim(),
+            )
+          ) {
             setStructureDraft(rows);
           }
         }
@@ -409,9 +420,31 @@ export default function ProjectDetailsPage() {
     try {
       const updatedProject = await reopenPlanningStructure(projectId, session, onSessionRefresh);
       const planningMetadata = await listPlannings(projectId, session, onSessionRefresh);
+      const nextPlanningId = updatedProject.displayed_planning_id ?? planningMetadata.at(-1)?.id ?? null;
+      const reopenedDetail = nextPlanningId
+        ? await getPlanning(projectId, nextPlanningId, session, onSessionRefresh)
+        : null;
       setProject(updatedProject);
       setPlannings(planningMetadata);
-      setSelectedPlanningId(updatedProject.displayed_planning_id ?? null);
+      setSelectedPlanningId(nextPlanningId);
+      const rows = getPlanningStructureDraftRows(
+        planningMetadata.find((planning) => planning.id === nextPlanningId) ?? null,
+        reopenedDetail,
+      );
+      if (
+        rows.length &&
+        rows.every(
+          (row) =>
+            row.postKey.trim() &&
+            row.postName.trim() &&
+            row.lotKey.trim() &&
+            row.lotName.trim() &&
+            row.deliverables.trim(),
+        )
+      ) {
+        setStructureDraft(rows);
+      }
+      setPlanningDetail(reopenedDetail);
       setStructureOpen(true);
     } catch (cause) {
       if (cause instanceof SessionExpiredError) {
@@ -778,6 +811,7 @@ export default function ProjectDetailsPage() {
     }
     setImportBusy(true);
     setError(null);
+    setImportFeedback(null);
     try {
       const batch = await createImportBatch(projectId, project.name, session, onSessionRefresh);
       await uploadImportSourceXml(batch.id, importFile, session, onSessionRefresh);
@@ -802,6 +836,7 @@ export default function ProjectDetailsPage() {
     }
     setImportBusy(true);
     setError(null);
+    setImportFeedback(null);
     try {
       await runImportBatch(importReview.batchId, session, onSessionRefresh, false, true);
       let batchStatus = await getImportBatchStatus(importReview.batchId, session, onSessionRefresh);
@@ -816,21 +851,61 @@ export default function ProjectDetailsPage() {
         throw new Error(batchStatus.errorMessage ?? "Import en échec.");
       }
 
-      const [updatedProject, planningMetadata] = await Promise.all([
+      setImportReview(null);
+      setImportFile(null);
+      setImportFeedback("Import réussi. Actualisation du projet en cours...");
+
+      const [projectRefresh, planningsRefresh] = await Promise.allSettled([
         getProject(projectId, session, onSessionRefresh),
         listPlannings(projectId, session, onSessionRefresh),
       ]);
+      const refreshFailures: string[] = [];
+      if (projectRefresh.status === "fulfilled") {
+        setProject(projectRefresh.value);
+      } else {
+        if (projectRefresh.reason instanceof SessionExpiredError) {
+          clearSession();
+          router.push("/login");
+          return;
+        }
+        refreshFailures.push("le projet");
+      }
+      if (planningsRefresh.status === "fulfilled") {
+        setPlannings(planningsRefresh.value);
+      } else {
+        if (planningsRefresh.reason instanceof SessionExpiredError) {
+          clearSession();
+          router.push("/login");
+          return;
+        }
+        refreshFailures.push("les versions de planning");
+      }
+
+      const refreshedProject = projectRefresh.status === "fulfilled" ? projectRefresh.value : project;
+      const refreshedPlannings = planningsRefresh.status === "fulfilled" ? planningsRefresh.value : plannings;
       const nextPlanningId =
-        updatedProject.displayed_planning_id ?? planningMetadata.at(-1)?.id ?? null;
-      const updatedDetail = nextPlanningId
-        ? await getPlanning(projectId, nextPlanningId, session, onSessionRefresh)
-        : null;
-      setProject(updatedProject);
-      setPlannings(planningMetadata);
+        refreshedProject?.displayed_planning_id ?? refreshedPlannings.at(-1)?.id ?? null;
+      if (nextPlanningId) {
+        try {
+          const updatedDetail = await getPlanning(projectId, nextPlanningId, session, onSessionRefresh);
+          setPlanningDetail(updatedDetail);
+        } catch (cause) {
+          if (cause instanceof SessionExpiredError) {
+            clearSession();
+            router.push("/login");
+            return;
+          }
+          refreshFailures.push("le détail du planning");
+        }
+      } else {
+        setPlanningDetail(null);
+      }
       setSelectedPlanningId(nextPlanningId);
-      setPlanningDetail(updatedDetail);
-      setImportReview(null);
-      setImportFile(null);
+      setImportFeedback(
+        refreshFailures.length
+          ? `Import réussi, mais ${refreshFailures.join(" et ")} n'ont pas pu être actualisés. Recharge la page pour voir l'état à jour.`
+          : "Import réussi. Le planning affiché a été actualisé.",
+      );
     } catch (cause) {
       if (cause instanceof SessionExpiredError) {
         clearSession();
@@ -912,6 +987,7 @@ export default function ProjectDetailsPage() {
       <section className="panel">
         {busy ? <p className="muted" role="status">Chargement...</p> : null}
         {error ? <p className="error" role="alert">{error}</p> : null}
+        {importFeedback ? <p className="muted" role="status">{importFeedback}</p> : null}
 
         {activeTab === "planning" && !isReadOnlyProject ? (
           <div className="row cost-line-form" style={{ marginBottom: "1rem", justifyContent: "space-between" }}>

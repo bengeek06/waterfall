@@ -421,4 +421,29 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     expect(mocks.getPlanning).toHaveBeenCalled();
     expect(screen.queryByRole("heading", { name: "Remplacement à confirmer" })).not.toBeInTheDocument();
   });
+
+  it("keeps the import success visible when a post-import refresh fails", async () => {
+    const current = planning({ id: 2, version_number: 2, status: "validated" });
+    mocks.getProject
+      .mockResolvedValueOnce(project({ status: "initialise", displayed_planning_id: current.id }))
+      .mockRejectedValueOnce(new Error("refresh failed"));
+    mocks.listPlannings
+      .mockResolvedValueOnce([current])
+      .mockResolvedValueOnce([current]);
+    mocks.getPlanning.mockResolvedValue(detail(current));
+
+    render(<ProjectDetailsPage />);
+    const file = new File(["<Project />"], "planning.xml", { type: "application/xml" });
+    fireEvent.change(await screen.findByLabelText("Importer un planning MS Project (.xml)"), {
+      target: { files: [file] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Prévisualiser l'import" }));
+    await screen.findByRole("heading", { name: "Remplacement à confirmer" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Confirmer le remplacement" }));
+
+    await waitFor(() => expect(screen.getByText(/Import réussi, mais le projet/)).toBeInTheDocument());
+    expect(screen.queryByRole("heading", { name: "Remplacement à confirmer" })).not.toBeInTheDocument();
+    expect(mocks.runImportBatch).toHaveBeenCalledTimes(2);
+  });
 });
