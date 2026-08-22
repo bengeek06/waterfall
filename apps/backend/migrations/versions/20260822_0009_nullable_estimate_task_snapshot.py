@@ -21,6 +21,14 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    null_rows = op.get_bind().scalar(
+        sa.text("SELECT COUNT(*) FROM wf_estimate_task_row WHERE task_id IS NULL")
+    )
+    if null_rows:
+        raise RuntimeError(
+            "Cannot downgrade 0009 while estimate task rows have NULL task_id; "
+            "restore their legacy task references first"
+        )
     with op.batch_alter_table("wf_estimate_task_row") as batch_op:
         batch_op.alter_column(
             "task_id",

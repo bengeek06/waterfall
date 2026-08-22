@@ -60,6 +60,55 @@ def _payload() -> dict[str, Any]:
     }
 
 
+def test_save_planning_structure_draft_is_non_operational_and_generates_later() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        draft_path = f"/projects/{project_id}/planning-structure/draft"
+
+        first = client.put(draft_path, json=_payload(), headers=headers)
+        second = client.put(draft_path, json=_payload(), headers=headers)
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert first.json()["planning_id"] == second.json()["planning_id"]
+        assert client.get(f"/projects/{project_id}", headers=headers).json()["status"] == "cree"
+        assert client.get(f"/projects/{project_id}/tasks", headers=headers).json() == []
+        plannings = client.get(f"/projects/{project_id}/plannings", headers=headers)
+        assert plannings.status_code == 200
+        planning_items = cast(list[dict[str, Any]], plannings.json())
+        assert len(planning_items) == 1
+        assert planning_items[0]["status"] == "draft"
+
+        generated = client.post(f"/projects/{project_id}/planning-structure", headers=headers)
+
+        assert generated.status_code == 201
+        generated_tasks = cast(list[dict[str, Any]], generated.json()["tasks"])
+        assert len(generated_tasks) == 8
+        project = client.get(f"/projects/{project_id}", headers=headers).json()
+        assert project["status"] == "initialise"
+        assert project["displayed_planning_id"] == first.json()["planning_id"]
+
+
+def test_save_planning_structure_draft_rejects_read_only_project() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        with get_session_factory()() as session:
+            project = session.get(MsProject, project_id)
+            assert project is not None
+            project.status = "termine"
+            session.commit()
+
+        response = client.put(
+            f"/projects/{project_id}/planning-structure/draft",
+            json=_payload(),
+            headers=headers,
+        )
+
+        assert response.status_code == 409
+
+
 def test_create_planning_structure_generates_hierarchy_and_links() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)

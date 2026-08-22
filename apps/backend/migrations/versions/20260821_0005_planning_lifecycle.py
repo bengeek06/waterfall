@@ -147,8 +147,13 @@ def upgrade() -> None:
     op.execute(
         sa.text(
             "INSERT INTO wf_planning "
-            "(project_id, version_number, status, note, created_at) "
-            "SELECT p.id, 1, 'draft', 'Backfilled from MS Project', CURRENT_TIMESTAMP "
+            "(project_id, version_number, status, note, created_at, validated_at) "
+            "SELECT p.id, 1, "
+            "CASE WHEN EXISTS (SELECT 1 FROM ms_task t WHERE t.project_id = p.id) "
+            "THEN 'validated' ELSE 'draft' END, "
+            "'Backfilled from MS Project', CURRENT_TIMESTAMP, "
+            "CASE WHEN EXISTS (SELECT 1 FROM ms_task t WHERE t.project_id = p.id) "
+            "THEN CURRENT_TIMESTAMP ELSE NULL END "
             "FROM ms_project p"
         )
     )
@@ -171,14 +176,19 @@ def upgrade() -> None:
             "INSERT INTO wf_planning_link_snapshot "
             "(planning_id, task_uid, predecessor_uid, link_type, lag_tenth_minute, lag_format) "
             "SELECT w.id, l.task_uid, l.predecessor_uid, l.link_type, l.lag_tenth_minute, "
-            "l.lag_format FROM ms_task_link l JOIN wf_planning w ON w.project_id = l.project_id"
+            "l.lag_format FROM ms_task_link l JOIN wf_planning w ON w.project_id = l.project_id "
+            "WHERE EXISTS (SELECT 1 FROM wf_planning_task_snapshot t "
+            "WHERE t.planning_id = w.id AND t.uid = l.task_uid) "
+            "AND EXISTS (SELECT 1 FROM wf_planning_task_snapshot t "
+            "WHERE t.planning_id = w.id AND t.uid = l.predecessor_uid)"
         )
     )
     op.execute(
         sa.text(
             "UPDATE ms_project SET displayed_planning_id = "
             "(SELECT w.id FROM wf_planning w WHERE w.project_id = ms_project.id) "
-            "WHERE EXISTS (SELECT 1 FROM wf_planning w WHERE w.project_id = ms_project.id)"
+            "WHERE EXISTS (SELECT 1 FROM wf_planning w "
+            "WHERE w.project_id = ms_project.id AND w.status <> 'draft')"
         )
     )
     op.execute(

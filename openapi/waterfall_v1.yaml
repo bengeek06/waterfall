@@ -71,7 +71,7 @@ paths:
       summary: Créer un utilisateur public lorsque l'inscription est activée
       operationId: registerUser
       requestBody:
-        required: true
+        required: false
         content:
           application/json:
             schema:
@@ -599,7 +599,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/ProjectId'
       requestBody:
-        required: true
+        required: false
         content:
           application/json:
             schema:
@@ -897,7 +897,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/ProjectId'
       requestBody:
-        required: true
+        required: false
         content:
           application/json:
             schema:
@@ -909,6 +909,35 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PlanningStructureRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /projects/{projectId}/planning-structure/draft:
+    put:
+      tags: [projects]
+      summary: Sauvegarder le brouillon de structure de planning
+      operationId: savePlanningStructureDraft
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlanningStructureCreate'
+      responses:
+        '200':
+          description: Brouillon de structure sauvegarde
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanningStructureDraftRead'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -948,14 +977,6 @@ paths:
         - bearerAuth: []
       parameters:
         - $ref: '#/components/parameters/ProjectId'
-        - name: limit
-          in: query
-          required: false
-          schema: { type: integer, minimum: 1, maximum: 2000, default: 200 }
-        - name: offset
-          in: query
-          required: false
-          schema: { type: integer, minimum: 0, default: 0 }
         - name: planning_id
           in: query
           required: false
@@ -2883,6 +2904,15 @@ components:
           items:
             $ref: '#/components/schemas/TaskRead'
 
+    PlanningStructureDraftRead:
+      type: object
+      required: [planning_id, structure]
+      properties:
+        planning_id:
+          type: integer
+        structure:
+          $ref: '#/components/schemas/PlanningStructureCreate'
+
     PlanningTreeRead:
       type: object
       required: [tasks]
@@ -3079,7 +3109,6 @@ components:
       required:
         - id
         - estimate_id
-        - task_id
         - position
         - task_name
         - is_milestone
@@ -3093,6 +3122,7 @@ components:
         task_id:
           type: integer
           minimum: 1
+          nullable: true
         parent_task_id:
           type: integer
           minimum: 1

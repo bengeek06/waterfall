@@ -1,3 +1,4 @@
+import json
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, cast
@@ -272,6 +273,58 @@ def test_identical_source_is_detected_without_reapplying() -> None:
         status = client.get(f"/imports/v1/batches/{batch_ids[1]}", headers=headers)
         assert status.status_code == 200
         assert status.json()["counters"]["tasks"] == 1
+
+
+def test_identical_source_after_validation_creates_a_new_draft() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client, "import.identical.validated@example.com")
+        project_id = _create_project(client, headers)
+        xml = b'<Project xmlns="http://schemas.microsoft.com/project"><SaveVersion>16</SaveVersion><ScheduleFromStart>1</ScheduleFromStart><StartDate>2026-01-01T08:00:00</StartDate><Tasks><Task><UID>1</UID><ID>1</ID><Name>One</Name></Task></Tasks></Project>'
+
+        def import_source() -> int:
+            batch = client.post(
+                "/imports/v1/batches",
+                json={"projectId": project_id, "importMode": "standard"},
+                headers=headers,
+            )
+            batch_id = cast(int, batch.json()["id"])
+            assert (
+                client.post(
+                    f"/imports/v1/batches/{batch_id}/xml",
+                    files={"file": ("same.xml", xml, "application/xml")},
+                    headers=headers,
+                ).status_code
+                == 202
+            )
+            assert (
+                client.post(
+                    f"/imports/v1/batches/{batch_id}/run",
+                    json={"confirm": True},
+                    headers=headers,
+                ).status_code
+                == 202
+            )
+            return batch_id
+
+        import_source()
+        planning = client.get(f"/projects/{project_id}/plannings", headers=headers).json()[0]
+        assert (
+            client.post(
+                f"/projects/{project_id}/plannings/{planning['id']}/validate", headers=headers
+            ).status_code
+            == 200
+        )
+        second_batch_id = import_source()
+
+        plannings = client.get(f"/projects/{project_id}/plannings", headers=headers)
+        assert plannings.status_code == 200
+        assert [item["status"] for item in plannings.json()] == ["validated", "draft"]
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            second_batch = (
+                session.query(WfImportBatch).filter(WfImportBatch.id == second_batch_id).one()
+            )
+            assert json.loads(second_batch.log_json or "{}")["identical_source"] is True
 
 
 @pytest.mark.parametrize("xml_path", EXAMPLE_XML_FILES, ids=lambda p: p.name)

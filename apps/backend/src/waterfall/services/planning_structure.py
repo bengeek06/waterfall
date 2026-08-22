@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 from sqlalchemy import func
@@ -10,6 +11,21 @@ from waterfall.models.planning import WfPlanning, WfPlanningLinkSnapshot, WfPlan
 from waterfall.models.resources import EstimateCostLine, EstimateTaskRow, TaskRoleAssignment
 from waterfall.models.wf_core import WfChargeLine, WfTaskEnrichment
 from waterfall.schemas.projects import PlanningStructureCreate
+
+DRAFT_NOTE_PREFIX = "planning-structure-draft:"
+
+
+def save_planning_structure_draft(planning: WfPlanning, payload: PlanningStructureCreate) -> None:
+    planning.note = DRAFT_NOTE_PREFIX + json.dumps(
+        payload.model_dump(mode="json"), separators=(",", ":")
+    )
+
+
+def load_planning_structure_draft(planning: WfPlanning) -> PlanningStructureCreate | None:
+    if planning.note is None or not planning.note.startswith(DRAFT_NOTE_PREFIX):
+        return None
+    raw_payload = planning.note.removeprefix(DRAFT_NOTE_PREFIX)
+    return PlanningStructureCreate.model_validate(json.loads(raw_payload))
 
 
 @dataclass(frozen=True)

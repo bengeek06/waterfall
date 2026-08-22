@@ -35,6 +35,7 @@ from waterfall.schemas.projects import (
     PlanningLinkRead,
     PlanningRead,
     PlanningStructureCreate,
+    PlanningStructureDraftRead,
     PlanningStructureRead,
     PlanningTaskTreeRead,
     PlanningTreeRead,
@@ -62,6 +63,8 @@ from waterfall.services import (
     calculate_estimate_lines,
     generate_planning_snapshot,
     generate_planning_structure,
+    load_planning_structure_draft,
+    save_planning_structure_draft,
 )
 from waterfall.services.msproject_xml import (
     MsProjectValidationError,
@@ -1371,8 +1374,6 @@ def list_project_tasks(
 @router.get("/{project_id}/planning-tree", response_model=PlanningTreeRead)
 def get_planning_tree(
     project_id: int,
-    limit: int = Query(default=200, ge=1, le=2000),
-    offset: int = Query(default=0, ge=0),
     planning_id: int | None = Query(default=None, gt=0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
@@ -1380,9 +1381,7 @@ def get_planning_tree(
     project = _get_project_or_404(db, project_id, current_user.id)
     selected_id = planning_id or project.displayed_planning_id
     if selected_id is not None:
-        detail = _planning_detail(
-            db, _get_planning_or_404(db, project_id, selected_id), offset=offset, limit=limit
-        )
+        detail = _planning_detail(db, _get_planning_or_404(db, project_id, selected_id))
         tasks = detail.tasks
     else:
         stored_tasks = (
@@ -1409,7 +1408,7 @@ def get_planning_tree(
 )
 def create_planning_structure(
     project_id: int,
-    payload: PlanningStructureCreate,
+    payload: PlanningStructureCreate | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> PlanningStructureRead:
@@ -1438,6 +1437,13 @@ def create_planning_structure(
             )
             db.add(planning)
             db.flush()
+        if payload is None:
+            payload = load_planning_structure_draft(planning)
+            if payload is None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="A saved planning structure draft is required",
+                )
         snapshots = generate_planning_snapshot(db, project, payload, planning)
         if project.planning_reference_id is None:
             generate_planning_structure(db, project, payload)
@@ -1458,6 +1464,53 @@ def create_planning_structure(
     return PlanningStructureRead(
         tasks=[_to_snapshot_task_read(snapshot, [], project_id) for snapshot in snapshots]
     )
+
+
+@router.put(
+    "/{project_id}/planning-structure/draft",
+    response_model=PlanningStructureDraftRead,
+)
+def save_planning_structure_draft_route(
+    project_id: int,
+    payload: PlanningStructureCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> PlanningStructureDraftRead:
+    project = _get_project_or_404(db, project_id, current_user.id)
+    ensure_project_mutable(project)
+    try:
+        planning = (
+            db.query(WfPlanning)
+            .filter(WfPlanning.project_id == project_id, WfPlanning.status == "draft")
+            .order_by(WfPlanning.version_number.desc())
+            .first()
+        )
+        if planning is None:
+            version_number = (
+                db.query(func.max(WfPlanning.version_number))
+                .filter(WfPlanning.project_id == project_id)
+                .scalar()
+                or 0
+            )
+            planning = WfPlanning(
+                project_id=project_id,
+                version_number=version_number + 1,
+                status="draft",
+                note=None,
+                created_at=datetime.now(UTC),
+            )
+            db.add(planning)
+            db.flush()
+        save_planning_structure_draft(planning, payload)
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Planning structure conflicts with existing project data",
+        ) from exc
+
+    return PlanningStructureDraftRead(planning_id=planning.id, structure=payload)
 
 
 @router.post("/{project_id}/tasks", response_model=TaskRead, status_code=status.HTTP_201_CREATED)

@@ -520,6 +520,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{projectId}/planning-structure/draft": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Sauvegarder le brouillon de structure de planning */
+        put: operations["savePlanningStructureDraft"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/projects/{projectId}/planning-structure/reopen": {
         parameters: {
             query?: never;
@@ -1303,6 +1320,10 @@ export interface components {
         PlanningStructureRead: {
             tasks: components["schemas"]["TaskRead"][];
         };
+        PlanningStructureDraftRead: {
+            planning_id: number;
+            structure: components["schemas"]["PlanningStructureCreate"];
+        };
         PlanningTreeRead: {
             tasks: components["schemas"]["PlanningTaskTreeRead"][];
         };
@@ -1372,7 +1393,7 @@ export interface components {
         EstimateTaskRowRead: {
             id: number;
             estimate_id: number;
-            task_id: number;
+            task_id?: number | null;
             parent_task_id?: number | null;
             position: number;
             task_name: string;
@@ -1752,7 +1773,7 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: {
+        requestBody?: {
             content: {
                 "application/json": components["schemas"]["UserCreate"];
             };
@@ -2348,7 +2369,7 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody: {
+        requestBody?: {
             content: {
                 "application/json": components["schemas"]["ProjectUpdate"];
             };
@@ -2664,7 +2685,7 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody: {
+        requestBody?: {
             content: {
                 "application/json": components["schemas"]["PlanningStructureCreate"];
             };
@@ -2677,6 +2698,36 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PlanningStructureRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    savePlanningStructureDraft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlanningStructureCreate"];
+            };
+        };
+        responses: {
+            /** @description Brouillon de structure sauvegarde */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanningStructureDraftRead"];
                 };
             };
             401: components["responses"]["Unauthorized"];
@@ -2713,8 +2764,6 @@ export interface operations {
     getPlanningTree: {
         parameters: {
             query?: {
-                limit?: number;
-                offset?: number;
                 planning_id?: number | null;
             };
             header?: never;

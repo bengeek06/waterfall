@@ -181,6 +181,11 @@ class PlanningStructureRead(BaseModel):
     tasks: list[TaskRead]
 
 
+class PlanningStructureDraftRead(BaseModel):
+    planning_id: int
+    structure: PlanningStructureCreate
+
+
 class PlanningRead(BaseModel):
     id: int
     project_id: int

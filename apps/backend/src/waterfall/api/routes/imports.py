@@ -254,7 +254,7 @@ async def upload_xml(
 )
 def run_batch(
     batch_id: int,
-    payload: ImportRunRequest | None = None,
+    payload: ImportRunRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> ImportRunAcceptedResponse:
@@ -265,7 +265,7 @@ def run_batch(
     if batch.status != "pending":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Batch is not pending")
 
-    run_request = payload or ImportRunRequest()
+    run_request = payload
     if not run_request.dry_run and not run_request.confirm:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -340,33 +340,14 @@ def run_batch(
             .first()
             is not None
         )
-        if identical_source:
-            planning = (
-                db.query(WfPlanning)
-                .filter(WfPlanning.id == project.displayed_planning_id)
-                .one_or_none()
-            )
-            task_count, link_count = _planning_counters(db, planning.id) if planning else (0, 0)
-            batch.status = "success"
-            batch.finished_at = datetime.now(UTC)
-            payload["counters"] = {"tasks": task_count, "links": link_count}
-            payload["errors"] = []
-            payload["dry_run"] = run_request.dry_run
-            payload["identical_source"] = True
-            batch.log_json = json.dumps(payload)
-            db.add(batch)
-            db.commit()
-            return ImportRunAcceptedResponse(
-                batchId=batch.id,
-                status="success",
-                acceptedAt=accepted_at,
-            )
         task_count, link_count = import_tasks_and_links(db, xml_bytes, project)
         batch.status = "success"
         batch.finished_at = datetime.now(UTC)
         payload["counters"] = {"tasks": task_count, "links": link_count}
         payload["errors"] = []
         payload["dry_run"] = False
+        if identical_source:
+            payload["identical_source"] = True
         batch.log_json = json.dumps(payload)
         db.add(batch)
         db.commit()
