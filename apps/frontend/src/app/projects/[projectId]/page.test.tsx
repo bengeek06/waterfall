@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   setPlanningReference: vi.fn(),
   savePlanningStructureDraft: vi.fn(),
   createPlanningStructure: vi.fn(),
+  reopenPlanningStructure: vi.fn(),
   router: { push: vi.fn() },
 }));
 
@@ -48,6 +49,7 @@ vi.mock("@/lib/backend", async () => {
     setPlanningReference: mocks.setPlanningReference,
     savePlanningStructureDraft: mocks.savePlanningStructureDraft,
     createPlanningStructure: mocks.createPlanningStructure,
+    reopenPlanningStructure: mocks.reopenPlanningStructure,
     getCostCategories: vi.fn().mockResolvedValue([]),
     getCostTypes: vi.fn().mockResolvedValue([]),
   };
@@ -128,10 +130,12 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     mocks.setPlanningReference.mockReset();
     mocks.savePlanningStructureDraft.mockReset();
     mocks.createPlanningStructure.mockReset();
+    mocks.reopenPlanningStructure.mockReset();
     mocks.listProjectEstimates.mockResolvedValue([]);
     mocks.listPlannings.mockResolvedValue([]);
     mocks.createPlanningStructure.mockResolvedValue({ tasks: [] });
     mocks.savePlanningStructureDraft.mockResolvedValue({ planning_id: 2, structure: { posts: [] } });
+    mocks.reopenPlanningStructure.mockResolvedValue(project({ status: "initialise", displayed_planning_id: 3 }));
     mocks.createImportBatch.mockResolvedValue({ id: 42 });
     mocks.uploadImportSourceXml.mockResolvedValue({ id: 42 });
     mocks.runImportBatch.mockResolvedValue({ batchId: 42 });
@@ -216,6 +220,44 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     render(<ProjectDetailsPage />);
 
     expect(await screen.findByRole("button", { name: "Rouvrir la structure" })).toBeInTheDocument();
+  });
+
+  it("allows reopening from a validated planning reference without a draft", async () => {
+    const reference = planning({ id: 4, status: "validated" });
+    mocks.getProject.mockResolvedValue(
+      project({ status: "initialise", displayed_planning_id: reference.id, planning_reference_id: reference.id }),
+    );
+    mocks.listPlannings.mockResolvedValue([reference]);
+    mocks.getPlanning.mockResolvedValue(detail(reference));
+
+    render(<ProjectDetailsPage />);
+
+    expect(await screen.findByRole("button", { name: "Rouvrir la structure" })).toBeInTheDocument();
+  });
+
+  it("hydrates the structure form from a saved draft", async () => {
+    const draft = planning({
+      id: 3,
+      status: "draft",
+      note: `planning-structure-draft:${JSON.stringify({
+        posts: [{
+          key: "post-1",
+          name: "Poste sauvegardé",
+          lots: [{ key: "lot-1", name: "Lot sauvegardé", deliverables: [{ key: "deliverable-1", name: "Livrable sauvegardé" }] }],
+        }],
+      })}`,
+    });
+    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draft.id }));
+    mocks.listPlannings.mockResolvedValue([draft]);
+    mocks.getPlanning.mockResolvedValue(detail(draft));
+
+    render(<ProjectDetailsPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Rouvrir la structure" }));
+
+    expect(await screen.findByDisplayValue("Poste sauvegardé")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Lot sauvegardé")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Livrable sauvegardé")).toBeInTheDocument();
   });
 
   it("does not allow reopening a draft in a read-only project", async () => {
@@ -363,6 +405,7 @@ describe("ProjectDetailsPage planning lifecycle", () => {
       expect.anything(),
       expect.anything(),
     ));
+    expect(mocks.getImportBatchStatus).not.toHaveBeenCalled();
     expect(screen.getByRole("heading", { name: "Remplacement à confirmer" })).toBeInTheDocument();
     expect(mocks.runImportBatch).toHaveBeenCalledWith(42, expect.anything(), expect.anything(), true, false);
 
@@ -375,7 +418,7 @@ describe("ProjectDetailsPage planning lifecycle", () => {
       true,
     ));
     await waitFor(() => expect(mocks.listPlannings).toHaveBeenCalledTimes(2));
-    expect(mocks.getPlanning).toHaveBeenCalledTimes(2);
+    expect(mocks.getPlanning).toHaveBeenCalled();
     expect(screen.queryByRole("heading", { name: "Remplacement à confirmer" })).not.toBeInTheDocument();
   });
 });

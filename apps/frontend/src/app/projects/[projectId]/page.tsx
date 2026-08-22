@@ -48,6 +48,7 @@ import {
 import { clearSession, getSession, setSession, type SessionTokens } from "@/lib/session";
 import {
   buildPlanningStructurePayload,
+  getPlanningStructureDraftRows,
   type PlanningStructureDraftRow,
 } from "@/lib/planning-structure";
 import { ReadOnlyGantt } from "@/components/read-only-gantt";
@@ -190,6 +191,13 @@ export default function ProjectDetailsPage() {
         const detail = await getPlanning(projectId, selectedPlanningId, session, onSessionRefresh);
         if (!cancelled) {
           setPlanningDetail(detail);
+          const rows = getPlanningStructureDraftRows(
+            plannings.find((planning) => planning.id === selectedPlanningId) ?? null,
+            detail,
+          );
+          if (rows.length) {
+            setStructureDraft(rows);
+          }
         }
       } catch (cause) {
         if (cancelled) {
@@ -212,9 +220,11 @@ export default function ProjectDetailsPage() {
     return () => {
       cancelled = true;
     };
-  }, [onSessionRefresh, projectId, router, selectedPlanningId, session]);
+  }, [onSessionRefresh, plannings, projectId, router, selectedPlanningId, session]);
 
   useEffect(() => {
+    let cancelled = false;
+
     async function loadEstimateDetails() {
       if (!session || selectedEstimateId === null) {
         setEstimateTaskRowCount(0);
@@ -226,9 +236,14 @@ export default function ProjectDetailsPage() {
           listEstimateTaskRows(projectId, selectedEstimateId, session, onSessionRefresh),
           listEstimateCostLines(projectId, selectedEstimateId, session, onSessionRefresh),
         ]);
-        setEstimateTaskRowCount(taskRows.length);
-        setCostLines(lines);
+        if (!cancelled) {
+          setEstimateTaskRowCount(taskRows.length);
+          setCostLines(lines);
+        }
       } catch (cause) {
+        if (cancelled) {
+          return;
+        }
         if (cause instanceof SessionExpiredError) {
           clearSession();
           router.push("/login");
@@ -239,6 +254,9 @@ export default function ProjectDetailsPage() {
     }
 
     void loadEstimateDetails();
+    return () => {
+      cancelled = true;
+    };
   }, [onSessionRefresh, projectId, router, selectedEstimateId, session]);
 
   useEffect(() => {
@@ -262,14 +280,21 @@ export default function ProjectDetailsPage() {
   }, [onSessionRefresh, session]);
 
   useEffect(() => {
+    let cancelled = false;
+
     async function loadAggregates() {
       if (!session || selectedEstimateId === null || activeTab !== "analytics") {
         return;
       }
       try {
         const data = await getEstimateAggregates(projectId, selectedEstimateId, session, onSessionRefresh);
-        setAggregates(data);
+        if (!cancelled) {
+          setAggregates(data);
+        }
       } catch (cause) {
+        if (cancelled) {
+          return;
+        }
         if (cause instanceof SessionExpiredError) {
           clearSession();
           router.push("/login");
@@ -280,6 +305,9 @@ export default function ProjectDetailsPage() {
     }
 
     void loadAggregates();
+    return () => {
+      cancelled = true;
+    };
   }, [activeTab, onSessionRefresh, projectId, router, selectedEstimateId, session]);
 
   const selectedEstimate = estimates.find((estimate) => estimate.id === selectedEstimateId) ?? null;
@@ -754,18 +782,6 @@ export default function ProjectDetailsPage() {
       const batch = await createImportBatch(projectId, project.name, session, onSessionRefresh);
       await uploadImportSourceXml(batch.id, importFile, session, onSessionRefresh);
       await runImportBatch(batch.id, session, onSessionRefresh, true, false);
-
-      let batchStatus = await getImportBatchStatus(batch.id, session, onSessionRefresh);
-      for (let index = 0; index < 20; index += 1) {
-        if (batchStatus.status === "success" || batchStatus.status === "failed") {
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 300));
-        batchStatus = await getImportBatchStatus(batch.id, session, onSessionRefresh);
-      }
-      if (batchStatus.status !== "success") {
-        throw new Error(batchStatus.errorMessage ?? "La prévisualisation de l'import a échoué.");
-      }
       const diff = await getImportBatchDiff(batch.id, session, onSessionRefresh);
       setImportReview({ batchId: batch.id, diff });
     } catch (cause) {
@@ -1129,7 +1145,7 @@ export default function ProjectDetailsPage() {
                     Définir comme référence
                   </button>
                 ) : null}
-                {plannings.some((planning) => planning.status === "draft") && !isReadOnlyProject ? (
+                {(plannings.some((planning) => planning.status === "draft") || project?.planning_reference_id !== null) && !isReadOnlyProject ? (
                   <button
                     className="btn"
                     type="button"

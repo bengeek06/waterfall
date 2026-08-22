@@ -1,4 +1,4 @@
-import type { PlanningStructureCreate } from "./backend";
+import type { Planning, PlanningDetail, PlanningStructureCreate } from "./backend";
 
 export type PlanningStructureDraftRow = {
   rowId: string;
@@ -8,6 +8,59 @@ export type PlanningStructureDraftRow = {
   lotName: string;
   deliverables: string;
 };
+
+const DRAFT_NOTE_PREFIX = "planning-structure-draft:";
+
+function rowsFromStructure(structure: PlanningStructureCreate): PlanningStructureDraftRow[] {
+  return structure.posts.flatMap((post) =>
+    post.lots.map((lot) => ({
+      rowId: `${post.key}/${lot.key}`,
+      postKey: post.key,
+      postName: post.name,
+      lotKey: lot.key,
+      lotName: lot.name,
+      deliverables: lot.deliverables.map((deliverable) => deliverable.name).join(", "),
+    })),
+  );
+}
+
+export function getPlanningStructureDraftRows(
+  planning: Planning | null,
+  detail: PlanningDetail | null,
+): PlanningStructureDraftRow[] {
+  if (planning?.note?.startsWith(DRAFT_NOTE_PREFIX)) {
+    try {
+      const structure = JSON.parse(planning.note.slice(DRAFT_NOTE_PREFIX.length)) as PlanningStructureCreate;
+      const rows = rowsFromStructure(structure);
+      if (rows.length) {
+        return rows;
+      }
+    } catch {
+      // Fall back to the selected planning when an older draft is malformed.
+    }
+  }
+
+  const rows = (detail?.tasks ?? [])
+    .filter((task) => task.structure_kind === "livrable")
+    .map((task) => {
+      const [postKey = "", lotKey = ""] = (task.structure_key ?? "").split("/");
+      const lot = detail?.tasks.find(
+        (candidate) => candidate.structure_kind === "lot" && candidate.structure_key === `${postKey}/${lotKey}`,
+      );
+      const post = detail?.tasks.find(
+        (candidate) => candidate.structure_kind === "poste" && candidate.structure_key === postKey,
+      );
+      return {
+        rowId: task.structure_key ?? `task-${task.uid}`,
+        postKey,
+        postName: post?.name ?? "",
+        lotKey,
+        lotName: lot?.name ?? "",
+        deliverables: task.name,
+      };
+    });
+  return rows;
+}
 
 type PlanningStructureLotDraft = {
   key: string;

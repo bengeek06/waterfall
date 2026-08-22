@@ -24,6 +24,7 @@ export type PlanningDetail = components["schemas"]["PlanningDetailRead"];
 export type TaskRoleAssignment = components["schemas"]["TaskRoleAssignmentRead"];
 export type ImportBatch = components["schemas"]["ImportBatchResponse"];
 export type ImportBatchStatus = components["schemas"]["ImportBatchStatusResponse"];
+export type ImportRunAcceptedResponse = components["schemas"]["ImportRunAcceptedResponse"];
 export type ImportDiff = components["schemas"]["ImportDiffResponse"];
 export type TokenResponse = components["schemas"]["Token"];
 
@@ -810,7 +811,7 @@ export function runImportBatch(
   dryRun = false,
   confirm = false,
 ) {
-  return authRequest<{ batchId: number }>(
+  return authRequest<ImportRunAcceptedResponse>(
     `/imports/v1/batches/${batchId}/run`,
     tokens,
     {
