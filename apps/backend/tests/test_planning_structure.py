@@ -234,6 +234,29 @@ def test_create_planning_structure_rejects_duplicate_keys_without_mutation() -> 
         assert listed.json() == []
 
 
+def test_legacy_task_mutations_are_rejected_when_planning_is_displayed() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        generated = client.post(
+            f"/projects/{project_id}/planning-structure",
+            json=_payload(),
+            headers=headers,
+        )
+        assert generated.status_code == 201
+        task_uid = generated.json()["tasks"][0]["uid"]
+
+        create = client.post(
+            f"/projects/{project_id}/tasks",
+            json={"name": "Legacy task"},
+            headers=headers,
+        )
+        delete = client.delete(f"/projects/{project_id}/tasks/{task_uid}", headers=headers)
+
+        assert create.status_code == 409
+        assert delete.status_code == 409
+
+
 def test_structure_versions_validated_planning_is_immutable_and_reopenable() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)

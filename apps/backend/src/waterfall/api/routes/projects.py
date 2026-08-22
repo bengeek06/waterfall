@@ -976,7 +976,11 @@ def validate_project_estimate(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Estimate is not a draft")
 
     # Calculate and snapshot all estimate lines (labor and non-labor)
-    estimate_lines = calculate_estimate_lines(db, estimate_id)
+    try:
+        estimate_lines = calculate_estimate_lines(db, estimate_id)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     db.add_all(estimate_lines)
     db.flush()
 
@@ -1525,6 +1529,11 @@ def create_project_task(
     """Add a planning task for devis purposes; dates stay driven by MS Project."""
     project = _get_project_or_404(db, project_id, current_user.id)
     ensure_project_mutable(project)
+    if project.displayed_planning_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot create a legacy task while a versioned planning is displayed",
+        )
 
     parent_task: MsTask | None = None
     if payload.parent_task_id is not None:
@@ -1663,6 +1672,11 @@ def delete_project_task(
 ) -> None:
     project = _get_project_or_404(db, project_id, current_user.id)
     ensure_project_mutable(project)
+    if project.displayed_planning_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot delete a legacy task while a versioned planning is displayed",
+        )
     task = _get_task_or_404(db, project_id, task_uid)
 
     has_children = (

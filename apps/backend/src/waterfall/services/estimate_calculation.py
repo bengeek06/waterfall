@@ -7,6 +7,7 @@ from typing import TypedDict
 from sqlalchemy.orm import Session
 
 from waterfall.models.ms_core import MsProject, MsTask
+from waterfall.models.planning import WfPlanningTaskSnapshot
 from waterfall.models.resources import (
     CostRate,
     CostType,
@@ -47,8 +48,25 @@ def calculate_estimate_lines(db: Session, estimate_id: int) -> list[EstimateLine
         .all()
     )
 
+    source_tasks: dict[int, WfPlanningTaskSnapshot] = {}
+    if estimate.planning_id is not None:
+        source_tasks = {
+            task.uid: task
+            for task in db.query(WfPlanningTaskSnapshot)
+            .filter(WfPlanningTaskSnapshot.planning_id == estimate.planning_id)
+            .all()
+        }
+        outside_source = [task.uid for _, task, _ in assignments if task.uid not in source_tasks]
+        if outside_source:
+            raise ValueError(
+                "Estimate has role assignments outside its planning snapshot: "
+                + ", ".join(str(uid) for uid in sorted(outside_source))
+            )
+
     for assignment, task, role in assignments:
-        labor_lines = _generate_labor_lines(db, estimate_id, assignment, task, role)
+        labor_lines = _generate_labor_lines(
+            db, estimate_id, assignment, task, role, source_tasks.get(task.uid)
+        )
         lines.extend(labor_lines)
 
     # 2. Process non-labor lines (Fourniture, Frais, UO)
@@ -93,6 +111,7 @@ def _generate_labor_lines(
     assignment: TaskRoleAssignment,
     task: MsTask,
     role: ResourceRole,
+    source_task: WfPlanningTaskSnapshot | None = None,
 ) -> list[EstimateLine]:
     """
     Generate EstimateLines for a task-role assignment, split by year if needed.
@@ -102,12 +121,13 @@ def _generate_labor_lines(
     """
     lines: list[EstimateLine] = []
 
-    if not task.start_at or not task.finish_at:
+    schedule_task = source_task or task
+    if not schedule_task.start_at or not schedule_task.finish_at:
         # Skip tasks without dates
         return lines
 
-    start_year = task.start_at.year
-    end_year = task.finish_at.year
+    start_year = schedule_task.start_at.year
+    end_year = schedule_task.finish_at.year
     years_spanned = end_year - start_year + 1
 
     # Distribute total hours uniformly across years
@@ -136,7 +156,7 @@ def _generate_labor_lines(
             estimate_id=estimate_id,
             task_id=task.id,
             role_id=role.id,
-            task_name=task.name,
+            task_name=schedule_task.name,
             role_code=role.code,
             role_name=role.name,
             accounting_code=role.code,  # Use role code as proxy for category

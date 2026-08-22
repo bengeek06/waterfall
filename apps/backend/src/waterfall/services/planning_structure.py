@@ -12,20 +12,17 @@ from waterfall.models.resources import EstimateCostLine, EstimateTaskRow, TaskRo
 from waterfall.models.wf_core import WfChargeLine, WfTaskEnrichment
 from waterfall.schemas.projects import PlanningStructureCreate
 
-DRAFT_NOTE_PREFIX = "planning-structure-draft:"
-
 
 def save_planning_structure_draft(planning: WfPlanning, payload: PlanningStructureCreate) -> None:
-    planning.note = DRAFT_NOTE_PREFIX + json.dumps(
+    planning.structure_draft_json = json.dumps(
         payload.model_dump(mode="json"), separators=(",", ":")
     )
 
 
 def load_planning_structure_draft(planning: WfPlanning) -> PlanningStructureCreate | None:
-    if planning.note is None or not planning.note.startswith(DRAFT_NOTE_PREFIX):
+    if planning.structure_draft_json is None:
         return None
-    raw_payload = planning.note.removeprefix(DRAFT_NOTE_PREFIX)
-    return PlanningStructureCreate.model_validate(json.loads(raw_payload))
+    return PlanningStructureCreate.model_validate(json.loads(planning.structure_draft_json))
 
 
 @dataclass(frozen=True)
