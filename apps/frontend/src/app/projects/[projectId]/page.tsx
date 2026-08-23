@@ -22,6 +22,7 @@ import {
   getImportBatchStatus,
   getImportBatchDiff,
   getPlanning,
+  getPlanningStructureDraft,
   getProject,
   listPlannings,
   listEstimateCostLines,
@@ -49,6 +50,7 @@ import { clearSession, getSession, setSession, type SessionTokens } from "@/lib/
 import {
   buildPlanningStructurePayload,
   getPlanningStructureDraftRows,
+  structureToDraftRows,
   type PlanningStructureDraftRow,
 } from "@/lib/planning-structure";
 import { ReadOnlyGantt } from "@/components/read-only-gantt";
@@ -190,12 +192,12 @@ export default function ProjectDetailsPage() {
       setPlanningDetailBusy(true);
       try {
         const detail = await getPlanning(projectId, selectedPlanningId, session, onSessionRefresh);
+        const savedDraft = await getPlanningStructureDraft(projectId, session, onSessionRefresh);
         if (!cancelled) {
           setPlanningDetail(detail);
-          const rows = getPlanningStructureDraftRows(
-            plannings.find((planning) => planning.id === selectedPlanningId) ?? null,
-            detail,
-          );
+          const rows = savedDraft
+            ? structureToDraftRows(savedDraft.structure)
+            : getPlanningStructureDraftRows(detail);
           if (
             rows.length &&
             rows.every(
@@ -231,7 +233,7 @@ export default function ProjectDetailsPage() {
     return () => {
       cancelled = true;
     };
-  }, [onSessionRefresh, plannings, projectId, router, selectedPlanningId, session]);
+  }, [onSessionRefresh, projectId, router, selectedPlanningId, session]);
 
   useEffect(() => {
     let cancelled = false;
@@ -424,13 +426,13 @@ export default function ProjectDetailsPage() {
       const reopenedDetail = nextPlanningId
         ? await getPlanning(projectId, nextPlanningId, session, onSessionRefresh)
         : null;
+      const savedDraft = await getPlanningStructureDraft(projectId, session, onSessionRefresh);
       setProject(updatedProject);
       setPlannings(planningMetadata);
       setSelectedPlanningId(nextPlanningId);
-      const rows = getPlanningStructureDraftRows(
-        planningMetadata.find((planning) => planning.id === nextPlanningId) ?? null,
-        reopenedDetail,
-      );
+      const rows = savedDraft
+        ? structureToDraftRows(savedDraft.structure)
+        : getPlanningStructureDraftRows(reopenedDetail);
       if (
         rows.length &&
         rows.every(

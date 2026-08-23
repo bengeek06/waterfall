@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildPlanningStructurePayload,
   getPlanningStructureDraftRows,
+  structureToDraftRows,
   type PlanningStructureDraftRow,
 } from "./planning-structure";
 
@@ -79,7 +80,7 @@ describe("buildPlanningStructurePayload", () => {
       ],
     } as never;
 
-    expect(getPlanningStructureDraftRows(null, detail)).toEqual([
+    expect(getPlanningStructureDraftRows(detail)).toEqual([
       {
         rowId: "design/spec/requirements",
         postKey: "design",
@@ -87,7 +88,60 @@ describe("buildPlanningStructurePayload", () => {
         lotKey: "spec",
         lotName: "Specification",
         deliverables: "Requirements",
+        deliverableKeys: { Requirements: "requirements" },
       },
+    ]);
+  });
+
+  it("preserves existing deliverable keys across a rows -> payload -> rows round-trip", () => {
+    const structure = {
+      posts: [
+        {
+          key: "design",
+          name: "Design",
+          lots: [
+            {
+              key: "specification",
+              name: "Specification",
+              deliverables: [
+                { key: "deliverable-1", name: "Requirements" },
+                { key: "custom-arch", name: "Architecture" },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    const rows = structureToDraftRows(structure);
+    const payload = buildPlanningStructurePayload(rows);
+
+    // Keys are reused verbatim, no deliverable-N reassignment.
+    expect(payload.posts[0].lots[0].deliverables).toEqual([
+      { key: "deliverable-1", name: "Requirements" },
+      { key: "custom-arch", name: "Architecture" },
+    ]);
+    // Round-trip back to rows is stable.
+    expect(structureToDraftRows(payload)).toEqual(rows);
+  });
+
+  it("only assigns new keys above existing ones for genuinely new deliverables", () => {
+    const rows: PlanningStructureDraftRow[] = [
+      {
+        rowId: "row-1",
+        postKey: "design",
+        postName: "Design",
+        lotKey: "spec",
+        lotName: "Specification",
+        deliverables: "Requirements, Architecture, Newcomer",
+        deliverableKeys: { Requirements: "deliverable-1", Architecture: "deliverable-2" },
+      },
+    ];
+
+    expect(buildPlanningStructurePayload(rows).posts[0].lots[0].deliverables).toEqual([
+      { key: "deliverable-1", name: "Requirements" },
+      { key: "deliverable-2", name: "Architecture" },
+      { key: "deliverable-3", name: "Newcomer" },
     ]);
   });
 });

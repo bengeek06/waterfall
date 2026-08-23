@@ -902,6 +902,26 @@ export function savePlanningStructureDraft(
   );
 }
 
+export async function getPlanningStructureDraft(
+  projectId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+): Promise<PlanningStructureDraftRead | null> {
+  try {
+    return await authRequest<PlanningStructureDraftRead>(
+      `/projects/${projectId}/planning-structure/draft`,
+      tokens,
+      { method: "GET" },
+      onSessionRefresh,
+    );
+  } catch (cause) {
+    if (cause instanceof ApiError && cause.status === 404) {
+      return null;
+    }
+    throw cause;
+  }
+}
+
 export function listPlannings(
   projectId: number,
   tokens: SessionTokens,

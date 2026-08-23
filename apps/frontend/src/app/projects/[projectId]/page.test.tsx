@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   setDisplayedPlanning: vi.fn(),
   setPlanningReference: vi.fn(),
   savePlanningStructureDraft: vi.fn(),
+  getPlanningStructureDraft: vi.fn(),
   createPlanningStructure: vi.fn(),
   reopenPlanningStructure: vi.fn(),
   router: { push: vi.fn() },
@@ -48,6 +49,7 @@ vi.mock("@/lib/backend", async () => {
     setDisplayedPlanning: mocks.setDisplayedPlanning,
     setPlanningReference: mocks.setPlanningReference,
     savePlanningStructureDraft: mocks.savePlanningStructureDraft,
+    getPlanningStructureDraft: mocks.getPlanningStructureDraft,
     createPlanningStructure: mocks.createPlanningStructure,
     reopenPlanningStructure: mocks.reopenPlanningStructure,
     getCostCategories: vi.fn().mockResolvedValue([]),
@@ -129,12 +131,14 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     mocks.setDisplayedPlanning.mockReset();
     mocks.setPlanningReference.mockReset();
     mocks.savePlanningStructureDraft.mockReset();
+    mocks.getPlanningStructureDraft.mockReset();
     mocks.createPlanningStructure.mockReset();
     mocks.reopenPlanningStructure.mockReset();
     mocks.listProjectEstimates.mockResolvedValue([]);
     mocks.listPlannings.mockResolvedValue([]);
     mocks.createPlanningStructure.mockResolvedValue({ tasks: [] });
     mocks.savePlanningStructureDraft.mockResolvedValue({ planning_id: 2, structure: { posts: [] } });
+    mocks.getPlanningStructureDraft.mockResolvedValue(null);
     mocks.reopenPlanningStructure.mockResolvedValue(project({ status: "initialise", displayed_planning_id: 3 }));
     mocks.createImportBatch.mockResolvedValue({ id: 42 });
     mocks.uploadImportSourceXml.mockResolvedValue({ id: 42 });
@@ -236,20 +240,20 @@ describe("ProjectDetailsPage planning lifecycle", () => {
   });
 
   it("hydrates the structure form from a saved draft", async () => {
-    const draft = planning({
-      id: 3,
-      status: "draft",
-      note: `planning-structure-draft:${JSON.stringify({
+    const draft = planning({ id: 3, status: "draft" });
+    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draft.id }));
+    mocks.listPlannings.mockResolvedValue([draft]);
+    mocks.getPlanning.mockResolvedValue(detail(draft));
+    mocks.getPlanningStructureDraft.mockResolvedValue({
+      planning_id: draft.id,
+      structure: {
         posts: [{
           key: "post-1",
           name: "Poste sauvegardé",
           lots: [{ key: "lot-1", name: "Lot sauvegardé", deliverables: [{ key: "deliverable-1", name: "Livrable sauvegardé" }] }],
         }],
-      })}`,
+      },
     });
-    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draft.id }));
-    mocks.listPlannings.mockResolvedValue([draft]);
-    mocks.getPlanning.mockResolvedValue(detail(draft));
 
     render(<ProjectDetailsPage />);
 
