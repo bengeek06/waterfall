@@ -40,7 +40,7 @@ Si un skill n'est pas utilisé, indique brièvement pourquoi.
 
 - Privilégie des changements minimaux et ciblés.
 - Ne modifie pas des zones hors périmètre sans justification.
-- Pour chaque invocation terminal, pars de la racine du dépôt et préfixe explicitement la commande par `source .venv/bin/activate &&`, car les shells persistants peuvent changer de répertoire.
+- Un shell persistant peut être dans n'importe quel répertoire: n'assume jamais être à la racine. Préfixe systématiquement chaque commande par `cd "$(git rev-parse --show-toplevel)" &&` avant `source .venv/bin/activate`, pour que l'ancrage soit auto-suffisant plutôt que dépendant du cwd courant.
 - Si tu touches un schéma SQLAlchemy, évalue systématiquement l'impact Alembic.
 - Si tu touches un endpoint, vérifie payloads, statuts HTTP, auth et erreurs.
 - Ne masque pas un échec de test/lint/typecheck.
@@ -77,20 +77,20 @@ Si un skill n'est pas utilisé, indique brièvement pourquoi.
 
 ### 5) Validation
 
-Depuis la racine du dépôt (selon périmètre):
+Ancrées sur la racine du dépôt quel que soit le cwd courant (selon périmètre):
 
-- `source .venv/bin/activate && cd apps/backend && ruff check .`
-- `source .venv/bin/activate && cd apps/backend && pyright`
-- `source .venv/bin/activate && cd apps/backend && pytest`
-- `source .venv/bin/activate && cd apps/backend && pytest --no-cov tests/<fichier>.py` pour une validation ciblée rapide.
-- `source .venv/bin/activate && cd apps/backend && alembic upgrade head`
+- `cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && cd apps/backend && ruff check .`
+- `cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && cd apps/backend && pyright`
+- `cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && cd apps/backend && pytest`
+- `cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && cd apps/backend && pytest --no-cov tests/<fichier>.py` pour une validation ciblée rapide.
+- `cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && cd apps/backend && alembic upgrade head`
 
 Depuis la racine (optionnel):
 
-- `source .venv/bin/activate && make lint-backend`
-- `source .venv/bin/activate && make typecheck-backend`
-- `source .venv/bin/activate && make test-backend`
-- `source .venv/bin/activate && make migrate-up`
+- `cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && make lint-backend`
+- `cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && make typecheck-backend`
+- `cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && make test-backend`
+- `cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && make migrate-up`
 
 Pour incidents runtime compose:
 

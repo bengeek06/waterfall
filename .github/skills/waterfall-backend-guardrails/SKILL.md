@@ -44,8 +44,8 @@ Waterfall backend relies on:
 - Distinguish API failure from post-action refresh failure when relevant.
 
 6. Use repository virtual environment consistently.
-- Start every terminal invocation from the repository root with the explicit prefix `source .venv/bin/activate &&`, because persistent shells can change their working directory.
-- For commands that require `apps/backend`, change directory after activation: `source .venv/bin/activate && cd apps/backend && ...`.
+- A persistent shell may be in any directory: never assume you're at the repository root. Self-anchor every invocation with `cd "$(git rev-parse --show-toplevel)" &&` before sourcing, instead of relying on the shell's current working directory.
+- For commands that require `apps/backend`, change directory after activation: `cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && cd apps/backend && ...`.
 
 ## Verification checklist
 
@@ -78,18 +78,18 @@ Waterfall backend relies on:
 
 From the repository root:
 
-- source .venv/bin/activate && cd apps/backend && ruff check .
-- source .venv/bin/activate && cd apps/backend && pyright
-- source .venv/bin/activate && cd apps/backend && pytest
-- source .venv/bin/activate && cd apps/backend && pytest --no-cov tests/<target_file>.py
-- source .venv/bin/activate && cd apps/backend && alembic upgrade head
+- cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && cd apps/backend && ruff check .
+- cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && cd apps/backend && pyright
+- cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && cd apps/backend && pytest
+- cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && cd apps/backend && pytest --no-cov tests/<target_file>.py
+- cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && cd apps/backend && alembic upgrade head
 
 Root commands:
 
-- source .venv/bin/activate && make lint-backend
-- source .venv/bin/activate && make typecheck-backend
-- source .venv/bin/activate && make test-backend
-- source .venv/bin/activate && make migrate-up
+- cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && make lint-backend
+- cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && make typecheck-backend
+- cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && make test-backend
+- cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && make migrate-up
 - docker compose -f infra/docker/docker-compose.yml ps
 - docker compose -f infra/docker/docker-compose.yml logs --tail=120 api
 

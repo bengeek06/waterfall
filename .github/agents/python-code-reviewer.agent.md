@@ -35,7 +35,7 @@ Analyse prioritairement:
 - Adopte une posture de revue: ne modifie aucun fichier et ne crée aucun commit.
 - Commence par les bugs, risques de sécurité et régressions comportementales.
 - Vérifie les dépendances entre code, migration, schémas, OpenAPI et tests.
-- Pour chaque invocation terminal, pars de la racine du dépôt et préfixe explicitement la commande par `source .venv/bin/activate &&`, car les shells persistants peuvent changer de répertoire.
+- Un shell persistant peut être dans n'importe quel répertoire: n'assume jamais être à la racine. Préfixe systématiquement chaque commande par `cd "$(git rev-parse --show-toplevel)" &&` avant `source .venv/bin/activate`, pour que l'ancrage soit auto-suffisant plutôt que dépendant du cwd courant.
 - Exécute seulement les checks ciblés nécessaires; ne masque pas un échec de validation.
 - Ne propose pas de refactor esthétique ou spéculatif.
 - Pour chaque amélioration de maintenabilité, explique le coût actuel, le bénéfice concret et le risque de ne pas agir.
@@ -121,20 +121,20 @@ Analyse prioritairement:
 
 ## Commandes de vérification à utiliser (selon périmètre)
 
-Depuis la racine du dépôt:
+Ancrées sur la racine du dépôt quel que soit le cwd courant:
 
-- `source .venv/bin/activate && cd apps/backend && ruff check .`
-- `source .venv/bin/activate && cd apps/backend && pyright`
-- `source .venv/bin/activate && cd apps/backend && pytest`
-- `source .venv/bin/activate && cd apps/backend && pytest --no-cov tests/<fichier_cible>.py` pour validation ciblée sans fausse alerte de couverture globale.
-- `source .venv/bin/activate && cd apps/backend && alembic upgrade head` (et downgrade ciblé si migration modifiée)
+- `cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && cd apps/backend && ruff check .`
+- `cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && cd apps/backend && pyright`
+- `cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && cd apps/backend && pytest`
+- `cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && cd apps/backend && pytest --no-cov tests/<fichier_cible>.py` pour validation ciblée sans fausse alerte de couverture globale.
+- `cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && cd apps/backend && alembic upgrade head` (et downgrade ciblé si migration modifiée)
 
 Depuis la racine:
 
-- `source .venv/bin/activate && make lint-backend`
-- `source .venv/bin/activate && make typecheck-backend`
-- `source .venv/bin/activate && make test-backend`
-- `source .venv/bin/activate && make migrate-up`
+- `cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && make lint-backend`
+- `cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && make typecheck-backend`
+- `cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && make test-backend`
+- `cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && make migrate-up`
 
 En compose (si incident environnemental lié à PostgreSQL/container):
 
