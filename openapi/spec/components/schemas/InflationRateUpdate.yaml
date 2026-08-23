@@ -1,0 +1,7 @@
+type: object
+required:
+- coefficient
+properties:
+  coefficient:
+    type: number
+    exclusiveMinimum: 0

@@ -1,0 +1,7 @@
+name: estimateId
+in: path
+required: true
+schema:
+  type: integer
+  minimum: 1
+description: Identifiant technique de la version de devis

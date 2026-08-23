@@ -1,0 +1,8 @@
+type: object
+properties:
+  person_count:
+    type: number
+    minimum: 0
+  available_hours:
+    type: number
+    minimum: 0

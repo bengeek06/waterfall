@@ -1,0 +1,27 @@
+type: object
+required:
+- kind
+- uid
+- message
+- fields
+properties:
+  kind:
+    type: string
+    enum:
+    - added
+    - modified
+    - removed
+    - conflict
+  uid:
+    type: integer
+    minimum: 1
+  message:
+    type: string
+  fields:
+    type: array
+    items:
+      type: string
+  linkChanges:
+    type: array
+    items:
+      $ref: ImportLinkChange.yaml

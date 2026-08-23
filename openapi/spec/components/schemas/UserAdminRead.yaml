@@ -1,0 +1,24 @@
+allOf:
+- $ref: UserRead.yaml
+- type: object
+  required:
+  - is_admin
+  - failed_login_attempts
+  - created_at
+  - updated_at
+  properties:
+    is_admin:
+      type: boolean
+    failed_login_attempts:
+      type: integer
+      minimum: 0
+    locked_until:
+      type: string
+      format: date-time
+      nullable: true
+    created_at:
+      type: string
+      format: date-time
+    updated_at:
+      type: string
+      format: date-time

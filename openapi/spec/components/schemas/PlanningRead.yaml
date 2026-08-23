@@ -1,0 +1,33 @@
+type: object
+required:
+- id
+- project_id
+- version_number
+- status
+- created_at
+properties:
+  id:
+    type: integer
+    minimum: 1
+  project_id:
+    type: integer
+    minimum: 1
+  version_number:
+    type: integer
+    minimum: 1
+  status:
+    type: string
+    enum:
+    - draft
+    - validated
+    - superseded
+  note:
+    type: string
+    nullable: true
+  created_at:
+    type: string
+    format: date-time
+  validated_at:
+    type: string
+    format: date-time
+    nullable: true

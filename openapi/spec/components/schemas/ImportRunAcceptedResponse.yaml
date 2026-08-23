@@ -1,0 +1,14 @@
+type: object
+required:
+- batchId
+- status
+- acceptedAt
+properties:
+  batchId:
+    type: integer
+    minimum: 1
+  status:
+    $ref: BatchStatus.yaml
+  acceptedAt:
+    type: string
+    format: date-time

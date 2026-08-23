@@ -1,0 +1,12 @@
+type: object
+properties:
+  quantity:
+    type: number
+    exclusiveMinimum: 0
+  hours:
+    type: number
+    minimum: 0
+  comment:
+    type: string
+    maxLength: 10000
+    nullable: true

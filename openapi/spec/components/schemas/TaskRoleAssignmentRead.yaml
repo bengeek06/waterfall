@@ -1,0 +1,45 @@
+type: object
+required:
+- id
+- task_id
+- role_id
+- role_code
+- role_name
+- cost_category_id
+- accounting_code
+- quantity
+- hours
+- created_at
+- updated_at
+properties:
+  id:
+    type: integer
+    minimum: 1
+  task_id:
+    type: integer
+    minimum: 1
+  role_id:
+    type: integer
+    minimum: 1
+  role_code:
+    type: string
+  role_name:
+    type: string
+  cost_category_id:
+    type: integer
+    minimum: 1
+  accounting_code:
+    type: string
+  quantity:
+    type: number
+  hours:
+    type: number
+  comment:
+    type: string
+    nullable: true
+  created_at:
+    type: string
+    format: date-time
+  updated_at:
+    type: string
+    format: date-time

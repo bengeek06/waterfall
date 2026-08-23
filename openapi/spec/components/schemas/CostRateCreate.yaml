@@ -1,0 +1,20 @@
+type: object
+required:
+- cost_category_id
+- year
+- hourly_rate
+- currency_code
+properties:
+  cost_category_id:
+    type: integer
+    minimum: 1
+  year:
+    type: integer
+    minimum: 2000
+    maximum: 9999
+  hourly_rate:
+    type: number
+    minimum: 0
+  currency_code:
+    type: string
+    pattern: ^[A-Z]{3}$

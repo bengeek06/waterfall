@@ -1,0 +1,17 @@
+type: object
+required:
+- total_labor_cost
+- total_purchase_cost
+- total_unburdened_cost
+- by_category
+properties:
+  total_labor_cost:
+    type: number
+  total_purchase_cost:
+    type: number
+  total_unburdened_cost:
+    type: number
+  by_category:
+    type: object
+    additionalProperties:
+      type: number

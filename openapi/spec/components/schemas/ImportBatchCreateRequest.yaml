@@ -1,0 +1,15 @@
+type: object
+required:
+- projectId
+- importMode
+properties:
+  projectId:
+    type: integer
+    minimum: 1
+    description: Projet cible, appartenant à l'utilisateur authentifié
+  importMode:
+    $ref: ImportMode.yaml
+  sourceName:
+    type: string
+    maxLength: 255
+    description: Nom logique de la source ou du planning

@@ -1,0 +1,637 @@
+/resources/nodes:
+  get:
+    tags:
+    - resources
+    summary: Lister les noeuds de ressources actifs
+    operationId: listResourceNodes
+    security:
+    - bearerAuth: []
+    responses:
+      '200':
+        description: Liste des noeuds
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: ../components/schemas/ResourceNodeRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+  post:
+    tags:
+    - resources
+    summary: Creer un noeud de ressources
+    operationId: createResourceNode
+    security:
+    - bearerAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/ResourceNodeCreate.yaml
+    responses:
+      '201':
+        description: Noeud cree
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ResourceNodeRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '403':
+        $ref: ../components/responses/Forbidden.yaml
+      '404':
+        $ref: ../components/responses/ResourceNotFound.yaml
+/resources/nodes/{nodeId}:
+  get:
+    tags:
+    - resources
+    summary: Lire un noeud de ressources
+    operationId: getResourceNode
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/NodeId.yaml
+    responses:
+      '200':
+        description: Noeud de ressources
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ResourceNodeRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ResourceNotFound.yaml
+  delete:
+    tags:
+    - resources
+    summary: Desactiver un noeud de ressources
+    operationId: deleteResourceNode
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/NodeId.yaml
+    responses:
+      '204':
+        description: Noeud desactive
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '403':
+        $ref: ../components/responses/Forbidden.yaml
+      '404':
+        $ref: ../components/responses/ResourceNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
+  patch:
+    tags:
+    - resources
+    summary: Modifier ou desactiver un noeud
+    operationId: updateResourceNode
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/NodeId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/ResourceNodeUpdate.yaml
+    responses:
+      '200':
+        description: Noeud modifie
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ResourceNodeRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '403':
+        $ref: ../components/responses/Forbidden.yaml
+      '404':
+        $ref: ../components/responses/ResourceNotFound.yaml
+/resources/roles:
+  get:
+    tags:
+    - resources
+    summary: Lister les roles actifs
+    operationId: listResourceRoles
+    security:
+    - bearerAuth: []
+    parameters:
+    - name: node_id
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+    - name: include_descendants
+      in: query
+      required: false
+      schema:
+        type: boolean
+        default: false
+    responses:
+      '200':
+        description: Liste des roles
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: ../components/schemas/ResourceRoleRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+  post:
+    tags:
+    - resources
+    summary: Creer un role
+    operationId: createResourceRole
+    security:
+    - bearerAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/ResourceRoleCreate.yaml
+    responses:
+      '201':
+        description: Role cree
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ResourceRoleRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '403':
+        $ref: ../components/responses/Forbidden.yaml
+      '404':
+        $ref: ../components/responses/ResourceNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
+/resources/roles/{roleId}:
+  get:
+    tags:
+    - resources
+    summary: Lire un role
+    operationId: getResourceRole
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/RoleId.yaml
+    responses:
+      '200':
+        description: Role
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ResourceRoleRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ResourceNotFound.yaml
+  patch:
+    tags:
+    - resources
+    summary: Modifier ou desactiver un role
+    operationId: updateResourceRole
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/RoleId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/ResourceRoleUpdate.yaml
+    responses:
+      '200':
+        description: Role modifie
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ResourceRoleRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '403':
+        $ref: ../components/responses/Forbidden.yaml
+      '404':
+        $ref: ../components/responses/ResourceNotFound.yaml
+/resources/categories:
+  get:
+    tags:
+    - resources
+    summary: Lister les categories de cout
+    operationId: listCostCategories
+    security:
+    - bearerAuth: []
+    parameters:
+    - name: include_inactive
+      in: query
+      required: false
+      schema:
+        type: boolean
+        default: false
+    responses:
+      '200':
+        description: Liste des categories
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: ../components/schemas/CostCategoryRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+  post:
+    tags:
+    - resources
+    summary: Creer une categorie de cout
+    operationId: createCostCategory
+    security:
+    - bearerAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/CostCategoryCreate.yaml
+    responses:
+      '201':
+        description: Categorie creee
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/CostCategoryRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '403':
+        $ref: ../components/responses/Forbidden.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
+/resources/cost-types:
+  get:
+    tags:
+    - resources
+    summary: Lister les types de coût
+    operationId: listCostTypes
+    security:
+    - bearerAuth: []
+    parameters:
+    - name: include_inactive
+      in: query
+      required: false
+      schema:
+        type: boolean
+        default: false
+    responses:
+      '200':
+        description: Liste des types de coût
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: ../components/schemas/CostTypeRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+  post:
+    tags:
+    - resources
+    summary: Créer un type de coût
+    operationId: createCostType
+    security:
+    - bearerAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/CostTypeCreate.yaml
+    responses:
+      '201':
+        description: Type de coût créé
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/CostTypeRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '403':
+        $ref: ../components/responses/Forbidden.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
+/resources/cost-types/{costTypeId}:
+  patch:
+    tags:
+    - resources
+    summary: Modifier ou désactiver un type de coût
+    operationId: updateCostType
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/CostTypeId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/CostTypeUpdate.yaml
+    responses:
+      '200':
+        description: Type de coût modifié
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/CostTypeRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '403':
+        $ref: ../components/responses/Forbidden.yaml
+      '404':
+        $ref: ../components/responses/ResourceNotFound.yaml
+/resources/categories/{categoryId}:
+  get:
+    tags:
+    - resources
+    summary: Lire une categorie de cout
+    operationId: getCostCategory
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/CategoryId.yaml
+    responses:
+      '200':
+        description: Categorie
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/CostCategoryRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ResourceNotFound.yaml
+  patch:
+    tags:
+    - resources
+    summary: Modifier ou desactiver une categorie
+    operationId: updateCostCategory
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/CategoryId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/CostCategoryUpdate.yaml
+    responses:
+      '200':
+        description: Categorie modifiee
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/CostCategoryRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '403':
+        $ref: ../components/responses/Forbidden.yaml
+      '404':
+        $ref: ../components/responses/ResourceNotFound.yaml
+/resources/categories/{categoryId}/rates:
+  get:
+    tags:
+    - resources
+    summary: Lister les taux horaires d'une categorie
+    operationId: listCostCategoryRates
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/CategoryId.yaml
+    responses:
+      '200':
+        description: Taux horaires annuels
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: ../components/schemas/CostRateRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ResourceNotFound.yaml
+/resources/rates:
+  get:
+    tags:
+    - resources
+    summary: Lister tous les taux horaires
+    operationId: listCostRates
+    security:
+    - bearerAuth: []
+    responses:
+      '200':
+        description: Liste des taux horaires annuels
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: ../components/schemas/CostRateRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+  post:
+    tags:
+    - resources
+    summary: Creer un taux horaire annuel
+    operationId: createCostRate
+    security:
+    - bearerAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/CostRateCreate.yaml
+    responses:
+      '201':
+        description: Taux cree
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/CostRateRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '403':
+        $ref: ../components/responses/Forbidden.yaml
+      '404':
+        $ref: ../components/responses/ResourceNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
+/resources/rates/{rateId}:
+  patch:
+    tags:
+    - resources
+    summary: Modifier un taux horaire annuel
+    operationId: updateCostRate
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/RateId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/CostRateUpdate.yaml
+    responses:
+      '200':
+        description: Taux modifie
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/CostRateRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '403':
+        $ref: ../components/responses/Forbidden.yaml
+      '404':
+        $ref: ../components/responses/ResourceNotFound.yaml
+/resources/inflation:
+  get:
+    tags:
+    - resources
+    summary: Lister les coefficients d'inflation
+    operationId: listInflationRates
+    security:
+    - bearerAuth: []
+    responses:
+      '200':
+        description: Coefficients annuels
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: ../components/schemas/InflationRateRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+/resources/inflation/{year}:
+  put:
+    tags:
+    - resources
+    summary: Creer ou modifier un coefficient d'inflation
+    operationId: putInflationRate
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/Year.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/InflationRateUpdate.yaml
+    responses:
+      '200':
+        description: Coefficient enregistre
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/InflationRateRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '403':
+        $ref: ../components/responses/Forbidden.yaml
+/resources/capacities:
+  get:
+    tags:
+    - resources
+    summary: Lister les capacites de roles
+    operationId: listRoleCapacities
+    security:
+    - bearerAuth: []
+    parameters:
+    - name: role_id
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+    responses:
+      '200':
+        description: Capacites par periode
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: ../components/schemas/RoleCapacityRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+  post:
+    tags:
+    - resources
+    summary: Creer une capacite de role
+    operationId: createRoleCapacity
+    security:
+    - bearerAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/RoleCapacityCreate.yaml
+    responses:
+      '201':
+        description: Capacite creee
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/RoleCapacityRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '403':
+        $ref: ../components/responses/Forbidden.yaml
+      '404':
+        $ref: ../components/responses/ResourceNotFound.yaml
+/resources/capacities/{capacityId}:
+  patch:
+    tags:
+    - resources
+    summary: Modifier une capacite de role
+    operationId: updateRoleCapacity
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/CapacityId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/RoleCapacityUpdate.yaml
+    responses:
+      '200':
+        description: Capacite modifiee
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/RoleCapacityRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '403':
+        $ref: ../components/responses/Forbidden.yaml
+      '404':
+        $ref: ../components/responses/ResourceNotFound.yaml

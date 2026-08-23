@@ -1,0 +1,35 @@
+type: object
+required:
+- id
+- estimate_id
+- position
+- task_name
+- is_milestone
+properties:
+  id:
+    type: integer
+    minimum: 1
+  estimate_id:
+    type: integer
+    minimum: 1
+  task_id:
+    type: integer
+    minimum: 1
+    nullable: true
+  parent_task_id:
+    type: integer
+    minimum: 1
+    nullable: true
+  position:
+    type: integer
+    minimum: 1
+  task_name:
+    type: string
+  outline_number:
+    type: string
+    nullable: true
+  outline_level:
+    type: integer
+    nullable: true
+  is_milestone:
+    type: boolean

@@ -1,0 +1,273 @@
+/auth/register:
+  post:
+    tags:
+    - auth
+    summary: Créer un utilisateur public lorsque l'inscription est activée
+    operationId: registerUser
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/UserCreate.yaml
+    responses:
+      '201':
+        description: Utilisateur créé
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/UserRead.yaml
+      '403':
+        $ref: ../components/responses/Forbidden.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
+/auth/token:
+  post:
+    tags:
+    - auth
+    summary: Obtenir un access token et définir le cookie de refresh HttpOnly
+    operationId: login
+    requestBody:
+      required: true
+      content:
+        application/x-www-form-urlencoded:
+          schema:
+            type: object
+            required:
+            - username
+            - password
+            properties:
+              username:
+                type: string
+                format: email
+              password:
+                type: string
+                format: password
+    responses:
+      '200':
+        description: Authentification réussie; le refresh token est défini par cookie
+          HttpOnly
+        headers:
+          Set-Cookie:
+            schema:
+              type: string
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/Token.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '403':
+        $ref: ../components/responses/Forbidden.yaml
+      '423':
+        description: Compte temporairement verrouillé
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ErrorResponse.yaml
+      '429':
+        description: Trop de tentatives de connexion
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ErrorResponse.yaml
+/auth/refresh:
+  post:
+    tags:
+    - auth
+    summary: Renouveler l'access token depuis le cookie de refresh HttpOnly
+    operationId: refreshAccessToken
+    responses:
+      '200':
+        description: Access token renouvelé et cookie de refresh renouvelé
+        headers:
+          Set-Cookie:
+            schema:
+              type: string
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/Token.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '403':
+        $ref: ../components/responses/Forbidden.yaml
+/auth/logout:
+  post:
+    tags:
+    - auth
+    summary: Effacer le cookie de refresh
+    operationId: logout
+    responses:
+      '204':
+        description: Session de refresh effacée
+/auth/me:
+  get:
+    tags:
+    - auth
+    summary: Lire l'utilisateur courant
+    operationId: getCurrentUser
+    security:
+    - bearerAuth: []
+    responses:
+      '200':
+        description: Utilisateur courant
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/UserRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '403':
+        $ref: ../components/responses/Forbidden.yaml
+/auth/me/password:
+  post:
+    tags:
+    - auth
+    summary: Modifier le mot de passe de l'utilisateur courant
+    operationId: changeCurrentUserPassword
+    security:
+    - bearerAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/PasswordChangeRequest.yaml
+    responses:
+      '204':
+        description: Mot de passe modifié
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '403':
+        $ref: ../components/responses/Forbidden.yaml
+/auth/users:
+  get:
+    tags:
+    - auth
+    summary: Lister les utilisateurs
+    operationId: listUsers
+    security:
+    - bearerAuth: []
+    responses:
+      '200':
+        description: Utilisateurs
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: ../components/schemas/UserAdminRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '403':
+        $ref: ../components/responses/Forbidden.yaml
+  post:
+    tags:
+    - auth
+    summary: Créer un utilisateur administrativement
+    operationId: createUser
+    security:
+    - bearerAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/UserCreate.yaml
+    responses:
+      '201':
+        description: Utilisateur créé
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/UserAdminRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '403':
+        $ref: ../components/responses/Forbidden.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
+/auth/users/{userId}:
+  delete:
+    tags:
+    - auth
+    summary: Supprimer un utilisateur
+    operationId: deleteUser
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/UserId.yaml
+    responses:
+      '204':
+        description: Utilisateur supprimé
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '403':
+        $ref: ../components/responses/Forbidden.yaml
+      '404':
+        $ref: ../components/responses/UserNotFound.yaml
+/auth/users/{userId}/status:
+  patch:
+    tags:
+    - auth
+    summary: Activer ou désactiver un utilisateur
+    operationId: updateUserStatus
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/UserId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/UserStatusUpdate.yaml
+    responses:
+      '200':
+        description: Utilisateur modifié
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/UserAdminRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '403':
+        $ref: ../components/responses/Forbidden.yaml
+      '404':
+        $ref: ../components/responses/UserNotFound.yaml
+/auth/users/{userId}/role:
+  patch:
+    tags:
+    - auth
+    summary: Modifier le rôle administrateur d'un utilisateur
+    operationId: updateUserRole
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/UserId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/UserRoleUpdate.yaml
+    responses:
+      '200':
+        description: Utilisateur modifié
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/UserAdminRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '403':
+        $ref: ../components/responses/Forbidden.yaml
+      '404':
+        $ref: ../components/responses/UserNotFound.yaml

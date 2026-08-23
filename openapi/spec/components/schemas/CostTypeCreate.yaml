@@ -1,0 +1,16 @@
+type: object
+required:
+- code
+- name
+- kind
+properties:
+  code:
+    type: string
+    minLength: 1
+    maxLength: 32
+  name:
+    type: string
+    minLength: 1
+    maxLength: 255
+  kind:
+    $ref: CostTypeKind.yaml

@@ -1,0 +1,39 @@
+/health:
+  get:
+    tags:
+    - health
+    summary: Vérifier la disponibilité de l'API
+    operationId: getHealth
+    responses:
+      '200':
+        description: API disponible
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/HealthStatus.yaml
+/health/ready:
+  get:
+    tags:
+    - health
+    summary: Vérifier que l'API est prête
+    operationId: getReadiness
+    responses:
+      '200':
+        description: API prête
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ReadinessStatus.yaml
+/metrics:
+  get:
+    tags:
+    - observability
+    summary: Exposer les métriques Prometheus
+    operationId: getMetrics
+    responses:
+      '200':
+        description: Métriques Prometheus
+        content:
+          text/plain:
+            schema:
+              type: string

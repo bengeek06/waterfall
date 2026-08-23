@@ -1,0 +1,14 @@
+type: object
+required:
+- access_token
+- token_type
+- expiresIn
+properties:
+  access_token:
+    type: string
+  token_type:
+    type: string
+    default: bearer
+  expiresIn:
+    type: integer
+    minimum: 1

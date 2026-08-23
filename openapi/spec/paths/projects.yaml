@@ -1,0 +1,996 @@
+/projects:
+  get:
+    tags:
+    - projects
+    summary: Lister les projets importes
+    operationId: listProjects
+    security:
+    - bearerAuth: []
+    parameters:
+    - name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 500
+        default: 50
+    - name: offset
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+    - name: include_archived
+      in: query
+      required: false
+      schema:
+        type: boolean
+        default: false
+    responses:
+      '200':
+        description: Liste de projets
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: ../components/schemas/ProjectRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+  post:
+    tags:
+    - projects
+    summary: Creer un projet sans import
+    operationId: createProject
+    security:
+    - bearerAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/ProjectCreate.yaml
+    responses:
+      '201':
+        description: Projet cree
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ProjectRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+/projects/{projectId}:
+  get:
+    tags:
+    - projects
+    summary: Lire un projet
+    operationId: getProject
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    responses:
+      '200':
+        description: Projet
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ProjectRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+  patch:
+    tags:
+    - projects
+    summary: Renommer un projet
+    operationId: updateProject
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/ProjectUpdate.yaml
+    responses:
+      '200':
+        description: Projet modifie
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ProjectRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+  delete:
+    tags:
+    - projects
+    summary: Supprimer un projet
+    operationId: deleteProject
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    responses:
+      '204':
+        description: Projet supprime
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+/projects/{projectId}/status:
+  patch:
+    tags:
+    - projects
+    summary: Modifier le statut d'un projet
+    operationId: updateProjectStatus
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/ProjectStatusUpdate.yaml
+    responses:
+      '200':
+        description: Projet mis a jour
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ProjectRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
+/projects/{projectId}/plannings:
+  get:
+    tags:
+    - projects
+    summary: Lister les versions de planning
+    operationId: listPlannings
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    responses:
+      '200':
+        description: Versions de planning
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: ../components/schemas/PlanningRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+  post:
+    tags:
+    - projects
+    summary: Creer un brouillon de planning
+    operationId: createPlanning
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/PlanningCreate.yaml
+    responses:
+      '201':
+        description: Brouillon cree
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/PlanningDetailRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
+/projects/{projectId}/plannings/{planningId}:
+  get:
+    tags:
+    - projects
+    summary: Lire une version de planning
+    operationId: getPlanning
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/PlanningId.yaml
+    - name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 2000
+        default: 200
+    - name: offset
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+    responses:
+      '200':
+        description: Version de planning
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/PlanningDetailRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/PlanningNotFound.yaml
+/projects/{projectId}/plannings/{planningId}/validate:
+  post:
+    tags:
+    - projects
+    summary: Valider une version de planning
+    operationId: validatePlanning
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/PlanningId.yaml
+    responses:
+      '200':
+        description: Version validee
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/PlanningRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/PlanningNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
+/projects/{projectId}/plannings/{planningId}/reference:
+  post:
+    tags:
+    - projects
+    summary: Definir la reference planning
+    operationId: setPlanningReference
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/PlanningId.yaml
+    responses:
+      '200':
+        description: Projet mis a jour
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ProjectRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/PlanningNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
+/projects/{projectId}/plannings/{planningId}/display:
+  post:
+    tags:
+    - projects
+    summary: Selectionner le planning affiche
+    operationId: setDisplayedPlanning
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/PlanningId.yaml
+    responses:
+      '200':
+        description: Projet mis a jour
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ProjectRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/PlanningNotFound.yaml
+/projects/{projectId}/estimates/{estimateId}/reference:
+  post:
+    tags:
+    - projects
+    summary: Definir le devis de reference
+    operationId: setEstimateReference
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/EstimateId.yaml
+    responses:
+      '200':
+        description: Projet mis a jour
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ProjectRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/EstimateNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
+/projects/{projectId}/tasks:
+  get:
+    tags:
+    - projects
+    summary: Lister les taches d'un projet
+    operationId: listProjectTasks
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 2000
+        default: 200
+    - name: offset
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+    - name: planning_id
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        nullable: true
+    responses:
+      '200':
+        description: Liste de taches
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: ../components/schemas/TaskRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+  post:
+    tags:
+    - projects
+    summary: Ajouter une tache de planning au projet
+    operationId: createProjectTask
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/TaskCreate.yaml
+    responses:
+      '201':
+        description: Tache creee
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/TaskRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+/projects/{projectId}/planning-structure:
+  post:
+    tags:
+    - projects
+    summary: Generer le squelette de planning depuis une structure metier
+    operationId: createPlanningStructure
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    requestBody:
+      required: false
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/PlanningStructureCreate.yaml
+    responses:
+      '201':
+        description: Squelette de planning genere
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/PlanningStructureRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
+/projects/{projectId}/planning-structure/draft:
+  get:
+    tags:
+    - projects
+    summary: Lire le brouillon de structure de planning
+    operationId: getPlanningStructureDraft
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    responses:
+      '200':
+        description: Brouillon de structure sauvegarde
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/PlanningStructureDraftRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+  put:
+    tags:
+    - projects
+    summary: Sauvegarder le brouillon de structure de planning
+    operationId: savePlanningStructureDraft
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/PlanningStructureCreate.yaml
+    responses:
+      '200':
+        description: Brouillon de structure sauvegarde
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/PlanningStructureDraftRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
+/projects/{projectId}/planning-structure/reopen:
+  post:
+    tags:
+    - projects
+    summary: Rouvrir la structure de planning dans un nouveau brouillon
+    operationId: reopenPlanningStructure
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    responses:
+      '200':
+        description: Projet rouvert dans un brouillon
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ProjectRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
+/projects/{projectId}/planning-tree:
+  get:
+    tags:
+    - projects
+    summary: Lire l'arbre hiérarchique du planning
+    operationId: getPlanningTree
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - name: planning_id
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        nullable: true
+    responses:
+      '200':
+        description: Arbre hiérarchique du planning
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/PlanningTreeRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+/projects/{projectId}/tasks/{taskUid}:
+  patch:
+    tags:
+    - projects
+    summary: Mettre a jour la description d'une tache
+    operationId: updateTaskDescription
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/TaskUid.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/TaskDescriptionUpdate.yaml
+    responses:
+      '200':
+        description: Tache mise a jour
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/TaskRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/TaskNotFound.yaml
+  delete:
+    tags:
+    - projects
+    summary: Supprimer une tache de planning sans enfant ni usage dans un devis
+    operationId: deleteProjectTask
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/TaskUid.yaml
+    responses:
+      '204':
+        description: Tache supprimee
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/TaskNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
+/projects/{projectId}/tasks/{taskUid}/role-assignments:
+  get:
+    tags:
+    - projects
+    summary: Lister les affectations de main-d'œuvre d'une tâche
+    operationId: listTaskRoleAssignments
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/TaskUid.yaml
+    responses:
+      '200':
+        description: Affectations de rôles
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: ../components/schemas/TaskRoleAssignmentRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/TaskNotFound.yaml
+  post:
+    tags:
+    - projects
+    summary: Affecter un rôle de main-d'œuvre à une tâche
+    operationId: createTaskRoleAssignment
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/TaskUid.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/TaskRoleAssignmentCreate.yaml
+    responses:
+      '201':
+        description: Affectation créée
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/TaskRoleAssignmentRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/TaskNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
+/projects/{projectId}/tasks/{taskUid}/role-assignments/{assignmentId}:
+  patch:
+    tags:
+    - projects
+    summary: Modifier une affectation de rôle
+    operationId: updateTaskRoleAssignment
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/TaskUid.yaml
+    - $ref: ../components/parameters/AssignmentId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/TaskRoleAssignmentUpdate.yaml
+    responses:
+      '200':
+        description: Affectation modifiée
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/TaskRoleAssignmentRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/TaskNotFound.yaml
+  delete:
+    tags:
+    - projects
+    summary: Supprimer une affectation de rôle
+    operationId: deleteTaskRoleAssignment
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/TaskUid.yaml
+    - $ref: ../components/parameters/AssignmentId.yaml
+    responses:
+      '204':
+        description: Affectation supprimée
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/TaskNotFound.yaml
+/projects/{projectId}/estimates:
+  get:
+    tags:
+    - projects
+    summary: Lister les versions de devis d'un projet
+    operationId: listProjectEstimates
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    responses:
+      '200':
+        description: Versions de devis
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: ../components/schemas/ProjectEstimateRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+  post:
+    tags:
+    - projects
+    summary: Créer un brouillon de devis et son snapshot de tâches
+    operationId: createProjectEstimate
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/ProjectEstimateCreate.yaml
+    responses:
+      '201':
+        description: Brouillon de devis créé
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ProjectEstimateRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+/projects/{projectId}/estimates/{estimateId}:
+  get:
+    tags:
+    - projects
+    summary: Lire une version de devis
+    operationId: getProjectEstimate
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/EstimateId.yaml
+    responses:
+      '200':
+        description: Version de devis
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ProjectEstimateRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+/projects/{projectId}/estimates/{estimateId}/task-rows:
+  get:
+    tags:
+    - projects
+    summary: Lister les lignes de tâches snapshotées dans un devis
+    operationId: listEstimateTaskRows
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/EstimateId.yaml
+    responses:
+      '200':
+        description: Lignes de tâches du devis
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: ../components/schemas/EstimateTaskRowRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+/projects/{projectId}/estimates/{estimateId}/cost-lines:
+  get:
+    tags:
+    - projects
+    summary: Lister les lignes de coût hors main-d'oeuvre d'un devis
+    operationId: listEstimateCostLines
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/EstimateId.yaml
+    responses:
+      '200':
+        description: Lignes de coût du devis
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: ../components/schemas/EstimateCostLineRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+  post:
+    tags:
+    - projects
+    summary: Ajouter une ligne Fourniture, Frais ou UO à un brouillon
+    operationId: createEstimateCostLine
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/EstimateId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/EstimateCostLineCreate.yaml
+    responses:
+      '201':
+        description: Ligne de coût créée
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/EstimateCostLineRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
+/projects/{projectId}/estimates/{estimateId}/cost-lines/{costLineId}:
+  patch:
+    tags:
+    - projects
+    summary: Modifier une ligne de coût d'un brouillon
+    operationId: updateEstimateCostLine
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/EstimateId.yaml
+    - $ref: ../components/parameters/CostLineId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/EstimateCostLineUpdate.yaml
+    responses:
+      '200':
+        description: Ligne de coût modifiée
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/EstimateCostLineRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
+  delete:
+    tags:
+    - projects
+    summary: Supprimer une ligne de coût d'un brouillon
+    operationId: deleteEstimateCostLine
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/EstimateId.yaml
+    - $ref: ../components/parameters/CostLineId.yaml
+    responses:
+      '204':
+        description: Ligne de coût supprimée
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
+/projects/{projectId}/estimates/{estimateId}/validate:
+  post:
+    tags:
+    - projects
+    summary: Valider et figer un brouillon de devis
+    operationId: validateProjectEstimate
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/EstimateId.yaml
+    responses:
+      '200':
+        description: Devis validé
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ProjectEstimateRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
+/projects/{projectId}/estimates/{estimateId}/aggregates:
+  get:
+    tags:
+    - projects
+    summary: Lire les agrégats financiers d'un devis
+    operationId: getEstimateAggregates
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/EstimateId.yaml
+    responses:
+      '200':
+        description: Agrégats du devis
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/EstimateAggregatesRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+/projects/{projectId}/estimates/{estimateId}/export.xlsx:
+  get:
+    tags:
+    - projects
+    summary: Exporter le devis au format Excel
+    operationId: exportEstimateExcel
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/EstimateId.yaml
+    responses:
+      '200':
+        description: Classeur Excel du devis
+        content:
+          application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+            schema:
+              type: string
+              format: binary
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+/projects/{projectId}/export.xml:
+  get:
+    tags:
+    - projects
+    summary: Exporter un projet au format XML MS Project
+    operationId: exportProjectXml
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - name: planning_id
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        nullable: true
+    responses:
+      '200':
+        description: XML du projet
+        content:
+          application/xml:
+            schema:
+              type: string
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml

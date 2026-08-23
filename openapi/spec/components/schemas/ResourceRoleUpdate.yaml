@@ -1,0 +1,14 @@
+type: object
+properties:
+  node_id:
+    type: integer
+    minimum: 1
+  cost_category_id:
+    type: integer
+    minimum: 1
+  name:
+    type: string
+    minLength: 1
+    maxLength: 255
+  is_active:
+    type: boolean

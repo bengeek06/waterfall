@@ -1,0 +1,8 @@
+type: object
+properties:
+  hourly_rate:
+    type: number
+    minimum: 0
+  currency_code:
+    type: string
+    pattern: ^[A-Z]{3}$

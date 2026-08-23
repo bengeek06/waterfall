@@ -1,0 +1,15 @@
+allOf:
+- $ref: PlanningRead.yaml
+- type: object
+  required:
+  - tasks
+  - links
+  properties:
+    tasks:
+      type: array
+      items:
+        $ref: TaskRead.yaml
+    links:
+      type: array
+      items:
+        $ref: PlanningLinkRead.yaml

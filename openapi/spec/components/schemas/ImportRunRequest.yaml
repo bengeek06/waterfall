@@ -1,0 +1,10 @@
+type: object
+properties:
+  dryRun:
+    type: boolean
+    default: false
+    description: Valide le fichier sans persister en base (optionnel)
+  confirm:
+    type: boolean
+    default: false
+    description: Confirme l'application du diff

@@ -1,0 +1,64 @@
+type: object
+required:
+- id
+- name
+- status
+- source_version
+- save_version_out
+- schedule_from_start
+properties:
+  id:
+    type: integer
+    minimum: 1
+  name:
+    type: string
+  status:
+    type: string
+    enum:
+    - cree
+    - initialise
+    - en_reponse_appel_offre
+    - perdu
+    - en_cours
+    - termine
+    - abandonne
+  code:
+    type: string
+    nullable: true
+  short_description:
+    type: string
+    nullable: true
+  source_version:
+    type: integer
+    enum:
+    - 2010
+    - 2013
+    - 2016
+  save_version_out:
+    type: integer
+    enum:
+    - 14
+    - 15
+    - 16
+  schedule_from_start:
+    type: boolean
+  start_date:
+    type: string
+    format: date-time
+    nullable: true
+  finish_date:
+    type: string
+    format: date-time
+    nullable: true
+  currency_code:
+    type: string
+    nullable: true
+  planning_reference_id:
+    type: integer
+    nullable: true
+  displayed_planning_id:
+    type: integer
+    nullable: true
+  reference_estimate_id:
+    type: integer
+    nullable: true

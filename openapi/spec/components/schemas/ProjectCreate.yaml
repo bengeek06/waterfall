@@ -1,0 +1,21 @@
+type: object
+required:
+- name
+properties:
+  name:
+    type: string
+    minLength: 1
+    maxLength: 255
+  code:
+    type: string
+    maxLength: 64
+    nullable: true
+  short_description:
+    type: string
+    maxLength: 500
+    nullable: true
+  currency_code:
+    type: string
+    minLength: 3
+    maxLength: 3
+    nullable: true

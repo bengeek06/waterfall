@@ -1,0 +1,9 @@
+type: object
+required:
+- posts
+properties:
+  posts:
+    type: array
+    minItems: 1
+    items:
+      $ref: PlanningPostCreate.yaml
