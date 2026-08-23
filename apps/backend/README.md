@@ -7,7 +7,7 @@ API REST professionnelle avec FastAPI, outillage qualité, et base enterprise.
 1. Activer l'environnement virtuel:
 
 ```bash
-source /home/benjamin/projects/rebirth/.venv/bin/activate
+source .venv/bin/activate
 ```
 
 2. Installer les dependances backend:
