@@ -9,6 +9,8 @@ export type PlanningStructureDraftRow = {
   deliverables: string;
   // Preserves the original key of each known deliverable (name -> key) so a
   // round-trip through the payload keeps stable structure_key values.
+  // Known limitation: renaming a deliverable is treated as new (loses its UID);
+  // non-destructive rename is deferred to E3 tree mutations.
   deliverableKeys?: Record<string, string>;
 };
 
