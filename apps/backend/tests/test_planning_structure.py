@@ -302,6 +302,48 @@ def test_reopen_and_regenerate_preserves_uids() -> None:
         assert regenerated_uid_by_key[new_key] > previous_max_uid
 
 
+def test_regenerate_structure_preserves_manual_tasks() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        path = f"/projects/{project_id}/planning-structure"
+
+        assert client.post(path, json=_payload(), headers=headers).status_code == 201
+        structured_tasks = cast(
+            list[dict[str, Any]],
+            client.get(f"/projects/{project_id}/tasks", headers=headers).json(),
+        )
+        uid_by_key = {
+            task["structure_key"]: task["uid"]
+            for task in structured_tasks
+            if task["structure_key"] is not None
+        }
+
+        created = client.post(
+            f"/projects/{project_id}/tasks",
+            json={"name": "Manual task"},
+            headers=headers,
+        )
+        assert created.status_code == 201
+        manual_uid = created.json()["uid"]
+        assert created.json()["structure_key"] is None
+
+        assert client.post(path, json=_payload(), headers=headers).status_code == 201
+
+        regenerated = cast(
+            list[dict[str, Any]],
+            client.get(f"/projects/{project_id}/tasks", headers=headers).json(),
+        )
+        assert manual_uid in [task["uid"] for task in regenerated]
+        regenerated_uid_by_key = {
+            task["structure_key"]: task["uid"]
+            for task in regenerated
+            if task["structure_key"] is not None
+        }
+        for key, uid in uid_by_key.items():
+            assert regenerated_uid_by_key[key] == uid
+
+
 def test_structure_versions_validated_planning_is_immutable_and_reopenable() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)

@@ -337,6 +337,61 @@ def test_create_and_delete_visible_draft_snapshot_preserves_legacy_tasks() -> No
             assert session.query(MsTask).filter(MsTask.uid == task_uid).count() == 0
 
 
+def test_snapshot_task_creation_after_deletion_keeps_unique_numbering() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        planning_response = client.post(
+            f"/projects/{project_id}/plannings", json={}, headers=headers
+        )
+        assert planning_response.status_code == 201
+        planning_id = cast(int, planning_response.json()["id"])
+        parent = planning_response.json()["tasks"][0]
+        parent_uid = cast(int, parent["uid"])
+        assert (
+            client.post(
+                f"/projects/{project_id}/plannings/{planning_id}/display", headers=headers
+            ).status_code
+            == 200
+        )
+
+        created_uids: list[int] = []
+        for name in ("Child A", "Child B", "Child C"):
+            response = client.post(
+                f"/projects/{project_id}/tasks",
+                json={"name": name, "parent_task_id": parent["id"]},
+                headers=headers,
+            )
+            assert response.status_code == 201
+            created_uids.append(cast(int, response.json()["uid"]))
+
+        # Deleting the middle child does not renumber siblings.
+        middle_uid = created_uids[1]
+        assert (
+            client.delete(f"/projects/{project_id}/tasks/{middle_uid}", headers=headers).status_code
+            == 204
+        )
+
+        recreated = client.post(
+            f"/projects/{project_id}/tasks",
+            json={"name": "Child D", "parent_task_id": parent["id"]},
+            headers=headers,
+        )
+        assert recreated.status_code == 201
+
+        with get_session_factory()() as session:
+            children = (
+                session.query(WfPlanningTaskSnapshot)
+                .filter(WfPlanningTaskSnapshot.planning_id == planning_id)
+                .filter(WfPlanningTaskSnapshot.parent_uid == parent_uid)
+                .all()
+            )
+        outline_numbers = [child.outline_number for child in children]
+        positions = [child.position for child in children]
+        assert len(outline_numbers) == len(set(outline_numbers))
+        assert len(positions) == len(set(positions))
+
+
 def test_snapshot_task_mutation_rejects_validated_display() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)

@@ -1592,25 +1592,27 @@ def create_project_task(
         )
         if parent_snapshot is not None:
             outline_level = (parent_snapshot.outline_level or 0) + 1
-            sibling_count = (
-                db.query(WfPlanningTaskSnapshot)
+            max_position = (
+                db.query(func.max(WfPlanningTaskSnapshot.position))
                 .filter(WfPlanningTaskSnapshot.planning_id == planning.id)
                 .filter(WfPlanningTaskSnapshot.parent_uid == parent_snapshot.uid)
-                .count()
+                .scalar()
             )
-            outline_number = f"{parent_snapshot.outline_number}.{sibling_count + 1}"
-            position = sibling_count + 1
+            next_index = (max_position or 0) + 1
+            outline_number = f"{parent_snapshot.outline_number}.{next_index}"
+            position = next_index
             parent_uid = parent_snapshot.uid
         else:
             outline_level = 1
-            sibling_count = (
-                db.query(WfPlanningTaskSnapshot)
+            max_position = (
+                db.query(func.max(WfPlanningTaskSnapshot.position))
                 .filter(WfPlanningTaskSnapshot.planning_id == planning.id)
                 .filter(WfPlanningTaskSnapshot.parent_uid.is_(None))
-                .count()
+                .scalar()
             )
-            outline_number = str(sibling_count + 1)
-            position = sibling_count + 1
+            next_index = (max_position or 0) + 1
+            outline_number = str(next_index)
+            position = next_index
             parent_uid = None
 
         snapshot = WfPlanningTaskSnapshot(

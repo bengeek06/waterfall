@@ -229,7 +229,9 @@ def generate_planning_snapshot(
         .filter(WfPlanningTaskSnapshot.planning_id == planning.id)
         .all()
     )
-    existing_by_key = {task.structure_key: task for task in existing}
+    existing_by_key = {
+        task.structure_key: task for task in existing if task.structure_key is not None
+    }
     source = None
     if not existing and project.displayed_planning_id not in (None, planning.id):
         source = (
@@ -237,7 +239,9 @@ def generate_planning_snapshot(
             .filter(WfPlanningTaskSnapshot.planning_id == project.displayed_planning_id)
             .all()
         )
-        existing_by_key.update({task.structure_key: task for task in source})
+        existing_by_key.update(
+            {task.structure_key: task for task in source if task.structure_key is not None}
+        )
 
     max_uid = (
         db.query(func.max(WfPlanningTaskSnapshot.uid))
@@ -255,11 +259,19 @@ def generate_planning_snapshot(
         .filter(WfPlanningLinkSnapshot.planning_id == planning.id)
         .all()
     )
-    existing_uids = {task.uid for task in existing if task.structure_key in incoming_keys}
+    existing_uids = {
+        task.uid
+        for task in existing
+        if task.structure_key is None or task.structure_key in incoming_keys
+    }
     for link in links:
         if link.task_uid not in existing_uids or link.predecessor_uid not in existing_uids:
             db.delete(link)
-    removed_ids = [task.id for task in existing if task.structure_key not in incoming_keys]
+    removed_ids = [
+        task.id
+        for task in existing
+        if task.structure_key is not None and task.structure_key not in incoming_keys
+    ]
     db.query(WfPlanningTaskSnapshot).filter(
         WfPlanningTaskSnapshot.planning_id == planning.id
     ).update({WfPlanningTaskSnapshot.parent_uid: None}, synchronize_session=False)
