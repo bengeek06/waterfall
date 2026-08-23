@@ -1529,11 +1529,85 @@ def create_project_task(
     """Add a planning task for devis purposes; dates stay driven by MS Project."""
     project = _get_project_or_404(db, project_id, current_user.id)
     ensure_project_mutable(project)
+
     if project.displayed_planning_id is not None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Cannot create a legacy task while a versioned planning is displayed",
+        planning = _get_planning_or_404(db, project_id, project.displayed_planning_id)
+        if planning.status != "draft":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Displayed planning is immutable because it is not a draft",
+            )
+        parent_snapshot: WfPlanningTaskSnapshot | None = None
+        if payload.parent_task_id is not None:
+            parent_snapshot = (
+                db.query(WfPlanningTaskSnapshot)
+                .filter(WfPlanningTaskSnapshot.id == payload.parent_task_id)
+                .filter(WfPlanningTaskSnapshot.planning_id == planning.id)
+                .first()
+            )
+            if parent_snapshot is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Parent task does not belong to displayed planning",
+                )
+
+        max_uid = (
+            db.query(func.max(WfPlanningTaskSnapshot.uid))
+            .filter(WfPlanningTaskSnapshot.planning_id == planning.id)
+            .scalar()
         )
+        max_id_display = (
+            db.query(func.max(WfPlanningTaskSnapshot.id_display))
+            .filter(WfPlanningTaskSnapshot.planning_id == planning.id)
+            .scalar()
+        )
+        if parent_snapshot is not None:
+            outline_level = (parent_snapshot.outline_level or 0) + 1
+            sibling_count = (
+                db.query(WfPlanningTaskSnapshot)
+                .filter(WfPlanningTaskSnapshot.planning_id == planning.id)
+                .filter(WfPlanningTaskSnapshot.parent_uid == parent_snapshot.uid)
+                .count()
+            )
+            outline_number = f"{parent_snapshot.outline_number}.{sibling_count + 1}"
+            position = sibling_count + 1
+            parent_uid = parent_snapshot.uid
+        else:
+            outline_level = 1
+            sibling_count = (
+                db.query(WfPlanningTaskSnapshot)
+                .filter(WfPlanningTaskSnapshot.planning_id == planning.id)
+                .filter(WfPlanningTaskSnapshot.parent_uid.is_(None))
+                .count()
+            )
+            outline_number = str(sibling_count + 1)
+            position = sibling_count + 1
+            parent_uid = None
+
+        snapshot = WfPlanningTaskSnapshot(
+            planning_id=planning.id,
+            uid=(max_uid or 0) + 1,
+            id_display=(max_id_display or 0) + 1,
+            parent_uid=parent_uid,
+            position=position,
+            name=payload.name.strip(),
+            task_type=0,
+            outline_number=outline_number,
+            outline_level=outline_level,
+            is_summary=False,
+            is_milestone=payload.is_milestone,
+        )
+        db.add(snapshot)
+        try:
+            db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Displayed planning task conflicts with existing planning data",
+            ) from exc
+        db.refresh(snapshot)
+        return _to_snapshot_task_read(snapshot, [], project_id)
 
     parent_task: MsTask | None = None
     if payload.parent_task_id is not None:
@@ -1590,7 +1664,14 @@ def create_project_task(
         is_milestone=payload.is_milestone,
     )
     db.add(task)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Task conflicts with existing project data",
+        ) from exc
     db.refresh(task)
     return _to_task_read(task, description=None)
 
@@ -1673,10 +1754,80 @@ def delete_project_task(
     project = _get_project_or_404(db, project_id, current_user.id)
     ensure_project_mutable(project)
     if project.displayed_planning_id is not None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Cannot delete a legacy task while a versioned planning is displayed",
+        planning = _get_planning_or_404(db, project_id, project.displayed_planning_id)
+        if planning.status != "draft":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Displayed planning is immutable because it is not a draft",
+            )
+        task = (
+            db.query(WfPlanningTaskSnapshot)
+            .filter(WfPlanningTaskSnapshot.planning_id == planning.id)
+            .filter(WfPlanningTaskSnapshot.uid == task_uid)
+            .first()
         )
+        if task is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+        if (
+            db.query(WfPlanningTaskSnapshot.id)
+            .filter(WfPlanningTaskSnapshot.planning_id == planning.id)
+            .filter(WfPlanningTaskSnapshot.parent_uid == task.uid)
+            .first()
+            is not None
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Task has child tasks and cannot be deleted",
+            )
+
+        legacy_task = (
+            db.query(MsTask).filter(MsTask.project_id == project_id, MsTask.uid == task_uid).first()
+        )
+        if legacy_task is not None:
+            in_use = (
+                db.query(TaskRoleAssignment.id)
+                .filter(TaskRoleAssignment.task_id == legacy_task.id)
+                .first()
+                is not None
+                or db.query(EstimateCostLine.id)
+                .filter(EstimateCostLine.task_id == legacy_task.id)
+                .first()
+                is not None
+                or db.query(EstimateTaskRow.id)
+                .filter(EstimateTaskRow.task_id == legacy_task.id)
+                .first()
+                is not None
+                or db.query(EstimateTaskRow.id)
+                .filter(EstimateTaskRow.parent_task_id == legacy_task.id)
+                .first()
+                is not None
+                or db.query(WfChargeLine.id)
+                .filter(WfChargeLine.project_id == project_id)
+                .filter(WfChargeLine.task_uid == task_uid)
+                .first()
+                is not None
+            )
+            if in_use:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Planning task is referenced by estimates, assignments, or charges",
+                )
+
+        db.query(WfPlanningLinkSnapshot).filter(
+            WfPlanningLinkSnapshot.planning_id == planning.id,
+            (WfPlanningLinkSnapshot.task_uid == task_uid)
+            | (WfPlanningLinkSnapshot.predecessor_uid == task_uid),
+        ).delete(synchronize_session=False)
+        db.delete(task)
+        try:
+            db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Planning task is still referenced and cannot be deleted",
+            ) from exc
+        return
     task = _get_task_or_404(db, project_id, task_uid)
 
     has_children = (
@@ -1756,6 +1907,22 @@ def create_task_role_assignment(
 ) -> TaskRoleAssignmentRead:
     project = _get_project_or_404(db, project_id, current_user.id)
     ensure_project_mutable(project)
+    if project.displayed_planning_id is not None:
+        planning = _get_planning_or_404(db, project_id, project.displayed_planning_id)
+        snapshot = (
+            db.query(WfPlanningTaskSnapshot)
+            .filter(WfPlanningTaskSnapshot.planning_id == planning.id)
+            .filter(WfPlanningTaskSnapshot.uid == task_uid)
+            .first()
+        )
+        legacy_task = (
+            db.query(MsTask).filter(MsTask.project_id == project_id, MsTask.uid == task_uid).first()
+        )
+        if snapshot is not None and legacy_task is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Snapshot-only tasks cannot receive legacy role assignments",
+            )
     task = _get_task_or_404(db, project_id, task_uid)
     row = (
         db.query(ResourceRole, CostCategory, CostType)

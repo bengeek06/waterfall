@@ -234,7 +234,7 @@ def test_create_planning_structure_rejects_duplicate_keys_without_mutation() -> 
         assert listed.json() == []
 
 
-def test_legacy_task_mutations_are_rejected_when_planning_is_displayed() -> None:
+def test_task_mutations_target_displayed_draft_snapshot() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)
         project_id = _create_project(client, headers)
@@ -244,17 +244,27 @@ def test_legacy_task_mutations_are_rejected_when_planning_is_displayed() -> None
             headers=headers,
         )
         assert generated.status_code == 201
-        task_uid = generated.json()["tasks"][0]["uid"]
+        summary_uid = generated.json()["tasks"][0]["uid"]
 
         create = client.post(
             f"/projects/{project_id}/tasks",
-            json={"name": "Legacy task"},
+            json={"name": "Draft task"},
             headers=headers,
         )
-        delete = client.delete(f"/projects/{project_id}/tasks/{task_uid}", headers=headers)
+        assert create.status_code == 201
+        new_uid = create.json()["uid"]
 
-        assert create.status_code == 409
-        assert delete.status_code == 409
+        # A summary task that still has children cannot be removed.
+        summary_delete = client.delete(
+            f"/projects/{project_id}/tasks/{summary_uid}", headers=headers
+        )
+        assert summary_delete.status_code == 409
+
+        # A leaf task added to the displayed draft snapshot can be removed.
+        leaf_delete = client.delete(f"/projects/{project_id}/tasks/{new_uid}", headers=headers)
+        assert leaf_delete.status_code == 204
+        remaining = client.get(f"/projects/{project_id}/tasks", headers=headers).json()
+        assert new_uid not in [task["uid"] for task in remaining]
 
 
 def test_structure_versions_validated_planning_is_immutable_and_reopenable() -> None:

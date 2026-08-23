@@ -270,6 +270,143 @@ def test_create_child_task_uses_parent_outline_number() -> None:
         assert second_payload["outline_number"] == "1.2"
 
 
+def test_create_task_uses_displayed_draft_snapshot() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        planning_response = client.post(
+            f"/projects/{project_id}/plannings", json={}, headers=headers
+        )
+        assert planning_response.status_code == 201
+        planning_id = planning_response.json()["id"]
+        parent = planning_response.json()["tasks"][0]
+        assert (
+            client.post(
+                f"/projects/{project_id}/plannings/{planning_id}/display", headers=headers
+            ).status_code
+            == 200
+        )
+
+        response = client.post(
+            f"/projects/{project_id}/tasks",
+            json={"name": "Snapshot task", "parent_task_id": parent["id"]},
+            headers=headers,
+        )
+
+        assert response.status_code == 201
+        payload = cast(dict[str, Any], response.json())
+        assert payload["project_id"] == project_id
+        assert payload["parent_uid"] == parent["uid"]
+        assert payload["outline_number"] == f"{parent['outline_number']}.1"
+        listed = client.get(f"/projects/{project_id}/tasks", headers=headers).json()
+        assert payload["uid"] in [task["uid"] for task in listed]
+        with get_session_factory()() as session:
+            assert session.query(MsTask).filter(MsTask.project_id == project_id).count() == 2
+
+
+def test_create_and_delete_visible_draft_snapshot_preserves_legacy_tasks() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        planning_response = client.post(
+            f"/projects/{project_id}/plannings", json={}, headers=headers
+        )
+        assert planning_response.status_code == 201
+        planning_id = planning_response.json()["id"]
+        assert (
+            client.post(
+                f"/projects/{project_id}/plannings/{planning_id}/display", headers=headers
+            ).status_code
+            == 200
+        )
+        created = client.post(
+            f"/projects/{project_id}/tasks", json={"name": "Visible draft task"}, headers=headers
+        )
+        assert created.status_code == 201
+        task_uid = cast(int, created.json()["uid"])
+
+        deleted = client.delete(f"/projects/{project_id}/tasks/{task_uid}", headers=headers)
+
+        assert deleted.status_code == 204
+        remaining = cast(
+            list[dict[str, Any]],
+            client.get(f"/projects/{project_id}/tasks", headers=headers).json(),
+        )
+        assert all(task["uid"] != task_uid for task in remaining)
+        with get_session_factory()() as session:
+            assert session.query(MsTask).filter(MsTask.uid == task_uid).count() == 0
+
+
+def test_snapshot_task_mutation_rejects_validated_display() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        planning_response = client.post(
+            f"/projects/{project_id}/plannings", json={}, headers=headers
+        )
+        planning_id = planning_response.json()["id"]
+        task_uid = planning_response.json()["tasks"][0]["uid"]
+        assert (
+            client.post(
+                f"/projects/{project_id}/plannings/{planning_id}/validate", headers=headers
+            ).status_code
+            == 200
+        )
+        assert (
+            client.post(
+                f"/projects/{project_id}/plannings/{planning_id}/display", headers=headers
+            ).status_code
+            == 200
+        )
+
+        create = client.post(
+            f"/projects/{project_id}/tasks", json={"name": "Refused"}, headers=headers
+        )
+        delete = client.delete(f"/projects/{project_id}/tasks/{task_uid}", headers=headers)
+
+        assert create.status_code == 409
+        assert delete.status_code == 409
+
+
+def test_snapshot_only_task_rejects_legacy_assignment() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client, "projects.snapshot-assignment@example.com")
+        project_id = cast(
+            int,
+            client.post(
+                "/projects", json={"name": "Snapshot-only assignment"}, headers=headers
+            ).json()["id"],
+        )
+        with get_session_factory()() as session:
+            planning = WfPlanning(project_id=project_id, version_number=1, status="draft")
+            session.add(planning)
+            session.flush()
+            session.add(
+                WfPlanningTaskSnapshot(
+                    planning_id=planning.id,
+                    uid=9101,
+                    name="Snapshot-only",
+                    position=1,
+                    is_summary=False,
+                    is_milestone=False,
+                )
+            )
+            session.query(MsProject).filter(MsProject.id == project_id).update(
+                {MsProject.displayed_planning_id: planning.id}
+            )
+            session.commit()
+        role_id, _ = _seed_roles()
+
+        response = client.post(
+            f"/projects/{project_id}/tasks/9101/role-assignments",
+            json={"role_id": role_id, "quantity": 1, "hours": 1},
+            headers=headers,
+        )
+
+        assert response.status_code == 409
+        assert "snapshot-only" in response.json()["detail"].lower()
+
+
 def test_create_task_rejects_foreign_parent() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)
