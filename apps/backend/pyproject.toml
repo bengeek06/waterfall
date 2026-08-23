@@ -52,6 +52,11 @@ waterfall-seed-admin = "waterfall.scripts.seed_admin:main"
 minversion = "8.0"
 addopts = "-q --cov=src/waterfall --cov-report=term-missing"
 testpaths = ["tests"]
+filterwarnings = [
+  # Third-party warning from Starlette/FastAPI TestClient; not fixable without
+  # migrating to httpx2 (out of scope). Targeted ignore, keep default behavior otherwise.
+  "ignore:Using `httpx` with `starlette.testclient` is deprecated:starlette.exceptions.StarletteDeprecationWarning",
+]
 
 [tool.coverage.run]
 branch = true
