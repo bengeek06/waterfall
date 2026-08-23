@@ -27,7 +27,7 @@
     <img alt="Pytest" src="https://img.shields.io/badge/Pytest-8.x-0A9EDC?logo=pytest&logoColor=white" />
   </a>
   <a href="https://github.com/pytest-dev/pytest-cov">
-    <img alt="Coverage 86.49%" src="https://img.shields.io/badge/Coverage-86.49%25-5C7CFA" />
+    <img alt="Coverage 86.94%" src="https://img.shields.io/badge/Coverage-86.94%25-5C7CFA" />
   </a>
 </p>
 
@@ -88,10 +88,8 @@ Le cœur fonctionnel repose sur une logique de planning et de coût qui reste co
 │   └── frontend/     # application web Next.js + interface utilisateur
 ├── packages/
 │   └── api-client-ts # client TypeScript généré
-├── openapi/          # spécification OpenAPI
-├── docs/             # documentation métier et checklists
-├── excel/            # modèles import/export de données
-├── schemas/          # schémas de référence et fichiers XML
+├── openapi/          # spécification OpenAPI (spec/ = source éclatée, waterfall_v1.yaml = bundle généré)
+├── docs/             # documentation métier
 ├── infra/            # infrastructure / déploiement
 ├── package.json      # scripts racine du workspace
 ├── README.md         # documentation principale
