@@ -19,6 +19,7 @@ Waterfall backend relies on:
 - PostgreSQL in Docker Compose and SQLite in tests
 - Quality gates: ruff, pyright, pytest
 - OpenAPI static contract parity check against runtime routes
+- OpenAPI source is split under `openapi/spec/` (paths per domain, one file per schema/parameter/response); the committed `openapi/waterfall_v1.yaml` is a generated bundle (banner comment, do not edit directly)
 
 ## Mandatory guardrails
 
@@ -29,7 +30,7 @@ Waterfall backend relies on:
 2. Keep schema, models, and API aligned.
 - SQLAlchemy model changes require migration impact assessment.
 - Pydantic constraints must match DB constraints and business rules.
-- Route or OpenAPI changes require parity checks and regeneration of the committed TypeScript client with `npm run api-client:generate`; verify the generated diff is committed.
+- Route or OpenAPI changes require editing the split sources under `openapi/spec/` (never the generated `openapi/waterfall_v1.yaml` directly), then `npm run openapi:bundle`, then parity checks and regeneration of the committed TypeScript client with `npm run api-client:generate`; verify both the bundled spec and the generated client diffs are committed.
 
 3. Avoid non-traceable database hotfixes.
 - Prefer Alembic workflows over ad-hoc SQL patches.
@@ -53,6 +54,7 @@ Waterfall backend relies on:
 
 - Verify status codes and response payload consistency.
 - Verify auth and ownership boundaries.
+- If `openapi/spec/**` was edited, run `npm run openapi:bundle` before parity checks.
 - Run targeted OpenAPI parity checks when routes change.
 
 ### B. Data and migrations
@@ -83,6 +85,7 @@ From the repository root:
 - cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && cd apps/backend && pytest
 - cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && cd apps/backend && pytest --no-cov tests/<target_file>.py
 - cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && cd apps/backend && alembic upgrade head
+- cd "$(git rev-parse --show-toplevel)" && npm run openapi:bundle (after editing openapi/spec/**)
 
 Root commands:
 
