@@ -1,13 +1,28 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from waterfall.models.ms_core import MsProject, MsTask, MsTaskLink
+from waterfall.models.planning import WfPlanning, WfPlanningLinkSnapshot, WfPlanningTaskSnapshot
 from waterfall.models.resources import EstimateCostLine, EstimateTaskRow, TaskRoleAssignment
 from waterfall.models.wf_core import WfChargeLine, WfTaskEnrichment
 from waterfall.schemas.projects import PlanningStructureCreate
+
+
+def save_planning_structure_draft(planning: WfPlanning, payload: PlanningStructureCreate) -> None:
+    planning.structure_draft_json = json.dumps(
+        payload.model_dump(mode="json"), separators=(",", ":")
+    )
+
+
+def load_planning_structure_draft(planning: WfPlanning) -> PlanningStructureCreate | None:
+    if planning.structure_draft_json is None:
+        return None
+    return PlanningStructureCreate.model_validate(json.loads(planning.structure_draft_json))
 
 
 @dataclass(frozen=True)
@@ -119,6 +134,12 @@ def generate_planning_structure(
                 f"Planning task is referenced and cannot be removed: {task.structure_key}"
             )
 
+    removed_uids = [task.uid for task in removed_tasks]
+    if removed_uids:
+        db.query(MsTask).filter(
+            MsTask.project_id == project.id,
+            MsTask.parent_uid.in_(removed_uids),
+        ).update({MsTask.parent_uid: None}, synchronize_session=False)
     for task in removed_tasks:
         db.query(MsTaskLink).filter(
             (MsTaskLink.task_uid == task.uid) | (MsTaskLink.predecessor_uid == task.uid)
@@ -178,25 +199,178 @@ def generate_planning_structure(
     deliverables_by_lot_key = {
         f"{post.key}/{lot.key}": lot.deliverables for post in payload.posts for lot in post.lots
     }
-    milestone_uids = [uid_by_key[node.key] for node in nodes if node.kind == "milestone"]
-    if milestone_uids:
-        db.query(MsTaskLink).filter(
-            MsTaskLink.project_id == project.id,
-            MsTaskLink.task_uid.in_(milestone_uids),
-        ).delete(synchronize_session=False)
     for node in nodes:
         if node.kind != "milestone" or node.parent_key is None:
             continue
         for deliverable in deliverables_by_lot_key[node.parent_key]:
-            db.add(
-                MsTaskLink(
-                    project_id=project.id,
-                    task_uid=uid_by_key[node.key],
-                    predecessor_uid=uid_by_key[f"{node.parent_key}/{deliverable.key}"],
-                    link_type=1,
-                    lag_tenth_minute=0,
-                    lag_format=7,
-                )
-            )
+            link_values = {
+                "project_id": project.id,
+                "task_uid": uid_by_key[node.key],
+                "predecessor_uid": uid_by_key[f"{node.parent_key}/{deliverable.key}"],
+                "link_type": 1,
+                "lag_tenth_minute": 0,
+                "lag_format": 7,
+            }
+            if not db.query(MsTaskLink.id).filter_by(**link_values).first():
+                db.add(MsTaskLink(**link_values))
     db.flush()
     return tasks
+
+
+def generate_planning_snapshot(
+    db: Session,
+    project: MsProject,
+    payload: PlanningStructureCreate,
+    planning: WfPlanning,
+) -> list[WfPlanningTaskSnapshot]:
+    nodes = _build_nodes(payload)
+    existing = (
+        db.query(WfPlanningTaskSnapshot)
+        .filter(WfPlanningTaskSnapshot.planning_id == planning.id)
+        .all()
+    )
+    existing_by_key = {
+        task.structure_key: task for task in existing if task.structure_key is not None
+    }
+    source = None
+    if not existing and project.displayed_planning_id not in (None, planning.id):
+        source = (
+            db.query(WfPlanningTaskSnapshot)
+            .filter(WfPlanningTaskSnapshot.planning_id == project.displayed_planning_id)
+            .all()
+        )
+        existing_by_key.update(
+            {task.structure_key: task for task in source if task.structure_key is not None}
+        )
+
+    max_uid = (
+        db.query(func.max(WfPlanningTaskSnapshot.uid))
+        .filter(WfPlanningTaskSnapshot.planning_id == planning.id)
+        .scalar()
+        or 0
+    )
+    if source:
+        max_uid = max(max_uid, max(task.uid for task in source))
+    uid_by_key: dict[str, int] = {}
+    snapshots: list[WfPlanningTaskSnapshot] = []
+    incoming_keys = {node.key for node in nodes}
+    links = (
+        db.query(WfPlanningLinkSnapshot)
+        .filter(WfPlanningLinkSnapshot.planning_id == planning.id)
+        .all()
+    )
+    existing_uids = {
+        task.uid
+        for task in existing
+        if task.structure_key is None or task.structure_key in incoming_keys
+    }
+    for link in links:
+        if link.task_uid not in existing_uids or link.predecessor_uid not in existing_uids:
+            db.delete(link)
+    removed_ids = [
+        task.id
+        for task in existing
+        if task.structure_key is not None and task.structure_key not in incoming_keys
+    ]
+    db.query(WfPlanningTaskSnapshot).filter(
+        WfPlanningTaskSnapshot.planning_id == planning.id
+    ).update({WfPlanningTaskSnapshot.parent_uid: None}, synchronize_session=False)
+    db.flush()
+    if removed_ids:
+        db.query(WfPlanningTaskSnapshot).filter(WfPlanningTaskSnapshot.id.in_(removed_ids)).delete(
+            synchronize_session=False
+        )
+    db.flush()
+
+    for node in nodes:
+        task = existing_by_key.get(node.key)
+        if task is None:
+            max_uid += 1
+            task = WfPlanningTaskSnapshot(
+                planning_id=planning.id,
+                uid=max_uid,
+                id_display=max_uid,
+                structure_key=node.key,
+                notes=None,
+            )
+            db.add(task)
+        elif task.planning_id != planning.id:
+            source_task = task
+            task = WfPlanningTaskSnapshot(
+                planning_id=planning.id,
+                uid=source_task.uid,
+                id_display=source_task.id_display,
+                structure_key=node.key,
+                notes=source_task.notes,
+            )
+            db.add(task)
+        task.structure_kind = node.kind
+        task.parent_uid = uid_by_key.get(node.parent_key) if node.parent_key else None
+        task.position = node.position
+        task.name = node.name
+        task.task_type = 0
+        task.outline_number = node.outline_number
+        task.outline_level = node.outline_level
+        task.is_summary = node.is_summary
+        task.is_milestone = node.is_milestone
+        snapshots.append(task)
+        uid_by_key[node.key] = task.uid
+
+    db.flush()
+    source_links = []
+    if source:
+        source_links = (
+            db.query(WfPlanningLinkSnapshot)
+            .filter(WfPlanningLinkSnapshot.planning_id == project.displayed_planning_id)
+            .all()
+        )
+        source_uid_by_key = {task.structure_key: task.uid for task in source}
+        source_uid_to_new_uid = {
+            source_uid_by_key[node.key]: uid_by_key[node.key]
+            for node in nodes
+            if node.key in source_uid_by_key
+        }
+        for link in source_links:
+            task_uid = source_uid_to_new_uid.get(link.task_uid)
+            predecessor_uid = source_uid_to_new_uid.get(link.predecessor_uid)
+            if task_uid is None or predecessor_uid is None:
+                continue
+            if (
+                not db.query(WfPlanningLinkSnapshot.id)
+                .filter_by(
+                    planning_id=planning.id,
+                    task_uid=task_uid,
+                    predecessor_uid=predecessor_uid,
+                    link_type=link.link_type,
+                )
+                .first()
+            ):
+                db.add(
+                    WfPlanningLinkSnapshot(
+                        planning_id=planning.id,
+                        task_uid=task_uid,
+                        predecessor_uid=predecessor_uid,
+                        link_type=link.link_type,
+                        lag_tenth_minute=link.lag_tenth_minute,
+                        lag_format=link.lag_format,
+                    )
+                )
+    deliverables_by_lot_key = {
+        f"{post.key}/{lot.key}": lot.deliverables for post in payload.posts for lot in post.lots
+    }
+    for node in nodes:
+        if node.kind != "milestone" or node.parent_key is None:
+            continue
+        for deliverable in deliverables_by_lot_key[node.parent_key]:
+            link_values = {
+                "planning_id": planning.id,
+                "task_uid": uid_by_key[node.key],
+                "predecessor_uid": uid_by_key[f"{node.parent_key}/{deliverable.key}"],
+                "link_type": 1,
+                "lag_tenth_minute": 0,
+                "lag_format": 7,
+            }
+            if not db.query(WfPlanningLinkSnapshot.id).filter_by(**link_values).first():
+                db.add(WfPlanningLinkSnapshot(**link_values))
+    db.flush()
+    return snapshots

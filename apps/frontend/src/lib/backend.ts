@@ -18,9 +18,14 @@ export type EstimateCostLine = components["schemas"]["EstimateCostLineRead"];
 export type Task = components["schemas"]["TaskRead"];
 export type PlanningStructureCreate = components["schemas"]["PlanningStructureCreate"];
 export type PlanningStructureRead = components["schemas"]["PlanningStructureRead"];
+export type PlanningStructureDraftRead = components["schemas"]["PlanningStructureDraftRead"];
+export type Planning = components["schemas"]["PlanningRead"];
+export type PlanningDetail = components["schemas"]["PlanningDetailRead"];
 export type TaskRoleAssignment = components["schemas"]["TaskRoleAssignmentRead"];
 export type ImportBatch = components["schemas"]["ImportBatchResponse"];
 export type ImportBatchStatus = components["schemas"]["ImportBatchStatusResponse"];
+export type ImportRunAcceptedResponse = components["schemas"]["ImportRunAcceptedResponse"];
+export type ImportDiff = components["schemas"]["ImportDiffResponse"];
 export type TokenResponse = components["schemas"]["Token"];
 
 export class ApiError extends Error {
@@ -520,9 +525,10 @@ export function getProjects(
   onSessionRefresh: (next: SessionTokens) => void,
   limit = 50,
   offset = 0,
+  includeArchived = false,
 ) {
   return authRequest<Project[]>(
-    `/projects?limit=${limit}&offset=${offset}`,
+    `/projects?limit=${limit}&offset=${offset}&include_archived=${includeArchived}`,
     tokens,
     { method: "GET" },
     onSessionRefresh,
@@ -802,8 +808,10 @@ export function runImportBatch(
   batchId: number,
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
+  dryRun = false,
+  confirm = false,
 ) {
-  return authRequest<{ batchId: number }>(
+  return authRequest<ImportRunAcceptedResponse>(
     `/imports/v1/batches/${batchId}/run`,
     tokens,
     {
@@ -811,8 +819,21 @@ export function runImportBatch(
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ dryRun: false }),
+      body: JSON.stringify({ dryRun, confirm }),
     },
+    onSessionRefresh,
+  );
+}
+
+export function getImportBatchDiff(
+  batchId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<ImportDiff>(
+    `/imports/v1/batches/${batchId}/diff`,
+    tokens,
+    { method: "GET" },
     onSessionRefresh,
   );
 }
@@ -859,6 +880,154 @@ export function createPlanningStructure(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     },
+    onSessionRefresh,
+  );
+}
+
+export function savePlanningStructureDraft(
+  projectId: number,
+  payload: PlanningStructureCreate,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<PlanningStructureDraftRead>(
+    `/projects/${projectId}/planning-structure/draft`,
+    tokens,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    onSessionRefresh,
+  );
+}
+
+export async function getPlanningStructureDraft(
+  projectId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+): Promise<PlanningStructureDraftRead | null> {
+  try {
+    return await authRequest<PlanningStructureDraftRead>(
+      `/projects/${projectId}/planning-structure/draft`,
+      tokens,
+      { method: "GET" },
+      onSessionRefresh,
+    );
+  } catch (cause) {
+    if (cause instanceof ApiError && cause.status === 404) {
+      return null;
+    }
+    throw cause;
+  }
+}
+
+export function listPlannings(
+  projectId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<Planning[]>(
+    `/projects/${projectId}/plannings`,
+    tokens,
+    { method: "GET" },
+    onSessionRefresh,
+  );
+}
+
+export function getPlanning(
+  projectId: number,
+  planningId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return getCompletePlanning(projectId, planningId, tokens, onSessionRefresh);
+}
+
+const PLANNING_PAGE_SIZE = 200;
+
+async function getCompletePlanning(
+  projectId: number,
+  planningId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  let offset = 0;
+  let completePlanning: PlanningDetail | null = null;
+
+  while (true) {
+    const page = await authRequest<PlanningDetail>(
+      `/projects/${projectId}/plannings/${planningId}?limit=${PLANNING_PAGE_SIZE}&offset=${offset}`,
+      tokens,
+      { method: "GET" },
+      onSessionRefresh,
+    );
+    if (!completePlanning) {
+      completePlanning = page;
+    } else {
+      completePlanning = Object.assign({}, completePlanning, {
+        tasks: [...completePlanning.tasks, ...page.tasks],
+        links: [...completePlanning.links, ...page.links],
+      });
+    }
+    if (page.tasks.length < PLANNING_PAGE_SIZE) {
+      return completePlanning;
+    }
+    offset += PLANNING_PAGE_SIZE;
+  }
+}
+
+export function validatePlanning(
+  projectId: number,
+  planningId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<Planning>(
+    `/projects/${projectId}/plannings/${planningId}/validate`,
+    tokens,
+    { method: "POST" },
+    onSessionRefresh,
+  );
+}
+
+export function setPlanningReference(
+  projectId: number,
+  planningId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<Project>(
+    `/projects/${projectId}/plannings/${planningId}/reference`,
+    tokens,
+    { method: "POST" },
+    onSessionRefresh,
+  );
+}
+
+export function setDisplayedPlanning(
+  projectId: number,
+  planningId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<Project>(
+    `/projects/${projectId}/plannings/${planningId}/display`,
+    tokens,
+    { method: "POST" },
+    onSessionRefresh,
+  );
+}
+
+export function reopenPlanningStructure(
+  projectId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<Project>(
+    `/projects/${projectId}/planning-structure/reopen`,
+    tokens,
+    { method: "POST" },
     onSessionRefresh,
   );
 }

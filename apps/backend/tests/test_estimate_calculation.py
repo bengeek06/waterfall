@@ -109,6 +109,75 @@ def _seed_resources_with_rates() -> tuple[int, dict[int, dict[int, Decimal]]]:
         return labor_role.id, rates_by_category
 
 
+def test_validation_rejects_assignments_outside_estimate_planning_snapshot() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        labor_role_id, _ = _seed_resources_with_rates()
+        project = client.post("/projects", json={"name": "Snapshot source"}, headers=headers)
+        assert project.status_code == 201
+        project_payload = cast(dict[str, Any], project.json())
+        project_id = cast(int, project_payload["id"])
+        planning = client.post(
+            f"/projects/{project_id}/planning-structure",
+            json={
+                "posts": [
+                    {
+                        "key": "post",
+                        "name": "Post",
+                        "lots": [
+                            {
+                                "key": "lot",
+                                "name": "Lot",
+                                "deliverables": [{"key": "task", "name": "Task"}],
+                            }
+                        ],
+                    }
+                ],
+            },
+            headers=headers,
+        )
+        assert planning.status_code == 201
+
+        with get_session_factory()() as session:
+            project_model = session.get(MsProject, project_id)
+            assert project_model is not None
+            extra_task = MsTask(
+                project_id=project_id,
+                uid=9999,
+                id_display=9999,
+                name="Outside snapshot",
+                task_type=0,
+                outline_number="99",
+                outline_level=1,
+                start_at=datetime(2026, 1, 1, 8, 0, tzinfo=UTC),
+                finish_at=datetime(2026, 1, 2, 8, 0, tzinfo=UTC),
+            )
+            session.add(extra_task)
+            session.commit()
+
+        estimate = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate.status_code == 201
+        estimate_payload = cast(dict[str, Any], estimate.json())
+        estimate_id = cast(int, estimate_payload["id"])
+        assignment = client.post(
+            f"/projects/{project_id}/tasks/9999/role-assignments",
+            json={"role_id": labor_role_id, "quantity": "1", "hours": "10"},
+            headers=headers,
+        )
+        assert assignment.status_code == 201
+
+        validation = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/validate",
+            headers=headers,
+        )
+        assert validation.status_code == 409
+        assert "outside its planning snapshot" in validation.json()["detail"]
+
+
 def test_calculate_labor_lines_spanning_years() -> None:
     """Test that labor hours are distributed uniformly across multiple years."""
     with TestClient(app) as client:

@@ -13,7 +13,8 @@ from sqlalchemy.orm import Session
 from waterfall.api.dependencies import get_current_active_user
 from waterfall.core.config import get_settings
 from waterfall.db.session import get_db
-from waterfall.models.ms_core import MsProject, MsTask, MsTaskLink
+from waterfall.models.ms_core import MsProject
+from waterfall.models.planning import WfPlanning, WfPlanningLinkSnapshot, WfPlanningTaskSnapshot
 from waterfall.models.user import User
 from waterfall.models.wf_core import WfImportBatch
 from waterfall.schemas.imports import (
@@ -34,6 +35,7 @@ from waterfall.schemas.imports import (
 from waterfall.services.import_diff import build_import_diff
 from waterfall.services.import_v1 import import_tasks_and_links
 from waterfall.services.msproject_xml import MsProjectValidationError, parse_msproject_xml
+from waterfall.services.project_lifecycle import ensure_project_mutable
 
 router = APIRouter(prefix="/imports/v1/batches", tags=["imports-v1"])
 UPLOAD_CHUNK_SIZE = 1024 * 1024
@@ -122,6 +124,26 @@ def _get_batch_or_404(db: Session, batch_id: int, owner_id: int) -> WfImportBatc
     return batch
 
 
+def _planning_counters(db: Session, planning_id: int) -> tuple[int, int]:
+    task_count = (
+        db.scalar(
+            select(func.count())
+            .select_from(WfPlanningTaskSnapshot)
+            .where(WfPlanningTaskSnapshot.planning_id == planning_id)
+        )
+        or 0
+    )
+    link_count = (
+        db.scalar(
+            select(func.count())
+            .select_from(WfPlanningLinkSnapshot)
+            .where(WfPlanningLinkSnapshot.planning_id == planning_id)
+        )
+        or 0
+    )
+    return task_count, link_count
+
+
 @router.post(
     "",
     response_model=ImportBatchResponse,
@@ -144,6 +166,7 @@ def create_batch(
     )
     if project is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    ensure_project_mutable(project)
 
     batch = WfImportBatch(
         project_id=project.id,
@@ -185,6 +208,9 @@ async def upload_xml(
         )
 
     batch = _get_batch_or_404(db, batch_id, current_user.id)
+    project = db.get(MsProject, batch.project_id)
+    if project is not None:
+        ensure_project_mutable(project)
     if batch.status != "pending":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -228,15 +254,18 @@ async def upload_xml(
 )
 def run_batch(
     batch_id: int,
-    payload: ImportRunRequest | None = None,
+    payload: ImportRunRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> ImportRunAcceptedResponse:
     batch = _get_batch_or_404(db, batch_id, current_user.id)
+    project = db.get(MsProject, batch.project_id)
+    if project is not None:
+        ensure_project_mutable(project)
     if batch.status != "pending":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Batch is not pending")
 
-    run_request = payload or ImportRunRequest()
+    run_request = payload
     if not run_request.dry_run and not run_request.confirm:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -262,6 +291,9 @@ def run_batch(
 
     xml_bytes = _read_source_xml(batch)
 
+    project = db.query(MsProject).filter(MsProject.id == batch.project_id).with_for_update().one()
+    ensure_project_mutable(project)
+
     accepted_at = datetime.now(UTC)
     if run_request.dry_run:
         try:
@@ -279,6 +311,24 @@ def run_batch(
             status="pending",
             acceptedAt=accepted_at,
         )
+
+    # Confirmation path only: reject referenced tasks that the diff preview flagged as
+    # conflicts before mutating any state, keeping the batch reusable (still pending).
+    try:
+        parsed_project = parse_msproject_xml(xml_bytes)
+    except MsProjectValidationError:
+        parsed_project = None
+    if parsed_project is not None:
+        conflicting_uids = [
+            item["uid"]
+            for item in build_import_diff(db, project, parsed_project)
+            if item.get("kind") == "conflict"
+        ]
+        if conflicting_uids:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "IMPORT_CONFLICT", "conflicts": conflicting_uids},
+            )
 
     updated = (
         db.query(WfImportBatch)
@@ -299,9 +349,6 @@ def run_batch(
     db.refresh(batch)
 
     try:
-        project = (
-            db.query(MsProject).filter(MsProject.id == batch.project_id).with_for_update().one()
-        )
         identical_source = (
             db.query(WfImportBatch.id)
             .filter(WfImportBatch.project_id == batch.project_id)
@@ -311,29 +358,14 @@ def run_batch(
             .first()
             is not None
         )
-        if identical_source:
-            task_count = db.query(MsTask.id).filter(MsTask.project_id == project.id).count()
-            link_count = db.query(MsTaskLink.id).filter(MsTaskLink.project_id == project.id).count()
-            batch.status = "success"
-            batch.finished_at = datetime.now(UTC)
-            payload["counters"] = {"tasks": task_count, "links": link_count}
-            payload["errors"] = []
-            payload["dry_run"] = run_request.dry_run
-            payload["identical_source"] = True
-            batch.log_json = json.dumps(payload)
-            db.add(batch)
-            db.commit()
-            return ImportRunAcceptedResponse(
-                batchId=batch.id,
-                status="success",
-                acceptedAt=accepted_at,
-            )
         task_count, link_count = import_tasks_and_links(db, xml_bytes, project)
         batch.status = "success"
         batch.finished_at = datetime.now(UTC)
         payload["counters"] = {"tasks": task_count, "links": link_count}
         payload["errors"] = []
         payload["dry_run"] = False
+        if identical_source:
+            payload["identical_source"] = True
         batch.log_json = json.dumps(payload)
         db.add(batch)
         db.commit()
@@ -422,30 +454,22 @@ def get_batch(
         except json.JSONDecodeError:
             pass
 
-    is_dry_run = log_payload.get("dry_run") is True
     saved_counters = log_payload.get("counters")
-    if is_dry_run and isinstance(saved_counters, dict):
+    if isinstance(saved_counters, dict):
         task_value = saved_counters.get("tasks")
         link_value = saved_counters.get("links")
         task_count = task_value if isinstance(task_value, int) else 0
         link_count = link_value if isinstance(link_value, int) else 0
-    elif batch.project_id is not None:
-        task_count = (
-            db.scalar(
-                select(func.count())
-                .select_from(MsTask)
-                .where(MsTask.project_id == batch.project_id)
-            )
-            or 0
+    elif batch.status == "success" and batch.project_id is not None:
+        planning = (
+            db.query(WfPlanning)
+            .join(MsProject, WfPlanning.project_id == MsProject.id)
+            .filter(WfPlanning.project_id == batch.project_id)
+            .filter(WfPlanning.id == MsProject.displayed_planning_id)
+            .one_or_none()
         )
-        link_count = (
-            db.scalar(
-                select(func.count())
-                .select_from(MsTaskLink)
-                .where(MsTaskLink.project_id == batch.project_id)
-            )
-            or 0
-        )
+        if planning is not None:
+            task_count, link_count = _planning_counters(db, planning.id)
 
     return ImportBatchStatusResponse(
         **batch_response.model_dump(by_alias=True),

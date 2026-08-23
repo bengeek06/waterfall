@@ -365,6 +365,126 @@ export interface paths {
         patch: operations["updateProject"];
         trace?: never;
     };
+    "/projects/{projectId}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Modifier le statut d'un projet */
+        patch: operations["updateProjectStatus"];
+        trace?: never;
+    };
+    "/projects/{projectId}/plannings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lister les versions de planning */
+        get: operations["listPlannings"];
+        put?: never;
+        /** Creer un brouillon de planning */
+        post: operations["createPlanning"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{projectId}/plannings/{planningId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lire une version de planning */
+        get: operations["getPlanning"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{projectId}/plannings/{planningId}/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Valider une version de planning */
+        post: operations["validatePlanning"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{projectId}/plannings/{planningId}/reference": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Definir la reference planning */
+        post: operations["setPlanningReference"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{projectId}/plannings/{planningId}/display": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Selectionner le planning affiche */
+        post: operations["setDisplayedPlanning"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{projectId}/estimates/{estimateId}/reference": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Definir le devis de reference */
+        post: operations["setEstimateReference"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/projects/{projectId}/tasks": {
         parameters: {
             query?: never;
@@ -394,6 +514,41 @@ export interface paths {
         put?: never;
         /** Generer le squelette de planning depuis une structure metier */
         post: operations["createPlanningStructure"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{projectId}/planning-structure/draft": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lire le brouillon de structure de planning */
+        get: operations["getPlanningStructureDraft"];
+        /** Sauvegarder le brouillon de structure de planning */
+        put: operations["savePlanningStructureDraft"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{projectId}/planning-structure/reopen": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Rouvrir la structure de planning dans un nouveau brouillon */
+        post: operations["reopenPlanningStructure"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1054,6 +1209,8 @@ export interface components {
         ProjectRead: {
             id: number;
             name: string;
+            /** @enum {string} */
+            status: "cree" | "initialise" | "en_reponse_appel_offre" | "perdu" | "en_cours" | "termine" | "abandonne";
             code?: string | null;
             short_description?: string | null;
             /** @enum {integer} */
@@ -1066,6 +1223,9 @@ export interface components {
             /** Format: date-time */
             finish_date?: string | null;
             currency_code?: string | null;
+            planning_reference_id?: number | null;
+            displayed_planning_id?: number | null;
+            reference_estimate_id?: number | null;
         };
         ProjectCreate: {
             name: string;
@@ -1077,6 +1237,32 @@ export interface components {
             name?: string;
             code?: string | null;
             short_description?: string | null;
+            /** @enum {string} */
+            status?: "cree" | "initialise" | "en_reponse_appel_offre" | "perdu" | "en_cours" | "termine" | "abandonne";
+        };
+        ProjectStatusUpdate: {
+            /** @enum {string} */
+            status: "cree" | "initialise" | "en_reponse_appel_offre" | "perdu" | "en_cours" | "termine" | "abandonne";
+        };
+        PlanningRead: {
+            id: number;
+            project_id: number;
+            version_number: number;
+            /** @enum {string} */
+            status: "draft" | "validated" | "superseded";
+            note?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            validated_at?: string | null;
+        };
+        PlanningCreate: {
+            note?: string | null;
+            source_planning_id?: number | null;
+        };
+        PlanningDetailRead: components["schemas"]["PlanningRead"] & {
+            tasks: components["schemas"]["TaskRead"][];
+            links: components["schemas"]["PlanningLinkRead"][];
         };
         TaskRead: {
             id: number;
@@ -1108,6 +1294,13 @@ export interface components {
             lag_tenth_minute?: number | null;
             lag_format?: number | null;
         };
+        PlanningLinkRead: {
+            task_uid: number;
+            predecessor_uid: number;
+            link_type: number;
+            lag_tenth_minute?: number | null;
+            lag_format?: number | null;
+        };
         PlanningStructureCreate: {
             posts: components["schemas"]["PlanningPostCreate"][];
         };
@@ -1127,6 +1320,10 @@ export interface components {
         };
         PlanningStructureRead: {
             tasks: components["schemas"]["TaskRead"][];
+        };
+        PlanningStructureDraftRead: {
+            planning_id: number;
+            structure: components["schemas"]["PlanningStructureCreate"];
         };
         PlanningTreeRead: {
             tasks: components["schemas"]["PlanningTaskTreeRead"][];
@@ -1180,6 +1377,7 @@ export interface components {
         ProjectEstimateRead: {
             id: number;
             project_id: number;
+            planning_id: number | null;
             reference_estimate_id?: number | null;
             version_number: number;
             /** @enum {string} */
@@ -1196,7 +1394,7 @@ export interface components {
         EstimateTaskRowRead: {
             id: number;
             estimate_id: number;
-            task_id: number;
+            task_id?: number | null;
             parent_task_id?: number | null;
             position: number;
             task_name: string;
@@ -1425,6 +1623,24 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
+        /** @description Planning introuvable */
+        PlanningNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description Devis introuvable */
+        EstimateNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
         /** @description Tache introuvable */
         TaskNotFound: {
             headers: {
@@ -1464,6 +1680,8 @@ export interface components {
         AssignmentId: number;
         /** @description Identifiant technique de la version de devis */
         EstimateId: number;
+        /** @description Identifiant technique de la version de planning */
+        PlanningId: number;
         /** @description Identifiant technique de la ligne de coût du devis */
         CostLineId: number;
         /** @description Identifiant technique du noeud de ressources */
@@ -1938,7 +2156,7 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": components["schemas"]["ImportRunRequest"];
             };
@@ -2049,6 +2267,7 @@ export interface operations {
             query?: {
                 limit?: number;
                 offset?: number;
+                include_archived?: boolean;
             };
             header?: never;
             path?: never;
@@ -2171,11 +2390,239 @@ export interface operations {
             404: components["responses"]["ProjectNotFound"];
         };
     };
+    updateProjectStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectStatusUpdate"];
+            };
+        };
+        responses: {
+            /** @description Projet mis a jour */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectRead"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    listPlannings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Versions de planning */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanningRead"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+        };
+    };
+    createPlanning: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlanningCreate"];
+            };
+        };
+        responses: {
+            /** @description Brouillon cree */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanningDetailRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getPlanning: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de planning */
+                planningId: components["parameters"]["PlanningId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Version de planning */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanningDetailRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["PlanningNotFound"];
+        };
+    };
+    validatePlanning: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de planning */
+                planningId: components["parameters"]["PlanningId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Version validee */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanningRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["PlanningNotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    setPlanningReference: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de planning */
+                planningId: components["parameters"]["PlanningId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Projet mis a jour */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["PlanningNotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    setDisplayedPlanning: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de planning */
+                planningId: components["parameters"]["PlanningId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Projet mis a jour */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["PlanningNotFound"];
+        };
+    };
+    setEstimateReference: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de devis */
+                estimateId: components["parameters"]["EstimateId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Projet mis a jour */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["EstimateNotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
     listProjectTasks: {
         parameters: {
             query?: {
                 limit?: number;
                 offset?: number;
+                planning_id?: number | null;
             };
             header?: never;
             path: {
@@ -2239,7 +2686,7 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody: {
+        requestBody?: {
             content: {
                 "application/json": components["schemas"]["PlanningStructureCreate"];
             };
@@ -2259,9 +2706,92 @@ export interface operations {
             409: components["responses"]["Conflict"];
         };
     };
-    getPlanningTree: {
+    getPlanningStructureDraft: {
         parameters: {
             query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Brouillon de structure sauvegarde */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanningStructureDraftRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+        };
+    };
+    savePlanningStructureDraft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlanningStructureCreate"];
+            };
+        };
+        responses: {
+            /** @description Brouillon de structure sauvegarde */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanningStructureDraftRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    reopenPlanningStructure: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Projet rouvert dans un brouillon */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getPlanningTree: {
+        parameters: {
+            query?: {
+                planning_id?: number | null;
+            };
             header?: never;
             path: {
                 /** @description Identifiant technique ms_project.id */
@@ -2778,7 +3308,9 @@ export interface operations {
     };
     exportProjectXml: {
         parameters: {
-            query?: never;
+            query?: {
+                planning_id?: number | null;
+            };
             header?: never;
             path: {
                 /** @description Identifiant technique ms_project.id */

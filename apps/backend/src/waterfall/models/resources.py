@@ -198,6 +198,7 @@ class Estimate(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("ms_project.id"), nullable=False)
+    planning_id: Mapped[int | None] = mapped_column(ForeignKey("wf_planning.id"), nullable=True)
     reference_estimate_id: Mapped[int | None] = mapped_column(
         ForeignKey("wf_estimate.id"), nullable=True
     )
@@ -221,7 +222,7 @@ class EstimateTaskRow(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     estimate_id: Mapped[int] = mapped_column(ForeignKey("wf_estimate.id"), nullable=False)
-    task_id: Mapped[int] = mapped_column(ForeignKey("ms_task.id"), nullable=False)
+    task_id: Mapped[int | None] = mapped_column(ForeignKey("ms_task.id"), nullable=True)
     parent_task_id: Mapped[int | None] = mapped_column(ForeignKey("ms_task.id"), nullable=True)
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     task_name: Mapped[str] = mapped_column(String(512), nullable=False)

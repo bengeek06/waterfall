@@ -3,20 +3,16 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from waterfall.models.ms_core import MsProject, MsTask, MsTaskLink
-from waterfall.models.resources import (
-    EstimateCostLine,
-    EstimateLine,
-    EstimateTaskRow,
-    TaskRoleAssignment,
-)
-from waterfall.models.wf_core import WfChargeLine, WfTaskEnrichment
+from waterfall.models.ms_core import MsProject
+from waterfall.models.planning import WfPlanning, WfPlanningLinkSnapshot, WfPlanningTaskSnapshot
 from waterfall.services.msproject_xml import ParsedProject, parse_msproject_xml
+from waterfall.services.project_lifecycle import ensure_project_mutable
 
 
-def _populate_parent_metadata(tasks: list[MsTask]) -> None:
+def _populate_parent_metadata(tasks: list[WfPlanningTaskSnapshot]) -> None:
     by_outline = {
         task.outline_number: task
         for task in tasks
@@ -47,12 +43,13 @@ def _apply_project_metadata(project: MsProject, parsed: ParsedProject) -> None:
     project.currency_code = parsed.currency_code
 
 
-def _task_kwargs(task: Any, project_id: int) -> dict[str, object]:
+def _task_kwargs(task: Any, planning_id: int) -> dict[str, object]:
     return {
-        "project_id": project_id,
+        "planning_id": planning_id,
         "uid": task.uid,
         "id_display": task.id_display,
         "name": task.name,
+        "notes": task.notes,
         "task_type": task.task_type,
         "outline_number": task.outline_number,
         "outline_level": task.outline_level,
@@ -70,81 +67,63 @@ def _task_kwargs(task: Any, project_id: int) -> dict[str, object]:
 
 
 def import_tasks_and_links(db: Session, xml_bytes: bytes, project: MsProject) -> tuple[int, int]:
+    ensure_project_mutable(project)
     parsed = parse_msproject_xml(xml_bytes)
     _apply_project_metadata(project, parsed)
     db.add(project)
     db.flush()
     now = datetime.now(UTC)
-    incoming_by_uid = {task.uid: task for task in parsed.tasks}
-    existing_by_uid = {
-        task.uid: task for task in db.query(MsTask).filter(MsTask.project_id == project.id).all()
-    }
-    removed = [task for uid, task in existing_by_uid.items() if uid not in incoming_by_uid]
-    for task in removed:
-        referenced = (
-            db.query(TaskRoleAssignment.id).filter(TaskRoleAssignment.task_id == task.id).first()
-            or db.query(EstimateCostLine.id).filter(EstimateCostLine.task_id == task.id).first()
-            or db.query(EstimateLine.id).filter(EstimateLine.task_id == task.id).first()
-            or db.query(EstimateTaskRow.id).filter(EstimateTaskRow.task_id == task.id).first()
-            or db.query(WfChargeLine.id)
-            .filter(WfChargeLine.project_id == project.id, WfChargeLine.task_uid == task.uid)
-            .first()
+    displayed = (
+        db.query(WfPlanning).filter(WfPlanning.id == project.displayed_planning_id).first()
+        if project.displayed_planning_id is not None
+        else None
+    )
+    if displayed is not None and displayed.status == "draft":
+        planning = displayed
+        db.query(WfPlanningLinkSnapshot).filter(
+            WfPlanningLinkSnapshot.planning_id == planning.id
+        ).delete(synchronize_session=False)
+        db.query(WfPlanningTaskSnapshot).filter(
+            WfPlanningTaskSnapshot.planning_id == planning.id
+        ).update({WfPlanningTaskSnapshot.parent_uid: None}, synchronize_session=False)
+        db.query(WfPlanningTaskSnapshot).filter(
+            WfPlanningTaskSnapshot.planning_id == planning.id
+        ).delete(synchronize_session=False)
+    else:
+        version_number = (
+            db.query(func.max(WfPlanning.version_number))
+            .filter(WfPlanning.project_id == project.id)
+            .scalar()
+            or 0
+        ) + 1
+        planning = WfPlanning(
+            project_id=project.id,
+            version_number=version_number,
+            status="draft",
+            note="Imported from MS Project",
+            created_at=now,
         )
-        if referenced:
-            raise ValueError(f"Task UID {task.uid} is referenced and cannot be removed")
-    for task in removed:
-        task.parent_uid = None
-        db.query(MsTaskLink).filter(
-            MsTaskLink.project_id == project.id,
-            (MsTaskLink.task_uid == task.uid) | (MsTaskLink.predecessor_uid == task.uid),
-        ).delete(synchronize_session=False)
-        db.query(WfTaskEnrichment).filter(
-            WfTaskEnrichment.project_id == project.id,
-            WfTaskEnrichment.task_uid == task.uid,
-        ).delete(synchronize_session=False)
-    db.flush()
-    for task in removed:
-        db.delete(task)
-    db.flush()
+        db.add(planning)
+        db.flush()
 
-    tasks: list[MsTask] = []
-    for parsed_task in parsed.tasks:
-        task = existing_by_uid.get(parsed_task.uid)
-        if task is None:
-            task = MsTask(**_task_kwargs(parsed_task, project.id))
-            db.add(task)
-        else:
-            structure_key = task.structure_key
-            structure_kind = task.structure_kind
-            for field, value in _task_kwargs(parsed_task, project.id).items():
-                if field not in {"project_id", "uid"}:
-                    setattr(task, field, value)
-            task.structure_key = structure_key
-            task.structure_kind = structure_kind
-        task.parent_uid = None
-        task.position = None
-        tasks.append(task)
+    tasks = [
+        WfPlanningTaskSnapshot(**_task_kwargs(parsed_task, planning.id))
+        for parsed_task in parsed.tasks
+    ]
+    db.add_all(tasks)
     db.flush()
     _populate_parent_metadata(tasks)
-    db.query(MsTaskLink).filter(MsTaskLink.project_id == project.id).delete(
-        synchronize_session=False
-    )
-    db.query(WfTaskEnrichment).filter(WfTaskEnrichment.project_id == project.id).delete(
-        synchronize_session=False
-    )
     db.add_all(
-        [
-            WfTaskEnrichment(
-                project_id=project.id,
-                task_uid=task.uid,
-                description=task.notes,
-                created_at=now,
-                updated_at=now,
-            )
-            for task in parsed.tasks
-            if task.notes is not None
-        ]
+        WfPlanningLinkSnapshot(
+            planning_id=planning.id,
+            task_uid=link.task_uid,
+            predecessor_uid=link.predecessor_uid,
+            link_type=link.link_type,
+            lag_tenth_minute=link.lag_tenth_minute,
+            lag_format=link.lag_format,
+        )
+        for link in parsed.links
     )
-    db.add_all([MsTaskLink(project_id=project.id, **link.__dict__) for link in parsed.links])
+    project.displayed_planning_id = planning.id
     db.flush()
     return len(parsed.tasks), len(parsed.links)

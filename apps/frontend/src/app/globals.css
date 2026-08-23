@@ -472,6 +472,46 @@ body {
   color: var(--ink-soft);
 }
 
+.checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--ink-soft);
+  font-family: var(--font-title), sans-serif;
+  font-size: 0.9rem;
+}
+
+.project-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-family: var(--font-title), sans-serif;
+  font-size: 0.86rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.project-status-blue {
+  color: var(--brand-blue-strong);
+}
+
+.project-status-green {
+  color: var(--accent-strong);
+}
+
+.project-status-red {
+  color: var(--warn);
+}
+
+.project-status .muted {
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.project-row-readonly {
+  background: #fbf6f4;
+}
+
 .error {
   color: var(--warn);
   font-family: var(--font-title), sans-serif;

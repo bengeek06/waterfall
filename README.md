@@ -201,6 +201,24 @@ Le projet est structuré pour rester lisible et évolutif :
 - logique de calcul et règles métier distinctes de la couche de présentation
 - contrat API stable pour éviter les dérives de données entre backend et frontend
 
+### Cycle de vie des plannings
+
+Un projet conserve des versions indépendantes de planning. Chaque version est créée en
+`draft`, peut être `validated`, puis devenir `superseded` lorsqu'une nouvelle référence
+est définie; l'historique reste consultable. Une référence ne peut être définie qu'après
+validation, et une version validée est immuable.
+
+Le projet persiste aussi la version affichée. L'interface charge les métadonnées des
+versions, puis le détail de la version sélectionnée; les lectures de tâches et d'arbre
+respectent cette sélection. La création initiale d'une structure initialise le projet.
+La réouverture crée un nouveau brouillon à partir de la référence validée, ou réutilise
+le brouillon existant.
+
+Les imports MS Project restent des brouillons jusqu'à validation explicite. La validation
+rend le brouillon courant `validated`; elle ne crée pas de nouvelle version. Lorsqu'un
+brouillon existe déjà, l'import avertit puis le remplace dans ce brouillon, sans modifier
+les versions validées.
+
 ## Déploiement et environnement
 
 Le dépôt inclut des éléments d’environnement de développement et d’exploitation :

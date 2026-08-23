@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from waterfall.models.ms_core import MsProject, MsTask, MsTaskLink
+from waterfall.models.ms_core import MsProject, MsTask
+from waterfall.models.planning import WfPlanning, WfPlanningLinkSnapshot, WfPlanningTaskSnapshot
 from waterfall.models.resources import (
     EstimateCostLine,
     EstimateLine,
@@ -16,10 +17,29 @@ from waterfall.services.msproject_xml import ParsedProject
 def build_import_diff(
     db: Session, project: MsProject, parsed: ParsedProject
 ) -> list[dict[str, object]]:
-    current = {
-        task.uid: task for task in db.query(MsTask).filter(MsTask.project_id == project.id).all()
-    }
+    displayed = (
+        db.query(WfPlanning)
+        .filter(WfPlanning.project_id == project.id)
+        .filter(WfPlanning.id == project.displayed_planning_id)
+        .one_or_none()
+        if project.displayed_planning_id is not None
+        else None
+    )
+    snapshot_tasks = (
+        db.query(WfPlanningTaskSnapshot)
+        .filter(WfPlanningTaskSnapshot.planning_id == displayed.id)
+        .all()
+        if displayed is not None
+        else []
+    )
+    current = {task.uid: task for task in snapshot_tasks}
     incoming = {task.uid: task for task in parsed.tasks}
+    link_query = (
+        db.query(WfPlanningLinkSnapshot).filter(WfPlanningLinkSnapshot.planning_id == displayed.id)
+        if displayed is not None
+        else None
+    )
+    current_link_rows = link_query.all() if link_query is not None else []
     current_links = {
         (
             link.task_uid,
@@ -28,7 +48,7 @@ def build_import_diff(
             link.lag_tenth_minute,
             link.lag_format,
         )
-        for link in db.query(MsTaskLink).filter(MsTaskLink.project_id == project.id).all()
+        for link in current_link_rows
     }
     incoming_links = {
         (
@@ -51,12 +71,23 @@ def build_import_diff(
             }
         )
     for uid in sorted(current.keys() - incoming.keys()):
-        task = current[uid]
+        legacy_task_id = (
+            db.query(MsTask.id).filter(MsTask.project_id == project.id, MsTask.uid == uid).scalar()
+        )
         referenced = (
-            db.query(TaskRoleAssignment.id).filter(TaskRoleAssignment.task_id == task.id).first()
-            or db.query(EstimateCostLine.id).filter(EstimateCostLine.task_id == task.id).first()
-            or db.query(EstimateLine.id).filter(EstimateLine.task_id == task.id).first()
-            or db.query(EstimateTaskRow.id).filter(EstimateTaskRow.task_id == task.id).first()
+            legacy_task_id is not None
+            and (
+                db.query(TaskRoleAssignment.id)
+                .filter(TaskRoleAssignment.task_id == legacy_task_id)
+                .first()
+                or db.query(EstimateCostLine.id)
+                .filter(EstimateCostLine.task_id == legacy_task_id)
+                .first()
+                or db.query(EstimateLine.id).filter(EstimateLine.task_id == legacy_task_id).first()
+                or db.query(EstimateTaskRow.id)
+                .filter(EstimateTaskRow.task_id == legacy_task_id)
+                .first()
+            )
             or db.query(WfChargeLine.id)
             .filter(WfChargeLine.project_id == project.id, WfChargeLine.task_uid == uid)
             .first()

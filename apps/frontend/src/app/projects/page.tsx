@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { CircleCheck, CircleDot, CirclePlus, CircleX, LoaderCircle, Send } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 
 import {
   ApiError,
@@ -16,12 +18,26 @@ import {
 import { clearSession, getSession, setSession, type SessionTokens } from "@/lib/session";
 
 const PROJECT_PAGE_SIZE = 50;
+const ARCHIVED_STATUSES = new Set<Project["status"]>(["perdu", "termine", "abandonne"]);
+const PROJECT_STATUS_DETAILS: Record<
+  Project["status"],
+  { label: string; Icon: LucideIcon; tone: "blue" | "green" | "red" }
+> = {
+  cree: { label: "Créé", Icon: CirclePlus, tone: "blue" },
+  initialise: { label: "Initialisé", Icon: LoaderCircle, tone: "blue" },
+  en_reponse_appel_offre: { label: "En réponse à appel d'offre", Icon: Send, tone: "blue" },
+  perdu: { label: "Perdu", Icon: CircleX, tone: "red" },
+  en_cours: { label: "En cours", Icon: CircleDot, tone: "green" },
+  termine: { label: "Terminé", Icon: CircleCheck, tone: "red" },
+  abandonne: { label: "Abandonné", Icon: CircleX, tone: "red" },
+};
 
 export default function ProjectsPage() {
   const router = useRouter();
   const [session, setSessionState] = useState<SessionTokens | null>(() => getSession());
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectOffset, setProjectOffset] = useState(0);
+  const [includeArchived, setIncludeArchived] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -40,10 +56,15 @@ export default function ProjectsPage() {
   );
 
   useEffect(() => {
+    let cancelled = false;
+
     async function load() {
       if (!session) {
         try {
           const restoredSession = await restoreSession();
+          if (cancelled) {
+            return;
+          }
           setSession(restoredSession);
           setSessionState(restoredSession);
         } catch {
@@ -61,10 +82,17 @@ export default function ProjectsPage() {
           onSessionRefresh,
           PROJECT_PAGE_SIZE,
           projectOffset,
+          includeArchived,
         );
+        if (cancelled) {
+          return;
+        }
         setProjects(projectsData);
         setSelectedIds(new Set());
       } catch (cause) {
+        if (cancelled) {
+          return;
+        }
         if (cause instanceof SessionExpiredError) {
           clearSession();
           router.push("/login");
@@ -81,12 +109,23 @@ export default function ProjectsPage() {
           setError("Erreur inattendue lors du chargement des projets");
         }
       } finally {
-        setBusy(false);
+        if (!cancelled) {
+          setBusy(false);
+        }
       }
     }
 
     void load();
-  }, [onSessionRefresh, projectOffset, router, session]);
+    return () => {
+      cancelled = true;
+    };
+  }, [includeArchived, onSessionRefresh, projectOffset, router, session]);
+
+  function toggleIncludeArchived() {
+    setIncludeArchived((current) => !current);
+    setProjectOffset(0);
+    setSelectedIds(new Set());
+  }
 
   function resetCreateFlow() {
     setCreateMode(false);
@@ -139,10 +178,17 @@ export default function ProjectsPage() {
   }
 
   function toggleSelectAll() {
+    const selectableProjects = projects.filter((project) => !ARCHIVED_STATUSES.has(project.status));
     setSelectedIds((previous) =>
-      previous.size === projects.length ? new Set() : new Set(projects.map((project) => project.id)),
+      previous.size === selectableProjects.length
+        ? new Set()
+        : new Set(selectableProjects.map((project) => project.id)),
     );
   }
+
+  const selectableProjectCount = projects.filter(
+    (project) => !ARCHIVED_STATUSES.has(project.status),
+  ).length;
 
   async function onDeleteSelected() {
     if (!session || selectedIds.size === 0) {
@@ -187,6 +233,15 @@ export default function ProjectsPage() {
             </button>
           ) : null}
         </div>
+
+        <label className="checkbox-label" style={{ marginTop: "1rem" }}>
+          <input
+            type="checkbox"
+            checked={includeArchived}
+            onChange={toggleIncludeArchived}
+          />
+          Inclure les projets perdus, terminés ou abandonnés
+        </label>
 
         {createMode ? (
           <div className="panel" style={{ marginTop: "1rem" }}>
@@ -271,20 +326,24 @@ export default function ProjectsPage() {
                       <input
                         type="checkbox"
                         aria-label="Tout sélectionner"
-                        checked={selectedIds.size > 0 && selectedIds.size === projects.length}
+                        checked={selectedIds.size > 0 && selectedIds.size === selectableProjectCount}
                         onChange={toggleSelectAll}
                       />
                     </th>
                     <th scope="col">Code</th>
                     <th scope="col">Nom</th>
+                    <th scope="col">Statut</th>
                     <th scope="col">Description</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {projects.map((project) => (
+                  {projects.map((project) => {
+                    const status = PROJECT_STATUS_DETAILS[project.status];
+                    const isReadOnly = ARCHIVED_STATUSES.has(project.status);
+                    return (
                     <tr
                       key={project.id}
-                      className="table-row-clickable"
+                      className={`table-row-clickable${isReadOnly ? " project-row-readonly" : ""}`}
                       onClick={() => router.push(`/projects/${project.id}`)}
                     >
                       <td>
@@ -292,15 +351,28 @@ export default function ProjectsPage() {
                           type="checkbox"
                           aria-label={`Sélectionner ${project.name}`}
                           checked={selectedIds.has(project.id)}
+                          disabled={isReadOnly}
                           onClick={(event) => event.stopPropagation()}
                           onChange={() => toggleSelected(project.id)}
                         />
                       </td>
                       <td>{project.code ?? "-"}</td>
                       <td>{project.name}</td>
+                      <td>
+                        <span className={`project-status project-status-${status.tone}`}>
+                          <status.Icon
+                            aria-label={`Statut : ${status.label}`}
+                            title={status.label}
+                            size={17}
+                          />
+                          <span>{status.label}</span>
+                          {isReadOnly ? <span className="muted">Lecture seule</span> : null}
+                        </span>
+                      </td>
                       <td className="muted">{project.short_description ?? "-"}</td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

@@ -8,7 +8,14 @@ from httpx import Response
 from waterfall.db.session import get_session_factory
 from waterfall.main import app
 from waterfall.models.ms_core import MsProject, MsTask
-from waterfall.models.resources import CostCategory, CostType, ResourceNode, ResourceRole
+from waterfall.models.planning import WfPlanning, WfPlanningTaskSnapshot
+from waterfall.models.resources import (
+    CostCategory,
+    CostType,
+    Estimate,
+    ResourceNode,
+    ResourceRole,
+)
 from waterfall.models.wf_core import WfTaskEnrichment
 
 
@@ -267,6 +274,198 @@ def test_create_child_task_uses_parent_outline_number() -> None:
         assert second_child.status_code == 201
         second_payload = cast(dict[str, Any], second_child.json())
         assert second_payload["outline_number"] == "1.2"
+
+
+def test_create_task_uses_displayed_draft_snapshot() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        planning_response = client.post(
+            f"/projects/{project_id}/plannings", json={}, headers=headers
+        )
+        assert planning_response.status_code == 201
+        planning_id = planning_response.json()["id"]
+        parent = planning_response.json()["tasks"][0]
+        assert (
+            client.post(
+                f"/projects/{project_id}/plannings/{planning_id}/display", headers=headers
+            ).status_code
+            == 200
+        )
+
+        response = client.post(
+            f"/projects/{project_id}/tasks",
+            json={"name": "Snapshot task", "parent_task_id": parent["id"]},
+            headers=headers,
+        )
+
+        assert response.status_code == 201
+        payload = cast(dict[str, Any], response.json())
+        assert payload["project_id"] == project_id
+        assert payload["parent_uid"] == parent["uid"]
+        assert payload["outline_number"] == f"{parent['outline_number']}.1"
+        listed = client.get(f"/projects/{project_id}/tasks", headers=headers).json()
+        assert payload["uid"] in [task["uid"] for task in listed]
+        with get_session_factory()() as session:
+            assert session.query(MsTask).filter(MsTask.project_id == project_id).count() == 2
+
+
+def test_create_and_delete_visible_draft_snapshot_preserves_legacy_tasks() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        planning_response = client.post(
+            f"/projects/{project_id}/plannings", json={}, headers=headers
+        )
+        assert planning_response.status_code == 201
+        planning_id = planning_response.json()["id"]
+        assert (
+            client.post(
+                f"/projects/{project_id}/plannings/{planning_id}/display", headers=headers
+            ).status_code
+            == 200
+        )
+        created = client.post(
+            f"/projects/{project_id}/tasks", json={"name": "Visible draft task"}, headers=headers
+        )
+        assert created.status_code == 201
+        task_uid = cast(int, created.json()["uid"])
+
+        deleted = client.delete(f"/projects/{project_id}/tasks/{task_uid}", headers=headers)
+
+        assert deleted.status_code == 204
+        remaining = cast(
+            list[dict[str, Any]],
+            client.get(f"/projects/{project_id}/tasks", headers=headers).json(),
+        )
+        assert all(task["uid"] != task_uid for task in remaining)
+        with get_session_factory()() as session:
+            assert session.query(MsTask).filter(MsTask.uid == task_uid).count() == 0
+
+
+def test_snapshot_task_creation_after_deletion_keeps_unique_numbering() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        planning_response = client.post(
+            f"/projects/{project_id}/plannings", json={}, headers=headers
+        )
+        assert planning_response.status_code == 201
+        planning_id = cast(int, planning_response.json()["id"])
+        parent = planning_response.json()["tasks"][0]
+        parent_uid = cast(int, parent["uid"])
+        assert (
+            client.post(
+                f"/projects/{project_id}/plannings/{planning_id}/display", headers=headers
+            ).status_code
+            == 200
+        )
+
+        created_uids: list[int] = []
+        for name in ("Child A", "Child B", "Child C"):
+            response = client.post(
+                f"/projects/{project_id}/tasks",
+                json={"name": name, "parent_task_id": parent["id"]},
+                headers=headers,
+            )
+            assert response.status_code == 201
+            created_uids.append(cast(int, response.json()["uid"]))
+
+        # Deleting the middle child does not renumber siblings.
+        middle_uid = created_uids[1]
+        assert (
+            client.delete(f"/projects/{project_id}/tasks/{middle_uid}", headers=headers).status_code
+            == 204
+        )
+
+        recreated = client.post(
+            f"/projects/{project_id}/tasks",
+            json={"name": "Child D", "parent_task_id": parent["id"]},
+            headers=headers,
+        )
+        assert recreated.status_code == 201
+
+        with get_session_factory()() as session:
+            children = (
+                session.query(WfPlanningTaskSnapshot)
+                .filter(WfPlanningTaskSnapshot.planning_id == planning_id)
+                .filter(WfPlanningTaskSnapshot.parent_uid == parent_uid)
+                .all()
+            )
+        outline_numbers = [child.outline_number for child in children]
+        positions = [child.position for child in children]
+        assert len(outline_numbers) == len(set(outline_numbers))
+        assert len(positions) == len(set(positions))
+
+
+def test_snapshot_task_mutation_rejects_validated_display() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        planning_response = client.post(
+            f"/projects/{project_id}/plannings", json={}, headers=headers
+        )
+        planning_id = planning_response.json()["id"]
+        task_uid = planning_response.json()["tasks"][0]["uid"]
+        assert (
+            client.post(
+                f"/projects/{project_id}/plannings/{planning_id}/validate", headers=headers
+            ).status_code
+            == 200
+        )
+        assert (
+            client.post(
+                f"/projects/{project_id}/plannings/{planning_id}/display", headers=headers
+            ).status_code
+            == 200
+        )
+
+        create = client.post(
+            f"/projects/{project_id}/tasks", json={"name": "Refused"}, headers=headers
+        )
+        delete = client.delete(f"/projects/{project_id}/tasks/{task_uid}", headers=headers)
+
+        assert create.status_code == 409
+        assert delete.status_code == 409
+
+
+def test_snapshot_only_task_rejects_legacy_assignment() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client, "projects.snapshot-assignment@example.com")
+        project_id = cast(
+            int,
+            client.post(
+                "/projects", json={"name": "Snapshot-only assignment"}, headers=headers
+            ).json()["id"],
+        )
+        with get_session_factory()() as session:
+            planning = WfPlanning(project_id=project_id, version_number=1, status="draft")
+            session.add(planning)
+            session.flush()
+            session.add(
+                WfPlanningTaskSnapshot(
+                    planning_id=planning.id,
+                    uid=9101,
+                    name="Snapshot-only",
+                    position=1,
+                    is_summary=False,
+                    is_milestone=False,
+                )
+            )
+            session.query(MsProject).filter(MsProject.id == project_id).update(
+                {MsProject.displayed_planning_id: planning.id}
+            )
+            session.commit()
+        role_id, _ = _seed_roles()
+
+        response = client.post(
+            f"/projects/{project_id}/tasks/9101/role-assignments",
+            json={"role_id": role_id, "quantity": 1, "hours": 1},
+            headers=headers,
+        )
+
+        assert response.status_code == 409
+        assert "snapshot-only" in response.json()["detail"].lower()
 
 
 def test_create_task_rejects_foreign_parent() -> None:
@@ -714,6 +913,227 @@ def test_project_estimate_snapshots_tasks_and_validates() -> None:
         assert validate_again_response.status_code == 409
 
 
+def test_project_estimate_can_snapshot_planning_without_legacy_tasks() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client, "projects.snapshot-only@example.com")
+        project_response = client.post(
+            "/projects",
+            json={"name": "Snapshot-only project"},
+            headers=headers,
+        )
+        assert project_response.status_code == 201
+        project_payload = cast(dict[str, Any], project_response.json())
+        project_id = cast(int, project_payload["id"])
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            planning = WfPlanning(project_id=project_id, version_number=1, status="draft")
+            session.add(planning)
+            session.flush()
+            session.add(
+                WfPlanningTaskSnapshot(
+                    planning_id=planning.id,
+                    uid=9001,
+                    name="Snapshot task",
+                    position=1,
+                    is_summary=False,
+                    is_milestone=False,
+                )
+            )
+            project = session.query(MsProject).filter(MsProject.id == project_id).one()
+            project.displayed_planning_id = planning.id
+            session.commit()
+
+        estimate_response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate_response.status_code == 201
+        estimate_id = estimate_response.json()["id"]
+
+        rows_response = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/task-rows",
+            headers=headers,
+        )
+        assert rows_response.status_code == 200
+        assert rows_response.json()[0]["task_id"] is None
+        assert rows_response.json()[0]["task_name"] == "Snapshot task"
+
+
+def test_planning_lifecycle_snapshots_reference_and_display_selection() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        create_response = client.post(
+            f"/projects/{project_id}/plannings",
+            json={"note": "Version initiale"},
+            headers=headers,
+        )
+        assert create_response.status_code == 201
+        draft = cast(dict[str, Any], create_response.json())
+        planning_id = cast(int, draft["id"])
+        assert draft["status"] == "draft"
+        assert [task["uid"] for task in draft["tasks"]] == [1001, 1002]
+
+        invalid_reference = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/reference",
+            headers=headers,
+        )
+        assert invalid_reference.status_code == 409
+
+        validate_response = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/validate",
+            headers=headers,
+        )
+        assert validate_response.status_code == 200
+
+        first_reference = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/reference",
+            headers=headers,
+        )
+        assert first_reference.status_code == 200
+        assert first_reference.json()["planning_reference_id"] == planning_id
+
+        second_response = client.post(
+            f"/projects/{project_id}/plannings",
+            json={"source_planning_id": planning_id},
+            headers=headers,
+        )
+        assert second_response.status_code == 201
+        second_id = second_response.json()["id"]
+        assert second_response.json()["tasks"][0]["name"] == "Task One"
+        assert (
+            client.post(
+                f"/projects/{project_id}/plannings/{second_id}/validate", headers=headers
+            ).status_code
+            == 200
+        )
+        assert (
+            client.post(
+                f"/projects/{project_id}/plannings/{second_id}/reference", headers=headers
+            ).status_code
+            == 200
+        )
+
+        with get_session_factory()() as session:
+            first = session.get(WfPlanning, planning_id)
+            assert first is not None
+            assert first.status == "superseded"
+
+        displayed = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/display", headers=headers
+        )
+        assert displayed.status_code == 200
+        tasks = client.get(f"/projects/{project_id}/tasks", headers=headers)
+        assert tasks.status_code == 200
+        assert tasks.json()[0]["name"] == "Task One"
+
+
+def test_project_status_requires_references_and_excludes_archived_by_default() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        blocked = client.patch(
+            f"/projects/{project_id}/status",
+            json={"status": "en_cours"},
+            headers=headers,
+        )
+        assert blocked.status_code == 409
+
+        completed = client.patch(
+            f"/projects/{project_id}/status",
+            json={"status": "termine"},
+            headers=headers,
+        )
+        assert completed.status_code == 409
+        lost = client.patch(
+            f"/projects/{project_id}/status",
+            json={"status": "perdu"},
+            headers=headers,
+        )
+        assert lost.status_code == 200
+        assert lost.json()["status"] == "perdu"
+        active_projects = cast(
+            list[dict[str, Any]], client.get("/projects", headers=headers).json()
+        )
+        assert all(item["id"] != project_id for item in active_projects)
+        archived_projects = cast(
+            list[dict[str, Any]],
+            client.get("/projects?include_archived=true", headers=headers).json(),
+        )
+        assert any(item["id"] == project_id for item in archived_projects)
+
+
+def test_project_can_enter_in_progress_after_both_references_are_set() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        planning = client.post(f"/projects/{project_id}/plannings", json={}, headers=headers)
+        assert planning.status_code == 201
+        planning_id = planning.json()["id"]
+        assert (
+            client.post(
+                f"/projects/{project_id}/plannings/{planning_id}/validate", headers=headers
+            ).status_code
+            == 200
+        )
+        assert (
+            client.post(
+                f"/projects/{project_id}/plannings/{planning_id}/reference", headers=headers
+            ).status_code
+            == 200
+        )
+
+        estimate = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate.status_code == 201
+        estimate_id = estimate.json()["id"]
+        assert (
+            client.post(
+                f"/projects/{project_id}/estimates/{estimate_id}/validate", headers=headers
+            ).status_code
+            == 200
+        )
+        assert (
+            client.post(
+                f"/projects/{project_id}/estimates/{estimate_id}/reference", headers=headers
+            ).status_code
+            == 200
+        )
+
+        assert (
+            client.patch(
+                f"/projects/{project_id}/status",
+                json={"status": "initialise"},
+                headers=headers,
+            ).status_code
+            == 200
+        )
+        assert (
+            client.patch(
+                f"/projects/{project_id}/status",
+                json={"status": "en_reponse_appel_offre"},
+                headers=headers,
+            ).status_code
+            == 200
+        )
+
+        response = client.patch(
+            f"/projects/{project_id}/status",
+            json={"status": "en_cours"},
+            headers=headers,
+        )
+        assert response.status_code == 200
+        assert response.json()["status"] == "en_cours"
+
+
 def test_estimate_cost_lines_support_non_labor_costs_and_draft_locking() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)
@@ -985,3 +1405,176 @@ def test_role_filter_can_include_descendant_nodes() -> None:
         assert descendants_response.status_code == 200
         assert direct_response.json() == []
         assert role.id in [item["id"] for item in descendants_response.json()]
+
+
+def _draft_structure_payload() -> dict[str, Any]:
+    return {
+        "posts": [
+            {
+                "key": "design",
+                "name": "Design",
+                "lots": [
+                    {
+                        "key": "specification",
+                        "name": "Specification",
+                        "deliverables": [{"key": "requirements", "name": "Requirements"}],
+                    }
+                ],
+            }
+        ]
+    }
+
+
+def test_planning_structure_draft_save_and_read_round_trip() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        create = client.post("/projects", json={"name": "Draft round trip"}, headers=headers)
+        assert create.status_code == 201
+        project_id = cast(int, create.json()["id"])
+        draft_path = f"/projects/{project_id}/planning-structure/draft"
+
+        payload = _draft_structure_payload()
+        saved = client.put(draft_path, json=payload, headers=headers)
+        assert saved.status_code == 200
+
+        read = client.get(draft_path, headers=headers)
+        assert read.status_code == 200
+        body = cast(dict[str, Any], read.json())
+        assert body["planning_id"] == saved.json()["planning_id"]
+        assert body["structure"] == payload
+
+
+def test_planning_structure_draft_read_returns_404_when_absent() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        create = client.post("/projects", json={"name": "No draft"}, headers=headers)
+        assert create.status_code == 201
+        project_id = cast(int, create.json()["id"])
+
+        read = client.get(f"/projects/{project_id}/planning-structure/draft", headers=headers)
+        assert read.status_code == 404
+
+
+def test_delete_project_clears_reference_estimate_before_deleting_estimates() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        create_response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert create_response.status_code == 201
+        estimate_id = cast(int, create_response.json()["id"])
+
+        # Point the project at the estimate so deletion must clear the FK first.
+        with get_session_factory()() as session:
+            project = session.get(MsProject, project_id)
+            assert project is not None
+            project.reference_estimate_id = estimate_id
+            session.commit()
+
+        deleted = client.delete(f"/projects/{project_id}", headers=headers)
+        assert deleted.status_code == 204
+
+        with get_session_factory()() as session:
+            assert session.get(MsProject, project_id) is None
+            assert session.query(Estimate).filter(Estimate.id == estimate_id).count() == 0
+
+
+def test_generate_planning_structure_syncs_persisted_draft() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        create = client.post("/projects", json={"name": "Draft sync"}, headers=headers)
+        assert create.status_code == 201
+        project_id = cast(int, create.json()["id"])
+        draft_path = f"/projects/{project_id}/planning-structure/draft"
+
+        structure_a = _draft_structure_payload()
+        assert client.put(draft_path, json=structure_a, headers=headers).status_code == 200
+
+        structure_b: dict[str, Any] = {
+            "posts": [
+                {
+                    "key": "build",
+                    "name": "Build",
+                    "lots": [
+                        {
+                            "key": "assembly",
+                            "name": "Assembly",
+                            "deliverables": [{"key": "module", "name": "Module"}],
+                        }
+                    ],
+                }
+            ]
+        }
+        generated = client.post(
+            f"/projects/{project_id}/planning-structure",
+            json=structure_b,
+            headers=headers,
+        )
+        assert generated.status_code == 201
+
+        read = client.get(draft_path, headers=headers)
+        assert read.status_code == 200
+        assert read.json()["structure"] == structure_b
+
+
+def test_planning_tasks_are_returned_depth_first() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        create = client.post("/projects", json={"name": "Depth first"}, headers=headers)
+        assert create.status_code == 201
+        project_id = cast(int, create.json()["id"])
+
+        structure: dict[str, Any] = {
+            "posts": [
+                {
+                    "key": "p1",
+                    "name": "Post 1",
+                    "lots": [
+                        {
+                            "key": "l1",
+                            "name": "Lot 1",
+                            "deliverables": [
+                                {"key": "d1", "name": "Deliverable 1"},
+                                {"key": "d2", "name": "Deliverable 2"},
+                            ],
+                        },
+                        {
+                            "key": "l2",
+                            "name": "Lot 2",
+                            "deliverables": [{"key": "d3", "name": "Deliverable 3"}],
+                        },
+                    ],
+                },
+                {
+                    "key": "p2",
+                    "name": "Post 2",
+                    "lots": [
+                        {
+                            "key": "l3",
+                            "name": "Lot 3",
+                            "deliverables": [{"key": "d4", "name": "Deliverable 4"}],
+                        }
+                    ],
+                },
+            ]
+        }
+        generated = client.post(
+            f"/projects/{project_id}/planning-structure",
+            json=structure,
+            headers=headers,
+        )
+        assert generated.status_code == 201
+
+        tasks = cast(
+            list[dict[str, Any]],
+            client.get(f"/projects/{project_id}/tasks", headers=headers).json(),
+        )
+        outlines = [task["outline_number"] for task in tasks]
+        # Parent immediately followed by its children, in local position order.
+        assert outlines[:4] == ["1", "1.1", "1.1.1", "1.1.2"]
+        # A second deliverable of lot 1 precedes lot 2 and the next post subtree.
+        assert outlines.index("1.1.2") < outlines.index("1.2")
+        assert outlines.index("1.2.1") < outlines.index("2")
