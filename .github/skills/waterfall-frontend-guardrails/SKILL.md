@@ -19,7 +19,7 @@ Waterfall frontend relies on:
 - React 19 + TypeScript
 - ESLint (`eslint-config-next` core-web-vitals + typescript)
 - Vitest + Testing Library (jsdom)
-- Generated API client package: `@rebirth/api-client`
+- Generated API client package: `@waterfall/api-client`
 
 Backend coupling specifics:
 
@@ -52,7 +52,7 @@ Backend coupling specifics:
 
 ### A) Type and contract checks
 
-- Ensure API calls match generated types from `@rebirth/api-client`.
+- Ensure API calls match generated types from `@waterfall/api-client`.
 - Validate request/response/error handling paths for changed screens.
 
 ### B) UI behavior checks
