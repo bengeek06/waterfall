@@ -267,6 +267,41 @@ def test_task_mutations_target_displayed_draft_snapshot() -> None:
         assert new_uid not in [task["uid"] for task in remaining]
 
 
+def test_reopen_and_regenerate_preserves_uids() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        path = f"/projects/{project_id}/planning-structure"
+
+        assert client.post(path, json=_payload(), headers=headers).status_code == 201
+        initial_tasks = cast(
+            list[dict[str, Any]],
+            client.get(f"/projects/{project_id}/tasks", headers=headers).json(),
+        )
+        uid_by_key = {task["structure_key"]: task["uid"] for task in initial_tasks}
+        previous_max_uid = max(uid_by_key.values())
+
+        reopened = client.post(f"/projects/{project_id}/planning-structure/reopen", headers=headers)
+        assert reopened.status_code == 200
+
+        extended = _payload()
+        extended["posts"][0]["lots"][0]["deliverables"].append(
+            {"key": "deployment", "name": "Deployment"}
+        )
+        assert client.post(path, json=extended, headers=headers).status_code == 201
+        regenerated_tasks = cast(
+            list[dict[str, Any]],
+            client.get(f"/projects/{project_id}/tasks", headers=headers).json(),
+        )
+        regenerated_uid_by_key = {task["structure_key"]: task["uid"] for task in regenerated_tasks}
+
+        for key, uid in uid_by_key.items():
+            assert regenerated_uid_by_key[key] == uid
+
+        new_key = "design/specification/deployment"
+        assert regenerated_uid_by_key[new_key] > previous_max_uid
+
+
 def test_structure_versions_validated_planning_is_immutable_and_reopenable() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)

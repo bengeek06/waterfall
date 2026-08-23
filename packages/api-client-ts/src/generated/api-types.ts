@@ -527,7 +527,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** Lire le brouillon de structure de planning */
+        get: operations["getPlanningStructureDraft"];
         /** Sauvegarder le brouillon de structure de planning */
         put: operations["savePlanningStructureDraft"];
         post?: never;
@@ -2703,6 +2704,31 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["ProjectNotFound"];
             409: components["responses"]["Conflict"];
+        };
+    };
+    getPlanningStructureDraft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Brouillon de structure sauvegarde */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanningStructureDraftRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
         };
     };
     savePlanningStructureDraft: {

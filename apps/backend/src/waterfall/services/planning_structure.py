@@ -272,14 +272,24 @@ def generate_planning_snapshot(
 
     for node in nodes:
         task = existing_by_key.get(node.key)
-        if task is None or task.planning_id != planning.id:
+        if task is None:
             max_uid += 1
             task = WfPlanningTaskSnapshot(
                 planning_id=planning.id,
                 uid=max_uid,
                 id_display=max_uid,
                 structure_key=node.key,
-                notes=existing_by_key[node.key].notes if node.key in existing_by_key else None,
+                notes=None,
+            )
+            db.add(task)
+        elif task.planning_id != planning.id:
+            source_task = task
+            task = WfPlanningTaskSnapshot(
+                planning_id=planning.id,
+                uid=source_task.uid,
+                id_display=source_task.id_display,
+                structure_key=node.key,
+                notes=source_task.notes,
             )
             db.add(task)
         task.structure_kind = node.kind

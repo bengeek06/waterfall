@@ -27,5 +27,12 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute(
+        sa.text(
+            "UPDATE wf_planning "
+            "SET note = :prefix || structure_draft_json "
+            "WHERE structure_draft_json IS NOT NULL AND note IS NULL"
+        ).bindparams(prefix="planning-structure-draft:")
+    )
     with op.batch_alter_table("wf_planning") as batch_op:
         batch_op.drop_column("structure_draft_json")

@@ -1519,6 +1519,35 @@ def save_planning_structure_draft_route(
     return PlanningStructureDraftRead(planning_id=planning.id, structure=payload)
 
 
+@router.get(
+    "/{project_id}/planning-structure/draft",
+    response_model=PlanningStructureDraftRead,
+)
+def get_planning_structure_draft_route(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> PlanningStructureDraftRead:
+    project = _get_project_or_404(db, project_id, current_user.id)
+    planning = (
+        db.query(WfPlanning)
+        .filter(
+            WfPlanning.project_id == project.id,
+            WfPlanning.status == "draft",
+            WfPlanning.structure_draft_json.isnot(None),
+        )
+        .order_by(WfPlanning.version_number.desc())
+        .first()
+    )
+    payload = load_planning_structure_draft(planning) if planning is not None else None
+    if planning is None or payload is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No planning structure draft found",
+        )
+    return PlanningStructureDraftRead(planning_id=planning.id, structure=payload)
+
+
 @router.post("/{project_id}/tasks", response_model=TaskRead, status_code=status.HTTP_201_CREATED)
 def create_project_task(
     project_id: int,

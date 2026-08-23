@@ -917,6 +917,25 @@ paths:
           $ref: '#/components/responses/Conflict'
 
   /projects/{projectId}/planning-structure/draft:
+    get:
+      tags: [projects]
+      summary: Lire le brouillon de structure de planning
+      operationId: getPlanningStructureDraft
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      responses:
+        '200':
+          description: Brouillon de structure sauvegarde
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanningStructureDraftRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
     put:
       tags: [projects]
       summary: Sauvegarder le brouillon de structure de planning

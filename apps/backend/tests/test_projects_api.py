@@ -1344,3 +1344,51 @@ def test_role_filter_can_include_descendant_nodes() -> None:
         assert descendants_response.status_code == 200
         assert direct_response.json() == []
         assert role.id in [item["id"] for item in descendants_response.json()]
+
+
+def _draft_structure_payload() -> dict[str, Any]:
+    return {
+        "posts": [
+            {
+                "key": "design",
+                "name": "Design",
+                "lots": [
+                    {
+                        "key": "specification",
+                        "name": "Specification",
+                        "deliverables": [{"key": "requirements", "name": "Requirements"}],
+                    }
+                ],
+            }
+        ]
+    }
+
+
+def test_planning_structure_draft_save_and_read_round_trip() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        create = client.post("/projects", json={"name": "Draft round trip"}, headers=headers)
+        assert create.status_code == 201
+        project_id = cast(int, create.json()["id"])
+        draft_path = f"/projects/{project_id}/planning-structure/draft"
+
+        payload = _draft_structure_payload()
+        saved = client.put(draft_path, json=payload, headers=headers)
+        assert saved.status_code == 200
+
+        read = client.get(draft_path, headers=headers)
+        assert read.status_code == 200
+        body = cast(dict[str, Any], read.json())
+        assert body["planning_id"] == saved.json()["planning_id"]
+        assert body["structure"] == payload
+
+
+def test_planning_structure_draft_read_returns_404_when_absent() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        create = client.post("/projects", json={"name": "No draft"}, headers=headers)
+        assert create.status_code == 201
+        project_id = cast(int, create.json()["id"])
+
+        read = client.get(f"/projects/{project_id}/planning-structure/draft", headers=headers)
+        assert read.status_code == 404
