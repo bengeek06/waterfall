@@ -312,6 +312,24 @@ def run_batch(
             acceptedAt=accepted_at,
         )
 
+    # Confirmation path only: reject referenced tasks that the diff preview flagged as
+    # conflicts before mutating any state, keeping the batch reusable (still pending).
+    try:
+        parsed_project = parse_msproject_xml(xml_bytes)
+    except MsProjectValidationError:
+        parsed_project = None
+    if parsed_project is not None:
+        conflicting_uids = [
+            item["uid"]
+            for item in build_import_diff(db, project, parsed_project)
+            if item.get("kind") == "conflict"
+        ]
+        if conflicting_uids:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "IMPORT_CONFLICT", "conflicts": conflicting_uids},
+            )
+
     updated = (
         db.query(WfImportBatch)
         .filter(WfImportBatch.id == batch.id)

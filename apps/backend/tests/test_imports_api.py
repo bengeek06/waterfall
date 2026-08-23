@@ -10,9 +10,9 @@ from httpx import Response
 from waterfall.core.config import get_settings
 from waterfall.db.session import get_session_factory
 from waterfall.main import app
-from waterfall.models.ms_core import MsTask
+from waterfall.models.ms_core import MsProject, MsTask
 from waterfall.models.planning import WfPlanning, WfPlanningLinkSnapshot, WfPlanningTaskSnapshot
-from waterfall.models.wf_core import WfImportBatch
+from waterfall.models.wf_core import WfChargeLine, WfImportBatch
 
 NS = {"ms": "http://schemas.microsoft.com/project"}
 EXAMPLE_XML = Path(__file__).resolve().parent / "planning_test.xml"
@@ -254,6 +254,110 @@ def test_import_diff_ignores_legacy_tasks_without_an_imported_snapshot() -> None
 
         assert diff.status_code == 200
         assert [item["uid"] for item in diff.json()["items"]] == [2]
+
+
+def _seed_displayed_draft_with_snapshot(project_id: int, uid: int, *, referenced: bool) -> None:
+    with get_session_factory()() as session:
+        planning = WfPlanning(project_id=project_id, version_number=1, status="draft")
+        session.add(planning)
+        session.flush()
+        session.add(
+            WfPlanningTaskSnapshot(
+                planning_id=planning.id,
+                uid=uid,
+                name="Referenced snapshot",
+                is_summary=False,
+                is_milestone=False,
+            )
+        )
+        project = session.get(MsProject, project_id)
+        assert project is not None
+        project.displayed_planning_id = planning.id
+        if referenced:
+            session.add(
+                MsTask(
+                    project_id=project_id,
+                    uid=uid,
+                    name="Referenced legacy",
+                    is_summary=False,
+                    is_milestone=False,
+                )
+            )
+            session.flush()
+            session.add(WfChargeLine(project_id=project_id, task_uid=uid, load_minutes=60))
+        session.commit()
+
+
+def _prepare_pending_batch(
+    client: TestClient, headers: dict[str, str], project_id: int, xml: bytes
+) -> int:
+    create = client.post(
+        "/imports/v1/batches",
+        json={"projectId": project_id, "importMode": "standard"},
+        headers=headers,
+    )
+    assert create.status_code == 201
+    batch_id = cast(int, create.json()["id"])
+    upload = client.post(
+        f"/imports/v1/batches/{batch_id}/xml",
+        files={"file": ("import.xml", xml, "application/xml")},
+        headers=headers,
+    )
+    assert upload.status_code == 202
+    return batch_id
+
+
+def test_confirmation_rejects_referenced_task_removal_conflict() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client, "import.conflict@example.com")
+        project_id = _create_project(client, headers)
+        _seed_displayed_draft_with_snapshot(project_id, uid=1, referenced=True)
+
+        # Incoming XML drops UID 1 (which is referenced) and only keeps UID 2.
+        xml = b'<Project xmlns="http://schemas.microsoft.com/project"><SaveVersion>16</SaveVersion><ScheduleFromStart>1</ScheduleFromStart><StartDate>2026-01-01T08:00:00</StartDate><Tasks><Task><UID>2</UID><ID>1</ID><Name>Incoming</Name></Task></Tasks></Project>'
+        batch_id = _prepare_pending_batch(client, headers, project_id, xml)
+
+        run = client.post(
+            f"/imports/v1/batches/{batch_id}/run",
+            json={"dryRun": False, "confirm": True},
+            headers=headers,
+        )
+
+        assert run.status_code == 409
+        detail = run.json()["detail"]
+        assert detail["code"] == "IMPORT_CONFLICT"
+        assert detail["conflicts"] == [1]
+
+        status_response = client.get(f"/imports/v1/batches/{batch_id}", headers=headers)
+        assert status_response.status_code == 200
+        assert status_response.json()["status"] == "pending"
+
+        with get_session_factory()() as session:
+            preserved = (
+                session.query(WfPlanningTaskSnapshot)
+                .filter(WfPlanningTaskSnapshot.uid == 1)
+                .count()
+            )
+            assert preserved == 1
+
+
+def test_confirmation_succeeds_when_removed_task_is_not_referenced() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client, "import.no.conflict@example.com")
+        project_id = _create_project(client, headers)
+        _seed_displayed_draft_with_snapshot(project_id, uid=1, referenced=False)
+
+        xml = b'<Project xmlns="http://schemas.microsoft.com/project"><SaveVersion>16</SaveVersion><ScheduleFromStart>1</ScheduleFromStart><StartDate>2026-01-01T08:00:00</StartDate><Tasks><Task><UID>2</UID><ID>1</ID><Name>Incoming</Name></Task></Tasks></Project>'
+        batch_id = _prepare_pending_batch(client, headers, project_id, xml)
+
+        run = client.post(
+            f"/imports/v1/batches/{batch_id}/run",
+            json={"dryRun": False, "confirm": True},
+            headers=headers,
+        )
+
+        assert run.status_code == 202
+        assert run.json()["status"] == "success"
 
 
 def test_invalid_import_exposes_structured_validation_errors() -> None:
