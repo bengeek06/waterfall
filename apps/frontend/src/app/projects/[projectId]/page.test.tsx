@@ -215,6 +215,83 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     );
   });
 
+  it("renders the refetched planning tasks after generation, including manual ones", async () => {
+    const generated = planning({ id: 5, status: "draft" });
+    const generatedDetail: PlanningDetail = {
+      ...generated,
+      tasks: [
+        {
+          id: 20,
+          project_id: 1,
+          uid: 20,
+          id_display: 20,
+          structure_key: "post/lot/deliverable",
+          structure_kind: "livrable",
+          parent_uid: null,
+          position: 1,
+          name: "Tâche structurée",
+          outline_number: "1.1.1",
+          outline_level: 3,
+          start_at: null,
+          finish_at: null,
+          percent_complete: 0,
+          is_summary: false,
+          is_milestone: false,
+          is_manual: false,
+          description: null,
+          predecessor_links: [],
+        },
+        {
+          id: 21,
+          project_id: 1,
+          uid: 21,
+          id_display: 21,
+          structure_key: null,
+          structure_kind: null,
+          parent_uid: null,
+          position: 2,
+          name: "Tâche manuelle",
+          outline_number: "2",
+          outline_level: 1,
+          start_at: null,
+          finish_at: null,
+          percent_complete: 0,
+          is_summary: false,
+          is_milestone: false,
+          is_manual: true,
+          description: null,
+          predecessor_links: [],
+        },
+      ],
+      links: [],
+    };
+    mocks.getProject
+      .mockResolvedValueOnce(project())
+      .mockResolvedValue(project({ status: "initialise", displayed_planning_id: generated.id }));
+    mocks.listPlannings.mockResolvedValueOnce([]).mockResolvedValue([generated]);
+    mocks.createPlanningStructure.mockResolvedValue({ tasks: generatedDetail.tasks });
+    mocks.getPlanning.mockResolvedValue(generatedDetail);
+
+    render(<ProjectDetailsPage />);
+
+    await screen.findByRole("heading", { name: "Structure initiale" });
+    fireEvent.change(screen.getByLabelText("Nom poste 1"), { target: { value: "Poste" } });
+    fireEvent.change(screen.getByLabelText("Nom lot 1"), { target: { value: "Lot" } });
+    fireEvent.change(screen.getByLabelText("Livrables 1"), { target: { value: "Livrable" } });
+    fireEvent.click(screen.getByRole("button", { name: "Générer le squelette" }));
+
+    await waitFor(() =>
+      expect(mocks.getPlanning).toHaveBeenCalledWith(
+        1,
+        generated.id,
+        expect.anything(),
+        expect.anything(),
+      ),
+    );
+    expect(await screen.findAllByText("Tâche structurée")).not.toHaveLength(0);
+    expect(await screen.findAllByText("Tâche manuelle")).not.toHaveLength(0);
+  });
+
   it("allows reopening an existing draft without a planning reference", async () => {
     const draft = planning({ id: 3, status: "draft" });
     mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draft.id }));

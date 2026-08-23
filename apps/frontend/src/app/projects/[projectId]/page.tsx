@@ -709,21 +709,21 @@ export default function ProjectDetailsPage() {
     setStructureBusy(true);
     setError(null);
     try {
-      const savedStructure = await createPlanningStructure(
-        projectId,
-        payload,
-        session,
-        onSessionRefresh,
-      );
-      setPlanningDetail((current) => current ? { ...current, tasks: savedStructure.tasks } : current);
-      setStructureOpen(false);
+      await createPlanningStructure(projectId, payload, session, onSessionRefresh);
       const [updatedProject, planningMetadata] = await Promise.all([
         getProject(projectId, session, onSessionRefresh),
         listPlannings(projectId, session, onSessionRefresh),
       ]);
+      const nextPlanningId =
+        updatedProject.displayed_planning_id ?? planningMetadata.at(-1)?.id ?? null;
+      const detail = nextPlanningId
+        ? await getPlanning(projectId, nextPlanningId, session, onSessionRefresh)
+        : null;
       setProject(updatedProject);
       setPlannings(planningMetadata);
-      setSelectedPlanningId(updatedProject.displayed_planning_id ?? null);
+      setSelectedPlanningId(nextPlanningId);
+      setPlanningDetail(detail);
+      setStructureOpen(false);
     } catch (cause) {
       if (cause instanceof SessionExpiredError) {
         clearSession();
