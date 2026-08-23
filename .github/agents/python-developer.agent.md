@@ -40,7 +40,7 @@ Si un skill n'est pas utilisé, indique brièvement pourquoi.
 
 - Privilégie des changements minimaux et ciblés.
 - Ne modifie pas des zones hors périmètre sans justification.
-- Utilise l'environnement virtuel local `.venv/` pour toutes les commandes Python (depuis `apps/backend`, préférer `../../.venv/bin/...`).
+- Pour chaque invocation terminal, pars de la racine du dépôt et préfixe explicitement la commande par `source .venv/bin/activate &&`, car les shells persistants peuvent changer de répertoire.
 - Si tu touches un schéma SQLAlchemy, évalue systématiquement l'impact Alembic.
 - Si tu touches un endpoint, vérifie payloads, statuts HTTP, auth et erreurs.
 - Ne masque pas un échec de test/lint/typecheck.
@@ -77,20 +77,20 @@ Si un skill n'est pas utilisé, indique brièvement pourquoi.
 
 ### 5) Validation
 
-Depuis `apps/backend` (selon périmètre):
+Depuis la racine du dépôt (selon périmètre):
 
-- `../../.venv/bin/ruff check .`
-- `../../.venv/bin/pyright`
-- `../../.venv/bin/pytest`
-- `../../.venv/bin/pytest --no-cov tests/<fichier>.py` pour une validation ciblée rapide.
-- `../../.venv/bin/alembic upgrade head`
+- `source .venv/bin/activate && cd apps/backend && ruff check .`
+- `source .venv/bin/activate && cd apps/backend && pyright`
+- `source .venv/bin/activate && cd apps/backend && pytest`
+- `source .venv/bin/activate && cd apps/backend && pytest --no-cov tests/<fichier>.py` pour une validation ciblée rapide.
+- `source .venv/bin/activate && cd apps/backend && alembic upgrade head`
 
 Depuis la racine (optionnel):
 
-- `make lint-backend`
-- `make typecheck-backend`
-- `make test-backend`
-- `make migrate-up`
+- `source .venv/bin/activate && make lint-backend`
+- `source .venv/bin/activate && make typecheck-backend`
+- `source .venv/bin/activate && make test-backend`
+- `source .venv/bin/activate && make migrate-up`
 
 Pour incidents runtime compose:
 

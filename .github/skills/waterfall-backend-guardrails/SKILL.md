@@ -44,8 +44,8 @@ Waterfall backend relies on:
 - Distinguish API failure from post-action refresh failure when relevant.
 
 6. Use repository virtual environment consistently.
-- Run Python tooling from `.venv/` to avoid host-path drift.
-- Prefer the repository-relative virtual environment: `../../.venv/bin/...` when running from `apps/backend`.
+- Start every terminal invocation from the repository root with the explicit prefix `source .venv/bin/activate &&`, because persistent shells can change their working directory.
+- For commands that require `apps/backend`, change directory after activation: `source .venv/bin/activate && cd apps/backend && ...`.
 
 ## Verification checklist
 
@@ -76,20 +76,20 @@ Waterfall backend relies on:
 
 ## Standard command set
 
-From apps/backend:
+From the repository root:
 
-- ../../.venv/bin/ruff check .
-- ../../.venv/bin/pyright
-- ../../.venv/bin/pytest
-- ../../.venv/bin/pytest --no-cov tests/<target_file>.py
-- ../../.venv/bin/alembic upgrade head
+- source .venv/bin/activate && cd apps/backend && ruff check .
+- source .venv/bin/activate && cd apps/backend && pyright
+- source .venv/bin/activate && cd apps/backend && pytest
+- source .venv/bin/activate && cd apps/backend && pytest --no-cov tests/<target_file>.py
+- source .venv/bin/activate && cd apps/backend && alembic upgrade head
 
-From repository root:
+Root commands:
 
-- make lint-backend
-- make typecheck-backend
-- make test-backend
-- make migrate-up
+- source .venv/bin/activate && make lint-backend
+- source .venv/bin/activate && make typecheck-backend
+- source .venv/bin/activate && make test-backend
+- source .venv/bin/activate && make migrate-up
 - docker compose -f infra/docker/docker-compose.yml ps
 - docker compose -f infra/docker/docker-compose.yml logs --tail=120 api
 

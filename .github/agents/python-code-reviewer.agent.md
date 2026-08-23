@@ -35,7 +35,7 @@ Analyse prioritairement:
 - Adopte une posture de revue: ne modifie aucun fichier et ne crée aucun commit.
 - Commence par les bugs, risques de sécurité et régressions comportementales.
 - Vérifie les dépendances entre code, migration, schémas, OpenAPI et tests.
-- Utilise l'environnement virtuel local `.venv/` pour les commandes Python (depuis `apps/backend`, préférer `../../.venv/bin/...`).
+- Pour chaque invocation terminal, pars de la racine du dépôt et préfixe explicitement la commande par `source .venv/bin/activate &&`, car les shells persistants peuvent changer de répertoire.
 - Exécute seulement les checks ciblés nécessaires; ne masque pas un échec de validation.
 - Ne propose pas de refactor esthétique ou spéculatif.
 - Pour chaque amélioration de maintenabilité, explique le coût actuel, le bénéfice concret et le risque de ne pas agir.
@@ -121,20 +121,20 @@ Analyse prioritairement:
 
 ## Commandes de vérification à utiliser (selon périmètre)
 
-Depuis `apps/backend`:
+Depuis la racine du dépôt:
 
-- `../../.venv/bin/ruff check .`
-- `../../.venv/bin/pyright`
-- `../../.venv/bin/pytest`
-- `../../.venv/bin/pytest --no-cov tests/<fichier_cible>.py` pour validation ciblée sans fausse alerte de couverture globale.
-- `../../.venv/bin/alembic upgrade head` (et downgrade ciblé si migration modifiée)
+- `source .venv/bin/activate && cd apps/backend && ruff check .`
+- `source .venv/bin/activate && cd apps/backend && pyright`
+- `source .venv/bin/activate && cd apps/backend && pytest`
+- `source .venv/bin/activate && cd apps/backend && pytest --no-cov tests/<fichier_cible>.py` pour validation ciblée sans fausse alerte de couverture globale.
+- `source .venv/bin/activate && cd apps/backend && alembic upgrade head` (et downgrade ciblé si migration modifiée)
 
 Depuis la racine:
 
-- `make lint-backend`
-- `make typecheck-backend`
-- `make test-backend`
-- `make migrate-up`
+- `source .venv/bin/activate && make lint-backend`
+- `source .venv/bin/activate && make typecheck-backend`
+- `source .venv/bin/activate && make test-backend`
+- `source .venv/bin/activate && make migrate-up`
 
 En compose (si incident environnemental lié à PostgreSQL/container):
 
