@@ -9,7 +9,13 @@ from waterfall.db.session import get_session_factory
 from waterfall.main import app
 from waterfall.models.ms_core import MsProject, MsTask
 from waterfall.models.planning import WfPlanning, WfPlanningTaskSnapshot
-from waterfall.models.resources import CostCategory, CostType, ResourceNode, ResourceRole
+from waterfall.models.resources import (
+    CostCategory,
+    CostType,
+    Estimate,
+    ResourceNode,
+    ResourceRole,
+)
 from waterfall.models.wf_core import WfTaskEnrichment
 
 
@@ -1447,3 +1453,128 @@ def test_planning_structure_draft_read_returns_404_when_absent() -> None:
 
         read = client.get(f"/projects/{project_id}/planning-structure/draft", headers=headers)
         assert read.status_code == 404
+
+
+def test_delete_project_clears_reference_estimate_before_deleting_estimates() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        create_response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert create_response.status_code == 201
+        estimate_id = cast(int, create_response.json()["id"])
+
+        # Point the project at the estimate so deletion must clear the FK first.
+        with get_session_factory()() as session:
+            project = session.get(MsProject, project_id)
+            assert project is not None
+            project.reference_estimate_id = estimate_id
+            session.commit()
+
+        deleted = client.delete(f"/projects/{project_id}", headers=headers)
+        assert deleted.status_code == 204
+
+        with get_session_factory()() as session:
+            assert session.get(MsProject, project_id) is None
+            assert session.query(Estimate).filter(Estimate.id == estimate_id).count() == 0
+
+
+def test_generate_planning_structure_syncs_persisted_draft() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        create = client.post("/projects", json={"name": "Draft sync"}, headers=headers)
+        assert create.status_code == 201
+        project_id = cast(int, create.json()["id"])
+        draft_path = f"/projects/{project_id}/planning-structure/draft"
+
+        structure_a = _draft_structure_payload()
+        assert client.put(draft_path, json=structure_a, headers=headers).status_code == 200
+
+        structure_b: dict[str, Any] = {
+            "posts": [
+                {
+                    "key": "build",
+                    "name": "Build",
+                    "lots": [
+                        {
+                            "key": "assembly",
+                            "name": "Assembly",
+                            "deliverables": [{"key": "module", "name": "Module"}],
+                        }
+                    ],
+                }
+            ]
+        }
+        generated = client.post(
+            f"/projects/{project_id}/planning-structure",
+            json=structure_b,
+            headers=headers,
+        )
+        assert generated.status_code == 201
+
+        read = client.get(draft_path, headers=headers)
+        assert read.status_code == 200
+        assert read.json()["structure"] == structure_b
+
+
+def test_planning_tasks_are_returned_depth_first() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        create = client.post("/projects", json={"name": "Depth first"}, headers=headers)
+        assert create.status_code == 201
+        project_id = cast(int, create.json()["id"])
+
+        structure: dict[str, Any] = {
+            "posts": [
+                {
+                    "key": "p1",
+                    "name": "Post 1",
+                    "lots": [
+                        {
+                            "key": "l1",
+                            "name": "Lot 1",
+                            "deliverables": [
+                                {"key": "d1", "name": "Deliverable 1"},
+                                {"key": "d2", "name": "Deliverable 2"},
+                            ],
+                        },
+                        {
+                            "key": "l2",
+                            "name": "Lot 2",
+                            "deliverables": [{"key": "d3", "name": "Deliverable 3"}],
+                        },
+                    ],
+                },
+                {
+                    "key": "p2",
+                    "name": "Post 2",
+                    "lots": [
+                        {
+                            "key": "l3",
+                            "name": "Lot 3",
+                            "deliverables": [{"key": "d4", "name": "Deliverable 4"}],
+                        }
+                    ],
+                },
+            ]
+        }
+        generated = client.post(
+            f"/projects/{project_id}/planning-structure",
+            json=structure,
+            headers=headers,
+        )
+        assert generated.status_code == 201
+
+        tasks = cast(
+            list[dict[str, Any]],
+            client.get(f"/projects/{project_id}/tasks", headers=headers).json(),
+        )
+        outlines = [task["outline_number"] for task in tasks]
+        # Parent immediately followed by its children, in local position order.
+        assert outlines[:4] == ["1", "1.1", "1.1.1", "1.1.2"]
+        # A second deliverable of lot 1 precedes lot 2 and the next post subtree.
+        assert outlines.index("1.1.2") < outlines.index("1.2")
+        assert outlines.index("1.2.1") < outlines.index("2")

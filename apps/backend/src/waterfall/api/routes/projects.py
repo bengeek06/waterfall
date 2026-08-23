@@ -182,20 +182,62 @@ def _to_planning_read(planning: WfPlanning) -> PlanningRead:
     )
 
 
+def _order_snapshots_depth_first(
+    snapshots: list[WfPlanningTaskSnapshot],
+) -> list[WfPlanningTaskSnapshot]:
+    """Return snapshots depth-first: each parent immediately followed by its children.
+
+    ``position`` is local to a sibling group, so a global sort mixes branches. Roots
+    (``parent_uid`` NULL or referencing an absent parent) and each sibling group are
+    sorted by ``position`` (NULLs last) with ``id`` as a stable tie-breaker.
+    """
+    known_uids = {task.uid for task in snapshots}
+    children_by_parent: dict[int | None, list[WfPlanningTaskSnapshot]] = {}
+    for task in snapshots:
+        parent = task.parent_uid if task.parent_uid in known_uids else None
+        children_by_parent.setdefault(parent, []).append(task)
+
+    def sort_key(task: WfPlanningTaskSnapshot) -> tuple[int, int, int]:
+        return (0 if task.position is not None else 1, task.position or 0, task.id)
+
+    for group in children_by_parent.values():
+        group.sort(key=sort_key)
+
+    ordered: list[WfPlanningTaskSnapshot] = []
+    visited: set[int] = set()
+
+    def traverse(start: WfPlanningTaskSnapshot) -> None:
+        stack = [start]
+        while stack:
+            node = stack.pop()
+            if node.uid in visited:
+                continue
+            visited.add(node.uid)
+            ordered.append(node)
+            stack.extend(reversed(children_by_parent.get(node.uid, [])))
+
+    for root in children_by_parent.get(None, []):
+        traverse(root)
+    # Guard against orphan cycles that never surface as roots.
+    for task in sorted(snapshots, key=sort_key):
+        if task.uid not in visited:
+            traverse(task)
+
+    return ordered
+
+
 def _planning_detail(
     db: Session,
     planning: WfPlanning,
     offset: int = 0,
     limit: int | None = None,
 ) -> PlanningDetailRead:
-    snapshot_query = (
+    ordered = _order_snapshots_depth_first(
         db.query(WfPlanningTaskSnapshot)
         .filter(WfPlanningTaskSnapshot.planning_id == planning.id)
-        .order_by(WfPlanningTaskSnapshot.position.asc().nulls_last(), WfPlanningTaskSnapshot.id)
+        .all()
     )
-    if limit is not None:
-        snapshot_query = snapshot_query.offset(offset).limit(limit)
-    snapshots = snapshot_query.all()
+    snapshots = ordered[offset : offset + limit] if limit is not None else ordered
     task_uids = [task.uid for task in snapshots]
     links = (
         db.query(WfPlanningLinkSnapshot)
@@ -886,10 +928,11 @@ def create_project_estimate(
         else None
     )
     snapshots = (
-        db.query(WfPlanningTaskSnapshot)
-        .filter(WfPlanningTaskSnapshot.planning_id == source_planning.id)
-        .order_by(WfPlanningTaskSnapshot.position, WfPlanningTaskSnapshot.id)
-        .all()
+        _order_snapshots_depth_first(
+            db.query(WfPlanningTaskSnapshot)
+            .filter(WfPlanningTaskSnapshot.planning_id == source_planning.id)
+            .all()
+        )
         if source_planning is not None
         else []
     )
@@ -1305,6 +1348,10 @@ def delete_project(
     estimate_ids = [
         row[0] for row in db.query(Estimate.id).filter(Estimate.project_id == project_id).all()
     ]
+    # Drop the project's reference to any estimate before deleting estimates, otherwise
+    # fk_ms_project_reference_estimate (no ON DELETE) is violated on PostgreSQL.
+    project.reference_estimate_id = None
+    db.flush()
     if estimate_ids:
         db.query(EstimateCostLine).filter(EstimateCostLine.estimate_id.in_(estimate_ids)).delete(
             synchronize_session=False
@@ -1321,7 +1368,6 @@ def delete_project(
             {Estimate.reference_estimate_id: None}, synchronize_session=False
         )
         db.query(Estimate).filter(Estimate.id.in_(estimate_ids)).delete(synchronize_session=False)
-    project.reference_estimate_id = None
 
     db.query(TaskRoleAssignment).filter(
         TaskRoleAssignment.task_id.in_(
@@ -1453,6 +1499,9 @@ def create_planning_structure(
         snapshots = generate_planning_snapshot(db, project, payload, planning)
         if project.planning_reference_id is None:
             generate_planning_structure(db, project, payload)
+        # Keep the persisted draft in sync with the structure actually generated so the
+        # editor reopens on the latest content instead of a stale saved draft.
+        save_planning_structure_draft(planning, payload)
         project.displayed_planning_id = planning.id
         if project.status == "cree":
             project.status = "initialise"
@@ -2070,10 +2119,9 @@ def export_project_xml(
         else None
     )
     if selected_planning is not None:
-        tasks = (
+        tasks = _order_snapshots_depth_first(
             db.query(WfPlanningTaskSnapshot)
             .filter(WfPlanningTaskSnapshot.planning_id == selected_planning.id)
-            .order_by(WfPlanningTaskSnapshot.position.asc().nulls_last(), WfPlanningTaskSnapshot.id)
             .all()
         )
         links = (
