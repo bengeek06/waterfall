@@ -1,7 +1,7 @@
 .PHONY: install-backend lint-backend format-backend typecheck-backend test-backend run-backend hooks migrate-up seed-admin compose-up compose-up-dev compose-up-full compose-down install-dev lint format typecheck test run
 
 install-backend:
-	/home/benjamin/projects/rebirth/.venv/bin/python -m pip install -e ./apps/backend[dev]
+	python -m pip install -e './apps/backend[dev]'
 
 lint-backend:
 	cd apps/backend && ruff check .
