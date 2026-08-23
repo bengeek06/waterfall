@@ -1,47 +1,101 @@
-.PHONY: install-backend lint-backend format-backend typecheck-backend test-backend run-backend hooks migrate-up seed-admin compose-up compose-up-dev compose-up-full compose-down install-dev lint format typecheck test run
+COMPOSE := docker compose -f infra/docker/docker-compose.yml
+COMPOSE_FULL := docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.full.yml
+BACKEND := apps/backend
 
-install-backend:
+.DEFAULT_GOAL := help
+
+.PHONY: help install install-backend install-frontend \
+	lint lint-backend lint-frontend format format-backend \
+	typecheck typecheck-backend typecheck-frontend \
+	test test-backend test-frontend build build-frontend gen-client \
+	dev run run-backend run-frontend db-up db-down up up-full down stop logs \
+	migrate-up seed-admin hooks clean clean-docker distclean \
+	install-dev compose-up compose-up-dev compose-up-full compose-down
+
+help:  ## Show this help
+	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | sort | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
+
+# ---- Install ----
+install: install-backend install-frontend  ## Install backend + frontend deps
+install-backend:  ## Install backend (editable + dev extras)
 	python -m pip install -e './apps/backend[dev]'
+install-frontend:  ## Install JS workspace deps
+	npm ci
 
-lint-backend:
-	cd apps/backend && ruff check .
-
+# ---- Quality ----
+lint: lint-backend lint-frontend  ## Lint backend + frontend
+lint-backend:  ## Ruff check (backend)
+	cd $(BACKEND) && ruff check .
+lint-frontend:  ## ESLint (frontend)
+	npm run frontend:lint
+format: format-backend  ## Format backend (ruff)
 format-backend:
-	cd apps/backend && ruff format .
+	cd $(BACKEND) && ruff format .
+typecheck: typecheck-backend typecheck-frontend  ## Type-check backend + frontend
+typecheck-backend:  ## Pyright (backend)
+	cd $(BACKEND) && pyright
+typecheck-frontend:  ## tsc --noEmit (frontend)
+	cd apps/frontend && npx tsc --noEmit
+test: test-backend test-frontend  ## Test backend + frontend
+test-backend:  ## Pytest (backend)
+	cd $(BACKEND) && pytest
+test-frontend:  ## Vitest (frontend)
+	npm run frontend:test
 
-typecheck-backend:
-	cd apps/backend && pyright
+# ---- Build / contract ----
+build: build-frontend  ## Build frontend (incl. api client)
+build-frontend:
+	npm run frontend:build
+gen-client:  ## Regenerate the OpenAPI TypeScript client
+	npm run api-client:generate
 
-test-backend:
-	cd apps/backend && pytest
+# ---- Run (native dev) ----
+run: dev  ## Alias for 'dev'
+dev:  ## Run backend + frontend natively (Ctrl-C stops both)
+	@bash -c 'trap "kill 0" EXIT; (cd $(BACKEND) && uvicorn waterfall.main:app --app-dir src --reload) & npm run frontend:dev & wait'
+run-backend:  ## Run backend only (uvicorn --reload)
+	cd $(BACKEND) && uvicorn waterfall.main:app --app-dir src --reload
+run-frontend:  ## Run frontend only (next dev)
+	npm run frontend:dev
 
-run-backend:
-	cd apps/backend && uvicorn waterfall.main:app --app-dir src --reload
+# ---- Docker ----
+db-up:  ## Start Postgres only (detached) for native dev
+	$(COMPOSE) up -d postgres
+db-down:  ## Stop Postgres
+	$(COMPOSE) stop postgres
+up:  ## Start base stack (api + db), foreground
+	$(COMPOSE) up --build
+up-full:  ## Start full stack (api, db, frontend, observability)
+	$(COMPOSE_FULL) up --build
+down:  ## Stop stack (containers removed, volumes kept)
+	$(COMPOSE_FULL) down
+stop: down  ## Alias for 'down'
+logs:  ## Follow stack logs
+	$(COMPOSE) logs -f
 
-hooks:
+# ---- DB / tooling ----
+migrate-up:  ## Apply Alembic migrations
+	cd $(BACKEND) && alembic upgrade head
+seed-admin:  ## Seed the admin user
+	cd $(BACKEND) && python -m waterfall.scripts.seed_admin
+hooks:  ## Install pre-commit hooks (pre-commit + pre-push)
 	pre-commit install
 
-migrate-up:
-	cd apps/backend && alembic upgrade head
+# ---- Clean ----
+clean:  ## Remove Python/Next caches and build outputs
+	find . -type d -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true
+	find apps/backend -type d -name '*.egg-info' -prune -exec rm -rf {} + 2>/dev/null || true
+	rm -rf apps/backend/.pytest_cache apps/backend/.ruff_cache apps/backend/.coverage apps/backend/htmlcov
+	rm -rf apps/frontend/.next apps/frontend/.turbo
+	rm -rf packages/api-client-ts/dist
+clean-docker:  ## Stop stack and DELETE volumes (DB data lost)
+	$(COMPOSE_FULL) down -v --remove-orphans
+distclean: clean clean-docker  ## Also remove node_modules and .venv
+	rm -rf node_modules apps/frontend/node_modules packages/api-client-ts/node_modules .venv
 
-seed-admin:
-	cd apps/backend && python -m waterfall.scripts.seed_admin
-
-compose-up: compose-up-dev
-
-compose-up-dev:
-	docker compose -f infra/docker/docker-compose.yml up --build
-
-compose-up-full:
-	docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.full.yml up --build
-
-compose-down:
-	docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.full.yml down -v
-
-# Backward-compatible aliases
+# ---- Backward-compatible aliases ----
 install-dev: install-backend
-lint: lint-backend
-format: format-backend
-typecheck: typecheck-backend
-test: test-backend
-run: run-backend
+compose-up: up
+compose-up-dev: up
+compose-up-full: up-full
+compose-down: clean-docker

@@ -143,45 +143,55 @@ Le projet est pensé comme une application de type API-first :
 
 ## Démarrage rapide
 
+Toutes les tâches courantes passent par le `Makefile` (`make help` liste l'ensemble des cibles).
+
 ### 1) Prérequis
 - Python 3.13+
 - Node.js 20+
 - npm
+- Docker (base de données et stack complet)
 
 ### 2) Installation
 
 ```bash
-source .venv/bin/activate
-python -m pip install -e apps/backend[dev]
-npm install
+source .venv/bin/activate   # environnement Python à la racine du dépôt
+make install                # backend (editable + dev) + workspaces npm
+make hooks                  # installe les hooks git (pre-commit + pre-push)
 ```
 
-### 3) Lancer le backend
+### 3) Développement local (natif)
 
 ```bash
-cd apps/backend
-uvicorn waterfall.main:app --app-dir src --reload
+make db-up                  # Postgres dans Docker, pour le dev natif
+make dev                    # backend (uvicorn) + frontend (next dev) — Ctrl-C arrête les deux
 ```
 
-### 4) Lancer le frontend
+Ou séparément : `make run-backend`, `make run-frontend`.
+
+### 4) Stack complet en conteneurs
 
 ```bash
-npm run frontend:dev
+make up-full                # api + db + frontend + observabilité
+make down                   # arrêt (volumes conservés) — alias : make stop
+make logs                   # suivre les logs
 ```
 
 ### 5) Vérifications
 
 ```bash
-cd apps/backend
-ruff check .
-pyright
-pytest
+make lint                   # ruff (backend) + eslint (frontend)
+make typecheck              # pyright (backend) + tsc --noEmit (frontend)
+make test                   # pytest (backend) + vitest (frontend)
 ```
 
+Chaque cible existe aussi en version ciblée : `make lint-backend`, `make test-frontend`, etc.
+
+### 6) Nettoyage
+
 ```bash
-npm run frontend:lint
-npm run frontend:test
-npm run frontend:build
+make clean                  # caches Python/Next + sorties de build
+make clean-docker           # arrêt du stack + suppression des volumes (données DB perdues)
+make distclean              # + node_modules et .venv
 ```
 
 ## Qualité et couverture
