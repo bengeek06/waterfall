@@ -5,9 +5,8 @@ import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ApiError, login } from "@/lib/backend";
@@ -43,43 +42,35 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="w-full max-w-md">
-      <div className="mb-6 flex justify-center">
-        <Image src="/waterfall_logo.svg" alt="Waterfall" width={172} height={40} priority />
+    <div className="w-full max-w-sm">
+      <div className="mb-10 flex justify-center">
+        <Image src="/waterfall_logo.svg" alt="Waterfall" width={230} height={54} priority />
       </div>
       <Card>
-        <CardHeader>
-          <CardTitle>Connexion</CardTitle>
-          <CardDescription>Accès à la console Waterfall.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Alert className="mb-6" variant="default">
-            <AlertDescription>Utilisez vos identifiants administrateur pour accéder à l&apos;espace de travail.</AlertDescription>
-          </Alert>
-
-          <form onSubmit={onSubmit} className="grid gap-5">
+        <CardContent className="p-8">
+          <form onSubmit={onSubmit} className="grid gap-6">
             <div className="grid gap-2">
               <Label htmlFor="email">Email</Label>
               <Input
-              id="email"
-              type="email"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              autoComplete="email"
-              required
-            />
-          </div>
+                id="email"
+                type="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                autoComplete="email"
+                required
+              />
+            </div>
 
             <div className="grid gap-2">
               <Label htmlFor="password">Mot de passe</Label>
               <Input
-              id="password"
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              autoComplete="current-password"
-              required
-            />
+                id="password"
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                autoComplete="current-password"
+                required
+              />
             </div>
 
             <Button type="submit" disabled={busy} className="w-full">

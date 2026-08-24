@@ -79,7 +79,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, [pathname]);
 
   if (pathname === "/login") {
-    return <main className="mx-auto grid min-h-svh w-full max-w-2xl place-items-center px-4">{children}</main>;
+    return <main className="mx-auto grid min-h-svh w-full place-items-center px-4">{children}</main>;
   }
 
   function signOut() {

@@ -5,47 +5,41 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  --bg: #eef1f4;
-  --ink: #172321;
-  --ink-soft: #61706d;
-  --card: oklch(1 0 0);
-  --line: #d7e0e6;
-  --accent: oklch(0.963 0.002 197.1);
-  --accent-strong: #0f5147;
-  --brand-blue: #027dc6;
-  --brand-blue-strong: #045e94;
-  --warn: #b14128;
-  --shadow: 0 12px 30px rgba(31, 37, 51, 0.09);
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.148 0.004 228.8);
-  --card-foreground: oklch(0.148 0.004 228.8);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.148 0.004 228.8);
-  --primary: oklch(0.218 0.008 223.9);
-  --primary-foreground: oklch(0.987 0.002 197.1);
-  --secondary: oklch(0.963 0.002 197.1);
-  --secondary-foreground: oklch(0.218 0.008 223.9);
-  --muted: oklch(0.963 0.002 197.1);
-  --muted-foreground: oklch(0.56 0.021 213.5);
-  --accent-foreground: oklch(0.218 0.008 223.9);
+  /* Brand palette derived from the Waterfall logo: deep blue, light blue, anthracite. */
+  --bg: #f4f6f8;
+  --ink: #404547;
+  --card: #ffffff;
+  --background: #ffffff;
+  --foreground: #404547;
+  --card-foreground: #404547;
+  --popover: #ffffff;
+  --popover-foreground: #404547;
+  --primary: #027dc6;
+  --primary-foreground: #ffffff;
+  --secondary: #eef2f5;
+  --secondary-foreground: #404547;
+  --muted: #eef2f5;
+  --muted-foreground: #6d7679;
+  --accent: #e8f4fc;
+  --accent-foreground: #045e94;
   --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.925 0.005 214.3);
-  --input: oklch(0.925 0.005 214.3);
-  --ring: oklch(0.723 0.014 214.4);
+  --border: #e0e5e9;
+  --input: #e0e5e9;
+  --ring: #1195e1;
   --chart-1: oklch(0.872 0.007 219.6);
   --chart-2: oklch(0.56 0.021 213.5);
   --chart-3: oklch(0.45 0.017 213.2);
   --chart-4: oklch(0.378 0.015 216);
   --chart-5: oklch(0.275 0.011 216.9);
   --radius: 0.625rem;
-  --sidebar: oklch(0.987 0.002 197.1);
-  --sidebar-foreground: oklch(0.148 0.004 228.8);
-  --sidebar-primary: oklch(0.218 0.008 223.9);
-  --sidebar-primary-foreground: oklch(0.987 0.002 197.1);
-  --sidebar-accent: oklch(0.963 0.002 197.1);
-  --sidebar-accent-foreground: oklch(0.218 0.008 223.9);
-  --sidebar-border: oklch(0.925 0.005 214.3);
-  --sidebar-ring: oklch(0.723 0.014 214.4);
+  --sidebar: #ffffff;
+  --sidebar-foreground: #404547;
+  --sidebar-primary: #027dc6;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #eef2f5;
+  --sidebar-accent-foreground: #027dc6;
+  --sidebar-border: #e6eaed;
+  --sidebar-ring: #1195e1;
 }
 
 html {
@@ -64,7 +58,6 @@ body {
   flex-direction: column;
   color: var(--ink);
   background: var(--bg);
-  font-family: var(--font-text), Georgia, serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -79,10 +72,13 @@ body {
     linear-gradient(145deg, #f8fafc, #e9eff4 62%, #dde6ee);
 }
 
-* {
-  box-sizing: border-box;
-  padding: 0;
-  margin: 0;
+/* Unlayered rules would otherwise always beat Tailwind's layered utilities. */
+@layer base {
+  * {
+    box-sizing: border-box;
+    padding: 0;
+    margin: 0;
+  }
 }
 
 a {
@@ -91,42 +87,43 @@ a {
 }
 
 .dark {
-  --background: oklch(0.148 0.004 228.8);
-  --foreground: oklch(0.987 0.002 197.1);
-  --card: oklch(0.218 0.008 223.9);
-  --card-foreground: oklch(0.987 0.002 197.1);
-  --popover: oklch(0.218 0.008 223.9);
-  --popover-foreground: oklch(0.987 0.002 197.1);
-  --primary: oklch(0.925 0.005 214.3);
-  --primary-foreground: oklch(0.218 0.008 223.9);
-  --secondary: oklch(0.275 0.011 216.9);
-  --secondary-foreground: oklch(0.987 0.002 197.1);
-  --muted: oklch(0.275 0.011 216.9);
-  --muted-foreground: oklch(0.723 0.014 214.4);
-  --accent: oklch(0.275 0.011 216.9);
-  --accent-foreground: oklch(0.987 0.002 197.1);
+  --background: #1c2426;
+  --foreground: #eef2f4;
+  --card: #232d30;
+  --card-foreground: #eef2f4;
+  --popover: #232d30;
+  --popover-foreground: #eef2f4;
+  --primary: #1195e1;
+  --primary-foreground: #0b1a22;
+  --secondary: #2b3538;
+  --secondary-foreground: #eef2f4;
+  --muted: #2b3538;
+  --muted-foreground: #97a3a6;
+  --accent: #23384a;
+  --accent-foreground: #7fc4ee;
   --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.56 0.021 213.5);
+  --border: rgba(255, 255, 255, 0.12);
+  --input: rgba(255, 255, 255, 0.16);
+  --ring: #1195e1;
   --chart-1: oklch(0.872 0.007 219.6);
   --chart-2: oklch(0.56 0.021 213.5);
   --chart-3: oklch(0.45 0.017 213.2);
   --chart-4: oklch(0.378 0.015 216);
   --chart-5: oklch(0.275 0.011 216.9);
-  --sidebar: oklch(0.218 0.008 223.9);
-  --sidebar-foreground: oklch(0.987 0.002 197.1);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.987 0.002 197.1);
-  --sidebar-accent: oklch(0.275 0.011 216.9);
-  --sidebar-accent-foreground: oklch(0.987 0.002 197.1);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.56 0.021 213.5);
+  --sidebar: #202a2d;
+  --sidebar-foreground: #eef2f4;
+  --sidebar-primary: #1195e1;
+  --sidebar-primary-foreground: #0b1a22;
+  --sidebar-accent: #2b3538;
+  --sidebar-accent-foreground: #7fc4ee;
+  --sidebar-border: rgba(255, 255, 255, 0.12);
+  --sidebar-ring: #1195e1;
 }
 
 @theme inline {
   --font-sans: var(--font-sans);
-  --font-heading: var(--font-heading);
+  /* Same family everywhere until a final typeface is chosen. */
+  --font-heading: var(--font-sans);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
