@@ -9,7 +9,7 @@ ALEMBIC := $(PYTHON) -m alembic
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install install-backend install-frontend \
+.PHONY: help venv install install-backend install-frontend \
 	lint lint-backend lint-frontend format format-backend \
 	typecheck typecheck-backend typecheck-frontend \
 	test test-backend test-frontend build build-frontend gen-client \
@@ -21,8 +21,10 @@ help:  ## Show this help
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | sort | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 
 # ---- Install ----
+venv:  ## Create the root Python virtualenv if it does not exist
+	@test -x .venv/bin/python || python3 -m venv .venv
 install: install-backend install-frontend  ## Install backend + frontend deps
-install-backend:  ## Install backend (editable + dev extras)
+install-backend: venv  ## Install backend (editable + dev extras)
 	$(PYTHON) -m pip install -e './apps/backend[dev]'
 install-frontend:  ## Install JS workspace deps
 	npm ci
@@ -52,6 +54,7 @@ build: build-frontend  ## Build frontend (incl. api client)
 build-frontend:
 	npm run frontend:build
 gen-client:  ## Regenerate the OpenAPI TypeScript client
+	npm run openapi:bundle
 	npm run api-client:generate
 
 # ---- Run (native dev) ----

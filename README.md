@@ -145,14 +145,15 @@ Toutes les tâches courantes passent par le `Makefile` (`make help` liste l'ense
 
 ### 1) Prérequis
 - Python 3.13+
-- Node.js 20+
-- npm
+- Node.js 20.19+ (20.x) ou 22.12+
+- npm 10+
 - Docker (base de données et stack complet)
 
 ### 2) Installation
 
 ```bash
-source .venv/bin/activate   # environnement Python à la racine du dépôt
+make venv                   # crée l'environnement Python à la racine du dépôt
+source .venv/bin/activate
 make install                # backend (editable + dev) + workspaces npm
 make hooks                  # installe les hooks git (pre-commit + pre-push)
 ```
