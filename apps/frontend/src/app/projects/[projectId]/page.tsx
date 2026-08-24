@@ -15,6 +15,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -668,6 +669,76 @@ export default function ProjectDetailsPage() {
     }
   }
 
+  const postGroups = useMemo(() => {
+    const groups: { postKey: string; postName: string; lots: { row: PlanningStructureDraftRow }[] }[] = [];
+    const byPostKey = new Map<string, (typeof groups)[number]>();
+    for (const row of structureDraft) {
+      let group = byPostKey.get(row.postKey);
+      if (!group) {
+        group = { postKey: row.postKey, postName: row.postName, lots: [] };
+        byPostKey.set(row.postKey, group);
+        groups.push(group);
+      }
+      group.lots.push({ row });
+    }
+    return groups;
+  }, [structureDraft]);
+
+  function updatePostField(postKey: string, field: "postKey" | "postName", value: string) {
+    setStructureDraft((previous) => previous.map((row) => (row.postKey === postKey ? { ...row, [field]: value } : row)));
+  }
+
+  function updateLotField(rowId: string, field: "lotKey" | "lotName", value: string) {
+    setStructureDraft((previous) => previous.map((row) => (row.rowId === rowId ? { ...row, [field]: value } : row)));
+  }
+
+  function updateDeliverable(rowId: string, deliverableIndex: number, value: string) {
+    setStructureDraft((previous) =>
+      previous.map((row) => {
+        if (row.rowId !== rowId) return row;
+        const deliverables = row.deliverables.split(",");
+        deliverables[deliverableIndex] = value;
+        return { ...row, deliverables: deliverables.join(",") };
+      }),
+    );
+  }
+
+  function addDeliverable(rowId: string) {
+    setStructureDraft((previous) =>
+      previous.map((row) => (row.rowId === rowId ? { ...row, deliverables: `${row.deliverables},` } : row)),
+    );
+  }
+
+  function removeDeliverable(rowId: string, deliverableIndex: number) {
+    setStructureDraft((previous) =>
+      previous.map((row) => {
+        if (row.rowId !== rowId) return row;
+        const deliverables = row.deliverables.split(",").filter((_, index) => index !== deliverableIndex);
+        return { ...row, deliverables: deliverables.join(",") };
+      }),
+    );
+  }
+
+  function removeLot(rowId: string) {
+    setStructureDraft((previous) => previous.filter((row) => row.rowId !== rowId));
+  }
+
+  function addLotToPost(postKey: string, postName: string) {
+    const id = nextStructureRowId++;
+    setStructureDraft((previous) => [
+      ...previous,
+      { rowId: `row-${id}`, postKey, postName, lotKey: `lot-${id}`, lotName: "", deliverables: "" },
+    ]);
+  }
+
+  function addPost() {
+    const id = nextStructureRowId++;
+    setStructureDraft((previous) => [
+      ...previous,
+      { rowId: `row-${id}`, postKey: `post-${id}`, postName: "", lotKey: `lot-${id}`, lotName: "", deliverables: "" },
+    ]);
+  }
+
   function getPlanningStructurePayload() {
     if (!session || isReadOnlyProject) {
       router.push("/login");
@@ -976,19 +1047,24 @@ export default function ProjectDetailsPage() {
               </div>
             ) : (
               <>
-                <h1 className="title">{project?.name ?? `Projet #${projectId}`}</h1>
-                <p className="subtitle">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h1 className="text-2xl font-bold">{project?.name ?? `Projet #${projectId}`}</h1>
+                  {project?.code ? <Badge variant="outline">{project.code}</Badge> : null}
+                </div>
+                <p className="mt-1 text-sm text-muted-foreground italic">
                   {project?.short_description ?? "Pilotage du planning et des versions de devis."}
                 </p>
-                {!isReadOnlyProject ? (
-                  <Button variant="outline" type="button" onClick={startEditProjectInfo}>
-                    Modifier
-                  </Button>
-                ) : null}
               </>
             )}
           </div>
-          <Button variant="outline" nativeButton={false} render={<Link href="/projects" />}>Retour projets</Button>
+          <div className="flex flex-wrap items-center gap-2">
+            {!editingProjectInfo && !isReadOnlyProject ? (
+              <Button variant="outline" type="button" onClick={startEditProjectInfo}>
+                Modifier
+              </Button>
+            ) : null}
+            <Button variant="outline" nativeButton={false} render={<Link href="/projects" />}>Retour projets</Button>
+          </div>
         </CardContent>
       </Card>
 
@@ -1073,100 +1149,96 @@ export default function ProjectDetailsPage() {
             <p className="mt-1 text-sm text-muted-foreground">
               Définis les postes, lots et livrables. L&apos;API enregistre la structure en générant le squelette.
             </p>
-            {structureDraft.map((row, index) => (
-              <div className="mt-4 grid gap-3 rounded-lg border p-3 md:grid-cols-6" key={row.rowId}>
-                <Input
-                  aria-label={`Clé poste ${index + 1}`}
-                  placeholder="Clé poste"
-                  value={row.postKey}
-                  onChange={(event) =>
-                    setStructureDraft((previous) =>
-                      previous.map((item, itemIndex) =>
-                        itemIndex === index ? { ...item, postKey: event.target.value } : item,
-                      ),
-                    )
-                  }
-                />
-                <Input
-                  aria-label={`Nom poste ${index + 1}`}
-                  placeholder="Poste"
-                  value={row.postName}
-                  onChange={(event) =>
-                    setStructureDraft((previous) =>
-                      previous.map((item, itemIndex) =>
-                        itemIndex === index ? { ...item, postName: event.target.value } : item,
-                      ),
-                    )
-                  }
-                />
-                <Input
-                  aria-label={`Clé lot ${index + 1}`}
-                  placeholder="Clé lot"
-                  value={row.lotKey}
-                  onChange={(event) =>
-                    setStructureDraft((previous) =>
-                      previous.map((item, itemIndex) =>
-                        itemIndex === index ? { ...item, lotKey: event.target.value } : item,
-                      ),
-                    )
-                  }
-                />
-                <Input
-                  aria-label={`Nom lot ${index + 1}`}
-                  placeholder="Lot"
-                  value={row.lotName}
-                  onChange={(event) =>
-                    setStructureDraft((previous) =>
-                      previous.map((item, itemIndex) =>
-                        itemIndex === index ? { ...item, lotName: event.target.value } : item,
-                      ),
-                    )
-                  }
-                />
-                <Input
-                  aria-label={`Livrables ${index + 1}`}
-                  placeholder="Livrables séparés par des virgules"
-                  value={row.deliverables}
-                  onChange={(event) =>
-                    setStructureDraft((previous) =>
-                      previous.map((item, itemIndex) =>
-                        itemIndex === index ? { ...item, deliverables: event.target.value } : item,
-                      ),
-                    )
-                  }
-                />
-                {structureDraft.length > 1 ? (
-                  <Button
-                    variant="destructive"
-                    size="sm"
-                    type="button"
-                    aria-label={`Supprimer la ligne ${index + 1}`}
-                    onClick={() => setStructureDraft((previous) => previous.filter((_, itemIndex) => itemIndex !== index))}
-                  >
-                    Supprimer
-                  </Button>
-                ) : null}
+            {postGroups.map((group, postIndex) => (
+              <div className="mt-4 rounded-lg border p-4" key={group.postKey || `post-${postIndex}`}>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Input
+                    aria-label={`Clé poste ${postIndex + 1}`}
+                    placeholder="Clé poste"
+                    value={group.postKey}
+                    onChange={(event) => updatePostField(group.postKey, "postKey", event.target.value)}
+                  />
+                  <Input
+                    aria-label={`Nom poste ${postIndex + 1}`}
+                    placeholder="Poste"
+                    value={group.postName}
+                    onChange={(event) => updatePostField(group.postKey, "postName", event.target.value)}
+                  />
+                </div>
+
+                {group.lots.map(({ row }, lotIndex) => {
+                  const deliverables = row.deliverables.split(",");
+                  return (
+                    <div className="mt-3 grid gap-3 rounded-md border bg-muted/30 p-3" key={row.rowId}>
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="grid flex-1 gap-3 sm:grid-cols-2">
+                          <Input
+                            aria-label={`Clé lot ${postIndex + 1}.${lotIndex + 1}`}
+                            placeholder="Clé lot"
+                            value={row.lotKey}
+                            onChange={(event) => updateLotField(row.rowId, "lotKey", event.target.value)}
+                          />
+                          <Input
+                            aria-label={`Nom lot ${postIndex + 1}.${lotIndex + 1}`}
+                            placeholder="Lot"
+                            value={row.lotName}
+                            onChange={(event) => updateLotField(row.rowId, "lotName", event.target.value)}
+                          />
+                        </div>
+                        {structureDraft.length > 1 ? (
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            type="button"
+                            aria-label={`Supprimer le lot ${postIndex + 1}.${lotIndex + 1}`}
+                            onClick={() => removeLot(row.rowId)}
+                          >
+                            Supprimer le lot
+                          </Button>
+                        ) : null}
+                      </div>
+
+                      <p className="text-xs font-medium text-muted-foreground">Livrables</p>
+                      {deliverables.map((deliverable, deliverableIndex) => (
+                        <div className="flex items-center gap-2" key={deliverableIndex}>
+                          <Input
+                            aria-label={`Livrable ${postIndex + 1}.${lotIndex + 1}.${deliverableIndex + 1}`}
+                            placeholder="Nom du livrable"
+                            value={deliverable}
+                            onChange={(event) => updateDeliverable(row.rowId, deliverableIndex, event.target.value)}
+                          />
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            type="button"
+                            aria-label={`Supprimer le livrable ${postIndex + 1}.${lotIndex + 1}.${deliverableIndex + 1}`}
+                            onClick={() => removeDeliverable(row.rowId, deliverableIndex)}
+                          >
+                            Supprimer
+                          </Button>
+                        </div>
+                      ))}
+                      <Button variant="outline" size="sm" type="button" className="w-fit" onClick={() => addDeliverable(row.rowId)}>
+                        Ajouter un livrable
+                      </Button>
+                    </div>
+                  );
+                })}
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  type="button"
+                  className="mt-3"
+                  onClick={() => addLotToPost(group.postKey, group.postName)}
+                >
+                  Ajouter un lot
+                </Button>
               </div>
             ))}
             <div className="mt-4 flex flex-wrap gap-2">
-              <Button
-                variant="outline"
-                type="button"
-                onClick={() =>
-                  setStructureDraft((previous) => [
-                    ...previous,
-                    {
-                      rowId: `row-${nextStructureRowId++}`,
-                      postKey: `post-${previous.length + 1}`,
-                      postName: "",
-                      lotKey: `lot-${previous.length + 1}`,
-                      lotName: "",
-                      deliverables: "",
-                    },
-                  ])
-                }
-              >
-                Ajouter une ligne
+              <Button variant="outline" type="button" onClick={addPost}>
+                Ajouter un poste
               </Button>
               <Button
                 type="button"

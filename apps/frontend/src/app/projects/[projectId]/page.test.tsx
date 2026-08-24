@@ -174,8 +174,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
 
     await screen.findByRole("heading", { name: "Structure initiale" });
     fireEvent.change(screen.getByLabelText("Nom poste 1"), { target: { value: "Poste" } });
-    fireEvent.change(screen.getByLabelText("Nom lot 1"), { target: { value: "Lot" } });
-    fireEvent.change(screen.getByLabelText("Livrables 1"), { target: { value: "Livrable" } });
+    fireEvent.change(screen.getByLabelText("Nom lot 1.1"), { target: { value: "Lot" } });
+    fireEvent.change(screen.getByLabelText("Livrable 1.1.1"), { target: { value: "Livrable" } });
     fireEvent.click(screen.getByRole("button", { name: "Enregistrer la structure" }));
 
     await waitFor(() => expect(mocks.savePlanningStructureDraft).toHaveBeenCalledTimes(1));
@@ -198,8 +198,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
 
     await screen.findByRole("heading", { name: "Structure initiale" });
     fireEvent.change(screen.getByLabelText("Nom poste 1"), { target: { value: "Poste" } });
-    fireEvent.change(screen.getByLabelText("Nom lot 1"), { target: { value: "Lot" } });
-    fireEvent.change(screen.getByLabelText("Livrables 1"), { target: { value: "Livrable" } });
+    fireEvent.change(screen.getByLabelText("Nom lot 1.1"), { target: { value: "Lot" } });
+    fireEvent.change(screen.getByLabelText("Livrable 1.1.1"), { target: { value: "Livrable" } });
     fireEvent.click(screen.getByRole("button", { name: "Générer le squelette" }));
 
     await waitFor(() => expect(mocks.createPlanningStructure).toHaveBeenCalledTimes(1));
@@ -276,8 +276,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
 
     await screen.findByRole("heading", { name: "Structure initiale" });
     fireEvent.change(screen.getByLabelText("Nom poste 1"), { target: { value: "Poste" } });
-    fireEvent.change(screen.getByLabelText("Nom lot 1"), { target: { value: "Lot" } });
-    fireEvent.change(screen.getByLabelText("Livrables 1"), { target: { value: "Livrable" } });
+    fireEvent.change(screen.getByLabelText("Nom lot 1.1"), { target: { value: "Lot" } });
+    fireEvent.change(screen.getByLabelText("Livrable 1.1.1"), { target: { value: "Livrable" } });
     fireEvent.click(screen.getByRole("button", { name: "Générer le squelette" }));
 
     await waitFor(() =>
