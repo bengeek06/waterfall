@@ -1,7 +1,12 @@
 import type { Metadata } from "next";
-import { Space_Grotesk, Source_Serif_4 } from "next/font/google";
+import { Space_Grotesk, Source_Serif_4, Inter, Roboto } from "next/font/google";
 import { AppShell } from "@/components/app-shell";
 import "./globals.css";
+import { cn } from "@/lib/utils";
+
+const robotoHeading = Roboto({subsets:['latin'],variable:'--font-heading'});
+
+const inter = Inter({subsets:['latin'],variable:'--font-sans'});
 
 const titleFont = Space_Grotesk({
   variable: "--font-title",
@@ -27,7 +32,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="fr" className={`${titleFont.variable} ${textFont.variable}`}>
+    <html lang="fr" className={cn(titleFont.variable, textFont.variable, "font-sans", inter.variable, robotoHeading.variable)}>
       <body>
         <div className="app-bg" />
         <AppShell>{children}</AppShell>
