@@ -2,8 +2,6 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { CircleCheck, CircleDot, CirclePlus, CircleX, LoaderCircle, Send } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -16,6 +14,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { ProjectsTable } from "@/components/projects-table";
 import {
   ApiError,
   Project,
@@ -29,19 +28,6 @@ import {
 import { clearSession, getSession, setSession, type SessionTokens } from "@/lib/session";
 
 const PROJECT_PAGE_SIZE = 50;
-const ARCHIVED_STATUSES = new Set<Project["status"]>(["perdu", "termine", "abandonne"]);
-const PROJECT_STATUS_DETAILS: Record<
-  Project["status"],
-  { label: string; Icon: LucideIcon; tone: "blue" | "green" | "red" }
-> = {
-  cree: { label: "Créé", Icon: CirclePlus, tone: "blue" },
-  initialise: { label: "Initialisé", Icon: LoaderCircle, tone: "blue" },
-  en_reponse_appel_offre: { label: "En réponse à appel d'offre", Icon: Send, tone: "blue" },
-  perdu: { label: "Perdu", Icon: CircleX, tone: "red" },
-  en_cours: { label: "En cours", Icon: CircleDot, tone: "green" },
-  termine: { label: "Terminé", Icon: CircleCheck, tone: "red" },
-  abandonne: { label: "Abandonné", Icon: CircleX, tone: "red" },
-};
 
 export default function ProjectsPage() {
   const router = useRouter();
@@ -177,31 +163,6 @@ export default function ProjectsPage() {
     }
   }
 
-  function toggleSelected(projectId: number) {
-    setSelectedIds((previous) => {
-      const next = new Set(previous);
-      if (next.has(projectId)) {
-        next.delete(projectId);
-      } else {
-        next.add(projectId);
-      }
-      return next;
-    });
-  }
-
-  function toggleSelectAll() {
-    const selectableProjects = projects.filter((project) => !ARCHIVED_STATUSES.has(project.status));
-    setSelectedIds((previous) =>
-      previous.size === selectableProjects.length
-        ? new Set()
-        : new Set(selectableProjects.map((project) => project.id)),
-    );
-  }
-
-  const selectableProjectCount = projects.filter(
-    (project) => !ARCHIVED_STATUSES.has(project.status),
-  ).length;
-
   async function onDeleteSelected() {
     if (!session || selectedIds.size === 0) {
       return;
@@ -324,64 +285,12 @@ export default function ProjectsPage() {
                 Supprimer la sélection
               </button>
             </div>
-            <div className="table-scroll">
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th scope="col">
-                      <input
-                        type="checkbox"
-                        aria-label="Tout sélectionner"
-                        checked={selectedIds.size > 0 && selectedIds.size === selectableProjectCount}
-                        onChange={toggleSelectAll}
-                      />
-                    </th>
-                    <th scope="col">Code</th>
-                    <th scope="col">Nom</th>
-                    <th scope="col">Statut</th>
-                    <th scope="col">Description</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {projects.map((project) => {
-                    const status = PROJECT_STATUS_DETAILS[project.status];
-                    const isReadOnly = ARCHIVED_STATUSES.has(project.status);
-                    return (
-                    <tr
-                      key={project.id}
-                      className={`table-row-clickable${isReadOnly ? " project-row-readonly" : ""}`}
-                      onClick={() => router.push(`/projects/${project.id}`)}
-                    >
-                      <td>
-                        <input
-                          type="checkbox"
-                          aria-label={`Sélectionner ${project.name}`}
-                          checked={selectedIds.has(project.id)}
-                          disabled={isReadOnly}
-                          onClick={(event) => event.stopPropagation()}
-                          onChange={() => toggleSelected(project.id)}
-                        />
-                      </td>
-                      <td>{project.code ?? "-"}</td>
-                      <td>{project.name}</td>
-                      <td>
-                        <span className={`project-status project-status-${status.tone}`}>
-                          <status.Icon
-                            aria-label={`Statut : ${status.label}`}
-                            title={status.label}
-                            size={17}
-                          />
-                          <span>{status.label}</span>
-                          {isReadOnly ? <span className="muted">Lecture seule</span> : null}
-                        </span>
-                      </td>
-                      <td className="muted">{project.short_description ?? "-"}</td>
-                    </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            <ProjectsTable
+              projects={projects}
+              selectedIds={selectedIds}
+              onSelectedIdsChange={setSelectedIds}
+              onProjectOpen={(projectId) => router.push(`/projects/${projectId}`)}
+            />
           </>
         ) : null}
 
