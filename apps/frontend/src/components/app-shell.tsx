@@ -11,23 +11,21 @@ import {
   SidebarContent,
   SidebarFooter,
   SidebarGroup,
-  SidebarGroupLabel,
   SidebarHeader,
   SidebarInset,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
+  SidebarSeparator,
   SidebarTrigger,
   useSidebar,
 } from "@/components/ui/sidebar";
 import { getMe } from "@/lib/backend";
 import { clearSession, getSession, setSession, type SessionTokens } from "@/lib/session";
 
-const navigation = [
-  { href: "/projects", label: "Projets", icon: FolderKanban },
-  { href: "/resources", label: "Paramètres", icon: Settings2 },
-];
+const navigation = [{ href: "/projects", label: "Projets", icon: FolderKanban }];
+const settingsItem = { href: "/resources", label: "Paramètres", icon: Settings2 };
 
 function NavigationItem({
   href,
@@ -97,7 +95,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </SidebarHeader>
         <SidebarContent>
           <SidebarGroup>
-            <SidebarGroupLabel>Pilotage</SidebarGroupLabel>
             <SidebarMenu>
               {navigation.map(({ href, label, icon: Icon }) => (
                 <NavigationItem
@@ -112,6 +109,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </SidebarGroup>
         </SidebarContent>
         <SidebarFooter>
+          <SidebarMenu>
+            <NavigationItem
+              href={settingsItem.href}
+              label={settingsItem.label}
+              Icon={settingsItem.icon}
+              active={pathname === settingsItem.href || pathname.startsWith(`${settingsItem.href}/`)}
+            />
+          </SidebarMenu>
+          <SidebarSeparator />
           <SidebarMenu>
             <SidebarMenuItem>
               <SidebarMenuButton tooltip="Se déconnecter" onClick={signOut}>
