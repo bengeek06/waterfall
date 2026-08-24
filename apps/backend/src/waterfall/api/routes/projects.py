@@ -135,6 +135,43 @@ def _get_planning_or_404(db: Session, project_id: int, planning_id: int) -> WfPl
     return planning
 
 
+def _get_latest_draft_planning(db: Session, project_id: int) -> WfPlanning | None:
+    return (
+        db.query(WfPlanning)
+        .filter(WfPlanning.project_id == project_id, WfPlanning.status == "draft")
+        .order_by(WfPlanning.version_number.desc())
+        .first()
+    )
+
+
+def _get_or_create_draft_planning(
+    db: Session,
+    *,
+    project_id: int,
+    note: str | None,
+) -> WfPlanning:
+    planning = _get_latest_draft_planning(db, project_id)
+    if planning is not None:
+        return planning
+
+    version_number = (
+        db.query(func.max(WfPlanning.version_number))
+        .filter(WfPlanning.project_id == project_id)
+        .scalar()
+        or 0
+    )
+    planning = WfPlanning(
+        project_id=project_id,
+        version_number=version_number + 1,
+        status="draft",
+        note=note,
+        created_at=datetime.now(UTC),
+    )
+    db.add(planning)
+    db.flush()
+    return planning
+
+
 def _to_snapshot_task_read(
     task: WfPlanningTaskSnapshot,
     links: list[WfPlanningLinkSnapshot],
@@ -757,12 +794,7 @@ def reopen_planning_structure(
 ) -> ProjectRead:
     project = _get_project_or_404(db, project_id, current_user.id)
     ensure_project_mutable(project)
-    existing_draft = (
-        db.query(WfPlanning)
-        .filter(WfPlanning.project_id == project_id, WfPlanning.status == "draft")
-        .order_by(WfPlanning.version_number.desc())
-        .first()
-    )
+    existing_draft = _get_latest_draft_planning(db, project_id)
     if existing_draft is not None:
         project.displayed_planning_id = existing_draft.id
         if project.status == "cree":
@@ -1468,28 +1500,9 @@ def create_planning_structure(
     project = _get_project_or_404(db, project_id, current_user.id)
     ensure_project_mutable(project)
     try:
-        planning = (
-            db.query(WfPlanning)
-            .filter(WfPlanning.project_id == project_id, WfPlanning.status == "draft")
-            .order_by(WfPlanning.version_number.desc())
-            .first()
+        planning = _get_or_create_draft_planning(
+            db, project_id=project_id, note="Generated from planning structure"
         )
-        if planning is None:
-            version_number = (
-                db.query(func.max(WfPlanning.version_number))
-                .filter(WfPlanning.project_id == project_id)
-                .scalar()
-                or 0
-            )
-            planning = WfPlanning(
-                project_id=project_id,
-                version_number=version_number + 1,
-                status="draft",
-                note="Generated from planning structure",
-                created_at=datetime.now(UTC),
-            )
-            db.add(planning)
-            db.flush()
         if payload is None:
             payload = load_planning_structure_draft(planning)
             if payload is None:
@@ -1535,28 +1548,7 @@ def save_planning_structure_draft_route(
     project = _get_project_or_404(db, project_id, current_user.id)
     ensure_project_mutable(project)
     try:
-        planning = (
-            db.query(WfPlanning)
-            .filter(WfPlanning.project_id == project_id, WfPlanning.status == "draft")
-            .order_by(WfPlanning.version_number.desc())
-            .first()
-        )
-        if planning is None:
-            version_number = (
-                db.query(func.max(WfPlanning.version_number))
-                .filter(WfPlanning.project_id == project_id)
-                .scalar()
-                or 0
-            )
-            planning = WfPlanning(
-                project_id=project_id,
-                version_number=version_number + 1,
-                status="draft",
-                note=None,
-                created_at=datetime.now(UTC),
-            )
-            db.add(planning)
-            db.flush()
+        planning = _get_or_create_draft_planning(db, project_id=project_id, note=None)
         save_planning_structure_draft(planning, payload)
         db.commit()
     except IntegrityError as exc:
