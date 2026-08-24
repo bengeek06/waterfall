@@ -14,7 +14,20 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { ProjectsTable } from "@/components/projects-table";
+import { Textarea } from "@/components/ui/textarea";
 import {
   ApiError,
   Project,
@@ -193,75 +206,79 @@ export default function ProjectsPage() {
           </div>
         </div>
 
-        <div className="row" style={{ marginTop: "1rem" }}>
-          {!createMode ? (
-            <button className="btn btn-primary" type="button" onClick={() => setCreateMode(true)}>
-              Créer projet
-            </button>
-          ) : null}
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button type="button" onClick={() => setCreateMode(true)}>
+            Créer projet
+          </Button>
         </div>
 
-        <label className="checkbox-label" style={{ marginTop: "1rem" }}>
-          <input
-            type="checkbox"
+        <label className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
+          <Checkbox
             checked={includeArchived}
-            onChange={toggleIncludeArchived}
+            onCheckedChange={toggleIncludeArchived}
           />
           Inclure les projets perdus, terminés ou abandonnés
         </label>
 
-        {createMode ? (
-          <div className="panel" style={{ marginTop: "1rem" }}>
-            <h2 style={{ marginTop: 0 }}>Nouveau projet</h2>
+      </section>
 
-            <div className="field">
-              <label htmlFor="project-name">Nom du projet</label>
-              <input
+      <Dialog
+        open={createMode}
+        onOpenChange={(open) => {
+          if (open) {
+            setCreateMode(true);
+          } else {
+            resetCreateFlow();
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Nouveau projet</DialogTitle>
+            <DialogDescription>Créez le référentiel initial du projet.</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4">
+            <div className="grid gap-2">
+              <Label htmlFor="project-name">Nom du projet</Label>
+              <Input
                 id="project-name"
-                type="text"
                 value={createName}
                 onChange={(event) => setCreateName(event.target.value)}
-                placeholder="Ex: Projet pilote"
+                placeholder="Ex. Projet pilote"
                 maxLength={255}
               />
             </div>
-            <div className="field">
-              <label htmlFor="project-code">Code projet</label>
-              <input
+            <div className="grid gap-2">
+              <Label htmlFor="project-code">Code projet</Label>
+              <Input
                 id="project-code"
-                type="text"
                 value={createCode}
                 onChange={(event) => setCreateCode(event.target.value)}
-                placeholder="Ex: PRJ-001"
+                placeholder="Ex. PRJ-001"
                 maxLength={64}
               />
             </div>
-            <div className="field">
-              <label htmlFor="project-description">Description (facultatif)</label>
-              <textarea
+            <div className="grid gap-2">
+              <Label htmlFor="project-description">Description (facultatif)</Label>
+              <Textarea
                 id="project-description"
-                rows={2}
+                rows={3}
                 value={createDescription}
                 onChange={(event) => setCreateDescription(event.target.value)}
                 maxLength={500}
               />
             </div>
-            <div className="row" style={{ marginTop: "0.8rem" }}>
-              <button
-                className="btn btn-primary"
-                type="button"
-                disabled={Boolean(actionBusy)}
-                onClick={() => void onCreateProject()}
-              >
-                Créer
-              </button>
-              <button className="btn" type="button" onClick={resetCreateFlow}>
-                Annuler
-              </button>
-            </div>
           </div>
-        ) : null}
-      </section>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={resetCreateFlow}>
+              Annuler
+            </Button>
+            <Button type="button" disabled={Boolean(actionBusy)} onClick={() => void onCreateProject()}>
+              {actionBusy ? "Création..." : "Créer"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <section className="panel">
         {busy ? <p className="muted" role="status">Chargement...</p> : null}
@@ -276,14 +293,14 @@ export default function ProjectsPage() {
               <span className="muted">
                 {selectedIds.size ? `${selectedIds.size} sélectionné(s)` : ""}
               </span>
-              <button
-                className="btn btn-danger"
+              <Button
+                variant="destructive"
                 type="button"
                 disabled={!selectedIds.size || Boolean(actionBusy)}
                 onClick={() => setDeleteDialogOpen(true)}
               >
                 Supprimer la sélection
-              </button>
+              </Button>
             </div>
             <ProjectsTable
               projects={projects}
@@ -300,22 +317,22 @@ export default function ProjectsPage() {
               {projects.length ? `Projets ${projectOffset + 1} à ${projectOffset + projects.length}` : ""}
             </span>
             <div className="row">
-              <button
-                className="btn"
+              <Button
+                variant="outline"
                 type="button"
                 disabled={projectOffset === 0}
                 onClick={() => setProjectOffset((current) => Math.max(0, current - PROJECT_PAGE_SIZE))}
               >
                 Précédent
-              </button>
-              <button
-                className="btn"
+              </Button>
+              <Button
+                variant="outline"
                 type="button"
                 disabled={projects.length < PROJECT_PAGE_SIZE}
                 onClick={() => setProjectOffset((current) => current + PROJECT_PAGE_SIZE)}
               >
                 Suivant
-              </button>
+              </Button>
             </div>
           </div>
         ) : null}
