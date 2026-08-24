@@ -564,7 +564,7 @@ export default function ResourcesPage() {
 
       {!busy && activeTab === "resources" ? (
         <>
-          <div className="master-detail">
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
           <OrganizationTree
             rows={organizationRows}
             selectedNodeId={selectedNodeId}
