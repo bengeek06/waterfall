@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { Space_Grotesk, Source_Serif_4, Inter, Roboto } from "next/font/google";
 import { AppShell } from "@/components/app-shell";
+import { Toaster } from "@/components/ui/sonner";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import "./globals.css";
 import { cn } from "@/lib/utils";
 
@@ -35,7 +37,10 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html lang="fr" className={cn(titleFont.variable, textFont.variable, "font-sans", inter.variable, robotoHeading.variable)}>
       <body>
         <div className="app-bg" />
-        <AppShell>{children}</AppShell>
+        <TooltipProvider>
+          <AppShell>{children}</AppShell>
+        </TooltipProvider>
+        <Toaster position="top-right" />
       </body>
     </html>
   );

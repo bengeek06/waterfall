@@ -4,7 +4,18 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CircleCheck, CircleDot, CirclePlus, CircleX, LoaderCircle, Send } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { toast } from "sonner";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   ApiError,
   Project,
@@ -46,6 +57,7 @@ export default function ProjectsPage() {
   const [createName, setCreateName] = useState("");
   const [createCode, setCreateCode] = useState("");
   const [createDescription, setCreateDescription] = useState("");
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
 
   const onSessionRefresh = useMemo(
     () => (next: SessionTokens) => {
@@ -195,23 +207,17 @@ export default function ProjectsPage() {
       return;
     }
 
-    const confirmed = window.confirm(
-      `Supprimer définitivement ${selectedIds.size} projet(s) ? Cette action est irréversible.`,
-    );
-    if (!confirmed) {
-      return;
-    }
-
-    setError(null);
+    const projectIds = [...selectedIds];
     setActionBusy("Suppression des projets sélectionnés...");
     try {
-      for (const projectId of selectedIds) {
+      for (const projectId of projectIds) {
         await deleteProject(projectId, session, onSessionRefresh);
       }
-      setProjects((prev) => prev.filter((project) => !selectedIds.has(project.id)));
+      setProjects((prev) => prev.filter((project) => !projectIds.includes(project.id)));
       setSelectedIds(new Set());
+      toast.success(`${projectIds.length} projet(s) supprimé(s).`);
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Impossible de supprimer les projets.");
+      toast.error(cause instanceof ApiError ? cause.message : "Impossible de supprimer les projets.");
     } finally {
       setActionBusy(null);
     }
@@ -313,7 +319,7 @@ export default function ProjectsPage() {
                 className="btn btn-danger"
                 type="button"
                 disabled={!selectedIds.size || Boolean(actionBusy)}
-                onClick={() => void onDeleteSelected()}
+                onClick={() => setDeleteDialogOpen(true)}
               >
                 Supprimer la sélection
               </button>
@@ -405,6 +411,29 @@ export default function ProjectsPage() {
           </div>
         ) : null}
       </section>
+
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Supprimer les projets sélectionnés ?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {selectedIds.size} projet(s) seront supprimé(s) définitivement. Cette action est irréversible.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Annuler</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                setDeleteDialogOpen(false);
+                void onDeleteSelected();
+              }}
+            >
+              Supprimer
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }

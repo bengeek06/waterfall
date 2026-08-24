@@ -1,5 +1,7 @@
 "use client";
 
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+
 export type SettingsTab = "resources" | "costs" | "users";
 
 type SettingsTabsProps = {
@@ -15,19 +17,18 @@ const tabs: Array<[SettingsTab, string]> = [
 
 export function SettingsTabs({ activeTab, onChange }: SettingsTabsProps) {
   return (
-    <nav className="project-tabs" aria-label="Sections des paramètres">
-      {tabs.map(([tab, label]) => (
-        <button
-          key={tab}
-          className={`project-tab ${activeTab === tab ? "project-tab-active" : ""}`}
-          type="button"
-          aria-selected={activeTab === tab}
-          role="tab"
-          onClick={() => onChange(tab)}
-        >
-          {label}
-        </button>
-      ))}
-    </nav>
+    <Tabs value={activeTab} onValueChange={(value) => onChange(value as SettingsTab)}>
+      <TabsList aria-label="Sections des paramètres" className="h-auto w-full justify-start overflow-x-auto rounded-none border-b bg-transparent p-0">
+        {tabs.map(([tab, label]) => (
+          <TabsTrigger
+            key={tab}
+            value={tab}
+            className="shrink-0 rounded-none border-b-2 border-transparent px-3 py-2.5 text-sm data-[state=active]:border-primary data-[state=active]:bg-transparent"
+          >
+            {label}
+          </TabsTrigger>
+        ))}
+      </TabsList>
+    </Tabs>
   );
 }
