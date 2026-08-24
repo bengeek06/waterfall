@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import {
   ApiError,
@@ -1415,27 +1416,26 @@ export default function ProjectDetailsPage() {
                   </Card>
                 ) : null}
 
-                <div className="table-scroll">
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th scope="col">Catégorie</th>
-                        <th scope="col">Libellé</th>
-                        <th scope="col">Quantité</th>
-                        <th scope="col">Coût unitaire</th>
-                        <th scope="col">Montant</th>
-                        {canEditEstimate ? <th scope="col">Action</th> : null}
-                      </tr>
-                    </thead>
-                    <tbody>
+                <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Catégorie</TableHead>
+                        <TableHead>Libellé</TableHead>
+                        <TableHead>Quantité</TableHead>
+                        <TableHead>Coût unitaire</TableHead>
+                        <TableHead>Montant</TableHead>
+                        {canEditEstimate ? <TableHead>Action</TableHead> : null}
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
                       {costLines.map((line) => {
                         const editing = editingLineId === line.id;
                         return (
-                          <tr key={line.id}>
-                            <td>{line.accounting_code}</td>
-                            <td>
+                          <TableRow key={line.id}>
+                            <TableCell>{line.accounting_code}</TableCell>
+                            <TableCell>
                               {editing ? (
-                                <input
+                                <Input
                                   value={editingLineDraft.label}
                                   onChange={(event) =>
                                     setEditingLineDraft((prev) => ({ ...prev, label: event.target.value }))
@@ -1444,10 +1444,10 @@ export default function ProjectDetailsPage() {
                               ) : (
                                 line.label
                               )}
-                            </td>
-                            <td>
+                            </TableCell>
+                            <TableCell>
                               {editing ? (
-                                <input
+                                <Input
                                   type="number"
                                   min="0"
                                   step="0.01"
@@ -1459,10 +1459,10 @@ export default function ProjectDetailsPage() {
                               ) : (
                                 line.quantity
                               )}
-                            </td>
-                            <td>
+                            </TableCell>
+                            <TableCell>
                               {editing ? (
-                                <input
+                                <Input
                                   type="number"
                                   min="0"
                                   step="0.01"
@@ -1474,49 +1474,49 @@ export default function ProjectDetailsPage() {
                               ) : (
                                 line.unit_cost
                               )}
-                            </td>
-                            <td>{line.purchase_cost}</td>
+                            </TableCell>
+                            <TableCell>{line.purchase_cost}</TableCell>
                             {canEditEstimate ? (
-                              <td>
-                                <div className="row">
+                              <TableCell>
+                                <div className="flex flex-wrap gap-2">
                                   {editing ? (
-                                    <button
-                                      className="btn btn-primary"
+                                    <Button
+                                      size="sm"
                                       type="button"
                                       disabled={estimateBusy}
                                       onClick={() => void saveCostLine(line)}
                                     >
                                       Sauver
-                                    </button>
+                                    </Button>
                                   ) : (
-                                    <button className="btn" type="button" onClick={() => startEditCostLine(line)}>
+                                    <Button size="sm" variant="outline" type="button" onClick={() => startEditCostLine(line)}>
                                       Modifier
-                                    </button>
+                                    </Button>
                                   )}
-                                  <button
-                                    className="btn btn-danger"
+                                  <Button
+                                    size="sm"
+                                    variant="destructive"
                                     type="button"
                                     disabled={estimateBusy}
                                     onClick={() => setCostLinePendingDelete(line)}
                                   >
                                     Supprimer
-                                  </button>
+                                  </Button>
                                 </div>
-                              </td>
+                              </TableCell>
                             ) : null}
-                          </tr>
+                          </TableRow>
                         );
                       })}
                       {!costLines.length ? (
-                        <tr>
-                          <td colSpan={canEditEstimate ? 6 : 5} className="muted">
+                        <TableRow>
+                          <TableCell colSpan={canEditEstimate ? 6 : 5} className="text-muted-foreground">
                             Aucune ligne de coût.
-                          </td>
-                        </tr>
+                          </TableCell>
+                        </TableRow>
                       ) : null}
-                    </tbody>
-                  </table>
-                </div>
+                    </TableBody>
+                </Table>
               </div>
             ) : null}
           </div>
