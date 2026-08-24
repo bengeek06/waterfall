@@ -1,6 +1,11 @@
 COMPOSE := docker compose -f infra/docker/docker-compose.yml
 COMPOSE_FULL := docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.full.yml
 BACKEND := apps/backend
+PYTHON := $(CURDIR)/.venv/bin/python
+RUFF := $(PYTHON) -m ruff
+PYRIGHT := $(PYTHON) -m pyright
+PYTEST := $(PYTHON) -m pytest
+ALEMBIC := $(PYTHON) -m alembic
 
 .DEFAULT_GOAL := help
 
@@ -18,27 +23,27 @@ help:  ## Show this help
 # ---- Install ----
 install: install-backend install-frontend  ## Install backend + frontend deps
 install-backend:  ## Install backend (editable + dev extras)
-	python -m pip install -e './apps/backend[dev]'
+	$(PYTHON) -m pip install -e './apps/backend[dev]'
 install-frontend:  ## Install JS workspace deps
 	npm ci
 
 # ---- Quality ----
 lint: lint-backend lint-frontend  ## Lint backend + frontend
 lint-backend:  ## Ruff check (backend)
-	cd $(BACKEND) && ruff check .
+	cd $(BACKEND) && $(RUFF) check .
 lint-frontend:  ## ESLint (frontend)
 	npm run frontend:lint
 format: format-backend  ## Format backend (ruff)
 format-backend:
-	cd $(BACKEND) && ruff format .
+	cd $(BACKEND) && $(RUFF) format .
 typecheck: typecheck-backend typecheck-frontend  ## Type-check backend + frontend
 typecheck-backend:  ## Pyright (backend)
-	cd $(BACKEND) && pyright
+	cd $(BACKEND) && $(PYRIGHT)
 typecheck-frontend:  ## tsc --noEmit (frontend)
 	cd apps/frontend && npx tsc --noEmit
 test: test-backend test-frontend  ## Test backend + frontend
 test-backend:  ## Pytest (backend)
-	cd $(BACKEND) && pytest
+	cd $(BACKEND) && $(PYTEST)
 test-frontend:  ## Vitest (frontend)
 	npm run frontend:test
 
@@ -52,9 +57,9 @@ gen-client:  ## Regenerate the OpenAPI TypeScript client
 # ---- Run (native dev) ----
 run: dev  ## Alias for 'dev'
 dev:  ## Run backend + frontend natively (Ctrl-C stops both)
-	@bash -c 'backend_pid=; frontend_pid=; cleanup() { trap - EXIT INT TERM; kill "$$backend_pid" "$$frontend_pid" 2>/dev/null || true; wait "$$backend_pid" "$$frontend_pid" 2>/dev/null || true; }; trap cleanup EXIT INT TERM; (cd $(BACKEND) && uvicorn waterfall.main:app --app-dir src --reload) & backend_pid=$$!; npm run frontend:dev & frontend_pid=$$!; wait -n "$$backend_pid" "$$frontend_pid"'
+	@bash -c 'backend_pid=; frontend_pid=; cleanup() { trap - EXIT INT TERM; kill "$$backend_pid" "$$frontend_pid" 2>/dev/null || true; wait "$$backend_pid" "$$frontend_pid" 2>/dev/null || true; }; trap cleanup EXIT INT TERM; (cd $(BACKEND) && $(PYTHON) -m uvicorn waterfall.main:app --app-dir src --reload) & backend_pid=$$!; npm run frontend:dev & frontend_pid=$$!; wait -n "$$backend_pid" "$$frontend_pid"'
 run-backend:  ## Run backend only (uvicorn --reload)
-	cd $(BACKEND) && uvicorn waterfall.main:app --app-dir src --reload
+	cd $(BACKEND) && $(PYTHON) -m uvicorn waterfall.main:app --app-dir src --reload
 run-frontend:  ## Run frontend only (next dev)
 	npm run frontend:dev
 
@@ -75,9 +80,9 @@ logs:  ## Follow stack logs
 
 # ---- DB / tooling ----
 migrate-up:  ## Apply Alembic migrations
-	cd $(BACKEND) && alembic upgrade head
+	cd $(BACKEND) && $(ALEMBIC) upgrade head
 seed-admin:  ## Seed the admin user
-	cd $(BACKEND) && python -m waterfall.scripts.seed_admin
+	cd $(BACKEND) && $(PYTHON) -m waterfall.scripts.seed_admin
 hooks:  ## Install pre-commit hooks (pre-commit + pre-push)
 	pre-commit install
 
