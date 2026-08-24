@@ -5,6 +5,21 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import {
   ApiError,
   CostCategory,
   createPlanningStructure,
@@ -92,6 +107,8 @@ export default function ProjectDetailsPage() {
   });
   const [editingLineId, setEditingLineId] = useState<number | null>(null);
   const [editingLineDraft, setEditingLineDraft] = useState({ label: "", quantity: "", unitCost: "" });
+  const [costLinePendingDelete, setCostLinePendingDelete] = useState<EstimateCostLine | null>(null);
+  const [estimateValidationOpen, setEstimateValidationOpen] = useState(false);
   const [estimateBusy, setEstimateBusy] = useState(false);
   const [aggregates, setAggregates] = useState<EstimateAggregates | null>(null);
   const [exportBusy, setExportBusy] = useState(false);
@@ -604,10 +621,6 @@ export default function ProjectDetailsPage() {
     if (!session || selectedEstimateId === null) {
       return;
     }
-    const confirmed = window.confirm(`Supprimer la ligne "${line.label}" ?`);
-    if (!confirmed) {
-      return;
-    }
 
     setEstimateBusy(true);
     setError(null);
@@ -628,10 +641,6 @@ export default function ProjectDetailsPage() {
 
   async function validateEstimate() {
     if (!session || selectedEstimateId === null) {
-      return;
-    }
-    const confirmed = window.confirm("Valider ce devis ? Il deviendra immuable.");
-    if (!confirmed) {
       return;
     }
 
@@ -922,14 +931,14 @@ export default function ProjectDetailsPage() {
 
   return (
     <>
-      <section className="panel">
-        <div className="row" style={{ justifyContent: "space-between" }}>
-          <div style={{ flex: 1 }}>
+      <Card>
+        <CardContent className="flex flex-wrap items-start justify-between gap-4 pt-6">
+          <div className="min-w-0 flex-1">
             {editingProjectInfo ? (
-              <div style={{ maxWidth: "34rem" }}>
-                <div className="field">
-                  <label htmlFor="project-info-name">Nom du projet</label>
-                  <input
+              <div className="grid max-w-2xl gap-4">
+                <div className="grid gap-2">
+                  <Label htmlFor="project-info-name">Nom du projet</Label>
+                  <Input
                     id="project-info-name"
                     value={projectInfoDraft.name}
                     onChange={(event) =>
@@ -938,9 +947,9 @@ export default function ProjectDetailsPage() {
                     maxLength={255}
                   />
                 </div>
-                <div className="field">
-                  <label htmlFor="project-info-description">Description courte</label>
-                  <textarea
+                <div className="grid gap-2">
+                  <Label htmlFor="project-info-description">Description courte</Label>
+                  <Textarea
                     id="project-info-description"
                     rows={2}
                     value={projectInfoDraft.shortDescription}
@@ -950,18 +959,17 @@ export default function ProjectDetailsPage() {
                     maxLength={500}
                   />
                 </div>
-                <div className="row">
-                  <button
-                    className="btn btn-primary"
+                <div className="flex flex-wrap gap-2">
+                  <Button
                     type="button"
                     disabled={projectInfoBusy}
                     onClick={() => void saveProjectInfo()}
                   >
                     Sauver
-                  </button>
-                  <button className="btn" type="button" onClick={() => setEditingProjectInfo(false)}>
+                  </Button>
+                  <Button variant="outline" type="button" onClick={() => setEditingProjectInfo(false)}>
                     Annuler
-                  </button>
+                  </Button>
                 </div>
               </div>
             ) : (
@@ -971,18 +979,16 @@ export default function ProjectDetailsPage() {
                   {project?.short_description ?? "Pilotage du planning et des versions de devis."}
                 </p>
                 {!isReadOnlyProject ? (
-                  <button className="btn" type="button" onClick={startEditProjectInfo}>
+                  <Button variant="outline" type="button" onClick={startEditProjectInfo}>
                     Modifier
-                  </button>
+                  </Button>
                 ) : null}
               </>
             )}
           </div>
-          <Link href="/projects" className="btn">
-            Retour projets
-          </Link>
-        </div>
-      </section>
+          <Button variant="outline" render={<Link href="/projects" />}>Retour projets</Button>
+        </CardContent>
+      </Card>
 
       <ProjectTabs activeTab={activeTab} onChange={setActiveTab} />
 
@@ -1315,7 +1321,7 @@ export default function ProjectDetailsPage() {
                     className="btn"
                     type="button"
                     disabled={estimateBusy}
-                    onClick={() => void validateEstimate()}
+                    onClick={() => setEstimateValidationOpen(true)}
                   >
                     Valider le devis
                   </button>
@@ -1482,7 +1488,7 @@ export default function ProjectDetailsPage() {
                                     className="btn btn-danger"
                                     type="button"
                                     disabled={estimateBusy}
-                                    onClick={() => void removeCostLine(line)}
+                                    onClick={() => setCostLinePendingDelete(line)}
                                   >
                                     Supprimer
                                   </button>
@@ -1571,6 +1577,41 @@ export default function ProjectDetailsPage() {
           </div>
         ) : null}
       </section>
+
+      <AlertDialog open={Boolean(costLinePendingDelete)} onOpenChange={(open) => !open && setCostLinePendingDelete(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Supprimer cette ligne de coût ?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {costLinePendingDelete ? `La ligne "${costLinePendingDelete.label}" sera supprimée définitivement.` : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Annuler</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={() => {
+              const line = costLinePendingDelete;
+              setCostLinePendingDelete(null);
+              if (line) void removeCostLine(line);
+            }}>Supprimer</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={estimateValidationOpen} onOpenChange={setEstimateValidationOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Valider ce devis ?</AlertDialogTitle>
+            <AlertDialogDescription>Après validation, ce devis deviendra immuable.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Annuler</AlertDialogCancel>
+            <AlertDialogAction onClick={() => {
+              setEstimateValidationOpen(false);
+              void validateEstimate();
+            }}>Valider le devis</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }
