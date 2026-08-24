@@ -1581,8 +1581,16 @@ def get_planning_structure_draft_route(
         .order_by(WfPlanning.version_number.desc())
         .first()
     )
-    payload = load_planning_structure_draft(planning) if planning is not None else None
-    if planning is None or payload is None:
+    if planning is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No planning structure draft found",
+        )
+    try:
+        payload = load_planning_structure_draft(planning)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    if payload is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No planning structure draft found",

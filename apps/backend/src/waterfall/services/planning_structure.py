@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
+from pydantic import ValidationError
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -22,7 +23,14 @@ def save_planning_structure_draft(planning: WfPlanning, payload: PlanningStructu
 def load_planning_structure_draft(planning: WfPlanning) -> PlanningStructureCreate | None:
     if planning.structure_draft_json is None:
         return None
-    return PlanningStructureCreate.model_validate(json.loads(planning.structure_draft_json))
+    try:
+        raw = json.loads(planning.structure_draft_json)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Saved planning structure draft is invalid JSON") from exc
+    try:
+        return PlanningStructureCreate.model_validate(raw)
+    except ValidationError as exc:
+        raise ValueError("Saved planning structure draft has invalid schema") from exc
 
 
 @dataclass(frozen=True)

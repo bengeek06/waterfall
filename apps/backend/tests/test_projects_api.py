@@ -1492,6 +1492,50 @@ def test_planning_structure_draft_read_returns_404_when_absent() -> None:
         assert read.status_code == 404
 
 
+def test_planning_structure_draft_read_returns_409_for_invalid_json() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        create = client.post("/projects", json={"name": "Invalid draft json"}, headers=headers)
+        assert create.status_code == 201
+        project_id = cast(int, create.json()["id"])
+
+        with get_session_factory()() as session:
+            planning = WfPlanning(
+                project_id=project_id,
+                version_number=1,
+                status="draft",
+                structure_draft_json="{invalid-json",
+            )
+            session.add(planning)
+            session.commit()
+
+        read = client.get(f"/projects/{project_id}/planning-structure/draft", headers=headers)
+        assert read.status_code == 409
+        assert read.json()["detail"] == "Saved planning structure draft is invalid JSON"
+
+
+def test_planning_structure_draft_read_returns_409_for_invalid_schema() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        create = client.post("/projects", json={"name": "Invalid draft schema"}, headers=headers)
+        assert create.status_code == 201
+        project_id = cast(int, create.json()["id"])
+
+        with get_session_factory()() as session:
+            planning = WfPlanning(
+                project_id=project_id,
+                version_number=1,
+                status="draft",
+                structure_draft_json='{"posts":"not-a-list"}',
+            )
+            session.add(planning)
+            session.commit()
+
+        read = client.get(f"/projects/{project_id}/planning-structure/draft", headers=headers)
+        assert read.status_code == 409
+        assert read.json()["detail"] == "Saved planning structure draft has invalid schema"
+
+
 def test_delete_project_clears_reference_estimate_before_deleting_estimates() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)
