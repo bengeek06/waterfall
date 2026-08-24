@@ -58,6 +58,7 @@ export default function ProjectsPage() {
   const [createName, setCreateName] = useState("");
   const [createCode, setCreateCode] = useState("");
   const [createDescription, setCreateDescription] = useState("");
+  const [createError, setCreateError] = useState<string | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
 
   const onSessionRefresh = useMemo(
@@ -145,6 +146,7 @@ export default function ProjectsPage() {
     setCreateName("");
     setCreateCode("");
     setCreateDescription("");
+    setCreateError(null);
   }
 
   async function onCreateProject() {
@@ -153,11 +155,11 @@ export default function ProjectsPage() {
       return;
     }
     if (!createName.trim() || !createCode.trim()) {
-      setError("Le nom et le code du projet sont obligatoires.");
+      setCreateError("Le nom et le code du projet sont obligatoires.");
       return;
     }
 
-    setError(null);
+    setCreateError(null);
     setActionBusy("Création du projet en cours...");
     try {
       const project = await createProject(
@@ -172,7 +174,7 @@ export default function ProjectsPage() {
       setProjects((prev) => [...prev, project].sort((left, right) => left.id - right.id));
       resetCreateFlow();
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Impossible de créer le projet.");
+      setCreateError(cause instanceof ApiError ? cause.message : "Impossible de créer le projet.");
     } finally {
       setActionBusy(null);
     }
@@ -233,6 +235,7 @@ export default function ProjectsPage() {
             <DialogTitle>Nouveau projet</DialogTitle>
             <DialogDescription>Créez le référentiel initial du projet.</DialogDescription>
           </DialogHeader>
+          {createError ? <Alert variant="destructive"><AlertDescription>{createError}</AlertDescription></Alert> : null}
           <div className="grid gap-4">
             <div className="grid gap-2">
               <Label htmlFor="project-name">Nom du projet</Label>

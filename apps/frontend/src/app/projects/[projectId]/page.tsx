@@ -670,12 +670,12 @@ export default function ProjectDetailsPage() {
   }
 
   const postGroups = useMemo(() => {
-    const groups: { postKey: string; postName: string; lots: { row: PlanningStructureDraftRow }[] }[] = [];
+    const groups: { groupId: string; postKey: string; postName: string; lots: { row: PlanningStructureDraftRow }[] }[] = [];
     const byPostKey = new Map<string, (typeof groups)[number]>();
     for (const row of structureDraft) {
       let group = byPostKey.get(row.postKey);
       if (!group) {
-        group = { postKey: row.postKey, postName: row.postName, lots: [] };
+        group = { groupId: row.rowId, postKey: row.postKey, postName: row.postName, lots: [] };
         byPostKey.set(row.postKey, group);
         groups.push(group);
       }
@@ -1150,7 +1150,7 @@ export default function ProjectDetailsPage() {
               Définis les postes, lots et livrables. L&apos;API enregistre la structure en générant le squelette.
             </p>
             {postGroups.map((group, postIndex) => (
-              <div className="mt-4 rounded-lg border p-4" key={group.postKey || `post-${postIndex}`}>
+              <div className="mt-4 rounded-lg border p-4" key={group.groupId}>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <Input
                     aria-label={`Clé poste ${postIndex + 1}`}

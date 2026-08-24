@@ -50,7 +50,7 @@ export function UsersTab(props: UsersTabProps) {
         </Button>
       </div>
 
-      {props.usersError ? <Alert variant="destructive"><AlertDescription>{props.usersError}</AlertDescription></Alert> : null}
+      {props.usersError && !props.createUserMode ? <Alert variant="destructive"><AlertDescription>{props.usersError}</AlertDescription></Alert> : null}
       <Table>
         <TableHeader><TableRow><TableHead>ID</TableHead><TableHead>Email</TableHead><TableHead>Statut</TableHead><TableHead>Rôle</TableHead><TableHead>Actions</TableHead></TableRow></TableHeader>
         <TableBody>{props.users.map((user) => <TableRow key={user.id}><TableCell>{user.id}</TableCell><TableCell>{user.email}</TableCell><TableCell><Badge variant={user.is_active ? "secondary" : "outline"}>{user.is_active ? "Actif" : "Inactif"}</Badge></TableCell><TableCell><Badge variant={user.is_admin ? "secondary" : "outline"}>{user.is_admin ? "Admin" : "Standard"}</Badge></TableCell><TableCell><div className="flex flex-wrap gap-2"><Button variant="outline" size="sm" onClick={() => props.onToggleStatus(user)} type="button" disabled={props.actionBusy}>{user.is_active ? "Désactiver" : "Activer"}</Button><Button variant="outline" size="sm" onClick={() => props.onToggleAdmin(user)} type="button" disabled={props.actionBusy}>{user.is_admin ? "Retirer admin" : "Promouvoir admin"}</Button><Button variant="destructive" size="sm" onClick={() => props.onRemove(user)} type="button" disabled={props.actionBusy}>Supprimer</Button></div></TableCell></TableRow>)}</TableBody>
@@ -59,6 +59,7 @@ export function UsersTab(props: UsersTabProps) {
       <Dialog open={props.createUserMode} onOpenChange={props.onSetCreateUserMode}>
         <DialogContent>
           <DialogHeader><DialogTitle>Nouvel utilisateur</DialogTitle><DialogDescription>Créez un accès à la console Waterfall.</DialogDescription></DialogHeader>
+          {props.usersError ? <Alert variant="destructive"><AlertDescription>{props.usersError}</AlertDescription></Alert> : null}
           <form onSubmit={props.onCreateUser} className="grid gap-4">
             <div className="grid gap-2"><Label htmlFor="new-user-email">Email</Label><Input id="new-user-email" type="email" value={props.newEmail} onChange={(event) => props.onEmailChange(event.target.value)} autoComplete="off" required /></div>
             <div className="grid gap-2"><Label htmlFor="new-user-password">Mot de passe</Label><Input id="new-user-password" type="password" value={props.newPassword} onChange={(event) => props.onPasswordChange(event.target.value)} minLength={8} autoComplete="new-password" required /></div>

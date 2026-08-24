@@ -45,7 +45,7 @@ function NavigationItem({
       <SidebarMenuButton
         isActive={active}
         tooltip={label}
-        render={<Link href={href} />}
+        render={<Link href={href} aria-current={active ? "page" : undefined} />}
         onClick={() => setOpenMobile(false)}
       >
         <Icon aria-hidden="true" />

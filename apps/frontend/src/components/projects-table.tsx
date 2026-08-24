@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import {
   flexRender,
   functionalUpdate,
@@ -100,6 +101,15 @@ export function ProjectsTable({
       {
         accessorKey: "name",
         header: ({ column }) => <SortableHeader label="Nom" column={column} />,
+        cell: ({ row }) => (
+          <Link
+            href={`/projects/${row.original.id}`}
+            className="font-medium hover:underline"
+            onClick={(event) => event.stopPropagation()}
+          >
+            {row.original.name}
+          </Link>
+        ),
       },
       {
         accessorKey: "status",

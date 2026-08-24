@@ -23,7 +23,7 @@ export function SettingsTabs({ activeTab, onChange }: SettingsTabsProps) {
           <TabsTrigger
             key={tab}
             value={tab}
-            className="shrink-0 rounded-none border-b-2 border-transparent px-3 py-2.5 text-sm data-[state=active]:border-primary data-[state=active]:bg-transparent"
+            className="shrink-0 rounded-none border-b-2 border-transparent px-3 py-2.5 text-sm data-active:border-primary data-active:bg-transparent"
           >
             {label}
           </TabsTrigger>

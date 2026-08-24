@@ -82,13 +82,36 @@ describe("buildPlanningStructurePayload", () => {
 
     expect(getPlanningStructureDraftRows(detail)).toEqual([
       {
-        rowId: "design/spec/requirements",
+        rowId: "design/spec",
         postKey: "design",
         postName: "Design",
         lotKey: "spec",
         lotName: "Specification",
         deliverables: "Requirements",
         deliverableKeys: { Requirements: "requirements" },
+      },
+    ]);
+  });
+
+  it("groups multiple deliverables of the same lot into a single row", () => {
+    const detail = {
+      tasks: [
+        { uid: 1, structure_kind: "poste", structure_key: "design", name: "Design" },
+        { uid: 2, structure_kind: "lot", structure_key: "design/spec", name: "Specification" },
+        { uid: 3, structure_kind: "livrable", structure_key: "design/spec/requirements", name: "Requirements" },
+        { uid: 4, structure_kind: "livrable", structure_key: "design/spec/architecture", name: "Architecture" },
+      ],
+    } as never;
+
+    expect(getPlanningStructureDraftRows(detail)).toEqual([
+      {
+        rowId: "design/spec",
+        postKey: "design",
+        postName: "Design",
+        lotKey: "spec",
+        lotName: "Specification",
+        deliverables: "Requirements,Architecture",
+        deliverableKeys: { Requirements: "requirements", Architecture: "architecture" },
       },
     ]);
   });
