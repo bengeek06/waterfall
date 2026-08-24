@@ -14,7 +14,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -199,10 +201,11 @@ export default function ProjectsPage() {
 
   return (
     <>
-      <section className="panel">
-        <div className="row" style={{ justifyContent: "space-between" }}>
+      <Card>
+        <CardContent className="pt-6">
+        <div className="flex flex-wrap justify-between gap-4">
           <div>
-            <h1 className="title">Gestion des projets</h1>
+            <h1 className="text-2xl font-semibold">Gestion des projets</h1>
           </div>
         </div>
 
@@ -220,7 +223,8 @@ export default function ProjectsPage() {
           Inclure les projets perdus, terminés ou abandonnés
         </label>
 
-      </section>
+        </CardContent>
+      </Card>
 
       <Dialog
         open={createMode}
@@ -280,17 +284,18 @@ export default function ProjectsPage() {
         </DialogContent>
       </Dialog>
 
-      <section className="panel">
-        {busy ? <p className="muted" role="status">Chargement...</p> : null}
-        {actionBusy ? <p className="muted" role="status">{actionBusy}</p> : null}
-        {error ? <p className="error" role="alert">{error}</p> : null}
+      <Card>
+        <CardContent className="pt-6">
+        {busy ? <p className="text-sm text-muted-foreground" role="status">Chargement...</p> : null}
+        {actionBusy ? <p className="text-sm text-muted-foreground" role="status">{actionBusy}</p> : null}
+        {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
 
-        {!busy && !projects.length ? <p className="muted">Aucun projet importé.</p> : null}
+        {!busy && !projects.length ? <p className="text-sm text-muted-foreground">Aucun projet importé.</p> : null}
 
         {!busy && projects.length ? (
           <>
-            <div className="row" style={{ marginBottom: "0.8rem", justifyContent: "space-between" }}>
-              <span className="muted">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+              <span className="text-sm text-muted-foreground">
                 {selectedIds.size ? `${selectedIds.size} sélectionné(s)` : ""}
               </span>
               <Button
@@ -312,11 +317,11 @@ export default function ProjectsPage() {
         ) : null}
 
         {!busy ? (
-          <div className="row" style={{ marginTop: "1rem", justifyContent: "space-between" }}>
-            <span className="muted">
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+            <span className="text-sm text-muted-foreground">
               {projects.length ? `Projets ${projectOffset + 1} à ${projectOffset + projects.length}` : ""}
             </span>
-            <div className="row">
+            <div className="flex gap-2">
               <Button
                 variant="outline"
                 type="button"
@@ -336,7 +341,8 @@ export default function ProjectsPage() {
             </div>
           </div>
         ) : null}
-      </section>
+        </CardContent>
+      </Card>
 
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <AlertDialogContent>

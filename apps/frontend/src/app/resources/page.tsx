@@ -3,6 +3,8 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   ApiError,
   AuthUserAdmin,
@@ -540,26 +542,24 @@ export default function ResourcesPage() {
 
   return (
     <>
-      <section className="panel">
-        <div className="row" style={{ justifyContent: "space-between" }}>
+      <Card>
+        <CardContent className="pt-6">
+        <div className="flex flex-wrap justify-between gap-4">
           <div>
-            <h1 className="title">Paramètres</h1>
-            <p className="subtitle">Référentiel entreprise réservé aux administrateurs.</p>
+            <h1 className="text-2xl font-semibold">Paramètres</h1>
+            <p className="mt-1 text-sm text-muted-foreground">Référentiel entreprise réservé aux administrateurs.</p>
           </div>
         </div>
-      </section>
+        </CardContent>
+      </Card>
 
       <SettingsTabs activeTab={activeTab} onChange={setActiveTab} />
 
       {notice ? (
-        <p className={notice.kind === "error" ? "error" : "success"} role={notice.kind === "error" ? "alert" : "status"}>
-          {notice.message}
-        </p>
+        <Alert variant={notice.kind === "error" ? "destructive" : "default"}><AlertDescription>{notice.message}</AlertDescription></Alert>
       ) : null}
       {busy ? (
-        <section className="panel">
-          <p className="muted" role="status">Chargement...</p>
-        </section>
+        <Card><CardContent className="pt-6"><p className="text-sm text-muted-foreground" role="status">Chargement...</p></CardContent></Card>
       ) : null}
 
       {!busy && activeTab === "resources" ? (
