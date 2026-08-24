@@ -14,6 +14,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -998,11 +999,12 @@ export default function ProjectDetailsPage() {
         {importFeedback ? <p className="muted" role="status">{importFeedback}</p> : null}
 
         {activeTab === "planning" && !isReadOnlyProject ? (
-          <div className="row cost-line-form" style={{ marginBottom: "1rem", justifyContent: "space-between" }}>
-            <div className="row">
-              <div className="field" style={{ marginBottom: 0 }}>
-                <label htmlFor="planning-import-file">Importer un planning MS Project (.xml)</label>
-                <input
+          <Card className="mb-4">
+            <CardContent className="flex flex-wrap items-end justify-between gap-4 pt-6">
+              <div className="flex flex-wrap items-end gap-3">
+                <div className="grid gap-2">
+                  <Label htmlFor="planning-import-file">Importer un planning MS Project (.xml)</Label>
+                  <Input
                   id="planning-import-file"
                   type="file"
                   accept=".xml,application/xml,text/xml"
@@ -1018,46 +1020,47 @@ export default function ProjectDetailsPage() {
                     setImportFile(file);
                   }}
                 />
-              </div>
-              <button
-                className="btn btn-primary"
+                </div>
+                <Button
                 type="button"
                 disabled={!importFile || importBusy}
                 onClick={() => void preparePlanningImport()}
               >
                 {importBusy ? "Prévisualisation..." : "Prévisualiser l'import"}
-              </button>
-            </div>
-            <button
-              className="btn"
+                </Button>
+              </div>
+              <Button
+              variant="outline"
               type="button"
               disabled={planningExportBusy}
               onClick={() => void exportPlanningXml()}
             >
               {planningExportBusy ? "Export..." : "Export XML"}
-            </button>
-          </div>
+              </Button>
+            </CardContent>
+          </Card>
         ) : null}
 
         {activeTab === "planning" && importReview ? (
-          <div className="panel" role="alert" style={{ marginBottom: "1rem" }}>
-            <h2>Remplacement à confirmer</h2>
-            <p>
+          <Alert className="mb-4">
+            <AlertTitle><h2>Remplacement à confirmer</h2></AlertTitle>
+            <AlertDescription>
               Cette prévisualisation contient {importReview.diff.items.length} changement(s).
               Le planning actuel ne sera remplacé qu&apos;après confirmation explicite.
-            </p>
+            </AlertDescription>
             {importReview.diff.identicalSource ? (
-              <p className="muted">La source est identique à la dernière importation.</p>
+              <AlertDescription>La source est identique à la dernière importation.</AlertDescription>
             ) : null}
-            <button
-              className="btn btn-danger"
+            <Button
+              className="mt-3"
+              variant="destructive"
               type="button"
               disabled={importBusy}
               onClick={() => void confirmPlanningImport()}
             >
               {importBusy ? "Import..." : "Confirmer le remplacement"}
-            </button>
-          </div>
+            </Button>
+          </Alert>
         ) : null}
 
         {activeTab === "planning" && structureOpen && !isReadOnlyProject ? (
