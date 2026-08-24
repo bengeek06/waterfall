@@ -1527,7 +1527,7 @@ export default function ProjectDetailsPage() {
         {activeTab === "commitments" ? (
           <div className="grid min-h-45 content-center justify-items-start gap-4">
             <h2>Reste à engager</h2>
-            <p className="muted">
+            <p className="text-sm text-muted-foreground">
               Le suivi budget de référence / engagé / reste à engager sera construit sur les versions
               « forecast_remaining » du jalon 9.
             </p>
@@ -1535,10 +1535,10 @@ export default function ProjectDetailsPage() {
         ) : null}
 
         {activeTab === "analytics" ? (
-          <div className="tab-content">
+          <div className="grid gap-4">
             <h2>Analytique</h2>
-            {!selectedEstimateId ? <p className="muted">Sélectionne un devis dans l&apos;onglet Devis.</p> : null}
-            {selectedEstimateId && !aggregates ? <p className="muted">Chargement des agrégats...</p> : null}
+            {!selectedEstimateId ? <p className="text-sm text-muted-foreground">Sélectionne un devis dans l&apos;onglet Devis.</p> : null}
+            {selectedEstimateId && !aggregates ? <p className="text-sm text-muted-foreground">Chargement des agrégats...</p> : null}
             {aggregates ? (
               <div className="grid gap-4">
                 <div className="flex flex-wrap gap-3">
@@ -1556,26 +1556,26 @@ export default function ProjectDetailsPage() {
                   </div>
                 </div>
 
-                <div className="analytics-breakdown">
-                  <h3 className="gantt-title">Répartition par catégorie</h3>
+                <div className="pt-2">
+                  <h3 className="mb-3 text-sm font-medium text-muted-foreground">Répartition par catégorie</h3>
                   {Object.keys(aggregates.by_category).length === 0 ? (
-                    <p className="muted">Aucun montant à répartir pour ce devis.</p>
+                    <p className="text-sm text-muted-foreground">Aucun montant à répartir pour ce devis.</p>
                   ) : (
                     (() => {
                       const entries = Object.entries(aggregates.by_category);
                       const max = Math.max(...entries.map(([, amount]) => Number(amount)), 1);
                       return (
-                        <div className="gantt-rows">
+                        <div className="grid gap-2">
                           {entries.map(([category, amount]) => (
-                            <div className="gantt-row" key={category}>
-                              <span className="gantt-label">{category}</span>
-                              <div className="gantt-track">
+                            <div className="grid grid-cols-[minmax(7.5rem,13.75rem)_1fr_auto] items-center gap-3" key={category}>
+                              <span className="truncate text-sm">{category}</span>
+                              <div className="relative h-3.5 rounded-full bg-muted">
                                 <div
-                                  className="gantt-bar"
+                                  className="absolute h-full rounded-full bg-primary"
                                   style={{ width: `${(Number(amount) / max) * 100}%` }}
                                 />
                               </div>
-                              <span className="muted">{Number(amount).toFixed(2)}</span>
+                              <span className="text-sm text-muted-foreground">{Number(amount).toFixed(2)}</span>
                             </div>
                           ))}
                         </div>
