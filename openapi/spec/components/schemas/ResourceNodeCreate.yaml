@@ -2,7 +2,6 @@ type: object
 required:
 - code
 - name
-- kind
 properties:
   code:
     type: string

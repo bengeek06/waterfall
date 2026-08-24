@@ -7,13 +7,13 @@ API REST professionnelle avec FastAPI, outillage qualité, et base enterprise.
 1. Activer l'environnement virtuel:
 
 ```bash
-source .venv/bin/activate
+source ../../.venv/bin/activate
 ```
 
 2. Installer les dependances backend:
 
 ```bash
-python -m pip install -e .[dev]
+python -m pip install -e '.[dev]'
 ```
 
 3. Lancer les controles:

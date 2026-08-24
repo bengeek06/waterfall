@@ -3271,7 +3271,6 @@ components:
       required:
         - code
         - name
-        - kind
       properties:
         code:
           type: string

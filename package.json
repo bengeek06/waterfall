@@ -13,7 +13,7 @@
     "frontend:dev": "npm --workspace frontend run dev",
     "frontend:build": "npm run api-client:build && npm --workspace frontend run build",
     "frontend:lint": "npm --workspace frontend run lint",
-    "frontend:test": "npm --workspace frontend run test"
+    "frontend:test": "npm run api-client:build && npm --workspace frontend run test"
   },
   "devDependencies": {
     "@redocly/cli": "^2.47.0"

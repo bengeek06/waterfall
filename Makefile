@@ -52,7 +52,7 @@ gen-client:  ## Regenerate the OpenAPI TypeScript client
 # ---- Run (native dev) ----
 run: dev  ## Alias for 'dev'
 dev:  ## Run backend + frontend natively (Ctrl-C stops both)
-	@bash -c 'trap "kill 0" EXIT; (cd $(BACKEND) && uvicorn waterfall.main:app --app-dir src --reload) & npm run frontend:dev & wait'
+	@bash -c 'backend_pid=; frontend_pid=; cleanup() { trap - EXIT INT TERM; kill "$$backend_pid" "$$frontend_pid" 2>/dev/null || true; wait "$$backend_pid" "$$frontend_pid" 2>/dev/null || true; }; trap cleanup EXIT INT TERM; (cd $(BACKEND) && uvicorn waterfall.main:app --app-dir src --reload) & backend_pid=$$!; npm run frontend:dev & frontend_pid=$$!; wait -n "$$backend_pid" "$$frontend_pid"'
 run-backend:  ## Run backend only (uvicorn --reload)
 	cd $(BACKEND) && uvicorn waterfall.main:app --app-dir src --reload
 run-frontend:  ## Run frontend only (next dev)
