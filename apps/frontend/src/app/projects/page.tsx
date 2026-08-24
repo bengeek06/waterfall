@@ -202,7 +202,7 @@ export default function ProjectsPage() {
   return (
     <>
       <Card>
-        <CardContent className="pt-6">
+        <CardContent>
         <div className="flex flex-wrap justify-between gap-4">
           <div>
             <h1 className="text-2xl font-semibold">Gestion des projets</h1>
@@ -214,14 +214,6 @@ export default function ProjectsPage() {
             Créer projet
           </Button>
         </div>
-
-        <label className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
-          <Checkbox
-            checked={includeArchived}
-            onCheckedChange={toggleIncludeArchived}
-          />
-          Inclure les projets perdus, terminés ou abandonnés
-        </label>
 
         </CardContent>
       </Card>
@@ -284,8 +276,16 @@ export default function ProjectsPage() {
         </DialogContent>
       </Dialog>
 
-      <Card>
+      <Card className="mt-4">
         <CardContent className="pt-6">
+        <label className="mb-4 flex items-center gap-2 text-sm text-muted-foreground">
+          <Checkbox
+            checked={includeArchived}
+            onCheckedChange={toggleIncludeArchived}
+          />
+          Inclure les projets perdus, terminés ou abandonnés
+        </label>
+
         {busy ? <p className="text-sm text-muted-foreground" role="status">Chargement...</p> : null}
         {actionBusy ? <p className="text-sm text-muted-foreground" role="status">{actionBusy}</p> : null}
         {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}

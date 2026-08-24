@@ -587,7 +587,7 @@ export default function ResourcesPage() {
   return (
     <>
       <Card>
-        <CardContent className="pt-6">
+        <CardContent>
         <div className="flex flex-wrap justify-between gap-4">
           <div>
             <h1 className="text-2xl font-semibold">Paramètres</h1>
@@ -597,7 +597,9 @@ export default function ResourcesPage() {
         </CardContent>
       </Card>
 
-      <SettingsTabs activeTab={activeTab} onChange={setActiveTab} />
+      <div className="mt-4">
+        <SettingsTabs activeTab={activeTab} onChange={setActiveTab} />
+      </div>
 
       {notice ? (
         <Alert variant={notice.kind === "error" ? "destructive" : "default"}><AlertDescription>{notice.message}</AlertDescription></Alert>

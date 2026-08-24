@@ -934,7 +934,7 @@ export default function ProjectDetailsPage() {
   return (
     <>
       <Card>
-        <CardContent className="flex flex-wrap items-start justify-between gap-4 pt-6">
+        <CardContent className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
             {editingProjectInfo ? (
               <div className="grid max-w-2xl gap-4">
@@ -988,18 +988,20 @@ export default function ProjectDetailsPage() {
               </>
             )}
           </div>
-          <Button variant="outline" render={<Link href="/projects" />}>Retour projets</Button>
+          <Button variant="outline" nativeButton={false} render={<Link href="/projects" />}>Retour projets</Button>
         </CardContent>
       </Card>
 
-      <ProjectTabs activeTab={activeTab} onChange={setActiveTab} />
+      <div className="mt-4">
+        <ProjectTabs activeTab={activeTab} onChange={setActiveTab} />
+      </div>
 
       <div className="space-y-4">
         {busy ? <p className="text-sm text-muted-foreground" role="status">Chargement...</p> : null}
         {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
         {importFeedback ? <Alert><AlertDescription>{importFeedback}</AlertDescription></Alert> : null}
 
-        {activeTab === "planning" && !isReadOnlyProject ? (
+        {activeTab === "planning" && project?.status === "initialise" ? (
           <Card className="mb-4">
             <CardContent className="flex flex-wrap items-end justify-between gap-4 pt-6">
               <div className="flex flex-wrap items-end gap-3">
