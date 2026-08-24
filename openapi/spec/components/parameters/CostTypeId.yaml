@@ -1,0 +1,7 @@
+name: costTypeId
+in: path
+required: true
+schema:
+  type: integer
+  minimum: 1
+description: Identifiant technique du type de coût

@@ -1,0 +1,16 @@
+type: object
+required:
+- code
+- message
+properties:
+  code:
+    type: string
+    example: ORPHAN_PREDECESSOR
+  message:
+    type: string
+  taskUid:
+    type: integer
+    nullable: true
+  predecessorUid:
+    type: integer
+    nullable: true

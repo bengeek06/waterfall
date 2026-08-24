@@ -1,0 +1,6 @@
+type: integer
+enum:
+- 2010
+- 2013
+- 2016
+description: Version source detectee/annoncee du XML MS Project

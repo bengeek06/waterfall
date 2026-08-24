@@ -1,0 +1,53 @@
+type: object
+required:
+- id
+- project_id
+- planning_id
+- version_number
+- kind
+- status
+- currency_code
+- created_at
+properties:
+  id:
+    type: integer
+    minimum: 1
+  project_id:
+    type: integer
+    minimum: 1
+  planning_id:
+    type: integer
+    minimum: 1
+    nullable: true
+  reference_estimate_id:
+    type: integer
+    minimum: 1
+    nullable: true
+  version_number:
+    type: integer
+    minimum: 1
+  kind:
+    type: string
+    enum:
+    - initial
+    - contract_reference
+    - forecast_remaining
+  status:
+    type: string
+    enum:
+    - draft
+    - validated
+    - superseded
+    - archived
+  currency_code:
+    type: string
+  created_at:
+    type: string
+    format: date-time
+  validated_at:
+    type: string
+    format: date-time
+    nullable: true
+  note:
+    type: string
+    nullable: true

@@ -1,0 +1,362 @@
+openapi: 3.1.0
+info:
+  title: Waterfall API
+  version: 0.1.0
+  summary: Contrat API pour l'import MS Project et la gestion des ressources
+  description: 'Contrat OpenAPI du backend Waterfall.
+
+    Le périmètre couvre l''import MS Project, l''enrichissement des tâches,
+
+    l''export XML et le référentiel des ressources, rôles, coûts et capacités.
+
+    '
+servers:
+- url: http://localhost:8000
+  description: Local development
+tags:
+- name: auth
+  description: Authentification par bearer token et gestion des utilisateurs
+- name: health
+  description: Sondes de disponibilité et de préparation
+- name: observability
+  description: Endpoint de métriques Prometheus
+- name: imports-v1
+  description: Flux d'import XML MS Project (MVP taches + dependances)
+- name: projects
+  description: Lecture projets/taches, enrichissement description, export XML
+- name: resources
+  description: Referentiel des ressources, roles, couts, inflation et capacites
+paths:
+  /health:
+    $ref: ./paths/system.yaml#/~1health
+  /health/ready:
+    $ref: ./paths/system.yaml#/~1health~1ready
+  /metrics:
+    $ref: ./paths/system.yaml#/~1metrics
+  /auth/register:
+    $ref: ./paths/auth.yaml#/~1auth~1register
+  /auth/token:
+    $ref: ./paths/auth.yaml#/~1auth~1token
+  /auth/refresh:
+    $ref: ./paths/auth.yaml#/~1auth~1refresh
+  /auth/logout:
+    $ref: ./paths/auth.yaml#/~1auth~1logout
+  /auth/me:
+    $ref: ./paths/auth.yaml#/~1auth~1me
+  /auth/me/password:
+    $ref: ./paths/auth.yaml#/~1auth~1me~1password
+  /auth/users:
+    $ref: ./paths/auth.yaml#/~1auth~1users
+  /auth/users/{userId}:
+    $ref: ./paths/auth.yaml#/~1auth~1users~1{userId}
+  /auth/users/{userId}/status:
+    $ref: ./paths/auth.yaml#/~1auth~1users~1{userId}~1status
+  /auth/users/{userId}/role:
+    $ref: ./paths/auth.yaml#/~1auth~1users~1{userId}~1role
+  /imports/v1/batches:
+    $ref: ./paths/imports.yaml#/~1imports~1v1~1batches
+  /imports/v1/batches/{batchId}/xml:
+    $ref: ./paths/imports.yaml#/~1imports~1v1~1batches~1{batchId}~1xml
+  /imports/v1/batches/{batchId}/run:
+    $ref: ./paths/imports.yaml#/~1imports~1v1~1batches~1{batchId}~1run
+  /imports/v1/batches/{batchId}/diff:
+    $ref: ./paths/imports.yaml#/~1imports~1v1~1batches~1{batchId}~1diff
+  /imports/v1/batches/{batchId}:
+    $ref: ./paths/imports.yaml#/~1imports~1v1~1batches~1{batchId}
+  /imports/v1/batches/{batchId}/errors:
+    $ref: ./paths/imports.yaml#/~1imports~1v1~1batches~1{batchId}~1errors
+  /projects:
+    $ref: ./paths/projects.yaml#/~1projects
+  /projects/{projectId}:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}
+  /projects/{projectId}/status:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1status
+  /projects/{projectId}/plannings:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1plannings
+  /projects/{projectId}/plannings/{planningId}:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1plannings~1{planningId}
+  /projects/{projectId}/plannings/{planningId}/validate:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1plannings~1{planningId}~1validate
+  /projects/{projectId}/plannings/{planningId}/reference:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1plannings~1{planningId}~1reference
+  /projects/{projectId}/plannings/{planningId}/display:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1plannings~1{planningId}~1display
+  /projects/{projectId}/estimates/{estimateId}/reference:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1reference
+  /projects/{projectId}/tasks:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1tasks
+  /projects/{projectId}/planning-structure:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1planning-structure
+  /projects/{projectId}/planning-structure/draft:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1planning-structure~1draft
+  /projects/{projectId}/planning-structure/reopen:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1planning-structure~1reopen
+  /projects/{projectId}/planning-tree:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1planning-tree
+  /projects/{projectId}/tasks/{taskUid}:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1tasks~1{taskUid}
+  /projects/{projectId}/tasks/{taskUid}/role-assignments:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1tasks~1{taskUid}~1role-assignments
+  /projects/{projectId}/tasks/{taskUid}/role-assignments/{assignmentId}:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1tasks~1{taskUid}~1role-assignments~1{assignmentId}
+  /projects/{projectId}/estimates:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates
+  /projects/{projectId}/estimates/{estimateId}:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}
+  /projects/{projectId}/estimates/{estimateId}/task-rows:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1task-rows
+  /projects/{projectId}/estimates/{estimateId}/cost-lines:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1cost-lines
+  /projects/{projectId}/estimates/{estimateId}/cost-lines/{costLineId}:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1cost-lines~1{costLineId}
+  /projects/{projectId}/estimates/{estimateId}/validate:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1validate
+  /projects/{projectId}/estimates/{estimateId}/aggregates:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1aggregates
+  /projects/{projectId}/estimates/{estimateId}/export.xlsx:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1export.xlsx
+  /projects/{projectId}/export.xml:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1export.xml
+  /resources/nodes:
+    $ref: ./paths/resources.yaml#/~1resources~1nodes
+  /resources/nodes/{nodeId}:
+    $ref: ./paths/resources.yaml#/~1resources~1nodes~1{nodeId}
+  /resources/roles:
+    $ref: ./paths/resources.yaml#/~1resources~1roles
+  /resources/roles/{roleId}:
+    $ref: ./paths/resources.yaml#/~1resources~1roles~1{roleId}
+  /resources/categories:
+    $ref: ./paths/resources.yaml#/~1resources~1categories
+  /resources/cost-types:
+    $ref: ./paths/resources.yaml#/~1resources~1cost-types
+  /resources/cost-types/{costTypeId}:
+    $ref: ./paths/resources.yaml#/~1resources~1cost-types~1{costTypeId}
+  /resources/categories/{categoryId}:
+    $ref: ./paths/resources.yaml#/~1resources~1categories~1{categoryId}
+  /resources/categories/{categoryId}/rates:
+    $ref: ./paths/resources.yaml#/~1resources~1categories~1{categoryId}~1rates
+  /resources/rates:
+    $ref: ./paths/resources.yaml#/~1resources~1rates
+  /resources/rates/{rateId}:
+    $ref: ./paths/resources.yaml#/~1resources~1rates~1{rateId}
+  /resources/inflation:
+    $ref: ./paths/resources.yaml#/~1resources~1inflation
+  /resources/inflation/{year}:
+    $ref: ./paths/resources.yaml#/~1resources~1inflation~1{year}
+  /resources/capacities:
+    $ref: ./paths/resources.yaml#/~1resources~1capacities
+  /resources/capacities/{capacityId}:
+    $ref: ./paths/resources.yaml#/~1resources~1capacities~1{capacityId}
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    HealthStatus:
+      $ref: ./components/schemas/HealthStatus.yaml
+    ReadinessStatus:
+      $ref: ./components/schemas/ReadinessStatus.yaml
+    UserCreate:
+      $ref: ./components/schemas/UserCreate.yaml
+    UserRead:
+      $ref: ./components/schemas/UserRead.yaml
+    UserAdminRead:
+      $ref: ./components/schemas/UserAdminRead.yaml
+    UserStatusUpdate:
+      $ref: ./components/schemas/UserStatusUpdate.yaml
+    UserRoleUpdate:
+      $ref: ./components/schemas/UserRoleUpdate.yaml
+    PasswordChangeRequest:
+      $ref: ./components/schemas/PasswordChangeRequest.yaml
+    Token:
+      $ref: ./components/schemas/Token.yaml
+    ImportMode:
+      $ref: ./components/schemas/ImportMode.yaml
+    BatchStatus:
+      $ref: ./components/schemas/BatchStatus.yaml
+    SourceVersion:
+      $ref: ./components/schemas/SourceVersion.yaml
+    ImportBatchCreateRequest:
+      $ref: ./components/schemas/ImportBatchCreateRequest.yaml
+    ImportBatchResponse:
+      $ref: ./components/schemas/ImportBatchResponse.yaml
+    ImportRunRequest:
+      $ref: ./components/schemas/ImportRunRequest.yaml
+    ImportDiffItem:
+      $ref: ./components/schemas/ImportDiffItem.yaml
+    ImportLinkChange:
+      $ref: ./components/schemas/ImportLinkChange.yaml
+    ImportDiffResponse:
+      $ref: ./components/schemas/ImportDiffResponse.yaml
+    ImportRunAcceptedResponse:
+      $ref: ./components/schemas/ImportRunAcceptedResponse.yaml
+    ImportCounters:
+      $ref: ./components/schemas/ImportCounters.yaml
+    ImportBatchStatusResponse:
+      $ref: ./components/schemas/ImportBatchStatusResponse.yaml
+    ImportIssue:
+      $ref: ./components/schemas/ImportIssue.yaml
+    ImportErrorListResponse:
+      $ref: ./components/schemas/ImportErrorListResponse.yaml
+    ErrorResponse:
+      $ref: ./components/schemas/ErrorResponse.yaml
+    ProjectRead:
+      $ref: ./components/schemas/ProjectRead.yaml
+    ProjectCreate:
+      $ref: ./components/schemas/ProjectCreate.yaml
+    ProjectUpdate:
+      $ref: ./components/schemas/ProjectUpdate.yaml
+    ProjectStatusUpdate:
+      $ref: ./components/schemas/ProjectStatusUpdate.yaml
+    PlanningRead:
+      $ref: ./components/schemas/PlanningRead.yaml
+    PlanningCreate:
+      $ref: ./components/schemas/PlanningCreate.yaml
+    PlanningDetailRead:
+      $ref: ./components/schemas/PlanningDetailRead.yaml
+    TaskRead:
+      $ref: ./components/schemas/TaskRead.yaml
+    TaskLinkRead:
+      $ref: ./components/schemas/TaskLinkRead.yaml
+    PlanningLinkRead:
+      $ref: ./components/schemas/PlanningLinkRead.yaml
+    PlanningStructureCreate:
+      $ref: ./components/schemas/PlanningStructureCreate.yaml
+    PlanningPostCreate:
+      $ref: ./components/schemas/PlanningPostCreate.yaml
+    PlanningLotCreate:
+      $ref: ./components/schemas/PlanningLotCreate.yaml
+    PlanningDeliverableCreate:
+      $ref: ./components/schemas/PlanningDeliverableCreate.yaml
+    PlanningStructureRead:
+      $ref: ./components/schemas/PlanningStructureRead.yaml
+    PlanningStructureDraftRead:
+      $ref: ./components/schemas/PlanningStructureDraftRead.yaml
+    PlanningTreeRead:
+      $ref: ./components/schemas/PlanningTreeRead.yaml
+    PlanningTaskTreeRead:
+      $ref: ./components/schemas/PlanningTaskTreeRead.yaml
+    TaskDescriptionUpdate:
+      $ref: ./components/schemas/TaskDescriptionUpdate.yaml
+    TaskCreate:
+      $ref: ./components/schemas/TaskCreate.yaml
+    TaskRoleAssignmentCreate:
+      $ref: ./components/schemas/TaskRoleAssignmentCreate.yaml
+    TaskRoleAssignmentUpdate:
+      $ref: ./components/schemas/TaskRoleAssignmentUpdate.yaml
+    TaskRoleAssignmentRead:
+      $ref: ./components/schemas/TaskRoleAssignmentRead.yaml
+    ProjectEstimateCreate:
+      $ref: ./components/schemas/ProjectEstimateCreate.yaml
+    ProjectEstimateRead:
+      $ref: ./components/schemas/ProjectEstimateRead.yaml
+    EstimateTaskRowRead:
+      $ref: ./components/schemas/EstimateTaskRowRead.yaml
+    SupplyStatus:
+      $ref: ./components/schemas/SupplyStatus.yaml
+    EstimateCostLineCreate:
+      $ref: ./components/schemas/EstimateCostLineCreate.yaml
+    EstimateCostLineUpdate:
+      $ref: ./components/schemas/EstimateCostLineUpdate.yaml
+    EstimateCostLineRead:
+      $ref: ./components/schemas/EstimateCostLineRead.yaml
+    EstimateAggregatesRead:
+      $ref: ./components/schemas/EstimateAggregatesRead.yaml
+    ResourceNodeCreate:
+      $ref: ./components/schemas/ResourceNodeCreate.yaml
+    ResourceNodeUpdate:
+      $ref: ./components/schemas/ResourceNodeUpdate.yaml
+    ResourceNodeRead:
+      $ref: ./components/schemas/ResourceNodeRead.yaml
+    ResourceRoleCreate:
+      $ref: ./components/schemas/ResourceRoleCreate.yaml
+    ResourceRoleUpdate:
+      $ref: ./components/schemas/ResourceRoleUpdate.yaml
+    ResourceRoleRead:
+      $ref: ./components/schemas/ResourceRoleRead.yaml
+    CostTypeCreate:
+      $ref: ./components/schemas/CostTypeCreate.yaml
+    CostTypeKind:
+      $ref: ./components/schemas/CostTypeKind.yaml
+    CostTypeUpdate:
+      $ref: ./components/schemas/CostTypeUpdate.yaml
+    CostTypeRead:
+      $ref: ./components/schemas/CostTypeRead.yaml
+    CostCategoryCreate:
+      $ref: ./components/schemas/CostCategoryCreate.yaml
+    CostCategoryUpdate:
+      $ref: ./components/schemas/CostCategoryUpdate.yaml
+    CostCategoryRead:
+      $ref: ./components/schemas/CostCategoryRead.yaml
+    CostRateCreate:
+      $ref: ./components/schemas/CostRateCreate.yaml
+    CostRateUpdate:
+      $ref: ./components/schemas/CostRateUpdate.yaml
+    CostRateRead:
+      $ref: ./components/schemas/CostRateRead.yaml
+    InflationRateUpdate:
+      $ref: ./components/schemas/InflationRateUpdate.yaml
+    InflationRateRead:
+      $ref: ./components/schemas/InflationRateRead.yaml
+    RoleCapacityCreate:
+      $ref: ./components/schemas/RoleCapacityCreate.yaml
+    RoleCapacityUpdate:
+      $ref: ./components/schemas/RoleCapacityUpdate.yaml
+    RoleCapacityRead:
+      $ref: ./components/schemas/RoleCapacityRead.yaml
+  parameters:
+    BatchId:
+      $ref: ./components/parameters/BatchId.yaml
+    ProjectId:
+      $ref: ./components/parameters/ProjectId.yaml
+    TaskUid:
+      $ref: ./components/parameters/TaskUid.yaml
+    AssignmentId:
+      $ref: ./components/parameters/AssignmentId.yaml
+    EstimateId:
+      $ref: ./components/parameters/EstimateId.yaml
+    PlanningId:
+      $ref: ./components/parameters/PlanningId.yaml
+    CostLineId:
+      $ref: ./components/parameters/CostLineId.yaml
+    NodeId:
+      $ref: ./components/parameters/NodeId.yaml
+    RoleId:
+      $ref: ./components/parameters/RoleId.yaml
+    CategoryId:
+      $ref: ./components/parameters/CategoryId.yaml
+    CostTypeId:
+      $ref: ./components/parameters/CostTypeId.yaml
+    RateId:
+      $ref: ./components/parameters/RateId.yaml
+    CapacityId:
+      $ref: ./components/parameters/CapacityId.yaml
+    Year:
+      $ref: ./components/parameters/Year.yaml
+    UserId:
+      $ref: ./components/parameters/UserId.yaml
+  responses:
+    BadRequest:
+      $ref: ./components/responses/BadRequest.yaml
+    Unauthorized:
+      $ref: ./components/responses/Unauthorized.yaml
+    Forbidden:
+      $ref: ./components/responses/Forbidden.yaml
+    Conflict:
+      $ref: ./components/responses/Conflict.yaml
+    BatchNotFound:
+      $ref: ./components/responses/BatchNotFound.yaml
+    ProjectNotFound:
+      $ref: ./components/responses/ProjectNotFound.yaml
+    PlanningNotFound:
+      $ref: ./components/responses/PlanningNotFound.yaml
+    EstimateNotFound:
+      $ref: ./components/responses/EstimateNotFound.yaml
+    TaskNotFound:
+      $ref: ./components/responses/TaskNotFound.yaml
+    ResourceNotFound:
+      $ref: ./components/responses/ResourceNotFound.yaml
+    UserNotFound:
+      $ref: ./components/responses/UserNotFound.yaml

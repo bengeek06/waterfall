@@ -1,0 +1,7 @@
+name: costLineId
+in: path
+required: true
+schema:
+  type: integer
+  minimum: 1
+description: Identifiant technique de la ligne de coût du devis

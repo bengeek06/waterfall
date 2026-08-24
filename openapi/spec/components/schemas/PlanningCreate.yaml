@@ -1,0 +1,10 @@
+type: object
+properties:
+  note:
+    type: string
+    maxLength: 10000
+    nullable: true
+  source_planning_id:
+    type: integer
+    minimum: 1
+    nullable: true

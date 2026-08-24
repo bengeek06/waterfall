@@ -1,0 +1,5 @@
+description: Ressource introuvable
+content:
+  application/json:
+    schema:
+      $ref: ../schemas/ErrorResponse.yaml

@@ -11,7 +11,7 @@ def configure_logging(level: str = "INFO") -> None:
             "disable_existing_loggers": False,
             "formatters": {
                 "json": {
-                    "()": "pythonjsonlogger.jsonlogger.JsonFormatter",
+                    "()": "pythonjsonlogger.json.JsonFormatter",
                     "fmt": "%(asctime)s %(levelname)s %(name)s %(message)s",
                 }
             },

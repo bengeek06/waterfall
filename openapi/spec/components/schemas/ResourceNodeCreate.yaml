@@ -1,0 +1,17 @@
+type: object
+required:
+- code
+- name
+properties:
+  code:
+    type: string
+    minLength: 1
+    maxLength: 64
+  name:
+    type: string
+    minLength: 1
+    maxLength: 255
+  parent_id:
+    type: integer
+    minimum: 1
+    nullable: true

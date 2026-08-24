@@ -27,7 +27,7 @@
     <img alt="Pytest" src="https://img.shields.io/badge/Pytest-8.x-0A9EDC?logo=pytest&logoColor=white" />
   </a>
   <a href="https://github.com/pytest-dev/pytest-cov">
-    <img alt="Coverage 86.49%" src="https://img.shields.io/badge/Coverage-86.49%25-5C7CFA" />
+    <img alt="Coverage 86.94%" src="https://img.shields.io/badge/Coverage-86.94%25-5C7CFA" />
   </a>
 </p>
 
@@ -88,10 +88,8 @@ Le cœur fonctionnel repose sur une logique de planning et de coût qui reste co
 │   └── frontend/     # application web Next.js + interface utilisateur
 ├── packages/
 │   └── api-client-ts # client TypeScript généré
-├── openapi/          # spécification OpenAPI
-├── docs/             # documentation métier et checklists
-├── excel/            # modèles import/export de données
-├── schemas/          # schémas de référence et fichiers XML
+├── openapi/          # spécification OpenAPI (spec/ = source éclatée, waterfall_v1.yaml = bundle généré)
+├── docs/             # documentation métier
 ├── infra/            # infrastructure / déploiement
 ├── package.json      # scripts racine du workspace
 ├── README.md         # documentation principale
@@ -143,45 +141,56 @@ Le projet est pensé comme une application de type API-first :
 
 ## Démarrage rapide
 
+Toutes les tâches courantes passent par le `Makefile` (`make help` liste l'ensemble des cibles).
+
 ### 1) Prérequis
 - Python 3.13+
-- Node.js 20+
-- npm
+- Node.js 20.19+ (20.x) ou 22.12+
+- npm 10+
+- Docker (base de données et stack complet)
 
 ### 2) Installation
 
 ```bash
+make venv                   # crée l'environnement Python à la racine du dépôt
 source .venv/bin/activate
-python -m pip install -e apps/backend[dev]
-npm install
+make install                # backend (editable + dev) + workspaces npm
+make hooks                  # installe les hooks git (pre-commit + pre-push)
 ```
 
-### 3) Lancer le backend
+### 3) Développement local (natif)
 
 ```bash
-cd apps/backend
-uvicorn waterfall.main:app --app-dir src --reload
+make db-up                  # Postgres dans Docker, pour le dev natif
+make dev                    # backend (uvicorn) + frontend (next dev) — Ctrl-C arrête les deux
 ```
 
-### 4) Lancer le frontend
+Ou séparément : `make run-backend`, `make run-frontend`.
+
+### 4) Stack complet en conteneurs
 
 ```bash
-npm run frontend:dev
+make up-full                # api + db + frontend + observabilité
+make down                   # arrêt (volumes conservés) — alias : make stop
+make logs                   # suivre les logs
 ```
 
 ### 5) Vérifications
 
 ```bash
-cd apps/backend
-ruff check .
-pyright
-pytest
+make lint                   # ruff (backend) + eslint (frontend)
+make typecheck              # pyright (backend) + tsc --noEmit (frontend)
+make test                   # pytest (backend) + vitest (frontend)
 ```
 
+Chaque cible existe aussi en version ciblée : `make lint-backend`, `make test-frontend`, etc.
+
+### 6) Nettoyage
+
 ```bash
-npm run frontend:lint
-npm run frontend:test
-npm run frontend:build
+make clean                  # caches Python/Next + sorties de build
+make clean-docker           # arrêt du stack + suppression des volumes (données DB perdues)
+make distclean              # + node_modules et .venv
 ```
 
 ## Qualité et couverture

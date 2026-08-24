@@ -1,0 +1,10 @@
+allOf:
+- $ref: TaskRead.yaml
+- type: object
+  required:
+  - children
+  properties:
+    children:
+      type: array
+      items:
+        $ref: PlanningTaskTreeRead.yaml

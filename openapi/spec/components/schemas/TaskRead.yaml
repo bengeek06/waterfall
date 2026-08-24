@@ -1,0 +1,72 @@
+type: object
+required:
+- id
+- project_id
+- uid
+- name
+- is_summary
+- is_milestone
+properties:
+  id:
+    type: integer
+    minimum: 1
+  project_id:
+    type: integer
+    minimum: 1
+  uid:
+    type: integer
+    minimum: 1
+  id_display:
+    type: integer
+    nullable: true
+  structure_key:
+    type: string
+    nullable: true
+  structure_kind:
+    type: string
+    enum:
+    - poste
+    - lot
+    - livrable
+    - milestone
+    - task
+    nullable: true
+  parent_uid:
+    type: integer
+    nullable: true
+  position:
+    type: integer
+    nullable: true
+  name:
+    type: string
+  outline_number:
+    type: string
+    nullable: true
+  outline_level:
+    type: integer
+    nullable: true
+  start_at:
+    type: string
+    format: date-time
+    nullable: true
+  finish_at:
+    type: string
+    format: date-time
+    nullable: true
+  percent_complete:
+    type: integer
+    nullable: true
+  is_summary:
+    type: boolean
+  is_milestone:
+    type: boolean
+  is_manual:
+    type: boolean
+    nullable: true
+  description:
+    type: string
+    nullable: true
+  predecessor_links:
+    type: array
+    items:
+      $ref: TaskLinkRead.yaml

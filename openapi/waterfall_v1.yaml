@@ -1,3 +1,6 @@
+# GENERATED FILE — do not edit directly.
+# Edit sources under openapi/spec/ and run: npm run openapi:bundle
+
 openapi: 3.1.0
 info:
   title: Waterfall API
@@ -10,7 +13,6 @@ info:
 servers:
   - url: http://localhost:8000
     description: Local development
-
 tags:
   - name: auth
     description: Authentification par bearer token et gestion des utilisateurs
@@ -24,11 +26,11 @@ tags:
     description: Lecture projets/taches, enrichissement description, export XML
   - name: resources
     description: Referentiel des ressources, roles, couts, inflation et capacites
-
 paths:
   /health:
     get:
-      tags: [health]
+      tags:
+        - health
       summary: Vérifier la disponibilité de l'API
       operationId: getHealth
       responses:
@@ -38,10 +40,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HealthStatus'
-
   /health/ready:
     get:
-      tags: [health]
+      tags:
+        - health
       summary: Vérifier que l'API est prête
       operationId: getReadiness
       responses:
@@ -51,10 +53,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ReadinessStatus'
-
   /metrics:
     get:
-      tags: [observability]
+      tags:
+        - observability
       summary: Exposer les métriques Prometheus
       operationId: getMetrics
       responses:
@@ -64,10 +66,10 @@ paths:
             text/plain:
               schema:
                 type: string
-
   /auth/register:
     post:
-      tags: [auth]
+      tags:
+        - auth
       summary: Créer un utilisateur public lorsque l'inscription est activée
       operationId: registerUser
       requestBody:
@@ -87,10 +89,10 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '409':
           $ref: '#/components/responses/Conflict'
-
   /auth/token:
     post:
-      tags: [auth]
+      tags:
+        - auth
       summary: Obtenir un access token et définir le cookie de refresh HttpOnly
       operationId: login
       requestBody:
@@ -99,7 +101,9 @@ paths:
           application/x-www-form-urlencoded:
             schema:
               type: object
-              required: [username, password]
+              required:
+                - username
+                - password
               properties:
                 username:
                   type: string
@@ -134,10 +138,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-
   /auth/refresh:
     post:
-      tags: [auth]
+      tags:
+        - auth
       summary: Renouveler l'access token depuis le cookie de refresh HttpOnly
       operationId: refreshAccessToken
       responses:
@@ -155,19 +159,19 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
-
   /auth/logout:
     post:
-      tags: [auth]
+      tags:
+        - auth
       summary: Effacer le cookie de refresh
       operationId: logout
       responses:
         '204':
           description: Session de refresh effacée
-
   /auth/me:
     get:
-      tags: [auth]
+      tags:
+        - auth
       summary: Lire l'utilisateur courant
       operationId: getCurrentUser
       security:
@@ -183,10 +187,10 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
-
   /auth/me/password:
     post:
-      tags: [auth]
+      tags:
+        - auth
       summary: Modifier le mot de passe de l'utilisateur courant
       operationId: changeCurrentUserPassword
       security:
@@ -204,10 +208,10 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
-
   /auth/users:
     get:
-      tags: [auth]
+      tags:
+        - auth
       summary: Lister les utilisateurs
       operationId: listUsers
       security:
@@ -226,7 +230,8 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
     post:
-      tags: [auth]
+      tags:
+        - auth
       summary: Créer un utilisateur administrativement
       operationId: createUser
       security:
@@ -250,10 +255,10 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '409':
           $ref: '#/components/responses/Conflict'
-
   /auth/users/{userId}:
     delete:
-      tags: [auth]
+      tags:
+        - auth
       summary: Supprimer un utilisateur
       operationId: deleteUser
       security:
@@ -271,10 +276,10 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/UserNotFound'
-
   /auth/users/{userId}/status:
     patch:
-      tags: [auth]
+      tags:
+        - auth
       summary: Activer ou désactiver un utilisateur
       operationId: updateUserStatus
       security:
@@ -302,10 +307,10 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/UserNotFound'
-
   /auth/users/{userId}/role:
     patch:
-      tags: [auth]
+      tags:
+        - auth
       summary: Modifier le rôle administrateur d'un utilisateur
       operationId: updateUserRole
       security:
@@ -333,10 +338,10 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/UserNotFound'
-
   /imports/v1/batches:
     post:
-      tags: [imports-v1]
+      tags:
+        - imports-v1
       summary: Creer un batch d'import
       operationId: createImportBatchV1
       security:
@@ -358,10 +363,10 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
-
   /imports/v1/batches/{batchId}/xml:
     post:
-      tags: [imports-v1]
+      tags:
+        - imports-v1
       summary: Uploader le fichier XML MS Project
       operationId: uploadImportSourceXmlV1
       security:
@@ -374,7 +379,8 @@ paths:
           multipart/form-data:
             schema:
               type: object
-              required: [file]
+              required:
+                - file
               properties:
                 file:
                   type: string
@@ -393,22 +399,22 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/BatchNotFound'
-        '415':
-          description: Media type non supporte
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
         '413':
           description: Fichier XML trop volumineux
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-
+        '415':
+          description: Media type non supporte
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /imports/v1/batches/{batchId}/run:
     post:
-      tags: [imports-v1]
+      tags:
+        - imports-v1
       summary: Executer l'import V1 (taches + dependances)
       operationId: runImportBatchV1
       security:
@@ -440,10 +446,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-
   /imports/v1/batches/{batchId}/diff:
     get:
-      tags: [imports-v1]
+      tags:
+        - imports-v1
       summary: Previsualiser les changements d'un import
       operationId: getImportBatchDiffV1
       security:
@@ -465,10 +471,10 @@ paths:
           $ref: '#/components/responses/BatchNotFound'
         '409':
           $ref: '#/components/responses/Conflict'
-
   /imports/v1/batches/{batchId}:
     get:
-      tags: [imports-v1]
+      tags:
+        - imports-v1
       summary: Lire le statut du batch
       operationId: getImportBatchV1
       security:
@@ -486,10 +492,10 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/BatchNotFound'
-
   /imports/v1/batches/{batchId}/errors:
     get:
-      tags: [imports-v1]
+      tags:
+        - imports-v1
       summary: Lister les erreurs d'import
       operationId: listImportBatchErrorsV1
       security:
@@ -507,10 +513,10 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/BatchNotFound'
-
   /projects:
     get:
-      tags: [projects]
+      tags:
+        - projects
       summary: Lister les projets importes
       operationId: listProjects
       security:
@@ -549,7 +555,8 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
     post:
-      tags: [projects]
+      tags:
+        - projects
       summary: Creer un projet sans import
       operationId: createProject
       security:
@@ -569,10 +576,10 @@ paths:
                 $ref: '#/components/schemas/ProjectRead'
         '401':
           $ref: '#/components/responses/Unauthorized'
-
   /projects/{projectId}:
     get:
-      tags: [projects]
+      tags:
+        - projects
       summary: Lire un projet
       operationId: getProject
       security:
@@ -591,7 +598,8 @@ paths:
         '404':
           $ref: '#/components/responses/ProjectNotFound'
     patch:
-      tags: [projects]
+      tags:
+        - projects
       summary: Renommer un projet
       operationId: updateProject
       security:
@@ -611,11 +619,15 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProjectRead'
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/ProjectNotFound' }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
     delete:
-      tags: [projects]
+      tags:
+        - projects
       summary: Supprimer un projet
       operationId: deleteProject
       security:
@@ -625,12 +637,14 @@ paths:
       responses:
         '204':
           description: Projet supprime
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/ProjectNotFound' }
-
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
   /projects/{projectId}/status:
     patch:
-      tags: [projects]
+      tags:
+        - projects
       summary: Modifier le statut d'un projet
       operationId: updateProjectStatus
       security:
@@ -658,10 +672,10 @@ paths:
           $ref: '#/components/responses/ProjectNotFound'
         '409':
           $ref: '#/components/responses/Conflict'
-
   /projects/{projectId}/plannings:
     get:
-      tags: [projects]
+      tags:
+        - projects
       summary: Lister les versions de planning
       operationId: listPlannings
       security:
@@ -677,10 +691,13 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/PlanningRead'
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/ProjectNotFound' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
     post:
-      tags: [projects]
+      tags:
+        - projects
       summary: Creer un brouillon de planning
       operationId: createPlanning
       security:
@@ -700,13 +717,16 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PlanningDetailRead'
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/ProjectNotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
-
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
   /projects/{projectId}/plannings/{planningId}:
     get:
-      tags: [projects]
+      tags:
+        - projects
       summary: Lire une version de planning
       operationId: getPlanning
       security:
@@ -717,11 +737,18 @@ paths:
         - name: limit
           in: query
           required: false
-          schema: { type: integer, minimum: 1, maximum: 2000, default: 200 }
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 2000
+            default: 200
         - name: offset
           in: query
           required: false
-          schema: { type: integer, minimum: 0, default: 0 }
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
       responses:
         '200':
           description: Version de planning
@@ -729,12 +756,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PlanningDetailRead'
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/PlanningNotFound' }
-
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/PlanningNotFound'
   /projects/{projectId}/plannings/{planningId}/validate:
     post:
-      tags: [projects]
+      tags:
+        - projects
       summary: Valider une version de planning
       operationId: validatePlanning
       security:
@@ -749,13 +778,16 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PlanningRead'
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/PlanningNotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
-
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/PlanningNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
   /projects/{projectId}/plannings/{planningId}/reference:
     post:
-      tags: [projects]
+      tags:
+        - projects
       summary: Definir la reference planning
       operationId: setPlanningReference
       security:
@@ -770,13 +802,16 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProjectRead'
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/PlanningNotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
-
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/PlanningNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
   /projects/{projectId}/plannings/{planningId}/display:
     post:
-      tags: [projects]
+      tags:
+        - projects
       summary: Selectionner le planning affiche
       operationId: setDisplayedPlanning
       security:
@@ -791,12 +826,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProjectRead'
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/PlanningNotFound' }
-
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/PlanningNotFound'
   /projects/{projectId}/estimates/{estimateId}/reference:
     post:
-      tags: [projects]
+      tags:
+        - projects
       summary: Definir le devis de reference
       operationId: setEstimateReference
       security:
@@ -811,13 +848,16 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProjectRead'
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/EstimateNotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
-
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/EstimateNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
   /projects/{projectId}/tasks:
     get:
-      tags: [projects]
+      tags:
+        - projects
       summary: Lister les taches d'un projet
       operationId: listProjectTasks
       security:
@@ -860,7 +900,8 @@ paths:
         '404':
           $ref: '#/components/responses/ProjectNotFound'
     post:
-      tags: [projects]
+      tags:
+        - projects
       summary: Ajouter une tache de planning au projet
       operationId: createProjectTask
       security:
@@ -886,10 +927,10 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/ProjectNotFound'
-
   /projects/{projectId}/planning-structure:
     post:
-      tags: [projects]
+      tags:
+        - projects
       summary: Generer le squelette de planning depuis une structure metier
       operationId: createPlanningStructure
       security:
@@ -915,10 +956,10 @@ paths:
           $ref: '#/components/responses/ProjectNotFound'
         '409':
           $ref: '#/components/responses/Conflict'
-
   /projects/{projectId}/planning-structure/draft:
     get:
-      tags: [projects]
+      tags:
+        - projects
       summary: Lire le brouillon de structure de planning
       operationId: getPlanningStructureDraft
       security:
@@ -937,7 +978,8 @@ paths:
         '404':
           $ref: '#/components/responses/ProjectNotFound'
     put:
-      tags: [projects]
+      tags:
+        - projects
       summary: Sauvegarder le brouillon de structure de planning
       operationId: savePlanningStructureDraft
       security:
@@ -963,10 +1005,10 @@ paths:
           $ref: '#/components/responses/ProjectNotFound'
         '409':
           $ref: '#/components/responses/Conflict'
-
   /projects/{projectId}/planning-structure/reopen:
     post:
-      tags: [projects]
+      tags:
+        - projects
       summary: Rouvrir la structure de planning dans un nouveau brouillon
       operationId: reopenPlanningStructure
       security:
@@ -986,10 +1028,10 @@ paths:
           $ref: '#/components/responses/ProjectNotFound'
         '409':
           $ref: '#/components/responses/Conflict'
-
   /projects/{projectId}/planning-tree:
     get:
-      tags: [projects]
+      tags:
+        - projects
       summary: Lire l'arbre hiérarchique du planning
       operationId: getPlanningTree
       security:
@@ -999,7 +1041,10 @@ paths:
         - name: planning_id
           in: query
           required: false
-          schema: { type: integer, minimum: 1, nullable: true }
+          schema:
+            type: integer
+            minimum: 1
+            nullable: true
       responses:
         '200':
           description: Arbre hiérarchique du planning
@@ -1011,10 +1056,10 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/ProjectNotFound'
-
   /projects/{projectId}/tasks/{taskUid}:
     patch:
-      tags: [projects]
+      tags:
+        - projects
       summary: Mettre a jour la description d'une tache
       operationId: updateTaskDescription
       security:
@@ -1042,7 +1087,8 @@ paths:
         '404':
           $ref: '#/components/responses/TaskNotFound'
     delete:
-      tags: [projects]
+      tags:
+        - projects
       summary: Supprimer une tache de planning sans enfant ni usage dans un devis
       operationId: deleteProjectTask
       security:
@@ -1059,10 +1105,10 @@ paths:
           $ref: '#/components/responses/TaskNotFound'
         '409':
           $ref: '#/components/responses/Conflict'
-
   /projects/{projectId}/tasks/{taskUid}/role-assignments:
     get:
-      tags: [projects]
+      tags:
+        - projects
       summary: Lister les affectations de main-d'œuvre d'une tâche
       operationId: listTaskRoleAssignments
       security:
@@ -1084,7 +1130,8 @@ paths:
         '404':
           $ref: '#/components/responses/TaskNotFound'
     post:
-      tags: [projects]
+      tags:
+        - projects
       summary: Affecter un rôle de main-d'œuvre à une tâche
       operationId: createTaskRoleAssignment
       security:
@@ -1113,10 +1160,10 @@ paths:
           $ref: '#/components/responses/TaskNotFound'
         '409':
           $ref: '#/components/responses/Conflict'
-
   /projects/{projectId}/tasks/{taskUid}/role-assignments/{assignmentId}:
     patch:
-      tags: [projects]
+      tags:
+        - projects
       summary: Modifier une affectation de rôle
       operationId: updateTaskRoleAssignment
       security:
@@ -1143,7 +1190,8 @@ paths:
         '404':
           $ref: '#/components/responses/TaskNotFound'
     delete:
-      tags: [projects]
+      tags:
+        - projects
       summary: Supprimer une affectation de rôle
       operationId: deleteTaskRoleAssignment
       security:
@@ -1159,10 +1207,10 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/TaskNotFound'
-
   /projects/{projectId}/estimates:
     get:
-      tags: [projects]
+      tags:
+        - projects
       summary: Lister les versions de devis d'un projet
       operationId: listProjectEstimates
       security:
@@ -1183,7 +1231,8 @@ paths:
         '404':
           $ref: '#/components/responses/ProjectNotFound'
     post:
-      tags: [projects]
+      tags:
+        - projects
       summary: Créer un brouillon de devis et son snapshot de tâches
       operationId: createProjectEstimate
       security:
@@ -1209,10 +1258,10 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/ProjectNotFound'
-
   /projects/{projectId}/estimates/{estimateId}:
     get:
-      tags: [projects]
+      tags:
+        - projects
       summary: Lire une version de devis
       operationId: getProjectEstimate
       security:
@@ -1231,10 +1280,10 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/ProjectNotFound'
-
   /projects/{projectId}/estimates/{estimateId}/task-rows:
     get:
-      tags: [projects]
+      tags:
+        - projects
       summary: Lister les lignes de tâches snapshotées dans un devis
       operationId: listEstimateTaskRows
       security:
@@ -1255,10 +1304,10 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/ProjectNotFound'
-
   /projects/{projectId}/estimates/{estimateId}/cost-lines:
     get:
-      tags: [projects]
+      tags:
+        - projects
       summary: Lister les lignes de coût hors main-d'oeuvre d'un devis
       operationId: listEstimateCostLines
       security:
@@ -1280,7 +1329,8 @@ paths:
         '404':
           $ref: '#/components/responses/ProjectNotFound'
     post:
-      tags: [projects]
+      tags:
+        - projects
       summary: Ajouter une ligne Fourniture, Frais ou UO à un brouillon
       operationId: createEstimateCostLine
       security:
@@ -1309,10 +1359,10 @@ paths:
           $ref: '#/components/responses/ProjectNotFound'
         '409':
           $ref: '#/components/responses/Conflict'
-
   /projects/{projectId}/estimates/{estimateId}/cost-lines/{costLineId}:
     patch:
-      tags: [projects]
+      tags:
+        - projects
       summary: Modifier une ligne de coût d'un brouillon
       operationId: updateEstimateCostLine
       security:
@@ -1343,7 +1393,8 @@ paths:
         '409':
           $ref: '#/components/responses/Conflict'
     delete:
-      tags: [projects]
+      tags:
+        - projects
       summary: Supprimer une ligne de coût d'un brouillon
       operationId: deleteEstimateCostLine
       security:
@@ -1361,10 +1412,10 @@ paths:
           $ref: '#/components/responses/ProjectNotFound'
         '409':
           $ref: '#/components/responses/Conflict'
-
   /projects/{projectId}/estimates/{estimateId}/validate:
     post:
-      tags: [projects]
+      tags:
+        - projects
       summary: Valider et figer un brouillon de devis
       operationId: validateProjectEstimate
       security:
@@ -1385,10 +1436,10 @@ paths:
           $ref: '#/components/responses/ProjectNotFound'
         '409':
           $ref: '#/components/responses/Conflict'
-
   /projects/{projectId}/estimates/{estimateId}/aggregates:
     get:
-      tags: [projects]
+      tags:
+        - projects
       summary: Lire les agrégats financiers d'un devis
       operationId: getEstimateAggregates
       security:
@@ -1407,10 +1458,10 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/ProjectNotFound'
-
   /projects/{projectId}/estimates/{estimateId}/export.xlsx:
     get:
-      tags: [projects]
+      tags:
+        - projects
       summary: Exporter le devis au format Excel
       operationId: exportEstimateExcel
       security:
@@ -1430,10 +1481,10 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/ProjectNotFound'
-
   /projects/{projectId}/export.xml:
     get:
-      tags: [projects]
+      tags:
+        - projects
       summary: Exporter un projet au format XML MS Project
       operationId: exportProjectXml
       security:
@@ -1443,7 +1494,10 @@ paths:
         - name: planning_id
           in: query
           required: false
-          schema: { type: integer, minimum: 1, nullable: true }
+          schema:
+            type: integer
+            minimum: 1
+            nullable: true
       responses:
         '200':
           description: XML du projet
@@ -1455,10 +1509,10 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/ProjectNotFound'
-
   /resources/nodes:
     get:
-      tags: [resources]
+      tags:
+        - resources
       summary: Lister les noeuds de ressources actifs
       operationId: listResourceNodes
       security:
@@ -1475,7 +1529,8 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
     post:
-      tags: [resources]
+      tags:
+        - resources
       summary: Creer un noeud de ressources
       operationId: createResourceNode
       security:
@@ -1501,7 +1556,8 @@ paths:
           $ref: '#/components/responses/ResourceNotFound'
   /resources/nodes/{nodeId}:
     get:
-      tags: [resources]
+      tags:
+        - resources
       summary: Lire un noeud de ressources
       operationId: getResourceNode
       security:
@@ -1520,7 +1576,8 @@ paths:
         '404':
           $ref: '#/components/responses/ResourceNotFound'
     delete:
-      tags: [resources]
+      tags:
+        - resources
       summary: Desactiver un noeud de ressources
       operationId: deleteResourceNode
       security:
@@ -1539,7 +1596,8 @@ paths:
         '409':
           $ref: '#/components/responses/Conflict'
     patch:
-      tags: [resources]
+      tags:
+        - resources
       summary: Modifier ou desactiver un noeud
       operationId: updateResourceNode
       security:
@@ -1567,10 +1625,10 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/ResourceNotFound'
-
   /resources/roles:
     get:
-      tags: [resources]
+      tags:
+        - resources
       summary: Lister les roles actifs
       operationId: listResourceRoles
       security:
@@ -1600,7 +1658,8 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
     post:
-      tags: [resources]
+      tags:
+        - resources
       summary: Creer un role
       operationId: createResourceRole
       security:
@@ -1626,10 +1685,10 @@ paths:
           $ref: '#/components/responses/ResourceNotFound'
         '409':
           $ref: '#/components/responses/Conflict'
-
   /resources/roles/{roleId}:
     get:
-      tags: [resources]
+      tags:
+        - resources
       summary: Lire un role
       operationId: getResourceRole
       security:
@@ -1648,7 +1707,8 @@ paths:
         '404':
           $ref: '#/components/responses/ResourceNotFound'
     patch:
-      tags: [resources]
+      tags:
+        - resources
       summary: Modifier ou desactiver un role
       operationId: updateResourceRole
       security:
@@ -1676,10 +1736,10 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/ResourceNotFound'
-
   /resources/categories:
     get:
-      tags: [resources]
+      tags:
+        - resources
       summary: Lister les categories de cout
       operationId: listCostCategories
       security:
@@ -1703,7 +1763,8 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
     post:
-      tags: [resources]
+      tags:
+        - resources
       summary: Creer une categorie de cout
       operationId: createCostCategory
       security:
@@ -1727,10 +1788,10 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '409':
           $ref: '#/components/responses/Conflict'
-
   /resources/cost-types:
     get:
-      tags: [resources]
+      tags:
+        - resources
       summary: Lister les types de coût
       operationId: listCostTypes
       security:
@@ -1754,7 +1815,8 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
     post:
-      tags: [resources]
+      tags:
+        - resources
       summary: Créer un type de coût
       operationId: createCostType
       security:
@@ -1778,10 +1840,10 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '409':
           $ref: '#/components/responses/Conflict'
-
   /resources/cost-types/{costTypeId}:
     patch:
-      tags: [resources]
+      tags:
+        - resources
       summary: Modifier ou désactiver un type de coût
       operationId: updateCostType
       security:
@@ -1807,10 +1869,10 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/ResourceNotFound'
-
   /resources/categories/{categoryId}:
     get:
-      tags: [resources]
+      tags:
+        - resources
       summary: Lire une categorie de cout
       operationId: getCostCategory
       security:
@@ -1829,7 +1891,8 @@ paths:
         '404':
           $ref: '#/components/responses/ResourceNotFound'
     patch:
-      tags: [resources]
+      tags:
+        - resources
       summary: Modifier ou desactiver une categorie
       operationId: updateCostCategory
       security:
@@ -1855,10 +1918,10 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/ResourceNotFound'
-
   /resources/categories/{categoryId}/rates:
     get:
-      tags: [resources]
+      tags:
+        - resources
       summary: Lister les taux horaires d'une categorie
       operationId: listCostCategoryRates
       security:
@@ -1878,10 +1941,10 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/ResourceNotFound'
-
   /resources/rates:
     get:
-      tags: [resources]
+      tags:
+        - resources
       summary: Lister tous les taux horaires
       operationId: listCostRates
       security:
@@ -1898,7 +1961,8 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
     post:
-      tags: [resources]
+      tags:
+        - resources
       summary: Creer un taux horaire annuel
       operationId: createCostRate
       security:
@@ -1924,10 +1988,10 @@ paths:
           $ref: '#/components/responses/ResourceNotFound'
         '409':
           $ref: '#/components/responses/Conflict'
-
   /resources/rates/{rateId}:
     patch:
-      tags: [resources]
+      tags:
+        - resources
       summary: Modifier un taux horaire annuel
       operationId: updateCostRate
       security:
@@ -1953,10 +2017,10 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/ResourceNotFound'
-
   /resources/inflation:
     get:
-      tags: [resources]
+      tags:
+        - resources
       summary: Lister les coefficients d'inflation
       operationId: listInflationRates
       security:
@@ -1972,10 +2036,10 @@ paths:
                   $ref: '#/components/schemas/InflationRateRead'
         '401':
           $ref: '#/components/responses/Unauthorized'
-
   /resources/inflation/{year}:
     put:
-      tags: [resources]
+      tags:
+        - resources
       summary: Creer ou modifier un coefficient d'inflation
       operationId: putInflationRate
       security:
@@ -1999,10 +2063,10 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
-
   /resources/capacities:
     get:
-      tags: [resources]
+      tags:
+        - resources
       summary: Lister les capacites de roles
       operationId: listRoleCapacities
       security:
@@ -2026,7 +2090,8 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
     post:
-      tags: [resources]
+      tags:
+        - resources
       summary: Creer une capacite de role
       operationId: createRoleCapacity
       security:
@@ -2050,10 +2115,10 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/ResourceNotFound'
-
   /resources/capacities/{capacityId}:
     patch:
-      tags: [resources]
+      tags:
+        - resources
       summary: Modifier une capacite de role
       operationId: updateRoleCapacity
       security:
@@ -2081,14 +2146,1482 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/ResourceNotFound'
-
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
       bearerFormat: JWT
-
+  schemas:
+    HealthStatus:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          example: ok
+    ReadinessStatus:
+      type: object
+      required:
+        - status
+        - timestamp
+      properties:
+        status:
+          type: string
+          example: ready
+        timestamp:
+          type: string
+          format: date-time
+    UserCreate:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+          minLength: 8
+          maxLength: 256
+    UserRead:
+      type: object
+      required:
+        - id
+        - email
+        - is_active
+      properties:
+        id:
+          type: integer
+          minimum: 1
+        email:
+          type: string
+          format: email
+        is_active:
+          type: boolean
+    UserAdminRead:
+      allOf:
+        - $ref: '#/components/schemas/UserRead'
+        - type: object
+          required:
+            - is_admin
+            - failed_login_attempts
+            - created_at
+            - updated_at
+          properties:
+            is_admin:
+              type: boolean
+            failed_login_attempts:
+              type: integer
+              minimum: 0
+            locked_until:
+              type: string
+              format: date-time
+              nullable: true
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+    UserStatusUpdate:
+      type: object
+      required:
+        - is_active
+      properties:
+        is_active:
+          type: boolean
+    UserRoleUpdate:
+      type: object
+      required:
+        - is_admin
+      properties:
+        is_admin:
+          type: boolean
+    PasswordChangeRequest:
+      type: object
+      required:
+        - current_password
+        - new_password
+      properties:
+        current_password:
+          type: string
+          format: password
+          minLength: 8
+          maxLength: 256
+        new_password:
+          type: string
+          format: password
+          minLength: 8
+          maxLength: 256
+    Token:
+      type: object
+      required:
+        - access_token
+        - token_type
+        - expiresIn
+      properties:
+        access_token:
+          type: string
+        token_type:
+          type: string
+          default: bearer
+        expiresIn:
+          type: integer
+          minimum: 1
+    ImportMode:
+      type: string
+      enum:
+        - standard
+        - full
+      description: |
+        standard: importe uniquement ms_task et ms_task_link.
+        full: reserve a une phase ulterieure (ressources/affectations).
+    BatchStatus:
+      type: string
+      enum:
+        - pending
+        - running
+        - success
+        - failed
+    SourceVersion:
+      type: integer
+      enum:
+        - 2010
+        - 2013
+        - 2016
+      description: Version source detectee/annoncee du XML MS Project
+    ImportBatchCreateRequest:
+      type: object
+      required:
+        - projectId
+        - importMode
+      properties:
+        projectId:
+          type: integer
+          minimum: 1
+          description: Projet cible, appartenant à l'utilisateur authentifié
+        importMode:
+          $ref: '#/components/schemas/ImportMode'
+        sourceName:
+          type: string
+          maxLength: 255
+          description: Nom logique de la source ou du planning
+    ImportBatchResponse:
+      type: object
+      required:
+        - id
+        - importMode
+        - status
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: integer
+          minimum: 1
+        importMode:
+          $ref: '#/components/schemas/ImportMode'
+        status:
+          $ref: '#/components/schemas/BatchStatus'
+        sourceName:
+          type: string
+          nullable: true
+        sourceVersion:
+          $ref: '#/components/schemas/SourceVersion'
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+        endedAt:
+          type: string
+          format: date-time
+          nullable: true
+        errorMessage:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    ImportRunRequest:
+      type: object
+      properties:
+        dryRun:
+          type: boolean
+          default: false
+          description: Valide le fichier sans persister en base (optionnel)
+        confirm:
+          type: boolean
+          default: false
+          description: Confirme l'application du diff
+    ImportDiffItem:
+      type: object
+      required:
+        - kind
+        - uid
+        - message
+        - fields
+      properties:
+        kind:
+          type: string
+          enum:
+            - added
+            - modified
+            - removed
+            - conflict
+        uid:
+          type: integer
+          minimum: 1
+        message:
+          type: string
+        fields:
+          type: array
+          items:
+            type: string
+        linkChanges:
+          type: array
+          items:
+            $ref: '#/components/schemas/ImportLinkChange'
+    ImportLinkChange:
+      type: object
+      required:
+        - action
+        - taskUid
+        - predecessorUid
+        - linkType
+      properties:
+        action:
+          type: string
+          enum:
+            - added
+            - removed
+        taskUid:
+          type: integer
+        predecessorUid:
+          type: integer
+        linkType:
+          type: integer
+        lagTenthMinute:
+          type: integer
+          nullable: true
+        lagFormat:
+          type: integer
+          nullable: true
+    ImportDiffResponse:
+      type: object
+      required:
+        - batchId
+        - identicalSource
+        - items
+      properties:
+        batchId:
+          type: integer
+          minimum: 1
+        sourceSha256:
+          type: string
+          nullable: true
+        identicalSource:
+          type: boolean
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ImportDiffItem'
+    ImportRunAcceptedResponse:
+      type: object
+      required:
+        - batchId
+        - status
+        - acceptedAt
+      properties:
+        batchId:
+          type: integer
+          minimum: 1
+        status:
+          $ref: '#/components/schemas/BatchStatus'
+        acceptedAt:
+          type: string
+          format: date-time
+    ImportCounters:
+      type: object
+      required:
+        - tasks
+        - links
+      properties:
+        tasks:
+          type: integer
+          minimum: 0
+        links:
+          type: integer
+          minimum: 0
+    ImportBatchStatusResponse:
+      allOf:
+        - $ref: '#/components/schemas/ImportBatchResponse'
+        - type: object
+          properties:
+            projectId:
+              type: integer
+              minimum: 1
+              nullable: true
+              description: ms_project.id cree par l'import
+            counters:
+              $ref: '#/components/schemas/ImportCounters'
+            warnings:
+              type: array
+              items:
+                $ref: '#/components/schemas/ImportIssue'
+    ImportIssue:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          example: ORPHAN_PREDECESSOR
+        message:
+          type: string
+        taskUid:
+          type: integer
+          nullable: true
+        predecessorUid:
+          type: integer
+          nullable: true
+    ImportErrorListResponse:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ImportIssue'
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+          example: INVALID_XML
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+    ProjectRead:
+      type: object
+      required:
+        - id
+        - name
+        - status
+        - source_version
+        - save_version_out
+        - schedule_from_start
+      properties:
+        id:
+          type: integer
+          minimum: 1
+        name:
+          type: string
+        status:
+          type: string
+          enum:
+            - cree
+            - initialise
+            - en_reponse_appel_offre
+            - perdu
+            - en_cours
+            - termine
+            - abandonne
+        code:
+          type: string
+          nullable: true
+        short_description:
+          type: string
+          nullable: true
+        source_version:
+          type: integer
+          enum:
+            - 2010
+            - 2013
+            - 2016
+        save_version_out:
+          type: integer
+          enum:
+            - 14
+            - 15
+            - 16
+        schedule_from_start:
+          type: boolean
+        start_date:
+          type: string
+          format: date-time
+          nullable: true
+        finish_date:
+          type: string
+          format: date-time
+          nullable: true
+        currency_code:
+          type: string
+          nullable: true
+        planning_reference_id:
+          type: integer
+          nullable: true
+        displayed_planning_id:
+          type: integer
+          nullable: true
+        reference_estimate_id:
+          type: integer
+          nullable: true
+    ProjectCreate:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        code:
+          type: string
+          maxLength: 64
+          nullable: true
+        short_description:
+          type: string
+          maxLength: 500
+          nullable: true
+        currency_code:
+          type: string
+          minLength: 3
+          maxLength: 3
+          nullable: true
+    ProjectUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        code:
+          type: string
+          maxLength: 64
+          nullable: true
+        short_description:
+          type: string
+          maxLength: 500
+          nullable: true
+        status:
+          type: string
+          enum:
+            - cree
+            - initialise
+            - en_reponse_appel_offre
+            - perdu
+            - en_cours
+            - termine
+            - abandonne
+    ProjectStatusUpdate:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum:
+            - cree
+            - initialise
+            - en_reponse_appel_offre
+            - perdu
+            - en_cours
+            - termine
+            - abandonne
+    PlanningRead:
+      type: object
+      required:
+        - id
+        - project_id
+        - version_number
+        - status
+        - created_at
+      properties:
+        id:
+          type: integer
+          minimum: 1
+        project_id:
+          type: integer
+          minimum: 1
+        version_number:
+          type: integer
+          minimum: 1
+        status:
+          type: string
+          enum:
+            - draft
+            - validated
+            - superseded
+        note:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        validated_at:
+          type: string
+          format: date-time
+          nullable: true
+    PlanningCreate:
+      type: object
+      properties:
+        note:
+          type: string
+          maxLength: 10000
+          nullable: true
+        source_planning_id:
+          type: integer
+          minimum: 1
+          nullable: true
+    PlanningDetailRead:
+      allOf:
+        - $ref: '#/components/schemas/PlanningRead'
+        - type: object
+          required:
+            - tasks
+            - links
+          properties:
+            tasks:
+              type: array
+              items:
+                $ref: '#/components/schemas/TaskRead'
+            links:
+              type: array
+              items:
+                $ref: '#/components/schemas/PlanningLinkRead'
+    TaskRead:
+      type: object
+      required:
+        - id
+        - project_id
+        - uid
+        - name
+        - is_summary
+        - is_milestone
+      properties:
+        id:
+          type: integer
+          minimum: 1
+        project_id:
+          type: integer
+          minimum: 1
+        uid:
+          type: integer
+          minimum: 1
+        id_display:
+          type: integer
+          nullable: true
+        structure_key:
+          type: string
+          nullable: true
+        structure_kind:
+          type: string
+          enum:
+            - poste
+            - lot
+            - livrable
+            - milestone
+            - task
+          nullable: true
+        parent_uid:
+          type: integer
+          nullable: true
+        position:
+          type: integer
+          nullable: true
+        name:
+          type: string
+        outline_number:
+          type: string
+          nullable: true
+        outline_level:
+          type: integer
+          nullable: true
+        start_at:
+          type: string
+          format: date-time
+          nullable: true
+        finish_at:
+          type: string
+          format: date-time
+          nullable: true
+        percent_complete:
+          type: integer
+          nullable: true
+        is_summary:
+          type: boolean
+        is_milestone:
+          type: boolean
+        is_manual:
+          type: boolean
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        predecessor_links:
+          type: array
+          items:
+            $ref: '#/components/schemas/TaskLinkRead'
+    TaskLinkRead:
+      type: object
+      required:
+        - predecessor_uid
+        - link_type
+      properties:
+        predecessor_uid:
+          type: integer
+          minimum: 1
+        link_type:
+          type: integer
+          minimum: 0
+          maximum: 3
+        lag_tenth_minute:
+          type: integer
+          nullable: true
+        lag_format:
+          type: integer
+          nullable: true
+    PlanningLinkRead:
+      type: object
+      required:
+        - task_uid
+        - predecessor_uid
+        - link_type
+      properties:
+        task_uid:
+          type: integer
+          minimum: 1
+        predecessor_uid:
+          type: integer
+          minimum: 1
+        link_type:
+          type: integer
+          minimum: 0
+          maximum: 3
+        lag_tenth_minute:
+          type: integer
+          nullable: true
+        lag_format:
+          type: integer
+          nullable: true
+    PlanningStructureCreate:
+      type: object
+      required:
+        - posts
+      properties:
+        posts:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/PlanningPostCreate'
+    PlanningPostCreate:
+      type: object
+      required:
+        - key
+        - name
+        - lots
+      properties:
+        key:
+          type: string
+          minLength: 1
+          maxLength: 40
+          pattern: ^[A-Za-z0-9][A-Za-z0-9._-]*$
+        name:
+          type: string
+          minLength: 1
+          maxLength: 512
+        lots:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/PlanningLotCreate'
+    PlanningLotCreate:
+      type: object
+      required:
+        - key
+        - name
+        - deliverables
+      properties:
+        key:
+          type: string
+          minLength: 1
+          maxLength: 40
+          pattern: ^[A-Za-z0-9][A-Za-z0-9._-]*$
+        name:
+          type: string
+          minLength: 1
+          maxLength: 512
+        deliverables:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/PlanningDeliverableCreate'
+    PlanningDeliverableCreate:
+      type: object
+      required:
+        - key
+        - name
+      properties:
+        key:
+          type: string
+          minLength: 1
+          maxLength: 40
+          pattern: ^[A-Za-z0-9][A-Za-z0-9._-]*$
+        name:
+          type: string
+          minLength: 1
+          maxLength: 512
+    PlanningStructureRead:
+      type: object
+      required:
+        - tasks
+      properties:
+        tasks:
+          type: array
+          items:
+            $ref: '#/components/schemas/TaskRead'
+    PlanningStructureDraftRead:
+      type: object
+      required:
+        - planning_id
+        - structure
+      properties:
+        planning_id:
+          type: integer
+        structure:
+          $ref: '#/components/schemas/PlanningStructureCreate'
+    PlanningTreeRead:
+      type: object
+      required:
+        - tasks
+      properties:
+        tasks:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlanningTaskTreeRead'
+    PlanningTaskTreeRead:
+      allOf:
+        - $ref: '#/components/schemas/TaskRead'
+        - type: object
+          required:
+            - children
+          properties:
+            children:
+              type: array
+              items:
+                $ref: '#/components/schemas/PlanningTaskTreeRead'
+    TaskDescriptionUpdate:
+      type: object
+      properties:
+        description:
+          type: string
+          nullable: true
+          maxLength: 10000
+    TaskCreate:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 512
+        parent_task_id:
+          type: integer
+          minimum: 1
+          nullable: true
+        is_milestone:
+          type: boolean
+          default: false
+    TaskRoleAssignmentCreate:
+      type: object
+      required:
+        - role_id
+        - quantity
+        - hours
+      properties:
+        role_id:
+          type: integer
+          minimum: 1
+        quantity:
+          type: number
+          exclusiveMinimum: 0
+        hours:
+          type: number
+          minimum: 0
+        comment:
+          type: string
+          maxLength: 10000
+          nullable: true
+    TaskRoleAssignmentUpdate:
+      type: object
+      properties:
+        quantity:
+          type: number
+          exclusiveMinimum: 0
+        hours:
+          type: number
+          minimum: 0
+        comment:
+          type: string
+          maxLength: 10000
+          nullable: true
+    TaskRoleAssignmentRead:
+      type: object
+      required:
+        - id
+        - task_id
+        - role_id
+        - role_code
+        - role_name
+        - cost_category_id
+        - accounting_code
+        - quantity
+        - hours
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: integer
+          minimum: 1
+        task_id:
+          type: integer
+          minimum: 1
+        role_id:
+          type: integer
+          minimum: 1
+        role_code:
+          type: string
+        role_name:
+          type: string
+        cost_category_id:
+          type: integer
+          minimum: 1
+        accounting_code:
+          type: string
+        quantity:
+          type: number
+        hours:
+          type: number
+        comment:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    ProjectEstimateCreate:
+      type: object
+      required:
+        - kind
+        - currency_code
+      properties:
+        kind:
+          type: string
+          enum:
+            - initial
+            - contract_reference
+            - forecast_remaining
+        currency_code:
+          type: string
+          minLength: 3
+          maxLength: 3
+        reference_estimate_id:
+          type: integer
+          minimum: 1
+          nullable: true
+        note:
+          type: string
+          maxLength: 10000
+          nullable: true
+    ProjectEstimateRead:
+      type: object
+      required:
+        - id
+        - project_id
+        - planning_id
+        - version_number
+        - kind
+        - status
+        - currency_code
+        - created_at
+      properties:
+        id:
+          type: integer
+          minimum: 1
+        project_id:
+          type: integer
+          minimum: 1
+        planning_id:
+          type: integer
+          minimum: 1
+          nullable: true
+        reference_estimate_id:
+          type: integer
+          minimum: 1
+          nullable: true
+        version_number:
+          type: integer
+          minimum: 1
+        kind:
+          type: string
+          enum:
+            - initial
+            - contract_reference
+            - forecast_remaining
+        status:
+          type: string
+          enum:
+            - draft
+            - validated
+            - superseded
+            - archived
+        currency_code:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        validated_at:
+          type: string
+          format: date-time
+          nullable: true
+        note:
+          type: string
+          nullable: true
+    EstimateTaskRowRead:
+      type: object
+      required:
+        - id
+        - estimate_id
+        - position
+        - task_name
+        - is_milestone
+      properties:
+        id:
+          type: integer
+          minimum: 1
+        estimate_id:
+          type: integer
+          minimum: 1
+        task_id:
+          type: integer
+          minimum: 1
+          nullable: true
+        parent_task_id:
+          type: integer
+          minimum: 1
+          nullable: true
+        position:
+          type: integer
+          minimum: 1
+        task_name:
+          type: string
+        outline_number:
+          type: string
+          nullable: true
+        outline_level:
+          type: integer
+          nullable: true
+        is_milestone:
+          type: boolean
+    SupplyStatus:
+      type: string
+      enum:
+        - planned
+        - ordered
+        - received
+        - cancelled
+    EstimateCostLineCreate:
+      type: object
+      required:
+        - cost_category_id
+        - label
+        - quantity
+        - unit_cost
+      properties:
+        task_id:
+          type: integer
+          minimum: 1
+          nullable: true
+        cost_category_id:
+          type: integer
+          minimum: 1
+        label:
+          type: string
+          minLength: 1
+          maxLength: 512
+        quantity:
+          type: number
+          exclusiveMinimum: 0
+        unit_cost:
+          type: number
+          minimum: 0
+        supply_status:
+          allOf:
+            - $ref: '#/components/schemas/SupplyStatus'
+          nullable: true
+    EstimateCostLineUpdate:
+      type: object
+      properties:
+        task_id:
+          type: integer
+          minimum: 1
+          nullable: true
+        cost_category_id:
+          type: integer
+          minimum: 1
+        label:
+          type: string
+          minLength: 1
+          maxLength: 512
+        quantity:
+          type: number
+          exclusiveMinimum: 0
+        unit_cost:
+          type: number
+          minimum: 0
+        supply_status:
+          allOf:
+            - $ref: '#/components/schemas/SupplyStatus'
+          nullable: true
+    EstimateCostLineRead:
+      type: object
+      required:
+        - id
+        - estimate_id
+        - cost_type_id
+        - cost_category_id
+        - cost_type_code
+        - accounting_code
+        - label
+        - quantity
+        - unit_cost
+        - purchase_cost
+      properties:
+        id:
+          type: integer
+          minimum: 1
+        estimate_id:
+          type: integer
+          minimum: 1
+        task_id:
+          type: integer
+          minimum: 1
+          nullable: true
+        cost_type_id:
+          type: integer
+          minimum: 1
+        cost_category_id:
+          type: integer
+          minimum: 1
+        cost_type_code:
+          type: string
+        accounting_code:
+          type: string
+        category_code:
+          type: string
+          nullable: true
+        label:
+          type: string
+        quantity:
+          type: number
+        unit_cost:
+          type: number
+        purchase_cost:
+          type: number
+        supply_status:
+          allOf:
+            - $ref: '#/components/schemas/SupplyStatus'
+          nullable: true
+    EstimateAggregatesRead:
+      type: object
+      required:
+        - total_labor_cost
+        - total_purchase_cost
+        - total_unburdened_cost
+        - by_category
+      properties:
+        total_labor_cost:
+          type: number
+        total_purchase_cost:
+          type: number
+        total_unburdened_cost:
+          type: number
+        by_category:
+          type: object
+          additionalProperties:
+            type: number
+    ResourceNodeCreate:
+      type: object
+      required:
+        - code
+        - name
+      properties:
+        code:
+          type: string
+          minLength: 1
+          maxLength: 64
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        parent_id:
+          type: integer
+          minimum: 1
+          nullable: true
+    ResourceNodeUpdate:
+      type: object
+      properties:
+        code:
+          type: string
+          minLength: 1
+          maxLength: 64
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        parent_id:
+          type: integer
+          minimum: 1
+          nullable: true
+        is_active:
+          type: boolean
+    ResourceNodeRead:
+      allOf:
+        - $ref: '#/components/schemas/ResourceNodeCreate'
+        - type: object
+          required:
+            - id
+            - is_active
+            - created_at
+            - updated_at
+          properties:
+            id:
+              type: integer
+              minimum: 1
+            is_active:
+              type: boolean
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+    ResourceRoleCreate:
+      type: object
+      required:
+        - node_id
+        - cost_category_id
+        - code
+        - name
+      properties:
+        node_id:
+          type: integer
+          minimum: 1
+        cost_category_id:
+          type: integer
+          minimum: 1
+        code:
+          type: string
+          minLength: 1
+          maxLength: 64
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+    ResourceRoleUpdate:
+      type: object
+      properties:
+        node_id:
+          type: integer
+          minimum: 1
+        cost_category_id:
+          type: integer
+          minimum: 1
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        is_active:
+          type: boolean
+    ResourceRoleRead:
+      allOf:
+        - $ref: '#/components/schemas/ResourceRoleCreate'
+        - type: object
+          required:
+            - id
+            - is_active
+            - created_at
+            - updated_at
+          properties:
+            id:
+              type: integer
+              minimum: 1
+            is_active:
+              type: boolean
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+    CostTypeCreate:
+      type: object
+      required:
+        - code
+        - name
+        - kind
+      properties:
+        code:
+          type: string
+          minLength: 1
+          maxLength: 32
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        kind:
+          $ref: '#/components/schemas/CostTypeKind'
+    CostTypeKind:
+      type: string
+      enum:
+        - labor
+        - supply
+        - other
+    CostTypeUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        is_active:
+          type: boolean
+    CostTypeRead:
+      allOf:
+        - $ref: '#/components/schemas/CostTypeCreate'
+        - type: object
+          required:
+            - id
+            - is_active
+            - created_at
+            - updated_at
+          properties:
+            id:
+              type: integer
+              minimum: 1
+            is_active:
+              type: boolean
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+    CostCategoryCreate:
+      type: object
+      required:
+        - cost_type_id
+        - accounting_code
+        - name
+      properties:
+        cost_type_id:
+          type: integer
+          minimum: 1
+        accounting_code:
+          type: string
+          minLength: 1
+          maxLength: 64
+        category_code:
+          type: string
+          maxLength: 64
+          nullable: true
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+          nullable: true
+    CostCategoryUpdate:
+      type: object
+      properties:
+        cost_type_id:
+          type: integer
+          minimum: 1
+        accounting_code:
+          type: string
+          minLength: 1
+          maxLength: 64
+        category_code:
+          type: string
+          maxLength: 64
+          nullable: true
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+          nullable: true
+        is_active:
+          type: boolean
+    CostCategoryRead:
+      allOf:
+        - $ref: '#/components/schemas/CostCategoryCreate'
+        - type: object
+          required:
+            - id
+            - is_active
+            - created_at
+            - updated_at
+          properties:
+            id:
+              type: integer
+              minimum: 1
+            is_active:
+              type: boolean
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+    CostRateCreate:
+      type: object
+      required:
+        - cost_category_id
+        - year
+        - hourly_rate
+        - currency_code
+      properties:
+        cost_category_id:
+          type: integer
+          minimum: 1
+        year:
+          type: integer
+          minimum: 2000
+          maximum: 9999
+        hourly_rate:
+          type: number
+          minimum: 0
+        currency_code:
+          type: string
+          pattern: ^[A-Z]{3}$
+    CostRateUpdate:
+      type: object
+      properties:
+        hourly_rate:
+          type: number
+          minimum: 0
+        currency_code:
+          type: string
+          pattern: ^[A-Z]{3}$
+    CostRateRead:
+      allOf:
+        - $ref: '#/components/schemas/CostRateCreate'
+        - type: object
+          required:
+            - id
+            - created_at
+            - updated_at
+          properties:
+            id:
+              type: integer
+              minimum: 1
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+    InflationRateUpdate:
+      type: object
+      required:
+        - coefficient
+      properties:
+        coefficient:
+          type: number
+          exclusiveMinimum: 0
+    InflationRateRead:
+      type: object
+      required:
+        - id
+        - year
+        - coefficient
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: integer
+          minimum: 1
+        year:
+          type: integer
+          minimum: 2000
+          maximum: 9999
+        coefficient:
+          type: number
+          exclusiveMinimum: 0
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    RoleCapacityCreate:
+      type: object
+      required:
+        - role_id
+        - person_count
+        - available_hours
+      properties:
+        role_id:
+          type: integer
+          minimum: 1
+        person_count:
+          type: number
+          minimum: 0
+        available_hours:
+          type: number
+          minimum: 0
+    RoleCapacityUpdate:
+      type: object
+      properties:
+        person_count:
+          type: number
+          minimum: 0
+        available_hours:
+          type: number
+          minimum: 0
+    RoleCapacityRead:
+      allOf:
+        - $ref: '#/components/schemas/RoleCapacityCreate'
+        - type: object
+          required:
+            - id
+            - created_at
+            - updated_at
+          properties:
+            id:
+              type: integer
+              minimum: 1
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
   parameters:
     BatchId:
       name: batchId
@@ -2211,7 +3744,6 @@ components:
         type: integer
         minimum: 1
       description: Identifiant technique de l'utilisateur
-
   responses:
     BadRequest:
       description: Requete invalide
@@ -2279,1334 +3811,3 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
-
-  schemas:
-    HealthStatus:
-      type: object
-      required: [status]
-      properties:
-        status:
-          type: string
-          example: ok
-
-    ReadinessStatus:
-      type: object
-      required: [status, timestamp]
-      properties:
-        status:
-          type: string
-          example: ready
-        timestamp:
-          type: string
-          format: date-time
-
-    UserCreate:
-      type: object
-      required: [email, password]
-      properties:
-        email:
-          type: string
-          format: email
-        password:
-          type: string
-          format: password
-          minLength: 8
-          maxLength: 256
-
-    UserRead:
-      type: object
-      required: [id, email, is_active]
-      properties:
-        id:
-          type: integer
-          minimum: 1
-        email:
-          type: string
-          format: email
-        is_active:
-          type: boolean
-
-    UserAdminRead:
-      allOf:
-        - $ref: '#/components/schemas/UserRead'
-        - type: object
-          required: [is_admin, failed_login_attempts, created_at, updated_at]
-          properties:
-            is_admin:
-              type: boolean
-            failed_login_attempts:
-              type: integer
-              minimum: 0
-            locked_until:
-              type: string
-              format: date-time
-              nullable: true
-            created_at:
-              type: string
-              format: date-time
-            updated_at:
-              type: string
-              format: date-time
-
-    UserStatusUpdate:
-      type: object
-      required: [is_active]
-      properties:
-        is_active:
-          type: boolean
-
-    UserRoleUpdate:
-      type: object
-      required: [is_admin]
-      properties:
-        is_admin:
-          type: boolean
-
-    PasswordChangeRequest:
-      type: object
-      required: [current_password, new_password]
-      properties:
-        current_password:
-          type: string
-          format: password
-          minLength: 8
-          maxLength: 256
-        new_password:
-          type: string
-          format: password
-          minLength: 8
-          maxLength: 256
-
-    Token:
-      type: object
-      required: [access_token, token_type, expiresIn]
-      properties:
-        access_token:
-          type: string
-        token_type:
-          type: string
-          default: bearer
-        expiresIn:
-          type: integer
-          minimum: 1
-
-    ImportMode:
-      type: string
-      enum: [standard, full]
-      description: |
-        standard: importe uniquement ms_task et ms_task_link.
-        full: reserve a une phase ulterieure (ressources/affectations).
-
-    BatchStatus:
-      type: string
-      enum: [pending, running, success, failed]
-
-    SourceVersion:
-      type: integer
-      enum: [2010, 2013, 2016]
-      description: Version source detectee/annoncee du XML MS Project
-
-    ImportBatchCreateRequest:
-      type: object
-      required: [projectId, importMode]
-      properties:
-        projectId:
-          type: integer
-          minimum: 1
-          description: Projet cible, appartenant à l'utilisateur authentifié
-        importMode:
-          $ref: '#/components/schemas/ImportMode'
-        sourceName:
-          type: string
-          maxLength: 255
-          description: Nom logique de la source ou du planning
-
-    ImportBatchResponse:
-      type: object
-      required:
-        - id
-        - importMode
-        - status
-        - createdAt
-        - updatedAt
-      properties:
-        id:
-          type: integer
-          minimum: 1
-        importMode:
-          $ref: '#/components/schemas/ImportMode'
-        status:
-          $ref: '#/components/schemas/BatchStatus'
-        sourceName:
-          type: string
-          nullable: true
-        sourceVersion:
-          $ref: '#/components/schemas/SourceVersion'
-        startedAt:
-          type: string
-          format: date-time
-          nullable: true
-        endedAt:
-          type: string
-          format: date-time
-          nullable: true
-        errorMessage:
-          type: string
-          nullable: true
-        createdAt:
-          type: string
-          format: date-time
-        updatedAt:
-          type: string
-          format: date-time
-
-    ImportRunRequest:
-      type: object
-      properties:
-        dryRun:
-          type: boolean
-          default: false
-          description: Valide le fichier sans persister en base (optionnel)
-        confirm:
-          type: boolean
-          default: false
-          description: Confirme l'application du diff
-
-    ImportDiffItem:
-      type: object
-      required: [kind, uid, message, fields]
-      properties:
-        kind:
-          type: string
-          enum: [added, modified, removed, conflict]
-        uid:
-          type: integer
-          minimum: 1
-        message:
-          type: string
-        fields:
-          type: array
-          items:
-            type: string
-        linkChanges:
-          type: array
-          items:
-            $ref: '#/components/schemas/ImportLinkChange'
-
-    ImportLinkChange:
-      type: object
-      required: [action, taskUid, predecessorUid, linkType]
-      properties:
-        action:
-          type: string
-          enum: [added, removed]
-        taskUid:
-          type: integer
-        predecessorUid:
-          type: integer
-        linkType:
-          type: integer
-        lagTenthMinute:
-          type: integer
-          nullable: true
-        lagFormat:
-          type: integer
-          nullable: true
-
-    ImportDiffResponse:
-      type: object
-      required: [batchId, identicalSource, items]
-      properties:
-        batchId:
-          type: integer
-          minimum: 1
-        sourceSha256:
-          type: string
-          nullable: true
-        identicalSource:
-          type: boolean
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/ImportDiffItem'
-
-    ImportRunAcceptedResponse:
-      type: object
-      required: [batchId, status, acceptedAt]
-      properties:
-        batchId:
-          type: integer
-          minimum: 1
-        status:
-          $ref: '#/components/schemas/BatchStatus'
-        acceptedAt:
-          type: string
-          format: date-time
-
-    ImportCounters:
-      type: object
-      required: [tasks, links]
-      properties:
-        tasks:
-          type: integer
-          minimum: 0
-        links:
-          type: integer
-          minimum: 0
-
-    ImportBatchStatusResponse:
-      allOf:
-        - $ref: '#/components/schemas/ImportBatchResponse'
-        - type: object
-          properties:
-            projectId:
-              type: integer
-              minimum: 1
-              nullable: true
-              description: ms_project.id cree par l'import
-            counters:
-              $ref: '#/components/schemas/ImportCounters'
-            warnings:
-              type: array
-              items:
-                $ref: '#/components/schemas/ImportIssue'
-
-    ImportIssue:
-      type: object
-      required: [code, message]
-      properties:
-        code:
-          type: string
-          example: ORPHAN_PREDECESSOR
-        message:
-          type: string
-        taskUid:
-          type: integer
-          nullable: true
-        predecessorUid:
-          type: integer
-          nullable: true
-
-    ImportErrorListResponse:
-      type: object
-      required: [items]
-      properties:
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/ImportIssue'
-
-    ErrorResponse:
-      type: object
-      required: [error, message]
-      properties:
-        error:
-          type: string
-          example: INVALID_XML
-        message:
-          type: string
-        details:
-          type: object
-          additionalProperties: true
-
-    ProjectRead:
-      type: object
-      required:
-        - id
-        - name
-        - status
-        - source_version
-        - save_version_out
-        - schedule_from_start
-      properties:
-        id:
-          type: integer
-          minimum: 1
-        name:
-          type: string
-        status:
-          type: string
-          enum: [cree, initialise, en_reponse_appel_offre, perdu, en_cours, termine, abandonne]
-        code:
-          type: string
-          nullable: true
-        short_description:
-          type: string
-          nullable: true
-        source_version:
-          type: integer
-          enum: [2010, 2013, 2016]
-        save_version_out:
-          type: integer
-          enum: [14, 15, 16]
-        schedule_from_start:
-          type: boolean
-        start_date:
-          type: string
-          format: date-time
-          nullable: true
-        finish_date:
-          type: string
-          format: date-time
-          nullable: true
-        currency_code:
-          type: string
-          nullable: true
-        planning_reference_id:
-          type: integer
-          nullable: true
-        displayed_planning_id:
-          type: integer
-          nullable: true
-        reference_estimate_id:
-          type: integer
-          nullable: true
-
-    ProjectCreate:
-      type: object
-      required: [name]
-      properties:
-        name:
-          type: string
-          minLength: 1
-          maxLength: 255
-        code:
-          type: string
-          maxLength: 64
-          nullable: true
-        short_description:
-          type: string
-          maxLength: 500
-          nullable: true
-        currency_code:
-          type: string
-          minLength: 3
-          maxLength: 3
-          nullable: true
-
-    ProjectUpdate:
-      type: object
-      properties:
-        name:
-          type: string
-          minLength: 1
-          maxLength: 255
-        code:
-          type: string
-          maxLength: 64
-          nullable: true
-        short_description:
-          type: string
-          maxLength: 500
-          nullable: true
-        status:
-          type: string
-          enum: [cree, initialise, en_reponse_appel_offre, perdu, en_cours, termine, abandonne]
-
-    ProjectStatusUpdate:
-      type: object
-      required: [status]
-      properties:
-        status:
-          type: string
-          enum: [cree, initialise, en_reponse_appel_offre, perdu, en_cours, termine, abandonne]
-
-    PlanningRead:
-      type: object
-      required: [id, project_id, version_number, status, created_at]
-      properties:
-        id: { type: integer, minimum: 1 }
-        project_id: { type: integer, minimum: 1 }
-        version_number: { type: integer, minimum: 1 }
-        status: { type: string, enum: [draft, validated, superseded] }
-        note: { type: string, nullable: true }
-        created_at: { type: string, format: date-time }
-        validated_at: { type: string, format: date-time, nullable: true }
-
-    PlanningCreate:
-      type: object
-      properties:
-        note: { type: string, maxLength: 10000, nullable: true }
-        source_planning_id: { type: integer, minimum: 1, nullable: true }
-
-    PlanningDetailRead:
-      allOf:
-        - $ref: '#/components/schemas/PlanningRead'
-        - type: object
-          required: [tasks, links]
-          properties:
-            tasks:
-              type: array
-              items:
-                $ref: '#/components/schemas/TaskRead'
-            links:
-              type: array
-              items:
-                $ref: '#/components/schemas/PlanningLinkRead'
-
-    TaskRead:
-      type: object
-      required:
-        - id
-        - project_id
-        - uid
-        - name
-        - is_summary
-        - is_milestone
-      properties:
-        id:
-          type: integer
-          minimum: 1
-        project_id:
-          type: integer
-          minimum: 1
-        uid:
-          type: integer
-          minimum: 1
-        id_display:
-          type: integer
-          nullable: true
-        structure_key:
-          type: string
-          nullable: true
-        structure_kind:
-          type: string
-          enum: [poste, lot, livrable, milestone, task]
-          nullable: true
-        parent_uid:
-          type: integer
-          nullable: true
-        position:
-          type: integer
-          nullable: true
-        name:
-          type: string
-        outline_number:
-          type: string
-          nullable: true
-        outline_level:
-          type: integer
-          nullable: true
-        start_at:
-          type: string
-          format: date-time
-          nullable: true
-        finish_at:
-          type: string
-          format: date-time
-          nullable: true
-        percent_complete:
-          type: integer
-          nullable: true
-        is_summary:
-          type: boolean
-        is_milestone:
-          type: boolean
-        is_manual:
-          type: boolean
-          nullable: true
-        description:
-          type: string
-          nullable: true
-        predecessor_links:
-          type: array
-          items:
-            $ref: '#/components/schemas/TaskLinkRead'
-
-    TaskLinkRead:
-      type: object
-      required: [predecessor_uid, link_type]
-      properties:
-        predecessor_uid:
-          type: integer
-          minimum: 1
-        link_type:
-          type: integer
-          minimum: 0
-          maximum: 3
-        lag_tenth_minute:
-          type: integer
-          nullable: true
-        lag_format:
-          type: integer
-          nullable: true
-
-    PlanningLinkRead:
-      type: object
-      required: [task_uid, predecessor_uid, link_type]
-      properties:
-        task_uid:
-          type: integer
-          minimum: 1
-        predecessor_uid:
-          type: integer
-          minimum: 1
-        link_type:
-          type: integer
-          minimum: 0
-          maximum: 3
-        lag_tenth_minute:
-          type: integer
-          nullable: true
-        lag_format:
-          type: integer
-          nullable: true
-
-    PlanningStructureCreate:
-      type: object
-      required: [posts]
-      properties:
-        posts:
-          type: array
-          minItems: 1
-          items:
-            $ref: '#/components/schemas/PlanningPostCreate'
-
-    PlanningPostCreate:
-      type: object
-      required: [key, name, lots]
-      properties:
-        key:
-          type: string
-          minLength: 1
-          maxLength: 40
-          pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
-        name:
-          type: string
-          minLength: 1
-          maxLength: 512
-        lots:
-          type: array
-          minItems: 1
-          items:
-            $ref: '#/components/schemas/PlanningLotCreate'
-
-    PlanningLotCreate:
-      type: object
-      required: [key, name, deliverables]
-      properties:
-        key:
-          type: string
-          minLength: 1
-          maxLength: 40
-          pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
-        name:
-          type: string
-          minLength: 1
-          maxLength: 512
-        deliverables:
-          type: array
-          minItems: 1
-          items:
-            $ref: '#/components/schemas/PlanningDeliverableCreate'
-
-    PlanningDeliverableCreate:
-      type: object
-      required: [key, name]
-      properties:
-        key:
-          type: string
-          minLength: 1
-          maxLength: 40
-          pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
-        name:
-          type: string
-          minLength: 1
-          maxLength: 512
-
-    PlanningStructureRead:
-      type: object
-      required: [tasks]
-      properties:
-        tasks:
-          type: array
-          items:
-            $ref: '#/components/schemas/TaskRead'
-
-    PlanningStructureDraftRead:
-      type: object
-      required: [planning_id, structure]
-      properties:
-        planning_id:
-          type: integer
-        structure:
-          $ref: '#/components/schemas/PlanningStructureCreate'
-
-    PlanningTreeRead:
-      type: object
-      required: [tasks]
-      properties:
-        tasks:
-          type: array
-          items:
-            $ref: '#/components/schemas/PlanningTaskTreeRead'
-
-    PlanningTaskTreeRead:
-      allOf:
-        - $ref: '#/components/schemas/TaskRead'
-        - type: object
-          required: [children]
-          properties:
-            children:
-              type: array
-              items:
-                $ref: '#/components/schemas/PlanningTaskTreeRead'
-
-    TaskDescriptionUpdate:
-      type: object
-      properties:
-        description:
-          type: string
-          nullable: true
-          maxLength: 10000
-
-    TaskCreate:
-      type: object
-      required: [name]
-      properties:
-        name:
-          type: string
-          minLength: 1
-          maxLength: 512
-        parent_task_id:
-          type: integer
-          minimum: 1
-          nullable: true
-        is_milestone:
-          type: boolean
-          default: false
-
-    TaskRoleAssignmentCreate:
-      type: object
-      required: [role_id, quantity, hours]
-      properties:
-        role_id:
-          type: integer
-          minimum: 1
-        quantity:
-          type: number
-          exclusiveMinimum: 0
-        hours:
-          type: number
-          minimum: 0
-        comment:
-          type: string
-          maxLength: 10000
-          nullable: true
-
-    TaskRoleAssignmentUpdate:
-      type: object
-      properties:
-        quantity:
-          type: number
-          exclusiveMinimum: 0
-        hours:
-          type: number
-          minimum: 0
-        comment:
-          type: string
-          maxLength: 10000
-          nullable: true
-
-    TaskRoleAssignmentRead:
-      type: object
-      required:
-        - id
-        - task_id
-        - role_id
-        - role_code
-        - role_name
-        - cost_category_id
-        - accounting_code
-        - quantity
-        - hours
-        - created_at
-        - updated_at
-      properties:
-        id:
-          type: integer
-          minimum: 1
-        task_id:
-          type: integer
-          minimum: 1
-        role_id:
-          type: integer
-          minimum: 1
-        role_code:
-          type: string
-        role_name:
-          type: string
-        cost_category_id:
-          type: integer
-          minimum: 1
-        accounting_code:
-          type: string
-        quantity:
-          type: number
-        hours:
-          type: number
-        comment:
-          type: string
-          nullable: true
-        created_at:
-          type: string
-          format: date-time
-        updated_at:
-          type: string
-          format: date-time
-
-    ProjectEstimateCreate:
-      type: object
-      required: [kind, currency_code]
-      properties:
-        kind:
-          type: string
-          enum: [initial, contract_reference, forecast_remaining]
-        currency_code:
-          type: string
-          minLength: 3
-          maxLength: 3
-        reference_estimate_id:
-          type: integer
-          minimum: 1
-          nullable: true
-        note:
-          type: string
-          maxLength: 10000
-          nullable: true
-
-    ProjectEstimateRead:
-      type: object
-      required:
-        - id
-        - project_id
-        - planning_id
-        - version_number
-        - kind
-        - status
-        - currency_code
-        - created_at
-      properties:
-        id:
-          type: integer
-          minimum: 1
-        project_id:
-          type: integer
-          minimum: 1
-        planning_id:
-          type: integer
-          minimum: 1
-          nullable: true
-        reference_estimate_id:
-          type: integer
-          minimum: 1
-          nullable: true
-        version_number:
-          type: integer
-          minimum: 1
-        kind:
-          type: string
-          enum: [initial, contract_reference, forecast_remaining]
-        status:
-          type: string
-          enum: [draft, validated, superseded, archived]
-        currency_code:
-          type: string
-        created_at:
-          type: string
-          format: date-time
-        validated_at:
-          type: string
-          format: date-time
-          nullable: true
-        note:
-          type: string
-          nullable: true
-
-    EstimateTaskRowRead:
-      type: object
-      required:
-        - id
-        - estimate_id
-        - position
-        - task_name
-        - is_milestone
-      properties:
-        id:
-          type: integer
-          minimum: 1
-        estimate_id:
-          type: integer
-          minimum: 1
-        task_id:
-          type: integer
-          minimum: 1
-          nullable: true
-        parent_task_id:
-          type: integer
-          minimum: 1
-          nullable: true
-        position:
-          type: integer
-          minimum: 1
-        task_name:
-          type: string
-        outline_number:
-          type: string
-          nullable: true
-        outline_level:
-          type: integer
-          nullable: true
-        is_milestone:
-          type: boolean
-
-    SupplyStatus:
-      type: string
-      enum: [planned, ordered, received, cancelled]
-
-    EstimateCostLineCreate:
-      type: object
-      required: [cost_category_id, label, quantity, unit_cost]
-      properties:
-        task_id:
-          type: integer
-          minimum: 1
-          nullable: true
-        cost_category_id:
-          type: integer
-          minimum: 1
-        label:
-          type: string
-          minLength: 1
-          maxLength: 512
-        quantity:
-          type: number
-          exclusiveMinimum: 0
-        unit_cost:
-          type: number
-          minimum: 0
-        supply_status:
-          allOf:
-            - $ref: '#/components/schemas/SupplyStatus'
-          nullable: true
-
-    EstimateCostLineUpdate:
-      type: object
-      properties:
-        task_id:
-          type: integer
-          minimum: 1
-          nullable: true
-        cost_category_id:
-          type: integer
-          minimum: 1
-        label:
-          type: string
-          minLength: 1
-          maxLength: 512
-        quantity:
-          type: number
-          exclusiveMinimum: 0
-        unit_cost:
-          type: number
-          minimum: 0
-        supply_status:
-          allOf:
-            - $ref: '#/components/schemas/SupplyStatus'
-          nullable: true
-
-    EstimateCostLineRead:
-      type: object
-      required:
-        - id
-        - estimate_id
-        - cost_type_id
-        - cost_category_id
-        - cost_type_code
-        - accounting_code
-        - label
-        - quantity
-        - unit_cost
-        - purchase_cost
-      properties:
-        id:
-          type: integer
-          minimum: 1
-        estimate_id:
-          type: integer
-          minimum: 1
-        task_id:
-          type: integer
-          minimum: 1
-          nullable: true
-        cost_type_id:
-          type: integer
-          minimum: 1
-        cost_category_id:
-          type: integer
-          minimum: 1
-        cost_type_code:
-          type: string
-        accounting_code:
-          type: string
-        category_code:
-          type: string
-          nullable: true
-        label:
-          type: string
-        quantity:
-          type: number
-        unit_cost:
-          type: number
-        purchase_cost:
-          type: number
-        supply_status:
-          allOf:
-            - $ref: '#/components/schemas/SupplyStatus'
-          nullable: true
-
-    EstimateAggregatesRead:
-      type: object
-      required:
-        - total_labor_cost
-        - total_purchase_cost
-        - total_unburdened_cost
-        - by_category
-      properties:
-        total_labor_cost:
-          type: number
-        total_purchase_cost:
-          type: number
-        total_unburdened_cost:
-          type: number
-        by_category:
-          type: object
-          additionalProperties:
-            type: number
-
-    ResourceNodeCreate:
-      type: object
-      required: [code, name, kind]
-      properties:
-        code:
-          type: string
-          minLength: 1
-          maxLength: 64
-        name:
-          type: string
-          minLength: 1
-          maxLength: 255
-        parent_id:
-          type: integer
-          minimum: 1
-          nullable: true
-
-    ResourceNodeUpdate:
-      type: object
-      properties:
-        code:
-          type: string
-          minLength: 1
-          maxLength: 64
-        name:
-          type: string
-          minLength: 1
-          maxLength: 255
-        parent_id:
-          type: integer
-          minimum: 1
-          nullable: true
-        is_active:
-          type: boolean
-
-    ResourceNodeRead:
-      allOf:
-        - $ref: '#/components/schemas/ResourceNodeCreate'
-        - type: object
-          required: [id, is_active, created_at, updated_at]
-          properties:
-            id:
-              type: integer
-              minimum: 1
-            is_active:
-              type: boolean
-            created_at:
-              type: string
-              format: date-time
-            updated_at:
-              type: string
-              format: date-time
-
-    ResourceRoleCreate:
-      type: object
-      required: [node_id, cost_category_id, code, name]
-      properties:
-        node_id:
-          type: integer
-          minimum: 1
-        cost_category_id:
-          type: integer
-          minimum: 1
-        code:
-          type: string
-          minLength: 1
-          maxLength: 64
-        name:
-          type: string
-          minLength: 1
-          maxLength: 255
-
-    ResourceRoleUpdate:
-      type: object
-      properties:
-        node_id:
-          type: integer
-          minimum: 1
-        cost_category_id:
-          type: integer
-          minimum: 1
-        name:
-          type: string
-          minLength: 1
-          maxLength: 255
-        is_active:
-          type: boolean
-
-    ResourceRoleRead:
-      allOf:
-        - $ref: '#/components/schemas/ResourceRoleCreate'
-        - type: object
-          required: [id, is_active, created_at, updated_at]
-          properties:
-            id:
-              type: integer
-              minimum: 1
-            is_active:
-              type: boolean
-            created_at:
-              type: string
-              format: date-time
-            updated_at:
-              type: string
-              format: date-time
-
-    CostTypeCreate:
-      type: object
-      required: [code, name, kind]
-      properties:
-        code:
-          type: string
-          minLength: 1
-          maxLength: 32
-        name:
-          type: string
-          minLength: 1
-          maxLength: 255
-        kind:
-          $ref: '#/components/schemas/CostTypeKind'
-
-    CostTypeKind:
-      type: string
-      enum: [labor, supply, other]
-
-    CostTypeUpdate:
-      type: object
-      properties:
-        name:
-          type: string
-          minLength: 1
-          maxLength: 255
-        is_active:
-          type: boolean
-
-    CostTypeRead:
-      allOf:
-        - $ref: '#/components/schemas/CostTypeCreate'
-        - type: object
-          required: [id, is_active, created_at, updated_at]
-          properties:
-            id:
-              type: integer
-              minimum: 1
-            is_active:
-              type: boolean
-            created_at:
-              type: string
-              format: date-time
-            updated_at:
-              type: string
-              format: date-time
-
-    CostCategoryCreate:
-      type: object
-      required: [cost_type_id, accounting_code, name]
-      properties:
-        cost_type_id:
-          type: integer
-          minimum: 1
-        accounting_code:
-          type: string
-          minLength: 1
-          maxLength: 64
-        category_code:
-          type: string
-          maxLength: 64
-          nullable: true
-        name:
-          type: string
-          minLength: 1
-          maxLength: 255
-          nullable: true
-
-    CostCategoryUpdate:
-      type: object
-      properties:
-        cost_type_id:
-          type: integer
-          minimum: 1
-        accounting_code:
-          type: string
-          minLength: 1
-          maxLength: 64
-        category_code:
-          type: string
-          maxLength: 64
-          nullable: true
-        name:
-          type: string
-          minLength: 1
-          maxLength: 255
-          nullable: true
-        is_active:
-          type: boolean
-
-    CostCategoryRead:
-      allOf:
-        - $ref: '#/components/schemas/CostCategoryCreate'
-        - type: object
-          required: [id, is_active, created_at, updated_at]
-          properties:
-            id:
-              type: integer
-              minimum: 1
-            is_active:
-              type: boolean
-            created_at:
-              type: string
-              format: date-time
-            updated_at:
-              type: string
-              format: date-time
-
-    CostRateCreate:
-      type: object
-      required: [cost_category_id, year, hourly_rate, currency_code]
-      properties:
-        cost_category_id:
-          type: integer
-          minimum: 1
-        year:
-          type: integer
-          minimum: 2000
-          maximum: 9999
-        hourly_rate:
-          type: number
-          minimum: 0
-        currency_code:
-          type: string
-          pattern: '^[A-Z]{3}$'
-
-    CostRateUpdate:
-      type: object
-      properties:
-        hourly_rate:
-          type: number
-          minimum: 0
-        currency_code:
-          type: string
-          pattern: '^[A-Z]{3}$'
-
-    CostRateRead:
-      allOf:
-        - $ref: '#/components/schemas/CostRateCreate'
-        - type: object
-          required: [id, created_at, updated_at]
-          properties:
-            id:
-              type: integer
-              minimum: 1
-            created_at:
-              type: string
-              format: date-time
-            updated_at:
-              type: string
-              format: date-time
-
-    InflationRateUpdate:
-      type: object
-      required: [coefficient]
-      properties:
-        coefficient:
-          type: number
-          exclusiveMinimum: 0
-
-    InflationRateRead:
-      type: object
-      required: [id, year, coefficient, created_at, updated_at]
-      properties:
-        id:
-          type: integer
-          minimum: 1
-        year:
-          type: integer
-          minimum: 2000
-          maximum: 9999
-        coefficient:
-          type: number
-          exclusiveMinimum: 0
-        created_at:
-          type: string
-          format: date-time
-        updated_at:
-          type: string
-          format: date-time
-
-    RoleCapacityCreate:
-      type: object
-      required: [role_id, person_count, available_hours]
-      properties:
-        role_id:
-          type: integer
-          minimum: 1
-        person_count:
-          type: number
-          minimum: 0
-        available_hours:
-          type: number
-          minimum: 0
-
-    RoleCapacityUpdate:
-      type: object
-      properties:
-        person_count:
-          type: number
-          minimum: 0
-        available_hours:
-          type: number
-          minimum: 0
-
-    RoleCapacityRead:
-      allOf:
-        - $ref: '#/components/schemas/RoleCapacityCreate'
-        - type: object
-          required: [id, created_at, updated_at]
-          properties:
-            id:
-              type: integer
-              minimum: 1
-            created_at:
-              type: string
-              format: date-time
-            updated_at:
-              type: string
-              format: date-time

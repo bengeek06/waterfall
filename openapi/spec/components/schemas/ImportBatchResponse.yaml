@@ -1,0 +1,37 @@
+type: object
+required:
+- id
+- importMode
+- status
+- createdAt
+- updatedAt
+properties:
+  id:
+    type: integer
+    minimum: 1
+  importMode:
+    $ref: ImportMode.yaml
+  status:
+    $ref: BatchStatus.yaml
+  sourceName:
+    type: string
+    nullable: true
+  sourceVersion:
+    $ref: SourceVersion.yaml
+  startedAt:
+    type: string
+    format: date-time
+    nullable: true
+  endedAt:
+    type: string
+    format: date-time
+    nullable: true
+  errorMessage:
+    type: string
+    nullable: true
+  createdAt:
+    type: string
+    format: date-time
+  updatedAt:
+    type: string
+    format: date-time

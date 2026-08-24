@@ -1,0 +1,7 @@
+name: taskUid
+in: path
+required: true
+schema:
+  type: integer
+  minimum: 1
+description: UID fonctionnel de la tache dans un projet

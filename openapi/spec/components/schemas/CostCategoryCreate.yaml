@@ -1,0 +1,22 @@
+type: object
+required:
+- cost_type_id
+- accounting_code
+- name
+properties:
+  cost_type_id:
+    type: integer
+    minimum: 1
+  accounting_code:
+    type: string
+    minLength: 1
+    maxLength: 64
+  category_code:
+    type: string
+    maxLength: 64
+    nullable: true
+  name:
+    type: string
+    minLength: 1
+    maxLength: 255
+    nullable: true

@@ -40,7 +40,7 @@ Si un skill n'est pas utilisé, indique brièvement pourquoi.
 
 - Privilégie des changements minimaux et ciblés.
 - Ne modifie pas des zones hors périmètre sans justification.
-- Utilise l'environnement virtuel local `.venv/` pour toutes les commandes Python (depuis `apps/backend`, préférer `../../.venv/bin/...`).
+- Un shell persistant peut être dans n'importe quel répertoire: n'assume jamais être à la racine. Préfixe systématiquement chaque commande par `cd "$(git rev-parse --show-toplevel)" &&` avant `source .venv/bin/activate`, pour que l'ancrage soit auto-suffisant plutôt que dépendant du cwd courant.
 - Si tu touches un schéma SQLAlchemy, évalue systématiquement l'impact Alembic.
 - Si tu touches un endpoint, vérifie payloads, statuts HTTP, auth et erreurs.
 - Ne masque pas un échec de test/lint/typecheck.
@@ -77,20 +77,20 @@ Si un skill n'est pas utilisé, indique brièvement pourquoi.
 
 ### 5) Validation
 
-Depuis `apps/backend` (selon périmètre):
+Ancrées sur la racine du dépôt quel que soit le cwd courant (selon périmètre):
 
-- `../../.venv/bin/ruff check .`
-- `../../.venv/bin/pyright`
-- `../../.venv/bin/pytest`
-- `../../.venv/bin/pytest --no-cov tests/<fichier>.py` pour une validation ciblée rapide.
-- `../../.venv/bin/alembic upgrade head`
+- `cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && cd apps/backend && ruff check .`
+- `cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && cd apps/backend && pyright`
+- `cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && cd apps/backend && pytest`
+- `cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && cd apps/backend && pytest --no-cov tests/<fichier>.py` pour une validation ciblée rapide.
+- `cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && cd apps/backend && alembic upgrade head`
 
 Depuis la racine (optionnel):
 
-- `make lint-backend`
-- `make typecheck-backend`
-- `make test-backend`
-- `make migrate-up`
+- `cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && make lint-backend`
+- `cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && make typecheck-backend`
+- `cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && make test-backend`
+- `cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && make migrate-up`
 
 Pour incidents runtime compose:
 

@@ -100,6 +100,9 @@ jobs:
       - name: Frontend lint
         run: npm run frontend:lint
 
+      - name: Frontend test
+        run: npm run frontend:test
+
       - name: Frontend build
         run: npm run frontend:build
 
@@ -121,6 +124,12 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Bundle OpenAPI spec
+        run: npm run openapi:bundle
+
+      - name: Verify bundled OpenAPI spec is committed
+        run: git diff --exit-code -- openapi/waterfall_v1.yaml
 
       - name: Regenerate OpenAPI TypeScript client
         run: npm run api-client:generate

@@ -1,0 +1,23 @@
+type: object
+properties:
+  task_id:
+    type: integer
+    minimum: 1
+    nullable: true
+  cost_category_id:
+    type: integer
+    minimum: 1
+  label:
+    type: string
+    minLength: 1
+    maxLength: 512
+  quantity:
+    type: number
+    exclusiveMinimum: 0
+  unit_cost:
+    type: number
+    minimum: 0
+  supply_status:
+    allOf:
+    - $ref: SupplyStatus.yaml
+    nullable: true

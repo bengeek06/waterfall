@@ -1,0 +1,17 @@
+allOf:
+- $ref: RoleCapacityCreate.yaml
+- type: object
+  required:
+  - id
+  - created_at
+  - updated_at
+  properties:
+    id:
+      type: integer
+      minimum: 1
+    created_at:
+      type: string
+      format: date-time
+    updated_at:
+      type: string
+      format: date-time

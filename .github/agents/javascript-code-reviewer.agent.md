@@ -43,7 +43,7 @@ Analyse prioritairement:
 ## Contexte frontend Waterfall à appliquer
 
 - Stack principale: Next.js 16 App Router, React 19, TypeScript, Vitest, Testing Library, ESLint.
-- Contrat API: types générés depuis `@rebirth/api-client`, couplés à OpenAPI backend.
+- Contrat API: types générés depuis `@waterfall/api-client`, couplés à OpenAPI backend.
 - Auth/session frontend:
 	- token d'accès maintenu en mémoire (`src/lib/session.ts`);
 	- refresh géré côté client avec mécanisme de déduplication (`refreshInFlight`) dans `src/lib/backend.ts`.

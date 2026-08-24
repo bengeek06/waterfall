@@ -1,0 +1,15 @@
+type: object
+required:
+- name
+properties:
+  name:
+    type: string
+    minLength: 1
+    maxLength: 512
+  parent_task_id:
+    type: integer
+    minimum: 1
+    nullable: true
+  is_milestone:
+    type: boolean
+    default: false

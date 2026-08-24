@@ -1,0 +1,15 @@
+type: object
+required:
+- role_id
+- person_count
+- available_hours
+properties:
+  role_id:
+    type: integer
+    minimum: 1
+  person_count:
+    type: number
+    minimum: 0
+  available_hours:
+    type: number
+    minimum: 0

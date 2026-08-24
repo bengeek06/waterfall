@@ -1,0 +1,18 @@
+type: object
+required:
+- batchId
+- identicalSource
+- items
+properties:
+  batchId:
+    type: integer
+    minimum: 1
+  sourceSha256:
+    type: string
+    nullable: true
+  identicalSource:
+    type: boolean
+  items:
+    type: array
+    items:
+      $ref: ImportDiffItem.yaml

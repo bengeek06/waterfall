@@ -1,16 +1,21 @@
 {
-  "name": "rebirth-root",
+  "name": "waterfall-root",
   "private": true,
   "workspaces": [
     "apps/*",
     "packages/*"
   ],
   "scripts": {
-    "api-client:generate": "npm --workspace @rebirth/api-client run generate",
-    "api-client:build": "npm --workspace @rebirth/api-client run build",
+    "openapi:bundle": "redocly bundle openapi/spec/waterfall_v1.yaml -o openapi/waterfall_v1.yaml --ext yaml && node scripts/prepend-openapi-banner.mjs",
+    "openapi:lint": "redocly lint openapi/spec/waterfall_v1.yaml",
+    "api-client:generate": "npm --workspace @waterfall/api-client run generate",
+    "api-client:build": "npm --workspace @waterfall/api-client run build",
     "frontend:dev": "npm --workspace frontend run dev",
     "frontend:build": "npm run api-client:build && npm --workspace frontend run build",
     "frontend:lint": "npm --workspace frontend run lint",
-    "frontend:test": "npm --workspace frontend run test"
+    "frontend:test": "npm run api-client:build && npm --workspace frontend run test"
+  },
+  "devDependencies": {
+    "@redocly/cli": "^2.47.0"
   }
 }

@@ -1,0 +1,7 @@
+name: projectId
+in: path
+required: true
+schema:
+  type: integer
+  minimum: 1
+description: Identifiant technique ms_project.id

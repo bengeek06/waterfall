@@ -1,0 +1,9 @@
+type: object
+required:
+- planning_id
+- structure
+properties:
+  planning_id:
+    type: integer
+  structure:
+    $ref: PlanningStructureCreate.yaml

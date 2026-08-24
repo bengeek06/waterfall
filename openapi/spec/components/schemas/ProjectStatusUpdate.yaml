@@ -1,0 +1,14 @@
+type: object
+required:
+- status
+properties:
+  status:
+    type: string
+    enum:
+    - cree
+    - initialise
+    - en_reponse_appel_offre
+    - perdu
+    - en_cours
+    - termine
+    - abandonne

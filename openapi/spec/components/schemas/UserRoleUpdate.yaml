@@ -1,0 +1,6 @@
+type: object
+required:
+- is_admin
+properties:
+  is_admin:
+    type: boolean

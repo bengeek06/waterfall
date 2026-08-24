@@ -1,0 +1,8 @@
+name: year
+in: path
+required: true
+schema:
+  type: integer
+  minimum: 2000
+  maximum: 9999
+description: Annee civile

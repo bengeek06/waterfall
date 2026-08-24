@@ -1,0 +1,175 @@
+/imports/v1/batches:
+  post:
+    tags:
+    - imports-v1
+    summary: Creer un batch d'import
+    operationId: createImportBatchV1
+    security:
+    - bearerAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/ImportBatchCreateRequest.yaml
+    responses:
+      '201':
+        description: Batch cree
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ImportBatchResponse.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+/imports/v1/batches/{batchId}/xml:
+  post:
+    tags:
+    - imports-v1
+    summary: Uploader le fichier XML MS Project
+    operationId: uploadImportSourceXmlV1
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/BatchId.yaml
+    requestBody:
+      required: true
+      content:
+        multipart/form-data:
+          schema:
+            type: object
+            required:
+            - file
+            properties:
+              file:
+                type: string
+                format: binary
+                description: Fichier .xml source MS Project
+    responses:
+      '202':
+        description: XML recu et associe au batch
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ImportBatchResponse.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/BatchNotFound.yaml
+      '415':
+        description: Media type non supporte
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ErrorResponse.yaml
+      '413':
+        description: Fichier XML trop volumineux
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ErrorResponse.yaml
+/imports/v1/batches/{batchId}/run:
+  post:
+    tags:
+    - imports-v1
+    summary: Executer l'import V1 (taches + dependances)
+    operationId: runImportBatchV1
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/BatchId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/ImportRunRequest.yaml
+    responses:
+      '202':
+        description: Import lance
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ImportRunAcceptedResponse.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/BatchNotFound.yaml
+      '409':
+        description: Etat du batch incompatible avec l'operation
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ErrorResponse.yaml
+/imports/v1/batches/{batchId}/diff:
+  get:
+    tags:
+    - imports-v1
+    summary: Previsualiser les changements d'un import
+    operationId: getImportBatchDiffV1
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/BatchId.yaml
+    responses:
+      '200':
+        description: Diff d'import
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ImportDiffResponse.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/BatchNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
+/imports/v1/batches/{batchId}:
+  get:
+    tags:
+    - imports-v1
+    summary: Lire le statut du batch
+    operationId: getImportBatchV1
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/BatchId.yaml
+    responses:
+      '200':
+        description: Statut du batch
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ImportBatchStatusResponse.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/BatchNotFound.yaml
+/imports/v1/batches/{batchId}/errors:
+  get:
+    tags:
+    - imports-v1
+    summary: Lister les erreurs d'import
+    operationId: listImportBatchErrorsV1
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/BatchId.yaml
+    responses:
+      '200':
+        description: Liste paginee des erreurs d'import
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ImportErrorListResponse.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/BatchNotFound.yaml

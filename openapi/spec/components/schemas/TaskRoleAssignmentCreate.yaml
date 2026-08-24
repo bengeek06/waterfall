@@ -1,0 +1,19 @@
+type: object
+required:
+- role_id
+- quantity
+- hours
+properties:
+  role_id:
+    type: integer
+    minimum: 1
+  quantity:
+    type: number
+    exclusiveMinimum: 0
+  hours:
+    type: number
+    minimum: 0
+  comment:
+    type: string
+    maxLength: 10000
+    nullable: true

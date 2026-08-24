@@ -1,4 +1,4 @@
-import { DEFAULT_API_BASE_URL, type components } from "@rebirth/api-client";
+import { DEFAULT_API_BASE_URL, type components } from "@waterfall/api-client";
 
 import type { SessionTokens } from "./session";
 

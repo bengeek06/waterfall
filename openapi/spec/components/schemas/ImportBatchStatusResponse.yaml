@@ -1,0 +1,15 @@
+allOf:
+- $ref: ImportBatchResponse.yaml
+- type: object
+  properties:
+    projectId:
+      type: integer
+      minimum: 1
+      nullable: true
+      description: ms_project.id cree par l'import
+    counters:
+      $ref: ImportCounters.yaml
+    warnings:
+      type: array
+      items:
+        $ref: ImportIssue.yaml

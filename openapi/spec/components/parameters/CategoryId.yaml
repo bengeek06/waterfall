@@ -1,0 +1,7 @@
+name: categoryId
+in: path
+required: true
+schema:
+  type: integer
+  minimum: 1
+description: Identifiant technique de la categorie de cout

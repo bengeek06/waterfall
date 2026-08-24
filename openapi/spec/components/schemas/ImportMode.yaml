@@ -1,0 +1,9 @@
+type: string
+enum:
+- standard
+- full
+description: 'standard: importe uniquement ms_task et ms_task_link.
+
+  full: reserve a une phase ulterieure (ressources/affectations).
+
+  '

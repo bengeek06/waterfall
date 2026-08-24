@@ -1,0 +1,24 @@
+type: object
+required:
+- action
+- taskUid
+- predecessorUid
+- linkType
+properties:
+  action:
+    type: string
+    enum:
+    - added
+    - removed
+  taskUid:
+    type: integer
+  predecessorUid:
+    type: integer
+  linkType:
+    type: integer
+  lagTenthMinute:
+    type: integer
+    nullable: true
+  lagFormat:
+    type: integer
+    nullable: true

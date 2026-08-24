@@ -1,0 +1,48 @@
+type: object
+required:
+- id
+- estimate_id
+- cost_type_id
+- cost_category_id
+- cost_type_code
+- accounting_code
+- label
+- quantity
+- unit_cost
+- purchase_cost
+properties:
+  id:
+    type: integer
+    minimum: 1
+  estimate_id:
+    type: integer
+    minimum: 1
+  task_id:
+    type: integer
+    minimum: 1
+    nullable: true
+  cost_type_id:
+    type: integer
+    minimum: 1
+  cost_category_id:
+    type: integer
+    minimum: 1
+  cost_type_code:
+    type: string
+  accounting_code:
+    type: string
+  category_code:
+    type: string
+    nullable: true
+  label:
+    type: string
+  quantity:
+    type: number
+  unit_cost:
+    type: number
+  purchase_cost:
+    type: number
+  supply_status:
+    allOf:
+    - $ref: SupplyStatus.yaml
+    nullable: true

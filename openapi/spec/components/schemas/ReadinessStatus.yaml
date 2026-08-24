@@ -1,0 +1,11 @@
+type: object
+required:
+- status
+- timestamp
+properties:
+  status:
+    type: string
+    example: ready
+  timestamp:
+    type: string
+    format: date-time

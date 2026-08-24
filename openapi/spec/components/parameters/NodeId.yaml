@@ -1,0 +1,7 @@
+name: nodeId
+in: path
+required: true
+schema:
+  type: integer
+  minimum: 1
+description: Identifiant technique du noeud de ressources
