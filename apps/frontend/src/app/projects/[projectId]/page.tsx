@@ -994,10 +994,10 @@ export default function ProjectDetailsPage() {
 
       <ProjectTabs activeTab={activeTab} onChange={setActiveTab} />
 
-      <section className="panel">
-        {busy ? <p className="muted" role="status">Chargement...</p> : null}
-        {error ? <p className="error" role="alert">{error}</p> : null}
-        {importFeedback ? <p className="muted" role="status">{importFeedback}</p> : null}
+      <div className="space-y-4">
+        {busy ? <p className="text-sm text-muted-foreground" role="status">Chargement...</p> : null}
+        {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
+        {importFeedback ? <Alert><AlertDescription>{importFeedback}</AlertDescription></Alert> : null}
 
         {activeTab === "planning" && !isReadOnlyProject ? (
           <Card className="mb-4">
@@ -1186,22 +1186,23 @@ export default function ProjectDetailsPage() {
         ) : null}
 
         {activeTab === "planning" && !structureOpen ? (
-          <div className="tab-content">
-            <div className="row" style={{ justifyContent: "space-between" }}>
+          <div className="grid gap-4">
+            <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
                 <h2>Planning affiché</h2>
-                <p className="muted">
+                <p className="text-sm text-muted-foreground">
                   {selectedPlanning
                     ? `Version ${selectedPlanning.version_number} - ${selectedPlanning.status}`
                     : "Aucune version de planning."}
                 </p>
               </div>
-              <div className="row">
+              <div className="flex flex-wrap items-center gap-2">
                 {plannings.length ? (
-                  <label className="estimate-select-label">
+                  <label className="grid gap-1 text-xs text-muted-foreground">
                     Version affichée
                     <select
                       aria-label="Version affichée"
+                      className="h-8 min-w-24 rounded-md border border-input bg-background px-2 text-sm text-foreground"
                       value={selectedPlanningId ?? ""}
                       disabled={planningBusy}
                       onChange={(event) => void selectPlanning(Number(event.target.value))}
@@ -1246,13 +1247,13 @@ export default function ProjectDetailsPage() {
                 ) : null}
               </div>
             </div>
-            {planningDetailBusy ? <p className="muted" role="status">Chargement du planning...</p> : null}
-            {!planningDetailBusy && !planningDetail ? <p className="muted empty-state">Aucun planning sélectionné.</p> : null}
+            {planningDetailBusy ? <p className="text-sm text-muted-foreground" role="status">Chargement du planning...</p> : null}
+            {!planningDetailBusy && !planningDetail ? <p className="py-6 text-sm text-muted-foreground">Aucun planning sélectionné.</p> : null}
             {planningDetail?.tasks.length ? <ReadOnlyGantt tasks={planningDetail.tasks} /> : null}
-            {planningDetail && !planningDetail.tasks.length ? <p className="muted empty-state">Le planning ne contient aucune tâche.</p> : null}
+            {planningDetail && !planningDetail.tasks.length ? <p className="py-6 text-sm text-muted-foreground">Le planning ne contient aucune tâche.</p> : null}
             {planningDetail?.tasks.length ? (
-              <div className="table-scroll">
-                <table className="table">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
                   <thead>
                     <tr>
                       <th scope="col">WBS</th>
@@ -1280,21 +1281,22 @@ export default function ProjectDetailsPage() {
         ) : null}
 
         {activeTab === "estimate" ? (
-          <div className="tab-content">
-            <div className="row" style={{ justifyContent: "space-between" }}>
+          <div className="grid gap-4">
+            <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
                 <h2>Versions de devis</h2>
-                <p className="muted">
+                <p className="text-sm text-muted-foreground">
                   {canEditEstimate
                     ? "Le brouillon sélectionné est éditable."
                     : "Cette version n'est plus modifiable."}
                 </p>
               </div>
-              <div className="row">
+              <div className="flex flex-wrap items-center gap-2">
                 {estimates.length ? (
-                  <label className="estimate-select-label">
+                  <label className="grid gap-1 text-xs text-muted-foreground">
                     Version
                     <select
+                      className="h-8 min-w-24 rounded-md border border-input bg-background px-2 text-sm text-foreground"
                       value={selectedEstimateId ?? ""}
                       onChange={(event) => setSelectedEstimateId(Number(event.target.value))}
                     >
@@ -1333,10 +1335,10 @@ export default function ProjectDetailsPage() {
                 ) : null}
               </div>
             </div>
-            {!estimates.length ? <p className="muted empty-state">Aucune version de devis.</p> : null}
+            {!estimates.length ? <p className="py-6 text-sm text-muted-foreground">Aucune version de devis.</p> : null}
 
             {estimates.length ? (
-              <div className="estimate-summary">
+              <div className="grid gap-4">
                 <div className="grid min-w-37.5 w-fit gap-0.5 rounded-lg border bg-muted/40 px-4 py-3">
                   <strong>{estimateTaskRowCount}</strong>
                   <span>tâches snapshotées</span>
@@ -1585,7 +1587,7 @@ export default function ProjectDetailsPage() {
             ) : null}
           </div>
         ) : null}
-      </section>
+      </div>
 
       <AlertDialog open={Boolean(costLinePendingDelete)} onOpenChange={(open) => !open && setCostLinePendingDelete(null)}>
         <AlertDialogContent>
