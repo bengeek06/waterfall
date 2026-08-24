@@ -1306,29 +1306,29 @@ export default function ProjectDetailsPage() {
                   </label>
                 ) : null}
                 {!isReadOnlyProject ? (
-                  <button className="btn btn-primary" type="button" onClick={() => void createDraftEstimate()}>
+                  <Button type="button" onClick={() => void createDraftEstimate()}>
                     Nouveau brouillon
-                  </button>
+                  </Button>
                 ) : null}
                 {estimates.length ? (
-                  <button
-                    className="btn"
+                  <Button
+                    variant="outline"
                     type="button"
                     disabled={exportBusy || isReadOnlyProject}
                     onClick={() => void exportExcel()}
                   >
                     {exportBusy ? "Export..." : "Export Excel"}
-                  </button>
+                  </Button>
                 ) : null}
                 {canEditEstimate ? (
-                  <button
-                    className="btn"
+                  <Button
+                    variant="outline"
                     type="button"
                     disabled={estimateBusy}
                     onClick={() => setEstimateValidationOpen(true)}
                   >
                     Valider le devis
-                  </button>
+                  </Button>
                 ) : null}
               </div>
             </div>
@@ -1346,10 +1346,13 @@ export default function ProjectDetailsPage() {
                 </div>
 
                 {canEditEstimate ? (
-                  <div className="cost-line-form row">
-                    <label className="estimate-select-label">
-                      Catégorie
+                  <Card>
+                    <CardContent className="grid gap-4 pt-6 md:grid-cols-5">
+                    <div className="grid gap-2">
+                      <Label htmlFor="cost-line-category">Catégorie</Label>
                       <select
+                        id="cost-line-category"
+                        className="h-8 rounded-md border border-input bg-background px-2 text-sm"
                         value={costLineDraft.categoryId}
                         onChange={(event) =>
                           setCostLineDraft((prev) => ({ ...prev, categoryId: event.target.value }))
@@ -1362,10 +1365,10 @@ export default function ProjectDetailsPage() {
                           </option>
                         ))}
                       </select>
-                    </label>
-                    <div className="field">
-                      <label htmlFor="cost-line-label">Libellé</label>
-                      <input
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="cost-line-label">Libellé</Label>
+                      <Input
                         id="cost-line-label"
                         value={costLineDraft.label}
                         onChange={(event) =>
@@ -1373,9 +1376,9 @@ export default function ProjectDetailsPage() {
                         }
                       />
                     </div>
-                    <div className="field">
-                      <label htmlFor="cost-line-quantity">Quantité</label>
-                      <input
+                    <div className="grid gap-2">
+                      <Label htmlFor="cost-line-quantity">Quantité</Label>
+                      <Input
                         id="cost-line-quantity"
                         type="number"
                         min="0"
@@ -1386,9 +1389,9 @@ export default function ProjectDetailsPage() {
                         }
                       />
                     </div>
-                    <div className="field">
-                      <label htmlFor="cost-line-unit-cost">Coût unitaire</label>
-                      <input
+                    <div className="grid gap-2">
+                      <Label htmlFor="cost-line-unit-cost">Coût unitaire</Label>
+                      <Input
                         id="cost-line-unit-cost"
                         type="number"
                         min="0"
@@ -1399,15 +1402,17 @@ export default function ProjectDetailsPage() {
                         }
                       />
                     </div>
-                    <button
-                      className="btn btn-primary"
+                    <div className="flex items-end">
+                    <Button
                       type="button"
                       disabled={estimateBusy}
                       onClick={() => void addCostLine()}
                     >
                       Ajouter la ligne
-                    </button>
-                  </div>
+                    </Button>
+                    </div>
+                    </CardContent>
+                  </Card>
                 ) : null}
 
                 <div className="table-scroll">
