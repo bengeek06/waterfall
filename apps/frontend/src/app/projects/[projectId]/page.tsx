@@ -1064,14 +1064,15 @@ export default function ProjectDetailsPage() {
         ) : null}
 
         {activeTab === "planning" && structureOpen && !isReadOnlyProject ? (
-          <div className="panel" style={{ marginBottom: "1rem" }}>
-            <h2>Structure initiale</h2>
-            <p className="muted">
+          <Card className="mb-4">
+            <CardContent className="pt-6">
+            <h2 className="text-lg font-semibold">Structure initiale</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
               Définis les postes, lots et livrables. L&apos;API enregistre la structure en générant le squelette.
             </p>
             {structureDraft.map((row, index) => (
-              <div className="row cost-line-form" key={row.rowId}>
-                <input
+              <div className="mt-4 grid gap-3 rounded-lg border p-3 md:grid-cols-6" key={row.rowId}>
+                <Input
                   aria-label={`Clé poste ${index + 1}`}
                   placeholder="Clé poste"
                   value={row.postKey}
@@ -1083,7 +1084,7 @@ export default function ProjectDetailsPage() {
                     )
                   }
                 />
-                <input
+                <Input
                   aria-label={`Nom poste ${index + 1}`}
                   placeholder="Poste"
                   value={row.postName}
@@ -1095,7 +1096,7 @@ export default function ProjectDetailsPage() {
                     )
                   }
                 />
-                <input
+                <Input
                   aria-label={`Clé lot ${index + 1}`}
                   placeholder="Clé lot"
                   value={row.lotKey}
@@ -1107,7 +1108,7 @@ export default function ProjectDetailsPage() {
                     )
                   }
                 />
-                <input
+                <Input
                   aria-label={`Nom lot ${index + 1}`}
                   placeholder="Lot"
                   value={row.lotName}
@@ -1119,7 +1120,7 @@ export default function ProjectDetailsPage() {
                     )
                   }
                 />
-                <input
+                <Input
                   aria-label={`Livrables ${index + 1}`}
                   placeholder="Livrables séparés par des virgules"
                   value={row.deliverables}
@@ -1132,20 +1133,21 @@ export default function ProjectDetailsPage() {
                   }
                 />
                 {structureDraft.length > 1 ? (
-                  <button
-                    className="btn btn-danger"
+                  <Button
+                    variant="destructive"
+                    size="sm"
                     type="button"
                     aria-label={`Supprimer la ligne ${index + 1}`}
                     onClick={() => setStructureDraft((previous) => previous.filter((_, itemIndex) => itemIndex !== index))}
                   >
                     Supprimer
-                  </button>
+                  </Button>
                 ) : null}
               </div>
             ))}
-            <div className="row">
-              <button
-                className="btn"
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Button
+                variant="outline"
                 type="button"
                 onClick={() =>
                   setStructureDraft((previous) => [
@@ -1162,25 +1164,24 @@ export default function ProjectDetailsPage() {
                 }
               >
                 Ajouter une ligne
-              </button>
-              <button
-                className="btn btn-primary"
+              </Button>
+              <Button
                 type="button"
                 disabled={structureBusy}
                 onClick={() => void savePlanningStructure()}
               >
                 {structureBusy ? "Enregistrement..." : "Enregistrer la structure"}
-              </button>
-              <button
-                className="btn btn-primary"
+              </Button>
+              <Button
                 type="button"
                 disabled={structureBusy}
                 onClick={() => void generatePlanningStructure()}
               >
                 {structureBusy ? "Génération..." : "Générer le squelette"}
-              </button>
+              </Button>
             </div>
-          </div>
+            </CardContent>
+          </Card>
         ) : null}
 
         {activeTab === "planning" && !structureOpen ? (
@@ -1213,34 +1214,34 @@ export default function ProjectDetailsPage() {
                   </label>
                 ) : null}
                 {selectedPlanning?.status === "draft" ? (
-                  <button
-                    className="btn"
+                  <Button
+                    variant="outline"
                     type="button"
                     disabled={planningBusy || isReadOnlyProject}
                     onClick={() => void validateSelectedPlanning()}
                   >
                     Valider le planning
-                  </button>
+                  </Button>
                 ) : null}
                 {selectedPlanning?.status === "validated" && project?.planning_reference_id !== selectedPlanning.id ? (
-                  <button
-                    className="btn"
+                  <Button
+                    variant="outline"
                     type="button"
                     disabled={planningBusy || isReadOnlyProject}
                     onClick={() => void setSelectedPlanningAsReference()}
                   >
                     Définir comme référence
-                  </button>
+                  </Button>
                 ) : null}
                 {(plannings.some((planning) => planning.status === "draft") || project?.planning_reference_id !== null) && !isReadOnlyProject ? (
-                  <button
-                    className="btn"
+                  <Button
+                    variant="outline"
                     type="button"
                     disabled={planningBusy || isReadOnlyProject}
                     onClick={() => void reopenStructure()}
                   >
                     Rouvrir la structure
-                  </button>
+                  </Button>
                 ) : null}
               </div>
             </div>
