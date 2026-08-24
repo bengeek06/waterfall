@@ -1337,11 +1337,11 @@ export default function ProjectDetailsPage() {
 
             {estimates.length ? (
               <div className="estimate-summary">
-                <div className="estimate-metric">
+                <div className="grid min-w-37.5 w-fit gap-0.5 rounded-lg border bg-muted/40 px-4 py-3">
                   <strong>{estimateTaskRowCount}</strong>
                   <span>tâches snapshotées</span>
                 </div>
-                <div className="estimate-metric">
+                <div className="grid min-w-37.5 w-fit gap-0.5 rounded-lg border bg-muted/40 px-4 py-3">
                   <strong>{costLines.length}</strong>
                   <span>lignes de coût</span>
                 </div>
@@ -1523,7 +1523,7 @@ export default function ProjectDetailsPage() {
         ) : null}
 
         {activeTab === "commitments" ? (
-          <div className="tab-placeholder">
+          <div className="grid min-h-45 content-center justify-items-start gap-4">
             <h2>Reste à engager</h2>
             <p className="muted">
               Le suivi budget de référence / engagé / reste à engager sera construit sur les versions
@@ -1538,17 +1538,17 @@ export default function ProjectDetailsPage() {
             {!selectedEstimateId ? <p className="muted">Sélectionne un devis dans l&apos;onglet Devis.</p> : null}
             {selectedEstimateId && !aggregates ? <p className="muted">Chargement des agrégats...</p> : null}
             {aggregates ? (
-              <div className="estimate-summary">
-                <div className="row">
-                  <div className="estimate-metric">
+              <div className="grid gap-4">
+                <div className="flex flex-wrap gap-3">
+                  <div className="grid min-w-37.5 w-fit gap-0.5 rounded-lg border bg-muted/40 px-4 py-3">
                     <strong>{Number(aggregates.total_labor_cost).toFixed(2)}</strong>
                     <span>Total MO</span>
                   </div>
-                  <div className="estimate-metric">
+                  <div className="grid min-w-37.5 w-fit gap-0.5 rounded-lg border bg-muted/40 px-4 py-3">
                     <strong>{Number(aggregates.total_purchase_cost).toFixed(2)}</strong>
                     <span>Total Achat</span>
                   </div>
-                  <div className="estimate-metric">
+                  <div className="grid min-w-37.5 w-fit gap-0.5 rounded-lg border bg-muted/40 px-4 py-3">
                     <strong>{Number(aggregates.total_unburdened_cost).toFixed(2)}</strong>
                     <span>PRU non chargé</span>
                   </div>
