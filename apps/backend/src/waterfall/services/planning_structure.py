@@ -8,9 +8,9 @@ from sqlalchemy.orm import Session
 
 from waterfall.models.ms_core import MsProject, MsTask, MsTaskLink
 from waterfall.models.planning import WfPlanning, WfPlanningLinkSnapshot, WfPlanningTaskSnapshot
-from waterfall.models.resources import EstimateCostLine, EstimateTaskRow, TaskRoleAssignment
-from waterfall.models.wf_core import WfChargeLine, WfTaskEnrichment
+from waterfall.models.wf_core import WfTaskEnrichment
 from waterfall.schemas.projects import PlanningStructureCreate
+from waterfall.services.task_references import is_task_referenced
 
 
 def save_planning_structure_draft(planning: WfPlanning, payload: PlanningStructureCreate) -> None:
@@ -120,16 +120,7 @@ def generate_planning_structure(
     incoming_keys = set(keys)
     removed_tasks = [task for key, task in existing_by_key.items() if key not in incoming_keys]
     for task in removed_tasks:
-        task_referenced = (
-            db.query(TaskRoleAssignment.id).filter(TaskRoleAssignment.task_id == task.id).first()
-            or db.query(EstimateCostLine.id).filter(EstimateCostLine.task_id == task.id).first()
-            or db.query(EstimateTaskRow.id).filter(EstimateTaskRow.task_id == task.id).first()
-            or db.query(WfChargeLine.id)
-            .filter(WfChargeLine.project_id == project.id)
-            .filter(WfChargeLine.task_uid == task.uid)
-            .first()
-        )
-        if task_referenced:
+        if is_task_referenced(db, project_id=project.id, task_uid=task.uid, task_id=task.id):
             raise ValueError(
                 f"Planning task is referenced and cannot be removed: {task.structure_key}"
             )

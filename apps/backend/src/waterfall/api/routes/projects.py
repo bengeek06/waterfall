@@ -75,6 +75,7 @@ from waterfall.services.project_lifecycle import (
     ensure_project_mutable,
     validate_project_status_transition,
 )
+from waterfall.services.task_references import is_task_referenced
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 MSP_NS = "http://schemas.microsoft.com/project/2007"
@@ -1863,35 +1864,16 @@ def delete_project_task(
         legacy_task = (
             db.query(MsTask).filter(MsTask.project_id == project_id, MsTask.uid == task_uid).first()
         )
-        if legacy_task is not None:
-            in_use = (
-                db.query(TaskRoleAssignment.id)
-                .filter(TaskRoleAssignment.task_id == legacy_task.id)
-                .first()
-                is not None
-                or db.query(EstimateCostLine.id)
-                .filter(EstimateCostLine.task_id == legacy_task.id)
-                .first()
-                is not None
-                or db.query(EstimateTaskRow.id)
-                .filter(EstimateTaskRow.task_id == legacy_task.id)
-                .first()
-                is not None
-                or db.query(EstimateTaskRow.id)
-                .filter(EstimateTaskRow.parent_task_id == legacy_task.id)
-                .first()
-                is not None
-                or db.query(WfChargeLine.id)
-                .filter(WfChargeLine.project_id == project_id)
-                .filter(WfChargeLine.task_uid == task_uid)
-                .first()
-                is not None
+        if is_task_referenced(
+            db,
+            project_id=project_id,
+            task_uid=task_uid,
+            task_id=legacy_task.id if legacy_task is not None else None,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Planning task is referenced by estimates, assignments, or charges",
             )
-            if in_use:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="Planning task is referenced by estimates, assignments, or charges",
-                )
 
         db.query(WfPlanningLinkSnapshot).filter(
             WfPlanningLinkSnapshot.planning_id == planning.id,
@@ -1924,13 +1906,7 @@ def delete_project_task(
             detail="Task has child tasks and cannot be deleted",
         )
 
-    in_use = (
-        db.query(TaskRoleAssignment).filter(TaskRoleAssignment.task_id == task.id).first()
-        is not None
-        or db.query(EstimateCostLine).filter(EstimateCostLine.task_id == task.id).first()
-        is not None
-        or db.query(EstimateTaskRow).filter(EstimateTaskRow.task_id == task.id).first() is not None
-    )
+    in_use = is_task_referenced(db, project_id=project_id, task_uid=task_uid, task_id=task.id)
     if in_use:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

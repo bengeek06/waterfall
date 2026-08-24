@@ -4,14 +4,8 @@ from sqlalchemy.orm import Session
 
 from waterfall.models.ms_core import MsProject, MsTask
 from waterfall.models.planning import WfPlanning, WfPlanningLinkSnapshot, WfPlanningTaskSnapshot
-from waterfall.models.resources import (
-    EstimateCostLine,
-    EstimateLine,
-    EstimateTaskRow,
-    TaskRoleAssignment,
-)
-from waterfall.models.wf_core import WfChargeLine
 from waterfall.services.msproject_xml import ParsedProject
+from waterfall.services.task_references import is_task_referenced
 
 
 def build_import_diff(
@@ -74,23 +68,11 @@ def build_import_diff(
         legacy_task_id = (
             db.query(MsTask.id).filter(MsTask.project_id == project.id, MsTask.uid == uid).scalar()
         )
-        referenced = (
-            legacy_task_id is not None
-            and (
-                db.query(TaskRoleAssignment.id)
-                .filter(TaskRoleAssignment.task_id == legacy_task_id)
-                .first()
-                or db.query(EstimateCostLine.id)
-                .filter(EstimateCostLine.task_id == legacy_task_id)
-                .first()
-                or db.query(EstimateLine.id).filter(EstimateLine.task_id == legacy_task_id).first()
-                or db.query(EstimateTaskRow.id)
-                .filter(EstimateTaskRow.task_id == legacy_task_id)
-                .first()
-            )
-            or db.query(WfChargeLine.id)
-            .filter(WfChargeLine.project_id == project.id, WfChargeLine.task_uid == uid)
-            .first()
+        referenced = is_task_referenced(
+            db,
+            project_id=project.id,
+            task_uid=uid,
+            task_id=legacy_task_id,
         )
         items.append(
             {
