@@ -2,9 +2,34 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { CircleCheck, CircleDot, CirclePlus, CircleX, LoaderCircle, Send } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
+import { toast } from "sonner";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { ProjectsTable } from "@/components/projects-table";
+import { Textarea } from "@/components/ui/textarea";
 import {
   ApiError,
   Project,
@@ -18,19 +43,6 @@ import {
 import { clearSession, getSession, setSession, type SessionTokens } from "@/lib/session";
 
 const PROJECT_PAGE_SIZE = 50;
-const ARCHIVED_STATUSES = new Set<Project["status"]>(["perdu", "termine", "abandonne"]);
-const PROJECT_STATUS_DETAILS: Record<
-  Project["status"],
-  { label: string; Icon: LucideIcon; tone: "blue" | "green" | "red" }
-> = {
-  cree: { label: "Créé", Icon: CirclePlus, tone: "blue" },
-  initialise: { label: "Initialisé", Icon: LoaderCircle, tone: "blue" },
-  en_reponse_appel_offre: { label: "En réponse à appel d'offre", Icon: Send, tone: "blue" },
-  perdu: { label: "Perdu", Icon: CircleX, tone: "red" },
-  en_cours: { label: "En cours", Icon: CircleDot, tone: "green" },
-  termine: { label: "Terminé", Icon: CircleCheck, tone: "red" },
-  abandonne: { label: "Abandonné", Icon: CircleX, tone: "red" },
-};
 
 export default function ProjectsPage() {
   const router = useRouter();
@@ -46,6 +58,8 @@ export default function ProjectsPage() {
   const [createName, setCreateName] = useState("");
   const [createCode, setCreateCode] = useState("");
   const [createDescription, setCreateDescription] = useState("");
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
 
   const onSessionRefresh = useMemo(
     () => (next: SessionTokens) => {
@@ -132,6 +146,7 @@ export default function ProjectsPage() {
     setCreateName("");
     setCreateCode("");
     setCreateDescription("");
+    setCreateError(null);
   }
 
   async function onCreateProject() {
@@ -140,11 +155,11 @@ export default function ProjectsPage() {
       return;
     }
     if (!createName.trim() || !createCode.trim()) {
-      setError("Le nom et le code du projet sont obligatoires.");
+      setCreateError("Le nom et le code du projet sont obligatoires.");
       return;
     }
 
-    setError(null);
+    setCreateError(null);
     setActionBusy("Création du projet en cours...");
     try {
       const project = await createProject(
@@ -159,59 +174,28 @@ export default function ProjectsPage() {
       setProjects((prev) => [...prev, project].sort((left, right) => left.id - right.id));
       resetCreateFlow();
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Impossible de créer le projet.");
+      setCreateError(cause instanceof ApiError ? cause.message : "Impossible de créer le projet.");
     } finally {
       setActionBusy(null);
     }
   }
-
-  function toggleSelected(projectId: number) {
-    setSelectedIds((previous) => {
-      const next = new Set(previous);
-      if (next.has(projectId)) {
-        next.delete(projectId);
-      } else {
-        next.add(projectId);
-      }
-      return next;
-    });
-  }
-
-  function toggleSelectAll() {
-    const selectableProjects = projects.filter((project) => !ARCHIVED_STATUSES.has(project.status));
-    setSelectedIds((previous) =>
-      previous.size === selectableProjects.length
-        ? new Set()
-        : new Set(selectableProjects.map((project) => project.id)),
-    );
-  }
-
-  const selectableProjectCount = projects.filter(
-    (project) => !ARCHIVED_STATUSES.has(project.status),
-  ).length;
 
   async function onDeleteSelected() {
     if (!session || selectedIds.size === 0) {
       return;
     }
 
-    const confirmed = window.confirm(
-      `Supprimer définitivement ${selectedIds.size} projet(s) ? Cette action est irréversible.`,
-    );
-    if (!confirmed) {
-      return;
-    }
-
-    setError(null);
+    const projectIds = [...selectedIds];
     setActionBusy("Suppression des projets sélectionnés...");
     try {
-      for (const projectId of selectedIds) {
+      for (const projectId of projectIds) {
         await deleteProject(projectId, session, onSessionRefresh);
       }
-      setProjects((prev) => prev.filter((project) => !selectedIds.has(project.id)));
+      setProjects((prev) => prev.filter((project) => !projectIds.includes(project.id)));
       setSelectedIds(new Set());
+      toast.success(`${projectIds.length} projet(s) supprimé(s).`);
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Impossible de supprimer les projets.");
+      toast.error(cause instanceof ApiError ? cause.message : "Impossible de supprimer les projets.");
     } finally {
       setActionBusy(null);
     }
@@ -219,192 +203,172 @@ export default function ProjectsPage() {
 
   return (
     <>
-      <section className="panel">
-        <div className="row" style={{ justifyContent: "space-between" }}>
+      <Card>
+        <CardContent>
+        <div className="flex flex-wrap justify-between gap-4">
           <div>
-            <h1 className="title">Gestion des projets</h1>
+            <h1 className="text-2xl font-semibold">Gestion des projets</h1>
           </div>
         </div>
 
-        <div className="row" style={{ marginTop: "1rem" }}>
-          {!createMode ? (
-            <button className="btn btn-primary" type="button" onClick={() => setCreateMode(true)}>
-              Créer projet
-            </button>
-          ) : null}
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button type="button" onClick={() => setCreateMode(true)}>
+            Créer projet
+          </Button>
         </div>
 
-        <label className="checkbox-label" style={{ marginTop: "1rem" }}>
-          <input
-            type="checkbox"
-            checked={includeArchived}
-            onChange={toggleIncludeArchived}
-          />
-          Inclure les projets perdus, terminés ou abandonnés
-        </label>
+        </CardContent>
+      </Card>
 
-        {createMode ? (
-          <div className="panel" style={{ marginTop: "1rem" }}>
-            <h2 style={{ marginTop: 0 }}>Nouveau projet</h2>
-
-            <div className="field">
-              <label htmlFor="project-name">Nom du projet</label>
-              <input
+      <Dialog
+        open={createMode}
+        onOpenChange={(open) => {
+          if (open) {
+            setCreateMode(true);
+          } else {
+            resetCreateFlow();
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Nouveau projet</DialogTitle>
+            <DialogDescription>Créez le référentiel initial du projet.</DialogDescription>
+          </DialogHeader>
+          {createError ? <Alert variant="destructive"><AlertDescription>{createError}</AlertDescription></Alert> : null}
+          <div className="grid gap-4">
+            <div className="grid gap-2">
+              <Label htmlFor="project-name">Nom du projet</Label>
+              <Input
                 id="project-name"
-                type="text"
                 value={createName}
                 onChange={(event) => setCreateName(event.target.value)}
-                placeholder="Ex: Projet pilote"
+                placeholder="Ex. Projet pilote"
                 maxLength={255}
               />
             </div>
-            <div className="field">
-              <label htmlFor="project-code">Code projet</label>
-              <input
+            <div className="grid gap-2">
+              <Label htmlFor="project-code">Code projet</Label>
+              <Input
                 id="project-code"
-                type="text"
                 value={createCode}
                 onChange={(event) => setCreateCode(event.target.value)}
-                placeholder="Ex: PRJ-001"
+                placeholder="Ex. PRJ-001"
                 maxLength={64}
               />
             </div>
-            <div className="field">
-              <label htmlFor="project-description">Description (facultatif)</label>
-              <textarea
+            <div className="grid gap-2">
+              <Label htmlFor="project-description">Description (facultatif)</Label>
+              <Textarea
                 id="project-description"
-                rows={2}
+                rows={3}
                 value={createDescription}
                 onChange={(event) => setCreateDescription(event.target.value)}
                 maxLength={500}
               />
             </div>
-            <div className="row" style={{ marginTop: "0.8rem" }}>
-              <button
-                className="btn btn-primary"
-                type="button"
-                disabled={Boolean(actionBusy)}
-                onClick={() => void onCreateProject()}
-              >
-                Créer
-              </button>
-              <button className="btn" type="button" onClick={resetCreateFlow}>
-                Annuler
-              </button>
-            </div>
           </div>
-        ) : null}
-      </section>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={resetCreateFlow}>
+              Annuler
+            </Button>
+            <Button type="button" disabled={Boolean(actionBusy)} onClick={() => void onCreateProject()}>
+              {actionBusy ? "Création..." : "Créer"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
-      <section className="panel">
-        {busy ? <p className="muted" role="status">Chargement...</p> : null}
-        {actionBusy ? <p className="muted" role="status">{actionBusy}</p> : null}
-        {error ? <p className="error" role="alert">{error}</p> : null}
+      <Card className="mt-4">
+        <CardContent className="pt-6">
+        <label className="mb-4 flex items-center gap-2 text-sm text-muted-foreground">
+          <Checkbox
+            checked={includeArchived}
+            onCheckedChange={toggleIncludeArchived}
+          />
+          Inclure les projets perdus, terminés ou abandonnés
+        </label>
 
-        {!busy && !projects.length ? <p className="muted">Aucun projet importé.</p> : null}
+        {busy ? <p className="text-sm text-muted-foreground" role="status">Chargement...</p> : null}
+        {actionBusy ? <p className="text-sm text-muted-foreground" role="status">{actionBusy}</p> : null}
+        {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
+
+        {!busy && !projects.length ? <p className="text-sm text-muted-foreground">Aucun projet importé.</p> : null}
 
         {!busy && projects.length ? (
           <>
-            <div className="row" style={{ marginBottom: "0.8rem", justifyContent: "space-between" }}>
-              <span className="muted">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+              <span className="text-sm text-muted-foreground">
                 {selectedIds.size ? `${selectedIds.size} sélectionné(s)` : ""}
               </span>
-              <button
-                className="btn btn-danger"
+              <Button
+                variant="destructive"
                 type="button"
                 disabled={!selectedIds.size || Boolean(actionBusy)}
-                onClick={() => void onDeleteSelected()}
+                onClick={() => setDeleteDialogOpen(true)}
               >
                 Supprimer la sélection
-              </button>
+              </Button>
             </div>
-            <div className="table-scroll">
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th scope="col">
-                      <input
-                        type="checkbox"
-                        aria-label="Tout sélectionner"
-                        checked={selectedIds.size > 0 && selectedIds.size === selectableProjectCount}
-                        onChange={toggleSelectAll}
-                      />
-                    </th>
-                    <th scope="col">Code</th>
-                    <th scope="col">Nom</th>
-                    <th scope="col">Statut</th>
-                    <th scope="col">Description</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {projects.map((project) => {
-                    const status = PROJECT_STATUS_DETAILS[project.status];
-                    const isReadOnly = ARCHIVED_STATUSES.has(project.status);
-                    return (
-                    <tr
-                      key={project.id}
-                      className={`table-row-clickable${isReadOnly ? " project-row-readonly" : ""}`}
-                      onClick={() => router.push(`/projects/${project.id}`)}
-                    >
-                      <td>
-                        <input
-                          type="checkbox"
-                          aria-label={`Sélectionner ${project.name}`}
-                          checked={selectedIds.has(project.id)}
-                          disabled={isReadOnly}
-                          onClick={(event) => event.stopPropagation()}
-                          onChange={() => toggleSelected(project.id)}
-                        />
-                      </td>
-                      <td>{project.code ?? "-"}</td>
-                      <td>{project.name}</td>
-                      <td>
-                        <span className={`project-status project-status-${status.tone}`}>
-                          <status.Icon
-                            aria-label={`Statut : ${status.label}`}
-                            title={status.label}
-                            size={17}
-                          />
-                          <span>{status.label}</span>
-                          {isReadOnly ? <span className="muted">Lecture seule</span> : null}
-                        </span>
-                      </td>
-                      <td className="muted">{project.short_description ?? "-"}</td>
-                    </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            <ProjectsTable
+              projects={projects}
+              selectedIds={selectedIds}
+              onSelectedIdsChange={setSelectedIds}
+              onProjectOpen={(projectId) => router.push(`/projects/${projectId}`)}
+            />
           </>
         ) : null}
 
         {!busy ? (
-          <div className="row" style={{ marginTop: "1rem", justifyContent: "space-between" }}>
-            <span className="muted">
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+            <span className="text-sm text-muted-foreground">
               {projects.length ? `Projets ${projectOffset + 1} à ${projectOffset + projects.length}` : ""}
             </span>
-            <div className="row">
-              <button
-                className="btn"
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
                 type="button"
                 disabled={projectOffset === 0}
                 onClick={() => setProjectOffset((current) => Math.max(0, current - PROJECT_PAGE_SIZE))}
               >
                 Précédent
-              </button>
-              <button
-                className="btn"
+              </Button>
+              <Button
+                variant="outline"
                 type="button"
                 disabled={projects.length < PROJECT_PAGE_SIZE}
                 onClick={() => setProjectOffset((current) => current + PROJECT_PAGE_SIZE)}
               >
                 Suivant
-              </button>
+              </Button>
             </div>
           </div>
         ) : null}
-      </section>
+        </CardContent>
+      </Card>
+
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Supprimer les projets sélectionnés ?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {selectedIds.size} projet(s) seront supprimé(s) définitivement. Cette action est irréversible.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Annuler</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                setDeleteDialogOpen(false);
+                void onDeleteSelected();
+              }}
+            >
+              Supprimer
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }

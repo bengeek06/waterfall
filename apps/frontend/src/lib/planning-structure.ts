@@ -33,26 +33,41 @@ export function structureToDraftRows(structure: PlanningStructureCreate): Planni
 export function getPlanningStructureDraftRows(
   detail: PlanningDetail | null,
 ): PlanningStructureDraftRow[] {
-  const rows = (detail?.tasks ?? [])
-    .filter((task) => task.structure_kind === "livrable")
-    .map((task) => {
-      const [postKey = "", lotKey = "", deliverableKey = ""] = (task.structure_key ?? "").split("/");
+  const rows: PlanningStructureDraftRow[] = [];
+  const rowsByLotKey = new Map<string, PlanningStructureDraftRow>();
+
+  for (const task of detail?.tasks ?? []) {
+    if (task.structure_kind !== "livrable") {
+      continue;
+    }
+    const [postKey = "", lotKey = "", deliverableKey = ""] = (task.structure_key ?? "").split("/");
+    const groupKey = `${postKey}/${lotKey}`;
+    let row = rowsByLotKey.get(groupKey);
+    if (!row) {
       const lot = detail?.tasks.find(
-        (candidate) => candidate.structure_kind === "lot" && candidate.structure_key === `${postKey}/${lotKey}`,
+        (candidate) => candidate.structure_kind === "lot" && candidate.structure_key === groupKey,
       );
       const post = detail?.tasks.find(
         (candidate) => candidate.structure_kind === "poste" && candidate.structure_key === postKey,
       );
-      return {
-        rowId: task.structure_key ?? `task-${task.uid}`,
+      row = {
+        rowId: groupKey,
         postKey,
         postName: post?.name ?? "",
         lotKey,
         lotName: lot?.name ?? "",
-        deliverables: task.name,
-        deliverableKeys: deliverableKey ? { [task.name]: deliverableKey } : undefined,
+        deliverables: "",
+        deliverableKeys: {},
       };
-    });
+      rowsByLotKey.set(groupKey, row);
+      rows.push(row);
+    }
+    row.deliverables = row.deliverables ? `${row.deliverables},${task.name}` : task.name;
+    if (deliverableKey) {
+      row.deliverableKeys![task.name] = deliverableKey;
+    }
+  }
+
   return rows;
 }
 

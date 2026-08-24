@@ -1,17 +1,12 @@
 import type { Metadata } from "next";
-import { Space_Grotesk, Source_Serif_4 } from "next/font/google";
+import { Inter } from "next/font/google";
 import { AppShell } from "@/components/app-shell";
+import { Toaster } from "@/components/ui/sonner";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import "./globals.css";
+import { cn } from "@/lib/utils";
 
-const titleFont = Space_Grotesk({
-  variable: "--font-title",
-  subsets: ["latin"],
-});
-
-const textFont = Source_Serif_4({
-  variable: "--font-text",
-  subsets: ["latin"],
-});
+const inter = Inter({subsets:['latin'],variable:'--font-sans'});
 
 export const metadata: Metadata = {
   title: "Waterfall Console",
@@ -27,10 +22,13 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="fr" className={`${titleFont.variable} ${textFont.variable}`}>
+    <html lang="fr" className={cn("font-sans", inter.variable)}>
       <body>
         <div className="app-bg" />
-        <AppShell>{children}</AppShell>
+        <TooltipProvider>
+          <AppShell>{children}</AppShell>
+        </TooltipProvider>
+        <Toaster position="top-right" />
       </body>
     </html>
   );

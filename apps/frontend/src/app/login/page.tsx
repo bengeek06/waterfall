@@ -3,7 +3,12 @@
 import Image from "next/image";
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { ApiError, login } from "@/lib/backend";
 import { setSession } from "@/lib/session";
 
@@ -12,12 +17,10 @@ export default function LoginPage() {
   const [email, setEmail] = useState("admin@example.com");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true);
-    setError(null);
 
     try {
       const tokens = await login(email, password);
@@ -27,11 +30,11 @@ export default function LoginPage() {
       router.push("/projects");
     } catch (cause) {
       if (cause instanceof ApiError) {
-        setError(cause.message);
+        toast.error(cause.message);
       } else if (cause instanceof TypeError) {
-        setError("Backend injoignable (API/CORS). Vérifie que l'API tourne sur http://127.0.0.1:8000.");
+        toast.error("Backend injoignable (API/CORS). Vérifie que l'API tourne sur http://127.0.0.1:8000.");
       } else {
-        setError("Erreur inattendue pendant le login");
+        toast.error("Erreur inattendue pendant le login");
       }
     } finally {
       setBusy(false);
@@ -39,48 +42,43 @@ export default function LoginPage() {
   }
 
   return (
-    <div style={{ maxWidth: "46rem", margin: "0 auto" }}>
-      <div className="row" style={{ justifyContent: "center", marginBottom: "1.5rem" }}>
-        <Image src="/waterfall_logo.svg" alt="Waterfall" width={172} height={40} priority />
+    <div className="w-full max-w-sm">
+      <div className="mb-10 flex justify-center">
+        <Image src="/waterfall_logo.svg" alt="Waterfall" width={230} height={54} priority />
       </div>
-      <section className="panel">
-        <h1 className="title">Connexion</h1>
-        <p className="subtitle">Accès à la console Waterfall.</p>
+      <Card>
+        <CardContent className="p-8">
+          <form onSubmit={onSubmit} className="grid gap-6">
+            <div className="grid gap-2">
+              <Label htmlFor="email">Email</Label>
+              <Input
+                id="email"
+                type="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                autoComplete="email"
+                required
+              />
+            </div>
 
-        <form onSubmit={onSubmit} style={{ marginTop: "1rem" }}>
-          <div className="field">
-            <label htmlFor="email">Email</label>
-            <input
-              id="email"
-              type="email"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              autoComplete="email"
-              required
-            />
-          </div>
+            <div className="grid gap-2">
+              <Label htmlFor="password">Mot de passe</Label>
+              <Input
+                id="password"
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                autoComplete="current-password"
+                required
+              />
+            </div>
 
-          <div className="field">
-            <label htmlFor="password">Mot de passe</label>
-            <input
-              id="password"
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              autoComplete="current-password"
-              required
-            />
-          </div>
-
-          {error ? <p className="error">{error}</p> : null}
-
-          <div className="row" style={{ marginTop: "0.8rem" }}>
-            <button className="btn btn-primary" type="submit" disabled={busy}>
+            <Button type="submit" disabled={busy} className="w-full">
               {busy ? "Connexion..." : "Se connecter"}
-            </button>
-          </div>
-        </form>
-      </section>
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
     </div>
   );
 }

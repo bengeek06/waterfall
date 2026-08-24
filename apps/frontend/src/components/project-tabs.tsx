@@ -1,5 +1,7 @@
 "use client";
 
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+
 export type ProjectTab = "planning" | "estimate" | "commitments" | "analytics";
 
 type ProjectTabsProps = {
@@ -16,19 +18,18 @@ const tabs: Array<[ProjectTab, string]> = [
 
 export function ProjectTabs({ activeTab, onChange }: ProjectTabsProps) {
   return (
-    <nav className="project-tabs" aria-label="Sections du projet">
-      {tabs.map(([tab, label]) => (
-        <button
-          key={tab}
-          className={`project-tab ${activeTab === tab ? "project-tab-active" : ""}`}
-          type="button"
-          aria-selected={activeTab === tab}
-          role="tab"
-          onClick={() => onChange(tab)}
-        >
-          {label}
-        </button>
-      ))}
-    </nav>
+    <Tabs value={activeTab} onValueChange={(value) => onChange(value as ProjectTab)}>
+      <TabsList aria-label="Sections du projet" className="h-auto w-full justify-start overflow-x-auto rounded-none border-b bg-transparent p-0">
+        {tabs.map(([tab, label]) => (
+          <TabsTrigger
+            key={tab}
+            value={tab}
+            className="shrink-0 rounded-none border-b-2 border-transparent px-3 py-2.5 text-sm data-active:border-primary data-active:bg-transparent"
+          >
+            {label}
+          </TabsTrigger>
+        ))}
+      </TabsList>
+    </Tabs>
   );
 }

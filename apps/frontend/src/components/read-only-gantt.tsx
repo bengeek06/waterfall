@@ -29,22 +29,22 @@ export function ReadOnlyGantt({ tasks }: { tasks: Task[] }) {
   const span = Math.max(rangeEnd - rangeStart, MIN_SPAN_MS);
 
   return (
-    <div className="gantt" aria-label="Planning en lecture seule">
-      <h3 className="gantt-title">Vue Gantt (lecture seule)</h3>
-      <div className="gantt-rows">
+    <section className="mt-6 border-t pt-4" aria-label="Planning en lecture seule">
+      <h3 className="mb-3 text-sm font-medium text-muted-foreground">Vue Gantt (lecture seule)</h3>
+      <div className="grid gap-2">
         {scheduled.map((task) => {
           const start = toTimestamp(task.start_at) ?? rangeStart;
           const finish = toTimestamp(task.finish_at) ?? start;
           const offsetPct = ((start - rangeStart) / span) * 100;
           const widthPct = Math.max(((finish - start) / span) * 100, 0.6);
           return (
-            <div key={task.uid} className="gantt-row">
-              <span className="gantt-label" title={task.name}>
+            <div key={task.uid} className="grid grid-cols-[minmax(7.5rem,13.75rem)_1fr] items-center gap-3">
+              <span className="truncate text-sm" title={task.name}>
                 {task.name}
               </span>
-              <div className="gantt-track">
+              <div className="relative h-3.5 rounded-full bg-muted">
                 <div
-                  className={`gantt-bar ${task.is_milestone ? "gantt-bar-milestone" : ""}`}
+                  className={`absolute h-full rounded-full ${task.is_milestone ? "bg-destructive" : "bg-primary"}`}
                   style={{ left: `${offsetPct}%`, width: `${widthPct}%` }}
                 />
               </div>
@@ -52,6 +52,6 @@ export function ReadOnlyGantt({ tasks }: { tasks: Task[] }) {
           );
         })}
       </div>
-    </div>
+    </section>
   );
 }

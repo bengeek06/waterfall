@@ -3,6 +3,18 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   ApiError,
   AuthUserAdmin,
@@ -51,6 +63,7 @@ import { CostCategoriesTable } from "@/components/cost-categories-table";
 import { ValuationPanel } from "@/components/valuation-panel";
 
 type Notice = { kind: "error" | "success"; message: string } | null;
+type PendingUserAction = { kind: "status" | "admin" | "delete"; user: AuthUserAdmin } | null;
 const costTypeKindLabels = {
   labor: "Main d'œuvre",
   supply: "Fourniture",
@@ -84,6 +97,7 @@ export default function ResourcesPage() {
   const [actionBusy, setActionBusy] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
   const [usersError, setUsersError] = useState<string | null>(null);
+  const [pendingUserAction, setPendingUserAction] = useState<PendingUserAction>(null);
 
   const [nodeCode, setNodeCode] = useState("");
   const [nodeName, setNodeName] = useState("");
@@ -416,15 +430,11 @@ export default function ResourcesPage() {
     }, "Capacité enregistrée.");
   }
 
-  async function toggleUserStatus(user: AuthUserAdmin) {
+  async function updateUserStatus(user: AuthUserAdmin) {
     if (!session) {
       return;
     }
     const nextStatus = !user.is_active;
-    const action = nextStatus ? "activer" : "désactiver";
-    if (!window.confirm(`${action[0].toUpperCase()}${action.slice(1)} le compte ${user.email} ?`)) {
-      return;
-    }
     setActionBusy(true);
     try {
       const updated = await setUserStatus(user.id, nextStatus, session, onSessionRefresh);
@@ -441,15 +451,11 @@ export default function ResourcesPage() {
     }
   }
 
-  async function toggleUserAdmin(user: AuthUserAdmin) {
+  async function updateUserAdmin(user: AuthUserAdmin) {
     if (!session) {
       return;
     }
     const nextAdmin = !user.is_admin;
-    const action = nextAdmin ? "promouvoir administrateur" : "retirer les droits administrateur";
-    if (!window.confirm(`${action[0].toUpperCase()}${action.slice(1)} pour ${user.email} ?`)) {
-      return;
-    }
     setActionBusy(true);
     try {
       const updated = await setUserRole(user.id, nextAdmin, session, onSessionRefresh);
@@ -493,15 +499,11 @@ export default function ResourcesPage() {
     }
   }
 
-  async function removeUser(user: AuthUserAdmin) {
+  async function deleteExistingUser(user: AuthUserAdmin) {
     if (!session) {
       router.push("/login");
       return;
     }
-    if (!window.confirm(`Supprimer définitivement ${user.email} ?`)) {
-      return;
-    }
-
     setUsersError(null);
     setActionBusy(true);
     try {
@@ -538,33 +540,77 @@ export default function ResourcesPage() {
     });
   }
 
+  function getPendingUserActionCopy(action: Exclude<PendingUserAction, null>) {
+    if (action.kind === "delete") {
+      return {
+        title: "Supprimer cet utilisateur ?",
+        description: `${action.user.email} sera supprimé définitivement. Cette action est irréversible.`,
+        confirmLabel: "Supprimer",
+        destructive: true,
+      };
+    }
+
+    if (action.kind === "status") {
+      const verb = action.user.is_active ? "désactiver" : "activer";
+      return {
+        title: `${verb[0].toUpperCase()}${verb.slice(1)} cet utilisateur ?`,
+        description: `Le compte ${action.user.email} sera ${verb}.`,
+        confirmLabel: verb[0].toUpperCase() + verb.slice(1),
+        destructive: action.user.is_active,
+      };
+    }
+
+    const verb = action.user.is_admin ? "retirer les droits administrateur" : "promouvoir administrateur";
+    return {
+      title: `${verb[0].toUpperCase()}${verb.slice(1)} ?`,
+      description: `Les droits de ${action.user.email} seront mis à jour.`,
+      confirmLabel: verb[0].toUpperCase() + verb.slice(1),
+      destructive: action.user.is_admin,
+    };
+  }
+
+  function confirmPendingUserAction() {
+    const action = pendingUserAction;
+    setPendingUserAction(null);
+    if (!action) {
+      return;
+    }
+    if (action.kind === "status") {
+      void updateUserStatus(action.user);
+    } else if (action.kind === "admin") {
+      void updateUserAdmin(action.user);
+    } else {
+      void deleteExistingUser(action.user);
+    }
+  }
+
   return (
     <>
-      <section className="panel">
-        <div className="row" style={{ justifyContent: "space-between" }}>
+      <Card>
+        <CardContent>
+        <div className="flex flex-wrap justify-between gap-4">
           <div>
-            <h1 className="title">Paramètres</h1>
-            <p className="subtitle">Référentiel entreprise réservé aux administrateurs.</p>
+            <h1 className="text-2xl font-semibold">Paramètres</h1>
+            <p className="mt-1 text-sm text-muted-foreground">Référentiel entreprise réservé aux administrateurs.</p>
           </div>
         </div>
-      </section>
+        </CardContent>
+      </Card>
 
-      <SettingsTabs activeTab={activeTab} onChange={setActiveTab} />
+      <div className="mt-4">
+        <SettingsTabs activeTab={activeTab} onChange={setActiveTab} />
+      </div>
 
       {notice ? (
-        <p className={notice.kind === "error" ? "error" : "success"} role={notice.kind === "error" ? "alert" : "status"}>
-          {notice.message}
-        </p>
+        <Alert variant={notice.kind === "error" ? "destructive" : "default"}><AlertDescription>{notice.message}</AlertDescription></Alert>
       ) : null}
       {busy ? (
-        <section className="panel">
-          <p className="muted" role="status">Chargement...</p>
-        </section>
+        <Card><CardContent className="pt-6"><p className="text-sm text-muted-foreground" role="status">Chargement...</p></CardContent></Card>
       ) : null}
 
       {!busy && activeTab === "resources" ? (
         <>
-          <div className="master-detail">
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
           <OrganizationTree
             rows={organizationRows}
             selectedNodeId={selectedNodeId}
@@ -603,7 +649,12 @@ export default function ResourcesPage() {
         </>
       ) : null}
 
-      {!busy && activeTab === "users" ? <UsersTab users={users} usersError={usersError} createUserMode={createUserMode} newEmail={newEmail} newPassword={newPassword} actionBusy={actionBusy} onCreateUser={addUser} onSetCreateUserMode={setCreateUserMode} onEmailChange={setNewEmail} onPasswordChange={setNewPassword} onToggleStatus={(user) => void toggleUserStatus(user)} onToggleAdmin={(user) => void toggleUserAdmin(user)} onRemove={(user) => void removeUser(user)} /> : null}
+      {!busy && activeTab === "users" ? <UsersTab users={users} usersError={usersError} createUserMode={createUserMode} newEmail={newEmail} newPassword={newPassword} actionBusy={actionBusy} onCreateUser={addUser} onSetCreateUserMode={setCreateUserMode} onEmailChange={setNewEmail} onPasswordChange={setNewPassword} onToggleStatus={(user) => setPendingUserAction({ kind: "status", user })} onToggleAdmin={(user) => setPendingUserAction({ kind: "admin", user })} onRemove={(user) => setPendingUserAction({ kind: "delete", user })} /> : null}
+
+      {pendingUserAction ? (() => {
+        const copy = getPendingUserActionCopy(pendingUserAction);
+        return <AlertDialog open onOpenChange={(open) => !open && setPendingUserAction(null)}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{copy.title}</AlertDialogTitle><AlertDialogDescription>{copy.description}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Annuler</AlertDialogCancel><AlertDialogAction variant={copy.destructive ? "destructive" : "default"} onClick={confirmPendingUserAction}>{copy.confirmLabel}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>;
+      })() : null}
     </>
   );
 }

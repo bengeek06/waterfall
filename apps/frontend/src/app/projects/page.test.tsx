@@ -95,7 +95,7 @@ describe("ProjectsPage", () => {
     expect(screen.getByText("En cours")).toBeInTheDocument();
     expect(screen.getByText("Perdu")).toBeInTheDocument();
     expect(screen.getByLabelText("Statut : Perdu")).toHaveAttribute("title", "Perdu");
-    expect(screen.getByRole("checkbox", { name: "Sélectionner Projet perdu" })).toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: "Sélectionner Projet perdu" })).toHaveAttribute("aria-disabled", "true");
     expect(screen.getByRole("button", { name: "Supprimer la sélection" })).toBeDisabled();
   });
 
