@@ -575,6 +575,10 @@ def test_delete_task_referenced_by_cost_line_conflicts() -> None:
             f"/projects/{project_id}/tasks/1001", headers=headers
         )
         assert delete_response.status_code == 409
+        assert (
+            delete_response.json()["detail"]
+            == "Task is referenced by estimates, assignments, or charges and cannot be deleted"
+        )
 
 
 def test_delete_task_referenced_by_parent_task_row_conflicts() -> None:
@@ -611,6 +615,10 @@ def test_delete_task_referenced_by_parent_task_row_conflicts() -> None:
             f"/projects/{project_id}/tasks/1001", headers=headers
         )
         assert delete_response.status_code == 409
+        assert (
+            delete_response.json()["detail"]
+            == "Task is referenced by estimates, assignments, or charges and cannot be deleted"
+        )
 
 
 def test_delete_task_not_found() -> None:

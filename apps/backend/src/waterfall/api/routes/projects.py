@@ -1910,7 +1910,7 @@ def delete_project_task(
     if in_use:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Task is referenced by an estimate and cannot be deleted",
+            detail="Task is referenced by estimates, assignments, or charges and cannot be deleted",
         )
 
     db.query(MsTaskLink).filter(MsTaskLink.project_id == project_id).filter(
