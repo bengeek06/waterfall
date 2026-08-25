@@ -75,6 +75,7 @@ from waterfall.services.project_lifecycle import (
     ensure_project_mutable,
     validate_project_status_transition,
 )
+from waterfall.services.task_references import is_task_referenced
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 MSP_NS = "http://schemas.microsoft.com/project/2007"
@@ -131,6 +132,43 @@ def _get_planning_or_404(db: Session, project_id: int, planning_id: int) -> WfPl
     )
     if planning is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Planning not found")
+    return planning
+
+
+def _get_latest_draft_planning(db: Session, project_id: int) -> WfPlanning | None:
+    return (
+        db.query(WfPlanning)
+        .filter(WfPlanning.project_id == project_id, WfPlanning.status == "draft")
+        .order_by(WfPlanning.version_number.desc())
+        .first()
+    )
+
+
+def _get_or_create_draft_planning(
+    db: Session,
+    *,
+    project_id: int,
+    note: str | None,
+) -> WfPlanning:
+    planning = _get_latest_draft_planning(db, project_id)
+    if planning is not None:
+        return planning
+
+    version_number = (
+        db.query(func.max(WfPlanning.version_number))
+        .filter(WfPlanning.project_id == project_id)
+        .scalar()
+        or 0
+    )
+    planning = WfPlanning(
+        project_id=project_id,
+        version_number=version_number + 1,
+        status="draft",
+        note=note,
+        created_at=datetime.now(UTC),
+    )
+    db.add(planning)
+    db.flush()
     return planning
 
 
@@ -756,12 +794,7 @@ def reopen_planning_structure(
 ) -> ProjectRead:
     project = _get_project_or_404(db, project_id, current_user.id)
     ensure_project_mutable(project)
-    existing_draft = (
-        db.query(WfPlanning)
-        .filter(WfPlanning.project_id == project_id, WfPlanning.status == "draft")
-        .order_by(WfPlanning.version_number.desc())
-        .first()
-    )
+    existing_draft = _get_latest_draft_planning(db, project_id)
     if existing_draft is not None:
         project.displayed_planning_id = existing_draft.id
         if project.status == "cree":
@@ -1467,28 +1500,9 @@ def create_planning_structure(
     project = _get_project_or_404(db, project_id, current_user.id)
     ensure_project_mutable(project)
     try:
-        planning = (
-            db.query(WfPlanning)
-            .filter(WfPlanning.project_id == project_id, WfPlanning.status == "draft")
-            .order_by(WfPlanning.version_number.desc())
-            .first()
+        planning = _get_or_create_draft_planning(
+            db, project_id=project_id, note="Generated from planning structure"
         )
-        if planning is None:
-            version_number = (
-                db.query(func.max(WfPlanning.version_number))
-                .filter(WfPlanning.project_id == project_id)
-                .scalar()
-                or 0
-            )
-            planning = WfPlanning(
-                project_id=project_id,
-                version_number=version_number + 1,
-                status="draft",
-                note="Generated from planning structure",
-                created_at=datetime.now(UTC),
-            )
-            db.add(planning)
-            db.flush()
         if payload is None:
             payload = load_planning_structure_draft(planning)
             if payload is None:
@@ -1534,28 +1548,7 @@ def save_planning_structure_draft_route(
     project = _get_project_or_404(db, project_id, current_user.id)
     ensure_project_mutable(project)
     try:
-        planning = (
-            db.query(WfPlanning)
-            .filter(WfPlanning.project_id == project_id, WfPlanning.status == "draft")
-            .order_by(WfPlanning.version_number.desc())
-            .first()
-        )
-        if planning is None:
-            version_number = (
-                db.query(func.max(WfPlanning.version_number))
-                .filter(WfPlanning.project_id == project_id)
-                .scalar()
-                or 0
-            )
-            planning = WfPlanning(
-                project_id=project_id,
-                version_number=version_number + 1,
-                status="draft",
-                note=None,
-                created_at=datetime.now(UTC),
-            )
-            db.add(planning)
-            db.flush()
+        planning = _get_or_create_draft_planning(db, project_id=project_id, note=None)
         save_planning_structure_draft(planning, payload)
         db.commit()
     except IntegrityError as exc:
@@ -1588,8 +1581,16 @@ def get_planning_structure_draft_route(
         .order_by(WfPlanning.version_number.desc())
         .first()
     )
-    payload = load_planning_structure_draft(planning) if planning is not None else None
-    if planning is None or payload is None:
+    if planning is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No planning structure draft found",
+        )
+    try:
+        payload = load_planning_structure_draft(planning)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    if payload is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No planning structure draft found",
@@ -1863,35 +1864,16 @@ def delete_project_task(
         legacy_task = (
             db.query(MsTask).filter(MsTask.project_id == project_id, MsTask.uid == task_uid).first()
         )
-        if legacy_task is not None:
-            in_use = (
-                db.query(TaskRoleAssignment.id)
-                .filter(TaskRoleAssignment.task_id == legacy_task.id)
-                .first()
-                is not None
-                or db.query(EstimateCostLine.id)
-                .filter(EstimateCostLine.task_id == legacy_task.id)
-                .first()
-                is not None
-                or db.query(EstimateTaskRow.id)
-                .filter(EstimateTaskRow.task_id == legacy_task.id)
-                .first()
-                is not None
-                or db.query(EstimateTaskRow.id)
-                .filter(EstimateTaskRow.parent_task_id == legacy_task.id)
-                .first()
-                is not None
-                or db.query(WfChargeLine.id)
-                .filter(WfChargeLine.project_id == project_id)
-                .filter(WfChargeLine.task_uid == task_uid)
-                .first()
-                is not None
+        if is_task_referenced(
+            db,
+            project_id=project_id,
+            task_uid=task_uid,
+            task_id=legacy_task.id if legacy_task is not None else None,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Planning task is referenced by estimates, assignments, or charges",
             )
-            if in_use:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="Planning task is referenced by estimates, assignments, or charges",
-                )
 
         db.query(WfPlanningLinkSnapshot).filter(
             WfPlanningLinkSnapshot.planning_id == planning.id,
@@ -1924,17 +1906,11 @@ def delete_project_task(
             detail="Task has child tasks and cannot be deleted",
         )
 
-    in_use = (
-        db.query(TaskRoleAssignment).filter(TaskRoleAssignment.task_id == task.id).first()
-        is not None
-        or db.query(EstimateCostLine).filter(EstimateCostLine.task_id == task.id).first()
-        is not None
-        or db.query(EstimateTaskRow).filter(EstimateTaskRow.task_id == task.id).first() is not None
-    )
+    in_use = is_task_referenced(db, project_id=project_id, task_uid=task_uid, task_id=task.id)
     if in_use:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Task is referenced by an estimate and cannot be deleted",
+            detail="Task is referenced by estimates, assignments, or charges and cannot be deleted",
         )
 
     db.query(MsTaskLink).filter(MsTaskLink.project_id == project_id).filter(

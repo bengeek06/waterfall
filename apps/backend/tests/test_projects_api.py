@@ -13,6 +13,7 @@ from waterfall.models.resources import (
     CostCategory,
     CostType,
     Estimate,
+    EstimateTaskRow,
     ResourceNode,
     ResourceRole,
 )
@@ -555,7 +556,7 @@ def test_delete_task_referenced_by_cost_line_conflicts() -> None:
             json={"kind": "initial", "currency_code": "EUR"},
             headers=headers,
         )
-        estimate_id = estimate_response.json()["id"]
+        estimate_id = cast(int, estimate_response.json()["id"])
 
         cost_line_response: Response = client.post(
             f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
@@ -574,6 +575,50 @@ def test_delete_task_referenced_by_cost_line_conflicts() -> None:
             f"/projects/{project_id}/tasks/1001", headers=headers
         )
         assert delete_response.status_code == 409
+        assert (
+            delete_response.json()["detail"]
+            == "Task is referenced by estimates, assignments, or charges and cannot be deleted"
+        )
+
+
+def test_delete_task_referenced_by_parent_task_row_conflicts() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        tasks_response: Response = client.get(f"/projects/{project_id}/tasks", headers=headers)
+        task_rows = cast(list[dict[str, Any]], tasks_response.json())
+        parent_task_id = cast(int, next(task["id"] for task in task_rows if task["uid"] == 1001))
+        child_task_id = cast(int, next(task["id"] for task in task_rows if task["uid"] == 1002))
+
+        estimate_response: Response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate_response.status_code == 201
+        estimate_id = cast(int, estimate_response.json()["id"])
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            row = (
+                session.query(EstimateTaskRow)
+                .filter(EstimateTaskRow.estimate_id == estimate_id)
+                .filter(EstimateTaskRow.task_id == child_task_id)
+                .first()
+            )
+            assert row is not None
+            row.parent_task_id = parent_task_id
+            session.commit()
+
+        delete_response: Response = client.delete(
+            f"/projects/{project_id}/tasks/1001", headers=headers
+        )
+        assert delete_response.status_code == 409
+        assert (
+            delete_response.json()["detail"]
+            == "Task is referenced by estimates, assignments, or charges and cannot be deleted"
+        )
 
 
 def test_delete_task_not_found() -> None:
@@ -595,7 +640,7 @@ def test_estimate_aggregates_on_draft_are_zero() -> None:
             json={"kind": "initial", "currency_code": "EUR"},
             headers=headers,
         )
-        estimate_id = estimate_response.json()["id"]
+        estimate_id = cast(int, estimate_response.json()["id"])
 
         response: Response = client.get(
             f"/projects/{project_id}/estimates/{estimate_id}/aggregates", headers=headers
@@ -631,7 +676,7 @@ def test_estimate_aggregates_and_excel_export_after_validation() -> None:
             json={"kind": "initial", "currency_code": "EUR"},
             headers=headers,
         )
-        estimate_id = estimate_response.json()["id"]
+        estimate_id = cast(int, estimate_response.json()["id"])
 
         cost_line_response: Response = client.post(
             f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
@@ -775,7 +820,7 @@ def test_delete_project_cascades_related_data() -> None:
             headers=headers,
         )
         assert estimate_response.status_code == 201
-        estimate_id = estimate_response.json()["id"]
+        estimate_id = cast(int, estimate_response.json()["id"])
 
         cost_line_response: Response = client.post(
             f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
@@ -950,7 +995,7 @@ def test_project_estimate_can_snapshot_planning_without_legacy_tasks() -> None:
             headers=headers,
         )
         assert estimate_response.status_code == 201
-        estimate_id = estimate_response.json()["id"]
+        estimate_id = cast(int, estimate_response.json()["id"])
 
         rows_response = client.get(
             f"/projects/{project_id}/estimates/{estimate_id}/task-rows",
@@ -1181,7 +1226,7 @@ def test_estimate_cost_lines_support_non_labor_costs_and_draft_locking() -> None
             headers=headers,
         )
         assert estimate_response.status_code == 201
-        estimate_id = estimate_response.json()["id"]
+        estimate_id = cast(int, estimate_response.json()["id"])
 
         create_response = client.post(
             f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
@@ -1453,6 +1498,50 @@ def test_planning_structure_draft_read_returns_404_when_absent() -> None:
 
         read = client.get(f"/projects/{project_id}/planning-structure/draft", headers=headers)
         assert read.status_code == 404
+
+
+def test_planning_structure_draft_read_returns_409_for_invalid_json() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        create = client.post("/projects", json={"name": "Invalid draft json"}, headers=headers)
+        assert create.status_code == 201
+        project_id = cast(int, create.json()["id"])
+
+        with get_session_factory()() as session:
+            planning = WfPlanning(
+                project_id=project_id,
+                version_number=1,
+                status="draft",
+                structure_draft_json="{invalid-json",
+            )
+            session.add(planning)
+            session.commit()
+
+        read = client.get(f"/projects/{project_id}/planning-structure/draft", headers=headers)
+        assert read.status_code == 409
+        assert read.json()["detail"] == "Saved planning structure draft is invalid JSON"
+
+
+def test_planning_structure_draft_read_returns_409_for_invalid_schema() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        create = client.post("/projects", json={"name": "Invalid draft schema"}, headers=headers)
+        assert create.status_code == 201
+        project_id = cast(int, create.json()["id"])
+
+        with get_session_factory()() as session:
+            planning = WfPlanning(
+                project_id=project_id,
+                version_number=1,
+                status="draft",
+                structure_draft_json='{"posts":"not-a-list"}',
+            )
+            session.add(planning)
+            session.commit()
+
+        read = client.get(f"/projects/{project_id}/planning-structure/draft", headers=headers)
+        assert read.status_code == 409
+        assert read.json()["detail"] == "Saved planning structure draft has invalid schema"
 
 
 def test_delete_project_clears_reference_estimate_before_deleting_estimates() -> None:
