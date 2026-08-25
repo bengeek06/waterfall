@@ -143,6 +143,99 @@ def test_mutable_draft_planning_locks_project_then_planning(
     planning_query.with_for_update.assert_called_once_with()
 
 
+def test_mutable_displayed_draft_planning_locks_project_then_planning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = MagicMock(spec=MsProject)
+    project.displayed_planning_id = 20
+    planning = MagicMock(spec=WfPlanning)
+    planning.status = "draft"
+    project_query = MagicMock()
+    planning_query = MagicMock()
+    project_query.filter.return_value = project_query
+    project_query.with_for_update.return_value = project_query
+    project_query.first.return_value = project
+    planning_query.filter.return_value = planning_query
+    planning_query.with_for_update.return_value = planning_query
+    planning_query.first.return_value = planning
+    db = MagicMock()
+    db.query.side_effect = [project_query, planning_query]
+
+    def assert_state_checks_follow_locks(_: MsProject) -> None:
+        assert project_query.with_for_update.called
+        assert planning_query.with_for_update.called
+
+    monkeypatch.setattr(projects, "ensure_project_mutable", assert_state_checks_follow_locks)
+
+    result = projects.get_mutable_displayed_draft_planning_with_locks(db, 10, 30)
+
+    assert result == (project, planning)
+    assert db.query.call_args_list == [
+        ((MsProject,),),
+        ((WfPlanning,),),
+    ]
+    project_query.with_for_update.assert_called_once_with()
+    planning_query.with_for_update.assert_called_once_with()
+
+
+def test_snapshot_task_creation_uses_displayed_planning_locks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[int, int]] = []
+    original_helper = projects.get_mutable_displayed_draft_planning_with_locks
+
+    def locked_helper(db: Any, project_id: int, owner_id: int) -> tuple[MsProject, WfPlanning]:
+        calls.append((project_id, owner_id))
+        return original_helper(db, project_id, owner_id)
+
+    monkeypatch.setattr(projects, "get_mutable_displayed_draft_planning_with_locks", locked_helper)
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        _, planning_id = _seed_plannings(project_id)
+        with get_session_factory()() as session:
+            project = session.get(MsProject, project_id)
+            assert project is not None
+            project.displayed_planning_id = planning_id
+            session.commit()
+
+        response = client.post(
+            f"/projects/{project_id}/tasks", json={"name": "Locked snapshot task"}, headers=headers
+        )
+
+    assert response.status_code == 201
+    assert len(calls) == 1
+    assert calls[0][0] == project_id
+
+
+def test_snapshot_task_deletion_uses_displayed_planning_locks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[int, int]] = []
+    original_helper = projects.get_mutable_displayed_draft_planning_with_locks
+
+    def locked_helper(db: Any, project_id: int, owner_id: int) -> tuple[MsProject, WfPlanning]:
+        calls.append((project_id, owner_id))
+        return original_helper(db, project_id, owner_id)
+
+    monkeypatch.setattr(projects, "get_mutable_displayed_draft_planning_with_locks", locked_helper)
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        _, planning_id = _seed_plannings(project_id)
+        with get_session_factory()() as session:
+            project = session.get(MsProject, project_id)
+            assert project is not None
+            project.displayed_planning_id = planning_id
+            session.commit()
+
+        response = client.delete(f"/projects/{project_id}/tasks/2", headers=headers)
+
+    assert response.status_code == 204
+    assert len(calls) == 1
+    assert calls[0][0] == project_id
+
+
 def test_move_leaf_targets_explicit_planning_and_recalculates_tree() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)

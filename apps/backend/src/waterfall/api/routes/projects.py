@@ -192,6 +192,49 @@ def get_mutable_draft_planning_with_locks(
     return project, planning
 
 
+def get_mutable_displayed_draft_planning_with_locks(
+    db: Session,
+    project_id: int,
+    owner_id: int,
+) -> tuple[MsProject, WfPlanning]:
+    project = (
+        db.query(MsProject)
+        .filter(MsProject.id == project_id, MsProject.owner_id == owner_id)
+        .with_for_update()
+        .first()
+    )
+    if project is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    if project.displayed_planning_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Displayed planning not found",
+        )
+
+    planning = (
+        db.query(WfPlanning)
+        .filter(
+            WfPlanning.id == project.displayed_planning_id,
+            WfPlanning.project_id == project_id,
+        )
+        .with_for_update()
+        .first()
+    )
+    if planning is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Displayed planning not found",
+        )
+
+    ensure_project_mutable(project)
+    if planning.status != "draft":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Displayed planning is immutable because it is not a draft",
+        )
+    return project, planning
+
+
 def _get_latest_draft_planning(db: Session, project_id: int) -> WfPlanning | None:
     return (
         db.query(WfPlanning)
@@ -1716,15 +1759,11 @@ def create_project_task(
 ) -> TaskRead:
     """Add a planning task for devis purposes; dates stay driven by MS Project."""
     project = _get_project_or_404(db, project_id, current_user.id)
-    ensure_project_mutable(project)
 
     if project.displayed_planning_id is not None:
-        planning = _get_planning_or_404(db, project_id, project.displayed_planning_id)
-        if planning.status != "draft":
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Displayed planning is immutable because it is not a draft",
-            )
+        project, planning = get_mutable_displayed_draft_planning_with_locks(
+            db, project_id, current_user.id
+        )
         parent_snapshot: WfPlanningTaskSnapshot | None = None
         if payload.parent_task_id is not None:
             parent_snapshot = (
@@ -1799,6 +1838,7 @@ def create_project_task(
         db.refresh(snapshot)
         return _to_snapshot_task_read(snapshot, [], project_id)
 
+    ensure_project_mutable(project)
     parent_task: MsTask | None = None
     if payload.parent_task_id is not None:
         parent_task = (
@@ -1942,14 +1982,10 @@ def delete_project_task(
     current_user: User = Depends(get_current_active_user),
 ) -> None:
     project = _get_project_or_404(db, project_id, current_user.id)
-    ensure_project_mutable(project)
     if project.displayed_planning_id is not None:
-        planning = _get_planning_or_404(db, project_id, project.displayed_planning_id)
-        if planning.status != "draft":
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Displayed planning is immutable because it is not a draft",
-            )
+        project, planning = get_mutable_displayed_draft_planning_with_locks(
+            db, project_id, current_user.id
+        )
         task = (
             db.query(WfPlanningTaskSnapshot)
             .filter(WfPlanningTaskSnapshot.planning_id == planning.id)
@@ -1999,6 +2035,7 @@ def delete_project_task(
                 detail="Planning task is still referenced and cannot be deleted",
             ) from exc
         return
+    ensure_project_mutable(project)
     task = _get_task_or_404(db, project_id, task_uid)
 
     has_children = (
