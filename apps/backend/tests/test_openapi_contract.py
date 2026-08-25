@@ -241,9 +241,35 @@ def test_move_planning_tasks_documents_all_not_found_resources() -> None:
         "/projects/{projectId}/plannings/{planningId}/tasks/move"
     ]["post"]
 
-    assert move_operation["responses"]["404"]["$ref"] == (
-        "#/components/responses/ProjectPlanningTaskNotFound"
-    )
+    static_components = cast(dict[str, Any], static_document["components"])
+    runtime_operation = cast(dict[str, Any], app.openapi()["paths"])[
+        "/projects/{project_id}/plannings/{planning_id}/tasks/move"
+    ]["post"]
+
+    for status_code, response_name in (
+        ("400", "MovePlanningTasksBadRequest"),
+        ("404", "MovePlanningTasksNotFound"),
+        ("409", "MovePlanningTasksConflict"),
+    ):
+        assert move_operation["responses"][status_code]["$ref"] == (
+            f"#/components/responses/{response_name}"
+        )
+        static_response = static_components["responses"][response_name]
+        assert static_response["content"]["application/json"]["schema"]["$ref"] == (
+            "#/components/schemas/FastAPIErrorResponse"
+        )
+        assert (
+            runtime_operation["responses"][status_code]["content"]["application/json"]["schema"][
+                "$ref"
+            ]
+            == "#/components/schemas/FastAPIErrorResponse"
+        )
+
+    error_schema = static_components["schemas"]["FastAPIErrorResponse"]
+    assert error_schema["properties"]["detail"]["anyOf"] == [
+        {"type": "string"},
+        {"type": "array", "items": {"type": "object", "additionalProperties": True}},
+    ]
 
 
 def test_generated_client_contains_every_static_operation() -> None:

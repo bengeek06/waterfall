@@ -33,6 +33,7 @@ from waterfall.schemas.projects import (
     EstimateCostLineRead,
     EstimateCostLineUpdate,
     EstimateTaskRowRead,
+    FastAPIErrorResponse,
     PlanningCreate,
     PlanningDetailRead,
     PlanningLinkRead,
@@ -787,6 +788,20 @@ router.add_api_route(
     move_planning_tasks_route,
     methods=["POST"],
     response_model=PlanningDetailRead,
+    responses={
+        status.HTTP_400_BAD_REQUEST: {
+            "model": FastAPIErrorResponse,
+            "description": "Requete de deplacement invalide",
+        },
+        status.HTTP_404_NOT_FOUND: {
+            "model": FastAPIErrorResponse,
+            "description": "Projet, planning ou tache introuvable pendant le deplacement",
+        },
+        status.HTTP_409_CONFLICT: {
+            "model": FastAPIErrorResponse,
+            "description": "Le deplacement entre en conflit avec le planning",
+        },
+    },
     route_class_override=_MovePlanningTasksRoute,
 )
 

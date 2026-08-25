@@ -1,0 +1,11 @@
+type: object
+required:
+- detail
+properties:
+  detail:
+    anyOf:
+    - type: string
+    - type: array
+      items:
+        type: object
+        additionalProperties: true

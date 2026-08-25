@@ -270,13 +270,13 @@
             schema:
               $ref: ../components/schemas/PlanningDetailRead.yaml
       '400':
-        $ref: ../components/responses/BadRequest.yaml
+        $ref: ../components/responses/MovePlanningTasksBadRequest.yaml
       '401':
         $ref: ../components/responses/Unauthorized.yaml
       '404':
-        $ref: ../components/responses/ProjectPlanningTaskNotFound.yaml
+        $ref: ../components/responses/MovePlanningTasksNotFound.yaml
       '409':
-        $ref: ../components/responses/Conflict.yaml
+        $ref: ../components/responses/MovePlanningTasksConflict.yaml
 /projects/{projectId}/plannings/{planningId}/validate:
   post:
     tags:

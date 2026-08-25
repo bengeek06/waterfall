@@ -1223,6 +1223,11 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        FastAPIErrorResponse: {
+            detail: string | {
+                [key: string]: unknown;
+            }[];
+        };
         ProjectRead: {
             id: number;
             name: string;
@@ -1661,6 +1666,33 @@ export interface components {
             };
             content: {
                 "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description Requete de deplacement invalide */
+        MovePlanningTasksBadRequest: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
+            };
+        };
+        /** @description Projet, planning ou tache introuvable pendant le deplacement */
+        MovePlanningTasksNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
+            };
+        };
+        /** @description Le deplacement entre en conflit avec le planning */
+        MovePlanningTasksConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
         /** @description Devis introuvable */
@@ -2564,10 +2596,10 @@ export interface operations {
                     "application/json": components["schemas"]["PlanningDetailRead"];
                 };
             };
-            400: components["responses"]["BadRequest"];
+            400: components["responses"]["MovePlanningTasksBadRequest"];
             401: components["responses"]["Unauthorized"];
-            404: components["responses"]["ProjectPlanningTaskNotFound"];
-            409: components["responses"]["Conflict"];
+            404: components["responses"]["MovePlanningTasksNotFound"];
+            409: components["responses"]["MovePlanningTasksConflict"];
         };
     };
     validatePlanning: {

@@ -204,6 +204,8 @@ components:
       $ref: ./components/schemas/ImportErrorListResponse.yaml
     ErrorResponse:
       $ref: ./components/schemas/ErrorResponse.yaml
+    FastAPIErrorResponse:
+      $ref: ./components/schemas/FastAPIErrorResponse.yaml
     ProjectRead:
       $ref: ./components/schemas/ProjectRead.yaml
     ProjectCreate:
@@ -358,6 +360,12 @@ components:
       $ref: ./components/responses/PlanningNotFound.yaml
     ProjectPlanningTaskNotFound:
       $ref: ./components/responses/ProjectPlanningTaskNotFound.yaml
+    MovePlanningTasksBadRequest:
+      $ref: ./components/responses/MovePlanningTasksBadRequest.yaml
+    MovePlanningTasksNotFound:
+      $ref: ./components/responses/MovePlanningTasksNotFound.yaml
+    MovePlanningTasksConflict:
+      $ref: ./components/responses/MovePlanningTasksConflict.yaml
     EstimateNotFound:
       $ref: ./components/responses/EstimateNotFound.yaml
     TaskNotFound:

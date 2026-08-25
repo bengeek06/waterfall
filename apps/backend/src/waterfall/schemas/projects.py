@@ -220,6 +220,10 @@ class PlanningTaskMove(BaseModel):
     position: int = Field(ge=1)
 
 
+class FastAPIErrorResponse(BaseModel):
+    detail: str | list[dict[str, object]]
+
+
 class ProjectStatusUpdate(BaseModel):
     status: ProjectStatus
 

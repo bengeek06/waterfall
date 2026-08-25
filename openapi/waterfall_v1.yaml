@@ -785,13 +785,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/PlanningDetailRead'
         '400':
-          $ref: '#/components/responses/BadRequest'
+          $ref: '#/components/responses/MovePlanningTasksBadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
-          $ref: '#/components/responses/ProjectPlanningTaskNotFound'
+          $ref: '#/components/responses/MovePlanningTasksNotFound'
         '409':
-          $ref: '#/components/responses/Conflict'
+          $ref: '#/components/responses/MovePlanningTasksConflict'
   /projects/{projectId}/plannings/{planningId}/validate:
     post:
       tags:
@@ -2546,6 +2546,18 @@ components:
         details:
           type: object
           additionalProperties: true
+    FastAPIErrorResponse:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          anyOf:
+            - type: string
+            - type: array
+              items:
+                type: object
+                additionalProperties: true
     ProjectRead:
       type: object
       required:
@@ -3845,6 +3857,24 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
+    MovePlanningTasksBadRequest:
+      description: Requete de deplacement invalide
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/FastAPIErrorResponse'
+    MovePlanningTasksNotFound:
+      description: Projet, planning ou tache introuvable pendant le deplacement
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/FastAPIErrorResponse'
+    MovePlanningTasksConflict:
+      description: Le deplacement entre en conflit avec le planning
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/FastAPIErrorResponse'
     EstimateNotFound:
       description: Devis introuvable
       content:

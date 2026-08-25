@@ -199,7 +199,13 @@ def test_invalid_move_rolls_back_tree() -> None:
         detail = client.get(f"/projects/{project_id}/plannings/{planning_id}", headers=headers)
 
         assert cycle.status_code == 409
+        cycle_payload = cast(dict[str, Any], cycle.json())
+        assert set(cycle_payload) == {"detail"}
+        assert isinstance(cycle_payload["detail"], str)
         assert missing.status_code == 404
+        missing_payload = cast(dict[str, Any], missing.json())
+        assert set(missing_payload) == {"detail"}
+        assert isinstance(missing_payload["detail"], str)
         assert _tasks_by_uid(cast(dict[str, Any], detail.json()))[3]["parent_uid"] == 1
 
 
@@ -219,6 +225,9 @@ def test_move_schema_validation_returns_bad_request() -> None:
         ):
             response = client.post(path, json=payload, headers=headers)
             assert response.status_code == 400
+            error_payload = cast(dict[str, Any], response.json())
+            assert set(error_payload) == {"detail"}
+            assert isinstance(error_payload["detail"], list)
 
 
 def test_move_recalculates_summary_invariants() -> None:
