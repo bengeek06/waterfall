@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Any, cast
+from unittest.mock import MagicMock
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 
+from waterfall.api.routes import projects
 from waterfall.db.session import get_session_factory
 from waterfall.main import app
 from waterfall.models.ms_core import MsProject
@@ -104,6 +107,40 @@ def _create_project(client: TestClient, headers: dict[str, str]) -> int:
 
 def _tasks_by_uid(payload: dict[str, Any]) -> dict[int, dict[str, Any]]:
     return {task["uid"]: task for task in cast(list[dict[str, Any]], payload["tasks"])}
+
+
+def test_mutable_draft_planning_locks_project_then_planning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = MagicMock(spec=MsProject)
+    planning = MagicMock(spec=WfPlanning)
+    planning.status = "draft"
+    project_query = MagicMock()
+    planning_query = MagicMock()
+    project_query.filter.return_value = project_query
+    project_query.with_for_update.return_value = project_query
+    project_query.first.return_value = project
+    planning_query.filter.return_value = planning_query
+    planning_query.with_for_update.return_value = planning_query
+    planning_query.first.return_value = planning
+    db = MagicMock()
+    db.query.side_effect = [project_query, planning_query]
+
+    def assert_state_checks_follow_locks(_: MsProject) -> None:
+        assert project_query.with_for_update.called
+        assert planning_query.with_for_update.called
+
+    monkeypatch.setattr(projects, "ensure_project_mutable", assert_state_checks_follow_locks)
+
+    result = projects.get_mutable_draft_planning_with_locks(db, 10, 20, 30)
+
+    assert result == (project, planning)
+    assert db.query.call_args_list == [
+        ((MsProject,),),
+        ((WfPlanning,),),
+    ]
+    project_query.with_for_update.assert_called_once_with()
+    planning_query.with_for_update.assert_called_once_with()
 
 
 def test_move_leaf_targets_explicit_planning_and_recalculates_tree() -> None:

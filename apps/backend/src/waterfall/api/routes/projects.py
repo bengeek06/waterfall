@@ -162,6 +162,36 @@ def _get_planning_or_404(db: Session, project_id: int, planning_id: int) -> WfPl
     return planning
 
 
+def get_mutable_draft_planning_with_locks(
+    db: Session,
+    project_id: int,
+    planning_id: int,
+    owner_id: int,
+) -> tuple[MsProject, WfPlanning]:
+    project = (
+        db.query(MsProject)
+        .filter(MsProject.id == project_id, MsProject.owner_id == owner_id)
+        .with_for_update()
+        .first()
+    )
+    if project is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
+    planning = (
+        db.query(WfPlanning)
+        .filter(WfPlanning.id == planning_id, WfPlanning.project_id == project_id)
+        .with_for_update()
+        .first()
+    )
+    if planning is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Planning not found")
+
+    ensure_project_mutable(project)
+    if planning.status != "draft":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Planning is not a draft")
+    return project, planning
+
+
 def _get_latest_draft_planning(db: Session, project_id: int) -> WfPlanning | None:
     return (
         db.query(WfPlanning)
@@ -757,11 +787,9 @@ def move_planning_tasks_route(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> PlanningDetailRead:
-    project = _get_project_or_404(db, project_id, current_user.id)
-    ensure_project_mutable(project)
-    planning = _get_planning_or_404(db, project_id, planning_id)
-    if planning.status != "draft":
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Planning is not a draft")
+    _, planning = get_mutable_draft_planning_with_locks(
+        db, project_id, planning_id, current_user.id
+    )
     try:
         move_planning_tasks(db, planning, payload)
         db.commit()
@@ -813,11 +841,9 @@ def validate_planning(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> PlanningRead:
-    project = _get_project_or_404(db, project_id, current_user.id)
-    ensure_project_mutable(project)
-    planning = _get_planning_or_404(db, project_id, planning_id)
-    if planning.status != "draft":
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Planning is not a draft")
+    _, planning = get_mutable_draft_planning_with_locks(
+        db, project_id, planning_id, current_user.id
+    )
     planning.status = "validated"
     planning.validated_at = datetime.now(UTC)
     db.commit()
