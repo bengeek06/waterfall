@@ -143,6 +143,17 @@ def test_static_openapi_matches_runtime_operation_ids_and_components() -> None:
         runtime_schema = cast(dict[str, Any], runtime_components[schema_name])
         assert set(static_schema.get("properties", {})) == set(runtime_schema["properties"])
 
+    static_move = cast(dict[str, Any], static_components["PlanningTaskMove"])
+    runtime_move = cast(dict[str, Any], runtime_components["PlanningTaskMove"])
+    assert (
+        static_move["properties"]["task_uids"]["minItems"]
+        == runtime_move["properties"]["task_uids"]["minItems"]
+    )
+    assert (
+        static_move["properties"]["task_uids"]["items"]["minimum"]
+        == runtime_move["properties"]["task_uids"]["items"]["minimum"]
+    )
+
     static_operation_ids = {
         operation["operationId"]
         for path_operations in cast(dict[str, dict[str, Any]], static_document["paths"]).values()
@@ -221,6 +232,18 @@ def test_planning_contract_matches_runtime_shapes() -> None:
         assert _schema_property_names(static_schemas[schema_name], static_schemas) == (
             _schema_property_names(runtime_schemas[schema_name], runtime_schemas)
         )
+
+
+def test_move_planning_tasks_documents_all_not_found_resources() -> None:
+    raw_document: object = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
+    static_document = cast(dict[str, Any], raw_document)
+    move_operation = static_document["paths"][
+        "/projects/{projectId}/plannings/{planningId}/tasks/move"
+    ]["post"]
+
+    assert move_operation["responses"]["404"]["$ref"] == (
+        "#/components/responses/ProjectPlanningTaskNotFound"
+    )
 
 
 def test_generated_client_contains_every_static_operation() -> None:

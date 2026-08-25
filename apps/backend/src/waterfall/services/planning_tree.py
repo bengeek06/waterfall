@@ -67,7 +67,28 @@ def _selected_roots(
             parent_uid = tasks_by_uid[parent_uid].parent_uid
         else:
             roots.append(task_uid)
-    return roots
+    return _depth_first_task_uids(tasks_by_uid, set(roots))
+
+
+def _depth_first_task_uids(
+    tasks_by_uid: dict[int, WfPlanningTaskSnapshot], selected_uids: set[int]
+) -> list[int]:
+    children_by_parent: dict[int | None, list[WfPlanningTaskSnapshot]] = defaultdict(list)
+    for task in tasks_by_uid.values():
+        children_by_parent[task.parent_uid].append(task)
+    for siblings in children_by_parent.values():
+        siblings.sort(key=_task_order)
+
+    ordered_uids: list[int] = []
+
+    def visit(parent_uid: int | None) -> None:
+        for task in children_by_parent[parent_uid]:
+            if task.uid in selected_uids:
+                ordered_uids.append(task.uid)
+            visit(task.uid)
+
+    visit(None)
+    return ordered_uids
 
 
 def _recalculate_outline(tasks_by_uid: dict[int, WfPlanningTaskSnapshot]) -> None:
@@ -83,8 +104,33 @@ def _recalculate_outline(tasks_by_uid: dict[int, WfPlanningTaskSnapshot]) -> Non
             task.outline_level = level
             task.outline_number = f"{prefix}.{position}" if prefix else str(position)
             update_children(task.uid, task.outline_number or "", level + 1)
+            _recalculate_summary_fields(task, children_by_parent[task.uid])
 
     update_children(None, "", 1)
+
+
+def _recalculate_summary_fields(
+    task: WfPlanningTaskSnapshot, children: list[WfPlanningTaskSnapshot]
+) -> None:
+    if not children:
+        if task.is_summary:
+            task.start_at = None
+            task.finish_at = None
+            task.duration_minutes = None
+        task.is_summary = False
+        return
+
+    task.is_summary = True
+    start_dates = [child.start_at for child in children if child.start_at is not None]
+    finish_dates = [child.finish_at for child in children if child.finish_at is not None]
+    task.start_at = min(start_dates) if start_dates else None
+    task.finish_at = max(finish_dates) if finish_dates else None
+    start_at = task.start_at
+    finish_at = task.finish_at
+    if start_at is None or finish_at is None:
+        task.duration_minutes = None
+    else:
+        task.duration_minutes = max(0, int((finish_at - start_at).total_seconds() // 60))
 
 
 def _validate_target_parent(
@@ -94,6 +140,8 @@ def _validate_target_parent(
 ) -> None:
     if target_parent_uid is not None and target_parent_uid not in tasks_by_uid:
         raise PlanningTreeMoveNotFoundError(f"Task not found: {target_parent_uid}")
+    if target_parent_uid is not None and tasks_by_uid[target_parent_uid].is_milestone:
+        raise PlanningTreeInvariantError("A milestone cannot contain children")
     if target_parent_uid in selected_roots:
         raise PlanningTreeInvariantError("A task cannot be moved under itself")
 
@@ -128,7 +176,7 @@ def move_planning_tasks(
     for siblings in siblings_by_parent.values():
         siblings.sort(key=_task_order)
 
-    moved = sorted((tasks_by_uid[task_uid] for task_uid in selected_roots), key=_task_order)
+    moved = [tasks_by_uid[task_uid] for task_uid in selected_roots]
     target_siblings = siblings_by_parent[command.target_parent_uid]
     if command.position > len(target_siblings) + 1:
         raise PlanningTreeMoveError("position is outside the target sibling range")

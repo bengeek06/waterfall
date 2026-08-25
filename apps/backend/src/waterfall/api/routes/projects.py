@@ -1,9 +1,12 @@
 import xml.etree.ElementTree as ET
+from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime
 from typing import Any, cast
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import Response
+from fastapi.routing import APIRoute
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -84,6 +87,24 @@ from waterfall.services.task_references import is_task_referenced
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 MSP_NS = "http://schemas.microsoft.com/project/2007"
+
+
+class _MovePlanningTasksRoute(APIRoute):
+    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
+        original_route_handler = super().get_route_handler()
+
+        async def move_route_handler(request: Request) -> Response:
+            try:
+                return await original_route_handler(request)
+            except RequestValidationError as exc:
+                if any(error["loc"][0] == "body" for error in exc.errors()):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=exc.errors(),
+                    ) from exc
+                raise
+
+        return move_route_handler
 
 
 def _bool_to_msp_flag(value: bool) -> str:
@@ -728,10 +749,6 @@ def get_planning(
     )
 
 
-@router.post(
-    "/{project_id}/plannings/{planning_id}/tasks/move",
-    response_model=PlanningDetailRead,
-)
 def move_planning_tasks_route(
     project_id: int,
     planning_id: int,
@@ -763,6 +780,15 @@ def move_planning_tasks_route(
             detail="Planning hierarchy conflicts with existing planning data",
         ) from exc
     return _planning_detail(db, planning)
+
+
+router.add_api_route(
+    "/{project_id}/plannings/{planning_id}/tasks/move",
+    move_planning_tasks_route,
+    methods=["POST"],
+    response_model=PlanningDetailRead,
+    route_class_override=_MovePlanningTasksRoute,
+)
 
 
 @router.post("/{project_id}/plannings/{planning_id}/validate", response_model=PlanningRead)

@@ -1654,6 +1654,15 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
+        /** @description Projet, planning ou tache introuvable */
+        ProjectPlanningTaskNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
         /** @description Devis introuvable */
         EstimateNotFound: {
             headers: {
@@ -2557,7 +2566,7 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
-            404: components["responses"]["PlanningNotFound"];
+            404: components["responses"]["ProjectPlanningTaskNotFound"];
             409: components["responses"]["Conflict"];
         };
     };

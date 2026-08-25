@@ -1,6 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -215,7 +215,7 @@ class PlanningCreate(BaseModel):
 
 
 class PlanningTaskMove(BaseModel):
-    task_uids: list[int] = Field(min_length=1)
+    task_uids: list[Annotated[int, Field(ge=1)]] = Field(min_length=1)
     target_parent_uid: int | None = Field(default=None, gt=0)
     position: int = Field(ge=1)
 

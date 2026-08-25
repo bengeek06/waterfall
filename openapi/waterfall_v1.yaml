@@ -789,7 +789,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
-          $ref: '#/components/responses/PlanningNotFound'
+          $ref: '#/components/responses/ProjectPlanningTaskNotFound'
         '409':
           $ref: '#/components/responses/Conflict'
   /projects/{projectId}/plannings/{planningId}/validate:
@@ -3835,6 +3835,12 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
     PlanningNotFound:
       description: Planning introuvable
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ProjectPlanningTaskNotFound:
+      description: Projet, planning ou tache introuvable
       content:
         application/json:
           schema:

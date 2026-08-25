@@ -356,6 +356,8 @@ components:
       $ref: ./components/responses/ProjectNotFound.yaml
     PlanningNotFound:
       $ref: ./components/responses/PlanningNotFound.yaml
+    ProjectPlanningTaskNotFound:
+      $ref: ./components/responses/ProjectPlanningTaskNotFound.yaml
     EstimateNotFound:
       $ref: ./components/responses/EstimateNotFound.yaml
     TaskNotFound:

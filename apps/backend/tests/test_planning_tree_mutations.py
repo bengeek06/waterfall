@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any, cast
 from uuid import uuid4
 
@@ -46,6 +47,9 @@ def _seed_plannings(project_id: int) -> tuple[int, int]:
                         name="Leaf A",
                         parent_uid=1,
                         position=1,
+                        start_at=datetime(2026, 1, 5, 8, 0, tzinfo=UTC),
+                        finish_at=datetime(2026, 1, 7, 8, 0, tzinfo=UTC),
+                        duration_minutes=2880,
                         is_summary=False,
                         is_milestone=False,
                     ),
@@ -55,6 +59,9 @@ def _seed_plannings(project_id: int) -> tuple[int, int]:
                         name="Leaf B",
                         parent_uid=1,
                         position=2,
+                        start_at=datetime(2026, 1, 8, 8, 0, tzinfo=UTC),
+                        finish_at=datetime(2026, 1, 10, 8, 0, tzinfo=UTC),
+                        duration_minutes=2880,
                         is_summary=False,
                         is_milestone=False,
                     ),
@@ -141,6 +148,22 @@ def test_move_group_normalizes_selected_descendant_and_preserves_subtree_order()
         assert by_uid[3]["outline_number"] == "2.2"
 
 
+def test_move_multiple_roots_preserves_current_depth_first_order() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        _, planning_id = _seed_plannings(project_id)
+
+        response = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/tasks/move",
+            json={"task_uids": [3, 5], "target_parent_uid": None, "position": 2},
+            headers=headers,
+        )
+
+        assert response.status_code == 200
+        assert [task["uid"] for task in response.json()["tasks"]] == [1, 2, 3, 5, 4, 6]
+
+
 def test_move_task_to_root() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)
@@ -178,6 +201,93 @@ def test_invalid_move_rolls_back_tree() -> None:
         assert cycle.status_code == 409
         assert missing.status_code == 404
         assert _tasks_by_uid(cast(dict[str, Any], detail.json()))[3]["parent_uid"] == 1
+
+
+def test_move_schema_validation_returns_bad_request() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        _, planning_id = _seed_plannings(project_id)
+        path = f"/projects/{project_id}/plannings/{planning_id}/tasks/move"
+
+        for payload in (
+            {"task_uids": [], "target_parent_uid": None, "position": 1},
+            {"task_uids": [0], "target_parent_uid": None, "position": 1},
+            {"task_uids": [-1], "target_parent_uid": None, "position": 1},
+            {"task_uids": [2], "target_parent_uid": 0, "position": 1},
+            {"task_uids": [2], "target_parent_uid": None, "position": 0},
+        ):
+            response = client.post(path, json=payload, headers=headers)
+            assert response.status_code == 400
+
+
+def test_move_recalculates_summary_invariants() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        _, planning_id = _seed_plannings(project_id)
+        path = f"/projects/{project_id}/plannings/{planning_id}/tasks/move"
+
+        promoted = client.post(
+            path,
+            json={"task_uids": [2], "target_parent_uid": 6, "position": 1},
+            headers=headers,
+        )
+
+        assert promoted.status_code == 200
+        promoted_tasks = _tasks_by_uid(cast(dict[str, Any], promoted.json()))
+        assert promoted_tasks[6]["is_summary"] is True
+        assert promoted_tasks[6]["start_at"] == "2026-01-05T08:00:00"
+        assert promoted_tasks[6]["finish_at"] == "2026-01-07T08:00:00"
+
+        demoted = client.post(
+            path,
+            json={"task_uids": [3], "target_parent_uid": 4, "position": 2},
+            headers=headers,
+        )
+
+        assert demoted.status_code == 200
+        tasks = _tasks_by_uid(cast(dict[str, Any], demoted.json()))
+        assert tasks[1]["is_summary"] is False
+        assert tasks[1]["start_at"] is None
+        assert tasks[1]["finish_at"] is None
+        assert tasks[4]["is_summary"] is True
+        assert tasks[4]["start_at"] == "2026-01-08T08:00:00"
+        assert tasks[4]["finish_at"] == "2026-01-10T08:00:00"
+        with get_session_factory()() as session:
+            snapshots = {
+                task.uid: task
+                for task in session.query(WfPlanningTaskSnapshot)
+                .filter(WfPlanningTaskSnapshot.planning_id == planning_id)
+                .all()
+            }
+        assert snapshots[1].duration_minutes is None
+        assert snapshots[4].duration_minutes == 2880
+        assert snapshots[6].duration_minutes == 2880
+
+
+def test_move_rejects_milestone_as_target_parent() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        _, planning_id = _seed_plannings(project_id)
+        with get_session_factory()() as session:
+            milestone = (
+                session.query(WfPlanningTaskSnapshot)
+                .filter(WfPlanningTaskSnapshot.planning_id == planning_id)
+                .filter(WfPlanningTaskSnapshot.uid == 6)
+                .one()
+            )
+            milestone.is_milestone = True
+            session.commit()
+
+        response = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/tasks/move",
+            json={"task_uids": [2], "target_parent_uid": 6, "position": 1},
+            headers=headers,
+        )
+
+        assert response.status_code == 409
 
 
 def test_move_rejects_validated_planning_and_read_only_project() -> None:
