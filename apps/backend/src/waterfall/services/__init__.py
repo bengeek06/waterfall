@@ -12,6 +12,12 @@ from waterfall.services.planning_structure import (
     load_planning_structure_draft,
     save_planning_structure_draft,
 )
+from waterfall.services.planning_tree import (
+    PlanningTreeInvariantError,
+    PlanningTreeMoveError,
+    PlanningTreeMoveNotFoundError,
+    move_planning_tasks,
+)
 
 __all__ = [
     "EstimateAggregates",
@@ -22,4 +28,8 @@ __all__ = [
     "generate_planning_structure",
     "load_planning_structure_draft",
     "save_planning_structure_draft",
+    "PlanningTreeMoveError",
+    "PlanningTreeInvariantError",
+    "PlanningTreeMoveNotFoundError",
+    "move_planning_tasks",
 ]

@@ -417,6 +417,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{projectId}/plannings/{planningId}/tasks/move": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Deplacer ou reordonner des taches d'un brouillon de planning */
+        post: operations["movePlanningTasks"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/projects/{projectId}/plannings/{planningId}/validate": {
         parameters: {
             query?: never;
@@ -1259,6 +1276,11 @@ export interface components {
         PlanningCreate: {
             note?: string | null;
             source_planning_id?: number | null;
+        };
+        PlanningTaskMove: {
+            task_uids: number[];
+            target_parent_uid?: number | null;
+            position: number;
         };
         PlanningDetailRead: components["schemas"]["PlanningRead"] & {
             tasks: components["schemas"]["TaskRead"][];
@@ -2504,6 +2526,39 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["PlanningNotFound"];
+        };
+    };
+    movePlanningTasks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de planning */
+                planningId: components["parameters"]["PlanningId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlanningTaskMove"];
+            };
+        };
+        responses: {
+            /** @description Arbre complet du brouillon mis a jour */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanningDetailRead"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["PlanningNotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     validatePlanning: {

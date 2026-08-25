@@ -134,6 +134,7 @@ def test_static_openapi_matches_runtime_operation_ids_and_components() -> None:
         "ProjectStatusUpdate",
         "PlanningRead",
         "PlanningCreate",
+        "PlanningTaskMove",
         "PlanningLinkRead",
     ):
         assert schema_name in runtime_components
@@ -208,6 +209,7 @@ def test_planning_contract_matches_runtime_shapes() -> None:
     relevant_schemas = (
         "PlanningRead",
         "PlanningDetailRead",
+        "PlanningTaskMove",
         "PlanningTreeRead",
         "TaskRead",
         "PlanningLinkRead",

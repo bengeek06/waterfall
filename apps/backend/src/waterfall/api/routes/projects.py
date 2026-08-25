@@ -37,6 +37,7 @@ from waterfall.schemas.projects import (
     PlanningStructureCreate,
     PlanningStructureDraftRead,
     PlanningStructureRead,
+    PlanningTaskMove,
     PlanningTaskTreeRead,
     PlanningTreeRead,
     ProjectCreate,
@@ -58,12 +59,16 @@ from waterfall.schemas.projects import (
 )
 from waterfall.schemas.resources import CostTypeKind
 from waterfall.services import (
+    PlanningTreeInvariantError,
+    PlanningTreeMoveError,
+    PlanningTreeMoveNotFoundError,
     build_estimate_workbook,
     calculate_estimate_aggregates,
     calculate_estimate_lines,
     generate_planning_snapshot,
     generate_planning_structure,
     load_planning_structure_draft,
+    move_planning_tasks,
     save_planning_structure_draft,
 )
 from waterfall.services.msproject_xml import (
@@ -721,6 +726,43 @@ def get_planning(
     return _planning_detail(
         db, _get_planning_or_404(db, project_id, planning_id), offset=offset, limit=limit
     )
+
+
+@router.post(
+    "/{project_id}/plannings/{planning_id}/tasks/move",
+    response_model=PlanningDetailRead,
+)
+def move_planning_tasks_route(
+    project_id: int,
+    planning_id: int,
+    payload: PlanningTaskMove,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> PlanningDetailRead:
+    project = _get_project_or_404(db, project_id, current_user.id)
+    ensure_project_mutable(project)
+    planning = _get_planning_or_404(db, project_id, planning_id)
+    if planning.status != "draft":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Planning is not a draft")
+    try:
+        move_planning_tasks(db, planning, payload)
+        db.commit()
+    except PlanningTreeMoveNotFoundError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except PlanningTreeInvariantError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except PlanningTreeMoveError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Planning hierarchy conflicts with existing planning data",
+        ) from exc
+    return _planning_detail(db, planning)
 
 
 @router.post("/{project_id}/plannings/{planning_id}/validate", response_model=PlanningRead)

@@ -760,6 +760,38 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/PlanningNotFound'
+  /projects/{projectId}/plannings/{planningId}/tasks/move:
+    post:
+      tags:
+        - projects
+      summary: Deplacer ou reordonner des taches d'un brouillon de planning
+      operationId: movePlanningTasks
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/PlanningId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlanningTaskMove'
+      responses:
+        '200':
+          description: Arbre complet du brouillon mis a jour
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanningDetailRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/PlanningNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
   /projects/{projectId}/plannings/{planningId}/validate:
     post:
       tags:
@@ -2686,6 +2718,26 @@ components:
           type: integer
           minimum: 1
           nullable: true
+    PlanningTaskMove:
+      type: object
+      required:
+        - task_uids
+        - position
+      properties:
+        task_uids:
+          type: array
+          minItems: 1
+          items:
+            type: integer
+            minimum: 1
+        target_parent_uid:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
+        position:
+          type: integer
+          minimum: 1
     PlanningDetailRead:
       allOf:
         - $ref: '#/components/schemas/PlanningRead'

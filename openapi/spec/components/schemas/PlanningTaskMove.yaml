@@ -1,0 +1,19 @@
+type: object
+required:
+- task_uids
+- position
+properties:
+  task_uids:
+    type: array
+    minItems: 1
+    items:
+      type: integer
+      minimum: 1
+  target_parent_uid:
+    type:
+    - integer
+    - 'null'
+    minimum: 1
+  position:
+    type: integer
+    minimum: 1

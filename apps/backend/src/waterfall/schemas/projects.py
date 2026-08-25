@@ -214,6 +214,12 @@ class PlanningCreate(BaseModel):
         return normalized or None
 
 
+class PlanningTaskMove(BaseModel):
+    task_uids: list[int] = Field(min_length=1)
+    target_parent_uid: int | None = Field(default=None, gt=0)
+    position: int = Field(ge=1)
+
+
 class ProjectStatusUpdate(BaseModel):
     status: ProjectStatus
 
