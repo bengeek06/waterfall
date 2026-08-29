@@ -1,5 +1,13 @@
 """Waterfall business logic services."""
 
+from waterfall.services.calendar_schedule import (
+    ResolvedCalendar,
+    compute_finish_at,
+    compute_working_minutes_between,
+    resolve_calendars_for_tasks,
+    resolve_default_calendar_id,
+    resolve_task_calendar_ids,
+)
 from waterfall.services.estimate_calculation import (
     EstimateAggregates,
     calculate_estimate_aggregates,
@@ -20,6 +28,12 @@ from waterfall.services.planning_tree import (
 )
 
 __all__ = [
+    "ResolvedCalendar",
+    "compute_finish_at",
+    "compute_working_minutes_between",
+    "resolve_calendars_for_tasks",
+    "resolve_default_calendar_id",
+    "resolve_task_calendar_ids",
     "EstimateAggregates",
     "calculate_estimate_lines",
     "calculate_estimate_aggregates",

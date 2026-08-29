@@ -486,3 +486,82 @@ def test_export_of_imported_project_never_reuses_source_calendar_uid() -> None:
 
         parse_msproject_xml(cast(bytes, export_response.content))
         _assert_no_dangling_calendar_uid_references(root)
+
+
+def test_export_of_imported_project_preserves_original_dates_without_a_move() -> None:
+    """E5-04 guardrail: a planning imported and never passed through a tree
+    move (i.e. never touching move_planning_tasks/_recalculate_summary_fields)
+    keeps its original Start/Finish dates exactly, byte-for-byte."""
+    with TestClient(app) as client:
+        headers = _admin_headers(client, "export.no_move.calendars@example.com")
+
+        project_response: Response = client.post(
+            "/projects",
+            json={"name": "No-move export target"},
+            headers=headers,
+        )
+        assert project_response.status_code == 201
+        project_id = project_response.json()["id"]
+
+        create_response: Response = client.post(
+            "/imports/v1/batches",
+            json={
+                "projectId": project_id,
+                "importMode": "standard",
+                "sourceName": EXAMPLE_XML_WITH_CALENDARS.name,
+            },
+            headers=headers,
+        )
+        assert create_response.status_code == 201
+        batch_id = create_response.json()["id"]
+
+        upload_response: Response = client.post(
+            f"/imports/v1/batches/{batch_id}/xml",
+            files={
+                "file": (
+                    EXAMPLE_XML_WITH_CALENDARS.name,
+                    EXAMPLE_XML_WITH_CALENDARS.read_bytes(),
+                    "application/xml",
+                )
+            },
+            headers=headers,
+        )
+        assert upload_response.status_code == 202
+
+        run_response: Response = client.post(
+            f"/imports/v1/batches/{batch_id}/run",
+            json={"dryRun": False, "confirm": True},
+            headers=headers,
+        )
+        assert run_response.status_code == 202
+
+        status_response: Response = client.get(
+            f"/imports/v1/batches/{batch_id}",
+            headers=headers,
+        )
+        assert status_response.status_code == 200
+        assert cast(dict[str, Any], status_response.json())["status"] == "success"
+
+        # No tree-move call happens here: this is the whole point of the test.
+        export_response: Response = client.get(
+            f"/projects/{project_id}/export.xml",
+            headers=headers,
+        )
+        assert export_response.status_code == 200
+
+        root = ET.fromstring(cast(bytes, export_response.content))
+        dates_by_uid: dict[str, tuple[str | None, str | None]] = {}
+        for task_node in root.findall("ms:Tasks/ms:Task", NS):
+            uid_node = task_node.find("ms:UID", NS)
+            start_node = task_node.find("ms:Start", NS)
+            finish_node = task_node.find("ms:Finish", NS)
+            assert uid_node is not None and uid_node.text is not None
+            dates_by_uid[uid_node.text] = (
+                start_node.text if start_node is not None else None,
+                finish_node.text if finish_node is not None else None,
+            )
+
+        assert dates_by_uid == {
+            "1": ("2026-11-30T09:00:00", "2027-01-15T18:00:00"),
+            "2": ("2027-01-18T09:00:00", "2027-06-25T18:00:00"),
+        }

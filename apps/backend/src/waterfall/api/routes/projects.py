@@ -76,6 +76,8 @@ from waterfall.services import (
     generate_planning_structure,
     load_planning_structure_draft,
     move_planning_tasks,
+    resolve_default_calendar_id,
+    resolve_task_calendar_ids,
     save_planning_structure_draft,
 )
 from waterfall.services.msproject_xml import (
@@ -2306,59 +2308,6 @@ def delete_task_role_assignment(
     db.commit()
 
 
-def _resolve_task_calendar_ids(db: Session, project_id: int, task_uids: set[int]) -> dict[int, int]:
-    """Resolve each exported task's working calendar id from its role assignments.
-
-    wf_task_role_assignment always references ms_task.id (the live task table),
-    never a wf_planning_task_snapshot row -- so the uid -> ms_task.id mapping is
-    resolved from ms_task regardless of whether the export is reading from a
-    planning snapshot or from ms_task directly.
-
-    A task may have several roles assigned with different calendars; MS Project
-    only carries a single CalendarUID per task. The issue (E5-02) does not
-    settle this ambiguity, so we deterministically keep the calendar of the
-    assigned role with the lowest role_id. Tasks without any role assignment,
-    or whose assigned roles have no calendar, are omitted from the mapping and
-    export without a Task/CalendarUID (MS Project then applies the project
-    calendar, which is the standard behaviour for an unset task calendar).
-
-    This intentionally does not filter on ResourceRole.is_active: a role
-    assignment is a historical fact about how a task was staffed, and export
-    determinism must not change retroactively just because the role was
-    deactivated after the assignment was made.
-    """
-    if not task_uids:
-        return {}
-
-    uid_by_task_id: dict[int, int] = {
-        task_id: uid
-        for task_id, uid in db.query(MsTask.id, MsTask.uid)
-        .filter(MsTask.project_id == project_id)
-        .filter(MsTask.uid.in_(task_uids))
-        .all()
-    }
-    if not uid_by_task_id:
-        return {}
-
-    rows = (
-        db.query(TaskRoleAssignment.task_id, ResourceRole.calendar_id)
-        .join(ResourceRole, TaskRoleAssignment.role_id == ResourceRole.id)
-        .filter(TaskRoleAssignment.task_id.in_(uid_by_task_id.keys()))
-        .order_by(TaskRoleAssignment.role_id.asc())
-        .all()
-    )
-
-    resolved: dict[int, int] = {}
-    for task_id, calendar_id in rows:
-        if calendar_id is None:
-            continue
-        uid = uid_by_task_id[task_id]
-        if uid in resolved:
-            continue
-        resolved[uid] = calendar_id
-    return resolved
-
-
 def _resolve_project_reference_calendar_id(
     db: Session, task_calendar_ids: dict[int, int]
 ) -> int | None:
@@ -2370,14 +2319,9 @@ def _resolve_project_reference_calendar_id(
     calendar id actually referenced by an exported task (deterministic, and
     guarantees the calendar is one we are already exporting).
     """
-    standard = (
-        db.query(Calendar)
-        .filter(Calendar.code == "STANDARD")
-        .filter(Calendar.is_active.is_(True))
-        .first()
-    )
-    if standard is not None:
-        return standard.id
+    standard_calendar_id = resolve_default_calendar_id(db)
+    if standard_calendar_id is not None:
+        return standard_calendar_id
     if task_calendar_ids:
         return min(task_calendar_ids.values())
     return None
@@ -2467,7 +2411,7 @@ def export_project_xml(
     # values emitted below are always recomputed from wf_calendar.id, never
     # replayed from an imported file's foreign uids (ms_project.calendar_uid /
     # ms_task.calendar_uid), which are never read here.
-    task_calendar_ids = _resolve_task_calendar_ids(db, project_id, {task.uid for task in tasks})
+    task_calendar_ids = resolve_task_calendar_ids(db, project_id, {task.uid for task in tasks})
     reference_calendar_id = _resolve_project_reference_calendar_id(db, task_calendar_ids)
 
     exported_calendar_ids = set(task_calendar_ids.values())

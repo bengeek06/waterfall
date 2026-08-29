@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any, cast
 from unittest.mock import MagicMock
 from uuid import uuid4
@@ -11,8 +12,17 @@ from fastapi.testclient import TestClient
 from waterfall.api.routes import projects
 from waterfall.db.session import get_session_factory
 from waterfall.main import app
-from waterfall.models.ms_core import MsProject
+from waterfall.models.ms_core import MsProject, MsTask
 from waterfall.models.planning import WfPlanning, WfPlanningTaskSnapshot
+from waterfall.models.resources import (
+    Calendar,
+    CalendarWeekday,
+    CostCategory,
+    CostType,
+    ResourceNode,
+    ResourceRole,
+    TaskRoleAssignment,
+)
 
 
 def _auth_headers(client: TestClient) -> dict[str, str]:
@@ -462,6 +472,109 @@ def test_move_recalculates_summary_invariants() -> None:
         assert snapshots[1].duration_minutes is None
         assert snapshots[4].duration_minutes == 2880
         assert snapshots[6].duration_minutes == 2880
+
+
+def test_move_recalculates_summary_duration_from_assigned_resource_role_calendar() -> None:
+    """E5-04: a summary task's duration is derived from its own assigned
+    resource role's working calendar, and children staffed on a different
+    (or no) calendar must not corrupt that resolution."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        _, planning_id = _seed_plannings(project_id)
+
+        with get_session_factory()() as session:
+            # PARTTIME: 4h/day Mon-Fri, 0h on the weekend -- deliberately
+            # different from STANDARD's 7h/day so the test can distinguish
+            # "calendar-aware" from "wall-clock" or "STANDARD" arithmetic.
+            calendar = Calendar(code="PARTTIME", name="Temps partiel", weeks_per_year=47)
+            session.add(calendar)
+            session.flush()
+            session.add_all(
+                CalendarWeekday(
+                    calendar_id=calendar.id,
+                    day_type=day_type,
+                    hours_per_day=Decimal("0.00") if day_type in (1, 7) else Decimal("4.00"),
+                )
+                for day_type in range(1, 8)
+            )
+
+            cost_type = CostType(code="MO", name="Main d'oeuvre", kind="labor")
+            session.add(cost_type)
+            session.flush()
+            category = CostCategory(
+                cost_type_id=cost_type.id,
+                accounting_code="DEV",
+                category_code="IDEX",
+                name="Developpement",
+            )
+            node = ResourceNode(code="IT", name="Departement informatique")
+            session.add_all([category, node])
+            session.flush()
+            role = ResourceRole(
+                node_id=node.id,
+                cost_category_id=category.id,
+                calendar_id=calendar.id,
+                code="DEV-PARTTIME",
+                name="Developpeur temps partiel",
+            )
+            session.add(role)
+            session.flush()
+
+            # wf_task_role_assignment references ms_task.id, never a
+            # planning snapshot row, so a live MsTask row bridging uid=4
+            # (Group B, the summary whose duration this test locks in) has
+            # to exist -- same bridging pattern the E5-02 export code uses.
+            summary_task = MsTask(project_id=project_id, uid=4, name="Group B")
+            session.add(summary_task)
+            session.flush()
+            session.add(
+                TaskRoleAssignment(
+                    task_id=summary_task.id,
+                    role_id=role.id,
+                    quantity=Decimal("1.00"),
+                    hours=Decimal("10.00"),
+                )
+            )
+
+            # uid=5 (Leaf C) is a child of the summary with dates that do not
+            # dominate the min/max window and no calendar of its own -- it
+            # resolves to the wall-clock fallback tier, distinct from the
+            # summary's own PARTTIME calendar, and must not influence the
+            # summary's duration calculation.
+            leaf_c = (
+                session.query(WfPlanningTaskSnapshot)
+                .filter(WfPlanningTaskSnapshot.planning_id == planning_id)
+                .filter(WfPlanningTaskSnapshot.uid == 5)
+                .one()
+            )
+            leaf_c.start_at = datetime(2026, 1, 1, 8, 0, tzinfo=UTC)
+            leaf_c.finish_at = datetime(2026, 1, 2, 8, 0, tzinfo=UTC)
+            session.commit()
+
+        response = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/tasks/move",
+            json={"task_uids": [3], "target_parent_uid": 4, "position": 2},
+            headers=headers,
+        )
+
+        assert response.status_code == 200
+        tasks = _tasks_by_uid(cast(dict[str, Any], response.json()))
+        assert tasks[4]["is_summary"] is True
+        assert tasks[4]["start_at"] == "2026-01-01T08:00:00"
+        assert tasks[4]["finish_at"] == "2026-01-10T08:00:00"
+
+        with get_session_factory()() as session:
+            group_b = (
+                session.query(WfPlanningTaskSnapshot)
+                .filter(WfPlanningTaskSnapshot.planning_id == planning_id)
+                .filter(WfPlanningTaskSnapshot.uid == 4)
+                .one()
+            )
+            # 7 working weekdays (Mon-Fri) at 4h/day between 2026-01-01T08:00
+            # and 2026-01-10T08:00 under PARTTIME: not the wall-clock diff
+            # (12960 minutes) nor a STANDARD-calendar figure.
+            assert group_b.duration_minutes == 1680
 
 
 def test_move_rejects_milestone_as_target_parent() -> None:
