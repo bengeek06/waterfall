@@ -71,6 +71,7 @@ import {
   structureToDraftRows,
   type PlanningStructureDraftRow,
 } from "@/lib/planning-structure";
+import { PlanningTreeTable } from "@/components/planning-tree-table";
 import { ReadOnlyGantt } from "@/components/read-only-gantt";
 import { ProjectTabs, type ProjectTab } from "@/components/project-tabs";
 
@@ -1324,32 +1325,12 @@ export default function ProjectDetailsPage() {
             {planningDetailBusy ? <p className="text-sm text-muted-foreground" role="status">Chargement du planning...</p> : null}
             {!planningDetailBusy && !planningDetail ? <p className="py-6 text-sm text-muted-foreground">Aucun planning sélectionné.</p> : null}
             {planningDetail?.tasks.length ? <ReadOnlyGantt tasks={planningDetail.tasks} /> : null}
-            {planningDetail && !planningDetail.tasks.length ? <p className="py-6 text-sm text-muted-foreground">Le planning ne contient aucune tâche.</p> : null}
-            {planningDetail?.tasks.length ? (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr>
-                      <th scope="col">WBS</th>
-                      <th scope="col">Nom</th>
-                      <th scope="col">Début</th>
-                      <th scope="col">Fin</th>
-                      <th scope="col">Avancement</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {planningDetail.tasks.map((task) => (
-                      <tr key={task.uid}>
-                        <td>{task.outline_number ?? task.uid}</td>
-                        <td>{task.is_milestone ? "◆ " : ""}{task.name}</td>
-                        <td>{task.start_at ? new Date(task.start_at).toLocaleDateString("fr-FR") : "-"}</td>
-                        <td>{task.finish_at ? new Date(task.finish_at).toLocaleDateString("fr-FR") : "-"}</td>
-                        <td>{task.percent_complete ?? 0}%</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+            {planningDetail ? (
+              <PlanningTreeTable
+                tasks={planningDetail.tasks}
+                versionKey={selectedPlanning?.id ?? null}
+                readOnly={isReadOnlyProject || selectedPlanning?.status === "validated"}
+              />
             ) : null}
           </div>
         ) : null}
