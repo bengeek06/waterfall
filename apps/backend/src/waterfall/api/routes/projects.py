@@ -81,7 +81,7 @@ from waterfall.services import (
 from waterfall.services.msproject_xml import (
     MsProjectValidationError,
     format_duration,
-    parse_msproject_xml,
+    validate_canonical_export_xml,
 )
 from waterfall.services.project_lifecycle import (
     ensure_project_mutable,
@@ -2637,7 +2637,7 @@ def export_project_xml(
 
     xml_content = ET.tostring(root, encoding="utf-8", xml_declaration=True)
     try:
-        parse_msproject_xml(xml_content)
+        validate_canonical_export_xml(xml_content)
     except MsProjectValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
