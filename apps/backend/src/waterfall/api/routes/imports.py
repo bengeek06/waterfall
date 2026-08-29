@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy import func, select
@@ -46,15 +48,17 @@ def _source_path(batch_id: int) -> Path:
     return Path(get_settings().import_storage_path) / f"batch-{batch_id}.xml"
 
 
-async def _save_source_xml(file: UploadFile, batch_id: int) -> tuple[Path, int, str]:
+async def _stage_source_xml(file: UploadFile, batch_id: int) -> tuple[Path, int, str]:
     settings = get_settings()
-    storage_path = _source_path(batch_id)
-    storage_path.parent.mkdir(parents=True, exist_ok=True)
+    final_path = _source_path(batch_id)
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+    # Unique staging name so concurrent uploads never write to the same file.
+    staging_path = final_path.with_name(f"{final_path.name}.{uuid4().hex}.part")
 
     byte_count = 0
     digest = hashlib.sha256()
     try:
-        with storage_path.open("wb") as destination:
+        with staging_path.open("wb") as destination:
             while chunk := await file.read(UPLOAD_CHUNK_SIZE):
                 byte_count += len(chunk)
                 if byte_count > settings.import_max_upload_bytes:
@@ -65,10 +69,10 @@ async def _save_source_xml(file: UploadFile, batch_id: int) -> tuple[Path, int, 
                 digest.update(chunk)
                 destination.write(chunk)
     except Exception:
-        storage_path.unlink(missing_ok=True)
+        staging_path.unlink(missing_ok=True)
         raise
 
-    return storage_path, byte_count, digest.hexdigest()
+    return staging_path, byte_count, digest.hexdigest()
 
 
 def _read_source_xml(batch: WfImportBatch) -> bytes:
@@ -211,16 +215,22 @@ async def upload_xml(
     batch = _get_batch_or_404(db, batch_id, current_user.id)
     if batch.project_id is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-    get_mutable_project_lock(db, batch.project_id, current_user.id)
-    # Re-read under the project lock: a concurrent writer may have finished while
-    # we waited to acquire it, leaving this instance stale.
-    db.refresh(batch)
-    if batch.status != "pending":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Batch is no longer pending",
-        )
-    storage_path, byte_count, source_sha256 = await _save_source_xml(file, batch.id)
+    # Stage the upload before locking so slow file I/O never blocks planning
+    # writers serialized on the project row lock.
+    staging_path, byte_count, source_sha256 = await _stage_source_xml(file, batch.id)
+    final_path = _source_path(batch.id)
+    try:
+        get_mutable_project_lock(db, batch.project_id, current_user.id)
+        db.refresh(batch)
+        if batch.status != "pending":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Batch is no longer pending",
+            )
+        os.replace(staging_path, final_path)
+    except BaseException:
+        staging_path.unlink(missing_ok=True)
+        raise
 
     log_payload: dict[str, object]
     if batch.log_json:
@@ -235,7 +245,7 @@ async def upload_xml(
     log_payload["uploaded_bytes"] = byte_count
 
     batch.source_filename = filename
-    batch.source_storage_path = str(storage_path)
+    batch.source_storage_path = str(final_path)
     batch.source_sha256 = source_sha256
     batch.status = "pending"
     batch.log_json = json.dumps(log_payload)
