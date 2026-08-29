@@ -89,9 +89,12 @@ export default function ProjectDetailsPage() {
   const [plannings, setPlannings] = useState<Planning[]>([]);
   const [selectedPlanningId, setSelectedPlanningId] = useState<number | null>(null);
   const selectedPlanningIdRef = useRef(selectedPlanningId);
-  useEffect(() => {
-    selectedPlanningIdRef.current = selectedPlanningId;
-  }, [selectedPlanningId]);
+  // Updated synchronously (not via effect) so an in-flight move can never observe a stale ID:
+  // an effect only runs after commit, leaving a window where a race could still slip through.
+  function updateSelectedPlanningId(next: number | null) {
+    selectedPlanningIdRef.current = next;
+    setSelectedPlanningId(next);
+  }
   const [planningDetail, setPlanningDetail] = useState<PlanningDetail | null>(null);
   const [planningBusy, setPlanningBusy] = useState(false);
   const [planningDetailBusy, setPlanningDetailBusy] = useState(false);
@@ -171,7 +174,7 @@ export default function ProjectDetailsPage() {
         setEstimates(estimatesData);
         setPlannings(planningsData);
         setStructureOpen(projectData.status === "cree");
-        setSelectedPlanningId(
+        updateSelectedPlanningId(
           projectData.displayed_planning_id ?? planningsData.at(-1)?.id ?? null,
         );
         setSelectedEstimateId((current) => current ?? estimatesData.at(-1)?.id ?? null);
@@ -361,7 +364,7 @@ export default function ProjectDetailsPage() {
       return;
     }
     if (isReadOnlyProject) {
-      setSelectedPlanningId(planningId);
+      updateSelectedPlanningId(planningId);
       return;
     }
     setPlanningBusy(true);
@@ -373,7 +376,7 @@ export default function ProjectDetailsPage() {
         session,
         onSessionRefresh,
       );
-      setSelectedPlanningId(planningId);
+      updateSelectedPlanningId(planningId);
       setProject(updatedProject);
     } catch (cause) {
       if (cause instanceof SessionExpiredError) {
@@ -489,7 +492,7 @@ export default function ProjectDetailsPage() {
       const savedDraft = await getPlanningStructureDraft(projectId, session, onSessionRefresh);
       setProject(updatedProject);
       setPlannings(planningMetadata);
-      setSelectedPlanningId(nextPlanningId);
+      updateSelectedPlanningId(nextPlanningId);
       const rows = savedDraft
         ? structureToDraftRows(savedDraft.structure)
         : getPlanningStructureDraftRows(reopenedDetail);
@@ -843,7 +846,7 @@ export default function ProjectDetailsPage() {
         : null;
       setProject(updatedProject);
       setPlannings(planningMetadata);
-      setSelectedPlanningId(nextPlanningId);
+      updateSelectedPlanningId(nextPlanningId);
       setPlanningDetail(detail);
       setStructureOpen(false);
     } catch (cause) {
@@ -1024,7 +1027,7 @@ export default function ProjectDetailsPage() {
       } else {
         setPlanningDetail(null);
       }
-      setSelectedPlanningId(nextPlanningId);
+      updateSelectedPlanningId(nextPlanningId);
       setImportFeedback(
         refreshFailures.length
           ? `Import réussi, mais ${refreshFailures.join(" et ")} n'ont pas pu être actualisés. Recharge la page pour voir l'état à jour.`

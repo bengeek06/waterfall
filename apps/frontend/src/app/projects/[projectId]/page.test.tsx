@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   getImportBatchDiff: vi.fn(),
   setDisplayedPlanning: vi.fn(),
   setPlanningReference: vi.fn(),
+  movePlanningTasks: vi.fn(),
   savePlanningStructureDraft: vi.fn(),
   getPlanningStructureDraft: vi.fn(),
   createPlanningStructure: vi.fn(),
@@ -48,6 +49,7 @@ vi.mock("@/lib/backend", async () => {
     getImportBatchDiff: mocks.getImportBatchDiff,
     setDisplayedPlanning: mocks.setDisplayedPlanning,
     setPlanningReference: mocks.setPlanningReference,
+    movePlanningTasks: mocks.movePlanningTasks,
     savePlanningStructureDraft: mocks.savePlanningStructureDraft,
     getPlanningStructureDraft: mocks.getPlanningStructureDraft,
     createPlanningStructure: mocks.createPlanningStructure,
@@ -130,6 +132,7 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     mocks.getImportBatchDiff.mockReset();
     mocks.setDisplayedPlanning.mockReset();
     mocks.setPlanningReference.mockReset();
+    mocks.movePlanningTasks.mockReset();
     mocks.savePlanningStructureDraft.mockReset();
     mocks.getPlanningStructureDraft.mockReset();
     mocks.createPlanningStructure.mockReset();
@@ -526,5 +529,98 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     await waitFor(() => expect(screen.getByText(/Import réussi, mais le projet/)).toBeInTheDocument());
     expect(screen.queryByRole("heading", { name: "Remplacement à confirmer" })).not.toBeInTheDocument();
     expect(mocks.runImportBatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("sends a move command and replaces the planning detail with the full server response", async () => {
+    const draft = planning({ id: 2, status: "draft" });
+    const siblingsDetail: PlanningDetail = {
+      ...draft,
+      tasks: [
+        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second", position: 2, parent_uid: null },
+      ],
+      links: [],
+    };
+    const movedDetail: PlanningDetail = {
+      ...draft,
+      tasks: [
+        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 2, parent_uid: null },
+      ],
+      links: [],
+    };
+    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draft.id }));
+    mocks.listPlannings.mockResolvedValue([draft]);
+    mocks.getPlanning.mockResolvedValue(siblingsDetail);
+    mocks.movePlanningTasks.mockResolvedValue(movedDetail);
+
+    render(<ProjectDetailsPage />);
+
+    await screen.findByText("Second");
+    fireEvent.click(screen.getByText("Second"));
+    fireEvent.click(screen.getByRole("button", { name: "Monter" }));
+
+    await waitFor(() =>
+      expect(mocks.movePlanningTasks).toHaveBeenCalledWith(
+        1,
+        draft.id,
+        { task_uids: [11], target_parent_uid: null, position: 1 },
+        expect.anything(),
+        expect.anything(),
+      ),
+    );
+    const rows = await screen.findAllByRole("row");
+    expect(rows).toHaveLength(3);
+    expect(rows[1]).toHaveTextContent("Second");
+    expect(rows[2]).toHaveTextContent("Premier");
+  });
+
+  it("ignores a move response for a planning that is no longer selected", async () => {
+    const draftA = planning({ id: 2, status: "draft" });
+    const draftB = planning({ id: 6, status: "draft", version_number: 2 });
+    const detailA: PlanningDetail = {
+      ...draftA,
+      tasks: [
+        { ...detail(draftA).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draftA).tasks[0], uid: 11, id_display: 11, name: "Second", position: 2, parent_uid: null },
+      ],
+      links: [],
+    };
+    const detailB = detail(draftB);
+    const staleDetail: PlanningDetail = {
+      ...draftA,
+      tasks: [{ ...detailA.tasks[0], name: "Réponse obsolète" }],
+      links: [],
+    };
+    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draftA.id }));
+    mocks.listPlannings.mockResolvedValue([draftA, draftB]);
+    mocks.getPlanning.mockImplementation(async (_projectId, planningId) =>
+      planningId === draftA.id ? detailA : detailB,
+    );
+    mocks.setDisplayedPlanning.mockImplementation(async (_projectId, planningId) =>
+      project({ status: "initialise", displayed_planning_id: planningId }),
+    );
+    let resolveMove!: (value: PlanningDetail) => void;
+    mocks.movePlanningTasks.mockImplementation(() => new Promise<PlanningDetail>((resolve) => {
+      resolveMove = resolve;
+    }));
+
+    render(<ProjectDetailsPage />);
+
+    await screen.findByText("Second");
+    fireEvent.click(screen.getByText("Second"));
+    fireEvent.click(screen.getByRole("button", { name: "Monter" }));
+    await waitFor(() => expect(mocks.movePlanningTasks).toHaveBeenCalledTimes(1));
+
+    fireEvent.change(await screen.findByRole("combobox", { name: "Version affichée" }), {
+      target: { value: String(draftB.id) },
+    });
+    await waitFor(() => expect(screen.getByText("Tâche 2")).toBeInTheDocument());
+
+    resolveMove(staleDetail);
+    await waitFor(() => expect(mocks.movePlanningTasks).toHaveResolved());
+
+    expect(screen.queryByText("Réponse obsolète")).not.toBeInTheDocument();
+    expect(screen.getByText("Tâche 2")).toBeInTheDocument();
   });
 });
