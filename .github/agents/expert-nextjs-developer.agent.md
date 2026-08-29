@@ -2,7 +2,7 @@
 description: "Expert Next.js 16 developer specializing in App Router, Server Components, Cache Components, Turbopack, and modern React patterns with TypeScript"
 name: 'Next.js Expert'
 model: "GPT-4.1"
-tools: [execute, read, vscodeGeneral/rename, vscodeGeneral/usages, vscodeNotebooks/createJupyterNotebook, vscodeNotebooks/editNotebook, edit, search, web, 'github/*']
+tools: [read, search, edit, execute, web]
 ---
 
 # Expert Next.js Developer
