@@ -442,7 +442,9 @@ export default function ProjectDetailsPage() {
         router.push("/login");
         return;
       }
-      setError(cause instanceof ApiError ? cause.message : "Impossible de déplacer les tâches sélectionnées.");
+      if (selectedPlanningIdRef.current === requestedPlanningId) {
+        setError(cause instanceof ApiError ? cause.message : "Impossible de déplacer les tâches sélectionnées.");
+      }
     } finally {
       setPlanningMutationBusy(false);
     }

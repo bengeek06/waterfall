@@ -623,4 +623,46 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     expect(screen.queryByText("Réponse obsolète")).not.toBeInTheDocument();
     expect(screen.getByText("Tâche 2")).toBeInTheDocument();
   });
+
+  it("does not show a move error after switching to another planning version", async () => {
+    const draftA = planning({ id: 2, status: "draft" });
+    const draftB = planning({ id: 6, status: "draft", version_number: 2 });
+    const detailA: PlanningDetail = {
+      ...draftA,
+      tasks: [
+        { ...detail(draftA).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draftA).tasks[0], uid: 11, id_display: 11, name: "Second", position: 2, parent_uid: null },
+      ],
+      links: [],
+    };
+    const detailB = detail(draftB);
+    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draftA.id }));
+    mocks.listPlannings.mockResolvedValue([draftA, draftB]);
+    mocks.getPlanning.mockImplementation(async (_projectId, planningId) =>
+      planningId === draftA.id ? detailA : detailB,
+    );
+    mocks.setDisplayedPlanning.mockImplementation(async (_projectId, planningId) =>
+      project({ status: "initialise", displayed_planning_id: planningId }),
+    );
+    let rejectMove!: (error: Error) => void;
+    mocks.movePlanningTasks.mockImplementation(() => new Promise<PlanningDetail>((_resolve, reject) => {
+      rejectMove = reject;
+    }));
+
+    render(<ProjectDetailsPage />);
+
+    await screen.findByText("Second");
+    fireEvent.click(screen.getByText("Second"));
+    fireEvent.click(screen.getByRole("button", { name: "Monter" }));
+    await waitFor(() => expect(mocks.movePlanningTasks).toHaveBeenCalledTimes(1));
+
+    fireEvent.change(await screen.findByRole("combobox", { name: "Version affichée" }), {
+      target: { value: String(draftB.id) },
+    });
+    await waitFor(() => expect(screen.getByText("Tâche 2")).toBeInTheDocument());
+
+    rejectMove(new Error("move failed"));
+    await waitFor(() => expect(screen.queryByText("Impossible de déplacer les tâches sélectionnées.")).not.toBeInTheDocument());
+    expect(screen.getByText("Tâche 2")).toBeInTheDocument();
+  });
 });
