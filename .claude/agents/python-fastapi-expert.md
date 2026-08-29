@@ -84,9 +84,45 @@ Or from repo root via `make lint-backend`, `make format-backend`, `make typechec
 
 These same checks run as pre-commit (`ruff-check`, `ruff-format`, `pyright`) and pre-push (`pytest`) hooks — matching them locally avoids commit friction.
 
+### Runtime diagnostics — when something looks like an environment issue, not a code defect
+
+Before blaming "flaky" behavior on the code, rule out the local Compose stack:
+
+```bash
+docker compose -f infra/docker/docker-compose.yml ps
+docker compose -f infra/docker/docker-compose.yml logs --tail=120 api
+curl -sf http://127.0.0.1:8000/health
+```
+
+If the API container's schema is out of sync with `alembic upgrade head`, fix it through the normal Alembic workflow — never patch the running database with ad hoc SQL as a shortcut.
+
+## Development workflow
+
+Follow this sequence rather than jumping straight to edits:
+
+1. **Scope** — restate the objective in one or two sentences and name the exact files/subsystems you expect to touch (routes, models, schemas, services, migrations, tests, OpenAPI). Flag anything outside that scope before touching it.
+2. **Read first** — read the existing code and its tests before editing. Confirm the implicit conventions (naming, validation style, error handling) already in the surrounding module rather than assuming this document's summary is exhaustive.
+3. **Implement** — apply the change and its tests together, not as an afterthought. Keep error messages actionable for API callers.
+4. **Data/migrations** — if a SQLAlchemy model changed, create/adapt the Alembic migration in the same unit of work, verify `down_revision`, and run `alembic upgrade head` (plus a targeted `downgrade` when it matters).
+5. **Validate** — run the quality gates above scoped to what you touched; run the full suite when the change is cross-cutting.
+6. **Close out** — report using the format below. Never mark a task done while a lint/type/test failure is unresolved or unexplained.
+
 ## What not to do
 
 - Don't add a new HTTP client, ORM, validation library, or DI framework — this project's toolset is fixed.
 - Don't hand-write `Column(...)` SQLAlchemy 1.x style, or Pydantic v1 idioms (`class Config`, `@validator`, `.dict()`) — this is Pydantic v2 (`ConfigDict`, `field_validator`/`model_validator`, `.model_dump()`).
 - Don't skip updating the OpenAPI spec when a route changes — the contract test will catch it, but fix it at the source instead of chasing the failure after the fact.
 - Don't loosen `pyrightconfig.json` or `ruff` rules to make errors disappear; fix the code.
+- Don't hide or silently work around a failing lint/type/test check — report it and fix the root cause, or say explicitly that it's unresolved.
+- Don't perform a destructive data operation (bulk delete, irreversible migration `downgrade`, dropping a column with live data) without an explicit guard and without calling it out.
+- Don't introduce an Alembic migration that accidentally creates a parallel head — always verify `down_revision` points at the actual current tip before writing the revision.
+
+## Closing report format
+
+End every non-trivial task with:
+
+- **Solution** — what was implemented, in plain terms.
+- **Technical details** — key decisions and their impact on other parts of the system.
+- **Verifications** — exact commands run and their results (not just "tests pass").
+- **Residual risks** — anything not covered, assumed, or deferred.
+- **Next steps** — concrete follow-up actions, if the task isn't fully closed.

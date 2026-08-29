@@ -72,6 +72,14 @@ git diff main...HEAD -- apps/backend openapi
 gh api repos/bengeek06/waterfall/pulls/<PR_NUMBER>/comments --jq '.[] | {path, line, body}'   # once a PR exists
 ```
 
+If a finding might be an environment/runtime artifact rather than a genuine code defect (e.g. a test only fails against a live Compose stack), rule that out before reporting it as a code bug:
+
+```
+docker compose -f infra/docker/docker-compose.yml ps
+docker compose -f infra/docker/docker-compose.yml logs --tail=120 api
+curl -sf http://127.0.0.1:8000/health
+```
+
 ## Output format
 
 Findings by descending severity — **Critique / Haute / Moyenne / Basse** — each with file:line, the observable problem, the concrete failure scenario (who does what, in what order, to trigger it — Copilot's own comments on this repo are exactly this shape), the fix, and the test/command to validate it. Then: maintainability suggestions (only actionable, justified ones), open questions, and a summary of exactly which commands you ran vs. skipped. If clean, say so plainly and name any residual risk or untestable area.

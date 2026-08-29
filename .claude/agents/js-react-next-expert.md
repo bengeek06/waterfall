@@ -76,6 +76,27 @@ npm run test           # or: npm run frontend:test from repo root (vitest run)
 
 ESLint config is `eslint-config-next` (`core-web-vitals` + `typescript`) via flat config in `eslint.config.mjs` — no Prettier is configured in this repo, so don't invent formatting rules beyond what ESLint enforces; match the surrounding file's style (this codebase tolerates dense, minimally-wrapped JSX in some files — don't do a drive-by reformat of code you're not otherwise touching). `tsconfig.json` is `strict: true` with `@/*` aliased to `src/*`.
 
+### Runtime diagnostics — when something looks like an environment issue, not a code defect
+
+Before assuming a UI bug, rule out the backend/Compose stack:
+
+```bash
+docker compose -f infra/docker/docker-compose.yml ps
+docker compose -f infra/docker/docker-compose.yml logs --tail=120 api
+curl -sf http://127.0.0.1:8000/health
+```
+
+If the API is unreachable or returning unexpected shapes, that's a backend/contract issue to hand off, not a frontend bug to work around.
+
+## Development workflow
+
+1. **Scope** — restate the objective and name the exact pages/components/hooks/lib files you expect to touch.
+2. **Read first** — read the existing code and its tests before editing; confirm the conventions already in the surrounding file (error handling, session handling, UI patterns) rather than assuming this document's summary is exhaustive.
+3. **Implement** — apply the change and its tests together. Keep UI error messages actionable, and treat loading/error/empty states as part of the feature, not an afterthought.
+4. **Contract/integration check** — verify payload/field names against the generated types, verify the session-expiry/refresh path still redirects correctly, and verify there's an explicit fallback when the API is unreachable.
+5. **Validate** — run the quality gates below scoped to what you touched; run the full suite when the change is cross-cutting.
+6. **Close out** — report using the format below. Never mark a task done while a lint/type/test/build failure is unresolved or unexplained.
+
 ## What not to do
 
 - Don't add react-query, SWR, Redux, Zustand, or any other state/data library — the existing `useState` + `lib/backend.ts` fetch-wrapper pattern is deliberate.
@@ -84,3 +105,15 @@ ESLint config is `eslint-config-next` (`core-web-vitals` + `typescript`) via fla
 - Don't swap `@base-ui/react` primitives for Radix, Headless UI, or raw HTML where a `components/ui/*` equivalent already exists.
 - Don't introduce `localStorage`/`sessionStorage` for the auth token — session state is intentionally in-memory only (`lib/session.ts`), backed by the httpOnly refresh cookie.
 - Don't add Prettier or reformat whole files — this repo relies on ESLint alone.
+- Don't hide or silently work around a failing lint/type/test/build check — report it and fix the root cause, or say explicitly that it's unresolved.
+- Don't propose a cosmetic refactor without a concrete reliability, readability, or maintenance-cost justification.
+
+## Closing report format
+
+End every non-trivial task with:
+
+- **Solution** — what was implemented, in plain terms.
+- **Technical details** — key decisions and their impact on other parts of the system.
+- **Verifications** — exact commands run and their results (not just "tests pass").
+- **Residual risks** — anything not covered, assumed, or deferred.
+- **Next steps** — concrete follow-up actions, if the task isn't fully closed.
