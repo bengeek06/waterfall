@@ -49,6 +49,7 @@ import {
   Project,
   Planning,
   PlanningDetail,
+  movePlanningTasks,
   ProjectEstimate,
   runImportBatch,
   savePlanningStructureDraft,
@@ -72,6 +73,7 @@ import {
   type PlanningStructureDraftRow,
 } from "@/lib/planning-structure";
 import { PlanningTreeTable } from "@/components/planning-tree-table";
+import type { PlanningMoveCommand } from "@/lib/planning-tree";
 import { ReadOnlyGantt } from "@/components/read-only-gantt";
 import { ProjectTabs, type ProjectTab } from "@/components/project-tabs";
 
@@ -89,6 +91,7 @@ export default function ProjectDetailsPage() {
   const [planningDetail, setPlanningDetail] = useState<PlanningDetail | null>(null);
   const [planningBusy, setPlanningBusy] = useState(false);
   const [planningDetailBusy, setPlanningDetailBusy] = useState(false);
+  const [planningMutationBusy, setPlanningMutationBusy] = useState(false);
   const [structureOpen, setStructureOpen] = useState(false);
   const [editingProjectInfo, setEditingProjectInfo] = useState(false);
   const [projectInfoDraft, setProjectInfoDraft] = useState({ name: "", shortDescription: "" });
@@ -403,6 +406,33 @@ export default function ProjectDetailsPage() {
       setError(cause instanceof ApiError ? cause.message : "Impossible de valider le planning.");
     } finally {
       setPlanningBusy(false);
+    }
+  }
+
+  async function movePlanningTaskSelection(command: PlanningMoveCommand) {
+    if (!session || !selectedPlanning || selectedPlanning.status !== "draft" || isReadOnlyProject) {
+      return;
+    }
+    setPlanningMutationBusy(true);
+    setError(null);
+    try {
+      const updated = await movePlanningTasks(
+        projectId,
+        selectedPlanning.id,
+        command,
+        session,
+        onSessionRefresh,
+      );
+      setPlanningDetail(updated);
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      setError(cause instanceof ApiError ? cause.message : "Impossible de déplacer les tâches sélectionnées.");
+    } finally {
+      setPlanningMutationBusy(false);
     }
   }
 
@@ -1330,6 +1360,8 @@ export default function ProjectDetailsPage() {
                 tasks={planningDetail.tasks}
                 versionKey={selectedPlanning?.id ?? null}
                 readOnly={isReadOnlyProject || (selectedPlanning ? selectedPlanning.status !== "draft" : false)}
+                onMove={(command) => void movePlanningTaskSelection(command)}
+                mutationBusy={planningMutationBusy}
               />
             ) : null}
           </div>
