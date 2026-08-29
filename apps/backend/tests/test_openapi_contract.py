@@ -134,6 +134,7 @@ def test_static_openapi_matches_runtime_operation_ids_and_components() -> None:
         "ProjectStatusUpdate",
         "PlanningRead",
         "PlanningCreate",
+        "PlanningTaskMove",
         "PlanningLinkRead",
     ):
         assert schema_name in runtime_components
@@ -141,6 +142,17 @@ def test_static_openapi_matches_runtime_operation_ids_and_components() -> None:
         static_schema = cast(dict[str, Any], static_components[schema_name])
         runtime_schema = cast(dict[str, Any], runtime_components[schema_name])
         assert set(static_schema.get("properties", {})) == set(runtime_schema["properties"])
+
+    static_move = cast(dict[str, Any], static_components["PlanningTaskMove"])
+    runtime_move = cast(dict[str, Any], runtime_components["PlanningTaskMove"])
+    assert (
+        static_move["properties"]["task_uids"]["minItems"]
+        == runtime_move["properties"]["task_uids"]["minItems"]
+    )
+    assert (
+        static_move["properties"]["task_uids"]["items"]["minimum"]
+        == runtime_move["properties"]["task_uids"]["items"]["minimum"]
+    )
 
     static_operation_ids = {
         operation["operationId"]
@@ -208,6 +220,7 @@ def test_planning_contract_matches_runtime_shapes() -> None:
     relevant_schemas = (
         "PlanningRead",
         "PlanningDetailRead",
+        "PlanningTaskMove",
         "PlanningTreeRead",
         "TaskRead",
         "PlanningLinkRead",
@@ -219,6 +232,44 @@ def test_planning_contract_matches_runtime_shapes() -> None:
         assert _schema_property_names(static_schemas[schema_name], static_schemas) == (
             _schema_property_names(runtime_schemas[schema_name], runtime_schemas)
         )
+
+
+def test_move_planning_tasks_documents_all_not_found_resources() -> None:
+    raw_document: object = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
+    static_document = cast(dict[str, Any], raw_document)
+    move_operation = static_document["paths"][
+        "/projects/{projectId}/plannings/{planningId}/tasks/move"
+    ]["post"]
+
+    static_components = cast(dict[str, Any], static_document["components"])
+    runtime_operation = cast(dict[str, Any], app.openapi()["paths"])[
+        "/projects/{project_id}/plannings/{planning_id}/tasks/move"
+    ]["post"]
+
+    for status_code, response_name in (
+        ("400", "MovePlanningTasksBadRequest"),
+        ("404", "MovePlanningTasksNotFound"),
+        ("409", "MovePlanningTasksConflict"),
+    ):
+        assert move_operation["responses"][status_code]["$ref"] == (
+            f"#/components/responses/{response_name}"
+        )
+        static_response = static_components["responses"][response_name]
+        assert static_response["content"]["application/json"]["schema"]["$ref"] == (
+            "#/components/schemas/FastAPIErrorResponse"
+        )
+        assert (
+            runtime_operation["responses"][status_code]["content"]["application/json"]["schema"][
+                "$ref"
+            ]
+            == "#/components/schemas/FastAPIErrorResponse"
+        )
+
+    error_schema = static_components["schemas"]["FastAPIErrorResponse"]
+    assert error_schema["properties"]["detail"]["anyOf"] == [
+        {"type": "string"},
+        {"type": "array", "items": {"type": "object", "additionalProperties": True}},
+    ]
 
 
 def test_generated_client_contains_every_static_operation() -> None:

@@ -75,6 +75,8 @@ paths:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1plannings
   /projects/{projectId}/plannings/{planningId}:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1plannings~1{planningId}
+  /projects/{projectId}/plannings/{planningId}/tasks/move:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1plannings~1{planningId}~1tasks~1move
   /projects/{projectId}/plannings/{planningId}/validate:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1plannings~1{planningId}~1validate
   /projects/{projectId}/plannings/{planningId}/reference:
@@ -202,6 +204,8 @@ components:
       $ref: ./components/schemas/ImportErrorListResponse.yaml
     ErrorResponse:
       $ref: ./components/schemas/ErrorResponse.yaml
+    FastAPIErrorResponse:
+      $ref: ./components/schemas/FastAPIErrorResponse.yaml
     ProjectRead:
       $ref: ./components/schemas/ProjectRead.yaml
     ProjectCreate:
@@ -214,6 +218,8 @@ components:
       $ref: ./components/schemas/PlanningRead.yaml
     PlanningCreate:
       $ref: ./components/schemas/PlanningCreate.yaml
+    PlanningTaskMove:
+      $ref: ./components/schemas/PlanningTaskMove.yaml
     PlanningDetailRead:
       $ref: ./components/schemas/PlanningDetailRead.yaml
     TaskRead:
@@ -352,6 +358,14 @@ components:
       $ref: ./components/responses/ProjectNotFound.yaml
     PlanningNotFound:
       $ref: ./components/responses/PlanningNotFound.yaml
+    ProjectPlanningTaskNotFound:
+      $ref: ./components/responses/ProjectPlanningTaskNotFound.yaml
+    MovePlanningTasksBadRequest:
+      $ref: ./components/responses/MovePlanningTasksBadRequest.yaml
+    MovePlanningTasksNotFound:
+      $ref: ./components/responses/MovePlanningTasksNotFound.yaml
+    MovePlanningTasksConflict:
+      $ref: ./components/responses/MovePlanningTasksConflict.yaml
     EstimateNotFound:
       $ref: ./components/responses/EstimateNotFound.yaml
     TaskNotFound:

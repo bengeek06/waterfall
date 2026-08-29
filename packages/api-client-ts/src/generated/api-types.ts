@@ -417,6 +417,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{projectId}/plannings/{planningId}/tasks/move": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Deplacer ou reordonner des taches d'un brouillon de planning */
+        post: operations["movePlanningTasks"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/projects/{projectId}/plannings/{planningId}/validate": {
         parameters: {
             query?: never;
@@ -1206,6 +1223,11 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        FastAPIErrorResponse: {
+            detail: string | {
+                [key: string]: unknown;
+            }[];
+        };
         ProjectRead: {
             id: number;
             name: string;
@@ -1259,6 +1281,11 @@ export interface components {
         PlanningCreate: {
             note?: string | null;
             source_planning_id?: number | null;
+        };
+        PlanningTaskMove: {
+            task_uids: number[];
+            target_parent_uid?: number | null;
+            position: number;
         };
         PlanningDetailRead: components["schemas"]["PlanningRead"] & {
             tasks: components["schemas"]["TaskRead"][];
@@ -1630,6 +1657,42 @@ export interface components {
             };
             content: {
                 "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description Projet, planning ou tache introuvable */
+        ProjectPlanningTaskNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description Requete de deplacement invalide */
+        MovePlanningTasksBadRequest: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
+            };
+        };
+        /** @description Projet, planning ou tache introuvable pendant le deplacement */
+        MovePlanningTasksNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
+            };
+        };
+        /** @description Le deplacement entre en conflit avec le planning */
+        MovePlanningTasksConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
         /** @description Devis introuvable */
@@ -2504,6 +2567,39 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["PlanningNotFound"];
+        };
+    };
+    movePlanningTasks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de planning */
+                planningId: components["parameters"]["PlanningId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlanningTaskMove"];
+            };
+        };
+        responses: {
+            /** @description Arbre complet du brouillon mis a jour */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanningDetailRead"];
+                };
+            };
+            400: components["responses"]["MovePlanningTasksBadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["MovePlanningTasksNotFound"];
+            409: components["responses"]["MovePlanningTasksConflict"];
         };
     };
     validatePlanning: {

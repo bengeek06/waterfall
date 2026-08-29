@@ -1,9 +1,12 @@
 import xml.etree.ElementTree as ET
+from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime
 from typing import Any, cast
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import Response
+from fastapi.routing import APIRoute
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -30,6 +33,7 @@ from waterfall.schemas.projects import (
     EstimateCostLineRead,
     EstimateCostLineUpdate,
     EstimateTaskRowRead,
+    FastAPIErrorResponse,
     PlanningCreate,
     PlanningDetailRead,
     PlanningLinkRead,
@@ -37,6 +41,7 @@ from waterfall.schemas.projects import (
     PlanningStructureCreate,
     PlanningStructureDraftRead,
     PlanningStructureRead,
+    PlanningTaskMove,
     PlanningTaskTreeRead,
     PlanningTreeRead,
     ProjectCreate,
@@ -58,12 +63,16 @@ from waterfall.schemas.projects import (
 )
 from waterfall.schemas.resources import CostTypeKind
 from waterfall.services import (
+    PlanningTreeInvariantError,
+    PlanningTreeMoveError,
+    PlanningTreeMoveNotFoundError,
     build_estimate_workbook,
     calculate_estimate_aggregates,
     calculate_estimate_lines,
     generate_planning_snapshot,
     generate_planning_structure,
     load_planning_structure_draft,
+    move_planning_tasks,
     save_planning_structure_draft,
 )
 from waterfall.services.msproject_xml import (
@@ -79,6 +88,24 @@ from waterfall.services.task_references import is_task_referenced
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 MSP_NS = "http://schemas.microsoft.com/project/2007"
+
+
+class _MovePlanningTasksRoute(APIRoute):
+    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
+        original_route_handler = super().get_route_handler()
+
+        async def move_route_handler(request: Request) -> Response:
+            try:
+                return await original_route_handler(request)
+            except RequestValidationError as exc:
+                if any(error["loc"][0] == "body" for error in exc.errors()):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=exc.errors(),
+                    ) from exc
+                raise
+
+        return move_route_handler
 
 
 def _bool_to_msp_flag(value: bool) -> str:
@@ -135,24 +162,138 @@ def _get_planning_or_404(db: Session, project_id: int, planning_id: int) -> WfPl
     return planning
 
 
-def _get_latest_draft_planning(db: Session, project_id: int) -> WfPlanning | None:
-    return (
-        db.query(WfPlanning)
-        .filter(WfPlanning.project_id == project_id, WfPlanning.status == "draft")
-        .order_by(WfPlanning.version_number.desc())
+def get_mutable_draft_planning_with_locks(
+    db: Session,
+    project_id: int,
+    planning_id: int,
+    owner_id: int,
+) -> tuple[MsProject, WfPlanning]:
+    project = (
+        db.query(MsProject)
+        .filter(MsProject.id == project_id, MsProject.owner_id == owner_id)
+        .populate_existing()
+        .with_for_update()
         .first()
     )
+    if project is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
+    planning = (
+        db.query(WfPlanning)
+        .filter(WfPlanning.id == planning_id, WfPlanning.project_id == project_id)
+        .populate_existing()
+        .with_for_update()
+        .first()
+    )
+    if planning is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Planning not found")
+
+    ensure_project_mutable(project)
+    if planning.status != "draft":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Planning is not a draft")
+    return project, planning
 
 
-def _get_or_create_draft_planning(
+def get_mutable_project_lock(
+    db: Session,
+    project_id: int,
+    owner_id: int,
+) -> MsProject:
+    project = (
+        db.query(MsProject)
+        .filter(MsProject.id == project_id, MsProject.owner_id == owner_id)
+        .populate_existing()
+        .with_for_update()
+        .first()
+    )
+    if project is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    ensure_project_mutable(project)
+    return project
+
+
+def get_mutable_project_with_latest_draft_lock(
+    db: Session,
+    project_id: int,
+    owner_id: int,
+    *,
+    create: bool = False,
+    note: str | None = None,
+) -> tuple[MsProject, WfPlanning | None]:
+    project = get_mutable_project_lock(db, project_id, owner_id)
+    planning = _get_latest_draft_planning(db, project_id, for_update=True)
+    if planning is None and create:
+        planning = _create_draft_planning(db, project_id=project_id, note=note)
+    return project, planning
+
+
+def get_mutable_project_with_displayed_planning_lock(
+    db: Session,
+    project_id: int,
+    owner_id: int,
+) -> tuple[MsProject, WfPlanning | None]:
+    project = get_mutable_project_lock(db, project_id, owner_id)
+    if project.displayed_planning_id is None:
+        return project, None
+
+    planning = (
+        db.query(WfPlanning)
+        .filter(
+            WfPlanning.id == project.displayed_planning_id,
+            WfPlanning.project_id == project_id,
+        )
+        .populate_existing()
+        .with_for_update()
+        .first()
+    )
+    if planning is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Displayed planning not found",
+        )
+
+    if planning.status != "draft":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Displayed planning is immutable because it is not a draft",
+        )
+    return project, planning
+
+
+def get_mutable_displayed_draft_planning_with_locks(
+    db: Session,
+    project_id: int,
+    owner_id: int,
+) -> tuple[MsProject, WfPlanning]:
+    project, planning = get_mutable_project_with_displayed_planning_lock(db, project_id, owner_id)
+    if planning is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Displayed planning not found",
+        )
+    return project, planning
+
+
+def _get_latest_draft_planning(
+    db: Session, project_id: int, *, for_update: bool = False
+) -> WfPlanning | None:
+    query = (
+        db.query(WfPlanning)
+        .filter(WfPlanning.project_id == project_id, WfPlanning.status == "draft")
+        .populate_existing()
+        .order_by(WfPlanning.version_number.desc())
+    )
+    if for_update:
+        query = query.with_for_update()
+    return query.first()
+
+
+def _create_draft_planning(
     db: Session,
     *,
     project_id: int,
     note: str | None,
 ) -> WfPlanning:
-    planning = _get_latest_draft_planning(db, project_id)
-    if planning is not None:
-        return planning
 
     version_number = (
         db.query(func.max(WfPlanning.version_number))
@@ -575,12 +716,19 @@ def create_planning(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> PlanningDetailRead:
-    project = _get_project_or_404(db, project_id, current_user.id)
-    ensure_project_mutable(project)
+    project = get_mutable_project_lock(db, project_id, current_user.id)
     source_id = payload.source_planning_id or project.displayed_planning_id
     source: WfPlanning | None = None
     if source_id is not None:
-        source = _get_planning_or_404(db, project_id, source_id)
+        source = (
+            db.query(WfPlanning)
+            .filter(WfPlanning.id == source_id, WfPlanning.project_id == project_id)
+            .populate_existing()
+            .with_for_update()
+            .first()
+        )
+        if source is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Planning not found")
     version_number = (
         db.query(func.max(WfPlanning.version_number))
         .filter(WfPlanning.project_id == project_id)
@@ -723,6 +871,63 @@ def get_planning(
     )
 
 
+def move_planning_tasks_route(
+    project_id: int,
+    planning_id: int,
+    payload: PlanningTaskMove,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> PlanningDetailRead:
+    _, planning = get_mutable_draft_planning_with_locks(
+        db, project_id, planning_id, current_user.id
+    )
+    try:
+        move_planning_tasks(db, planning, payload)
+        # Capture the response while the row locks are still held so a concurrent
+        # writer cannot make us return a later transaction's state.
+        detail = _planning_detail(db, planning)
+        db.commit()
+    except PlanningTreeMoveNotFoundError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except PlanningTreeInvariantError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except PlanningTreeMoveError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Planning hierarchy conflicts with existing planning data",
+        ) from exc
+    return detail
+
+
+router.add_api_route(
+    "/{project_id}/plannings/{planning_id}/tasks/move",
+    move_planning_tasks_route,
+    methods=["POST"],
+    response_model=PlanningDetailRead,
+    responses={
+        status.HTTP_400_BAD_REQUEST: {
+            "model": FastAPIErrorResponse,
+            "description": "Requete de deplacement invalide",
+        },
+        status.HTTP_404_NOT_FOUND: {
+            "model": FastAPIErrorResponse,
+            "description": "Projet, planning ou tache introuvable pendant le deplacement",
+        },
+        status.HTTP_409_CONFLICT: {
+            "model": FastAPIErrorResponse,
+            "description": "Le deplacement entre en conflit avec le planning",
+        },
+    },
+    route_class_override=_MovePlanningTasksRoute,
+)
+
+
 @router.post("/{project_id}/plannings/{planning_id}/validate", response_model=PlanningRead)
 def validate_planning(
     project_id: int,
@@ -730,11 +935,9 @@ def validate_planning(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> PlanningRead:
-    project = _get_project_or_404(db, project_id, current_user.id)
-    ensure_project_mutable(project)
-    planning = _get_planning_or_404(db, project_id, planning_id)
-    if planning.status != "draft":
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Planning is not a draft")
+    _, planning = get_mutable_draft_planning_with_locks(
+        db, project_id, planning_id, current_user.id
+    )
     planning.status = "validated"
     planning.validated_at = datetime.now(UTC)
     db.commit()
@@ -749,9 +952,16 @@ def set_planning_reference(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> ProjectRead:
-    project = _get_project_or_404(db, project_id, current_user.id)
-    ensure_project_mutable(project)
-    planning = _get_planning_or_404(db, project_id, planning_id)
+    project = get_mutable_project_lock(db, project_id, current_user.id)
+    planning = (
+        db.query(WfPlanning)
+        .filter(WfPlanning.id == planning_id, WfPlanning.project_id == project_id)
+        .populate_existing()
+        .with_for_update()
+        .first()
+    )
+    if planning is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Planning not found")
     if planning.status != "validated":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -759,7 +969,13 @@ def set_planning_reference(
         )
     previous = project.planning_reference_id
     if previous is not None and previous != planning.id:
-        old = db.get(WfPlanning, previous)
+        old = (
+            db.query(WfPlanning)
+            .filter(WfPlanning.id == previous, WfPlanning.project_id == project_id)
+            .populate_existing()
+            .with_for_update()
+            .first()
+        )
         if old is not None:
             old.status = "superseded"
     project.planning_reference_id = planning.id
@@ -777,9 +993,16 @@ def set_displayed_planning(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> ProjectRead:
-    project = _get_project_or_404(db, project_id, current_user.id)
-    ensure_project_mutable(project)
-    _get_planning_or_404(db, project_id, planning_id)
+    project = get_mutable_project_lock(db, project_id, current_user.id)
+    planning = (
+        db.query(WfPlanning)
+        .filter(WfPlanning.id == planning_id, WfPlanning.project_id == project_id)
+        .populate_existing()
+        .with_for_update()
+        .first()
+    )
+    if planning is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Planning not found")
     project.displayed_planning_id = planning_id
     db.commit()
     db.refresh(project)
@@ -792,9 +1015,9 @@ def reopen_planning_structure(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> ProjectRead:
-    project = _get_project_or_404(db, project_id, current_user.id)
-    ensure_project_mutable(project)
-    existing_draft = _get_latest_draft_planning(db, project_id)
+    project, existing_draft = get_mutable_project_with_latest_draft_lock(
+        db, project_id, current_user.id
+    )
     if existing_draft is not None:
         project.displayed_planning_id = existing_draft.id
         if project.status == "cree":
@@ -808,7 +1031,18 @@ def reopen_planning_structure(
             status_code=status.HTTP_409_CONFLICT,
             detail="A validated planning is required to reopen the structure",
         )
-    source = _get_planning_or_404(db, project_id, project.planning_reference_id)
+    source = (
+        db.query(WfPlanning)
+        .filter(
+            WfPlanning.id == project.planning_reference_id,
+            WfPlanning.project_id == project_id,
+        )
+        .populate_existing()
+        .with_for_update()
+        .first()
+    )
+    if source is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Planning not found")
     if source.status != "validated":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -1497,12 +1731,15 @@ def create_planning_structure(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> PlanningStructureRead:
-    project = _get_project_or_404(db, project_id, current_user.id)
-    ensure_project_mutable(project)
     try:
-        planning = _get_or_create_draft_planning(
-            db, project_id=project_id, note="Generated from planning structure"
+        project, planning = get_mutable_project_with_latest_draft_lock(
+            db,
+            project_id,
+            current_user.id,
+            create=True,
+            note="Generated from planning structure",
         )
+        assert planning is not None
         if payload is None:
             payload = load_planning_structure_draft(planning)
             if payload is None:
@@ -1545,10 +1782,14 @@ def save_planning_structure_draft_route(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> PlanningStructureDraftRead:
-    project = _get_project_or_404(db, project_id, current_user.id)
-    ensure_project_mutable(project)
     try:
-        planning = _get_or_create_draft_planning(db, project_id=project_id, note=None)
+        _, planning = get_mutable_project_with_latest_draft_lock(
+            db,
+            project_id,
+            current_user.id,
+            create=True,
+        )
+        assert planning is not None
         save_planning_structure_draft(planning, payload)
         db.commit()
     except IntegrityError as exc:
@@ -1606,16 +1847,11 @@ def create_project_task(
     current_user: User = Depends(get_current_active_user),
 ) -> TaskRead:
     """Add a planning task for devis purposes; dates stay driven by MS Project."""
-    project = _get_project_or_404(db, project_id, current_user.id)
-    ensure_project_mutable(project)
+    project, planning = get_mutable_project_with_displayed_planning_lock(
+        db, project_id, current_user.id
+    )
 
-    if project.displayed_planning_id is not None:
-        planning = _get_planning_or_404(db, project_id, project.displayed_planning_id)
-        if planning.status != "draft":
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Displayed planning is immutable because it is not a draft",
-            )
+    if planning is not None:
         parent_snapshot: WfPlanningTaskSnapshot | None = None
         if payload.parent_task_id is not None:
             parent_snapshot = (
@@ -1690,6 +1926,7 @@ def create_project_task(
         db.refresh(snapshot)
         return _to_snapshot_task_read(snapshot, [], project_id)
 
+    ensure_project_mutable(project)
     parent_task: MsTask | None = None
     if payload.parent_task_id is not None:
         parent_task = (
@@ -1765,19 +2002,10 @@ def update_task_description(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> TaskRead:
-    project = _get_project_or_404(db, project_id, current_user.id)
-    ensure_project_mutable(project)
-    displayed_planning = (
-        db.query(WfPlanning).filter(WfPlanning.id == project.displayed_planning_id).first()
-        if project.displayed_planning_id is not None
-        else None
+    _project, displayed_planning = get_mutable_project_with_displayed_planning_lock(
+        db, project_id, current_user.id
     )
     if displayed_planning is not None:
-        if displayed_planning.status != "draft":
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Displayed planning is not a draft",
-            )
         snapshot = (
             db.query(WfPlanningTaskSnapshot)
             .filter(WfPlanningTaskSnapshot.planning_id == displayed_planning.id)
@@ -1832,15 +2060,10 @@ def delete_project_task(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> None:
-    project = _get_project_or_404(db, project_id, current_user.id)
-    ensure_project_mutable(project)
-    if project.displayed_planning_id is not None:
-        planning = _get_planning_or_404(db, project_id, project.displayed_planning_id)
-        if planning.status != "draft":
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Displayed planning is immutable because it is not a draft",
-            )
+    project, planning = get_mutable_project_with_displayed_planning_lock(
+        db, project_id, current_user.id
+    )
+    if planning is not None:
         task = (
             db.query(WfPlanningTaskSnapshot)
             .filter(WfPlanningTaskSnapshot.planning_id == planning.id)
@@ -1890,6 +2113,7 @@ def delete_project_task(
                 detail="Planning task is still referenced and cannot be deleted",
             ) from exc
         return
+    ensure_project_mutable(project)
     task = _get_task_or_404(db, project_id, task_uid)
 
     has_children = (

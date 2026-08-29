@@ -1,6 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -212,6 +212,16 @@ class PlanningCreate(BaseModel):
             return None
         normalized = value.strip()
         return normalized or None
+
+
+class PlanningTaskMove(BaseModel):
+    task_uids: list[Annotated[int, Field(ge=1)]] = Field(min_length=1)
+    target_parent_uid: int | None = Field(default=None, gt=0)
+    position: int = Field(ge=1)
+
+
+class FastAPIErrorResponse(BaseModel):
+    detail: str | list[dict[str, object]]
 
 
 class ProjectStatusUpdate(BaseModel):

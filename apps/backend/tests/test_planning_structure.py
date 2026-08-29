@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 from httpx import Response
 
+from waterfall.api.routes import projects
 from waterfall.db.session import get_session_factory
 from waterfall.main import app
 from waterfall.models.ms_core import MsProject
@@ -88,6 +89,60 @@ def test_save_planning_structure_draft_is_non_operational_and_generates_later() 
         project = client.get(f"/projects/{project_id}", headers=headers).json()
         assert project["status"] == "initialise"
         assert project["displayed_planning_id"] == first.json()["planning_id"]
+
+
+def test_direct_planning_structure_writers_use_project_lock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[int] = []
+    latest_draft_calls: list[int] = []
+    displayed_planning_calls: list[int] = []
+    original_lock = projects.get_mutable_project_lock
+    original_latest_draft = projects.get_mutable_project_with_latest_draft_lock
+    original_displayed_planning = projects.get_mutable_project_with_displayed_planning_lock
+
+    def locked_project(db: Any, project_id: int, owner_id: int) -> MsProject:
+        calls.append(project_id)
+        return original_lock(db, project_id, owner_id)
+
+    def locked_latest_draft(
+        db: Any, project_id: int, owner_id: int, **kwargs: Any
+    ) -> tuple[MsProject, Any]:
+        latest_draft_calls.append(project_id)
+        return original_latest_draft(db, project_id, owner_id, **kwargs)
+
+    def locked_displayed_planning(db: Any, project_id: int, owner_id: int) -> tuple[MsProject, Any]:
+        displayed_planning_calls.append(project_id)
+        return original_displayed_planning(db, project_id, owner_id)
+
+    monkeypatch.setattr(projects, "get_mutable_project_lock", locked_project)
+    monkeypatch.setattr(projects, "get_mutable_project_with_latest_draft_lock", locked_latest_draft)
+    monkeypatch.setattr(
+        projects,
+        "get_mutable_project_with_displayed_planning_lock",
+        locked_displayed_planning,
+    )
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        draft_path = f"/projects/{project_id}/planning-structure/draft"
+
+        saved = client.put(draft_path, json=_payload(), headers=headers)
+        generated = client.post(f"/projects/{project_id}/planning-structure", headers=headers)
+        updated = client.patch(
+            f"/projects/{project_id}/tasks/{generated.json()['tasks'][0]['uid']}",
+            json={"description": "Updated"},
+            headers=headers,
+        )
+        reopened = client.post(f"/projects/{project_id}/planning-structure/reopen", headers=headers)
+
+    assert saved.status_code == 200
+    assert generated.status_code == 201
+    assert updated.status_code == 200
+    assert reopened.status_code == 200
+    assert calls == [project_id] * 4
+    assert latest_draft_calls == [project_id] * 3
+    assert displayed_planning_calls == [project_id]
 
 
 def test_save_planning_structure_draft_rejects_read_only_project() -> None:

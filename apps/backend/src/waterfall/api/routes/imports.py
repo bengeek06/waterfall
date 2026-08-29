@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from waterfall.api.dependencies import get_current_active_user
+from waterfall.api.routes.projects import get_mutable_project_lock
 from waterfall.core.config import get_settings
 from waterfall.db.session import get_db
 from waterfall.models.ms_core import MsProject
@@ -45,15 +48,17 @@ def _source_path(batch_id: int) -> Path:
     return Path(get_settings().import_storage_path) / f"batch-{batch_id}.xml"
 
 
-async def _save_source_xml(file: UploadFile, batch_id: int) -> tuple[Path, int, str]:
+async def _stage_source_xml(file: UploadFile, batch_id: int) -> tuple[Path, int, str]:
     settings = get_settings()
-    storage_path = _source_path(batch_id)
-    storage_path.parent.mkdir(parents=True, exist_ok=True)
+    final_path = _source_path(batch_id)
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+    # Unique staging name so concurrent uploads never write to the same file.
+    staging_path = final_path.with_name(f"{final_path.name}.{uuid4().hex}.part")
 
     byte_count = 0
     digest = hashlib.sha256()
     try:
-        with storage_path.open("wb") as destination:
+        with staging_path.open("wb") as destination:
             while chunk := await file.read(UPLOAD_CHUNK_SIZE):
                 byte_count += len(chunk)
                 if byte_count > settings.import_max_upload_bytes:
@@ -64,10 +69,10 @@ async def _save_source_xml(file: UploadFile, batch_id: int) -> tuple[Path, int, 
                 digest.update(chunk)
                 destination.write(chunk)
     except Exception:
-        storage_path.unlink(missing_ok=True)
+        staging_path.unlink(missing_ok=True)
         raise
 
-    return storage_path, byte_count, digest.hexdigest()
+    return staging_path, byte_count, digest.hexdigest()
 
 
 def _read_source_xml(batch: WfImportBatch) -> bytes:
@@ -208,15 +213,24 @@ async def upload_xml(
         )
 
     batch = _get_batch_or_404(db, batch_id, current_user.id)
-    project = db.get(MsProject, batch.project_id)
-    if project is not None:
-        ensure_project_mutable(project)
-    if batch.status != "pending":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Batch is no longer pending",
-        )
-    storage_path, byte_count, source_sha256 = await _save_source_xml(file, batch.id)
+    if batch.project_id is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    # Stage the upload before locking so slow file I/O never blocks planning
+    # writers serialized on the project row lock.
+    staging_path, byte_count, source_sha256 = await _stage_source_xml(file, batch.id)
+    final_path = _source_path(batch.id)
+    try:
+        get_mutable_project_lock(db, batch.project_id, current_user.id)
+        db.refresh(batch)
+        if batch.status != "pending":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Batch is no longer pending",
+            )
+        os.replace(staging_path, final_path)
+    except BaseException:
+        staging_path.unlink(missing_ok=True)
+        raise
 
     log_payload: dict[str, object]
     if batch.log_json:
@@ -231,7 +245,7 @@ async def upload_xml(
     log_payload["uploaded_bytes"] = byte_count
 
     batch.source_filename = filename
-    batch.source_storage_path = str(storage_path)
+    batch.source_storage_path = str(final_path)
     batch.source_sha256 = source_sha256
     batch.status = "pending"
     batch.log_json = json.dumps(log_payload)
@@ -259,9 +273,12 @@ def run_batch(
     current_user: User = Depends(get_current_active_user),
 ) -> ImportRunAcceptedResponse:
     batch = _get_batch_or_404(db, batch_id, current_user.id)
-    project = db.get(MsProject, batch.project_id)
-    if project is not None:
-        ensure_project_mutable(project)
+    if batch.project_id is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    project = get_mutable_project_lock(db, batch.project_id, current_user.id)
+    # Re-read under the project lock: a concurrent writer may have finished while
+    # we waited to acquire it, leaving this instance stale.
+    db.refresh(batch)
     if batch.status != "pending":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Batch is not pending")
 
@@ -290,9 +307,6 @@ def run_batch(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Corrupted batch payload")
 
     xml_bytes = _read_source_xml(batch)
-
-    project = db.query(MsProject).filter(MsProject.id == batch.project_id).with_for_update().one()
-    ensure_project_mutable(project)
 
     accepted_at = datetime.now(UTC)
     if run_request.dry_run:
@@ -349,6 +363,10 @@ def run_batch(
     db.refresh(batch)
 
     try:
+        # The status commit above released the project row lock; re-acquire it
+        # immediately before mutating snapshots so a concurrent writer cannot
+        # change displayed_planning_id/status between the two transactions.
+        project = get_mutable_project_lock(db, batch.project_id, current_user.id)
         identical_source = (
             db.query(WfImportBatch.id)
             .filter(WfImportBatch.project_id == batch.project_id)
@@ -369,6 +387,22 @@ def run_batch(
         batch.log_json = json.dumps(payload)
         db.add(batch)
         db.commit()
+    except HTTPException as exc:
+        # Preserve the precise status/detail (e.g. project became read-only
+        # concurrently) instead of masking it as a generic import failure.
+        db.rollback()
+        failed_batch = _get_batch_or_404(db, batch_id, current_user.id)
+        failed_batch.status = "failed"
+        failed_batch.finished_at = datetime.now(UTC)
+        failed_batch.log_json = json.dumps(
+            {
+                "error": str(exc.detail),
+                "errors": [{"code": "IMPORT_FAILED", "message": str(exc.detail)}],
+            }
+        )
+        db.add(failed_batch)
+        db.commit()
+        raise
     except Exception as exc:
         db.rollback()
         failed_batch = _get_batch_or_404(db, batch_id, current_user.id)
