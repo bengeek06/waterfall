@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   AlertDialog,
@@ -88,6 +88,10 @@ export default function ProjectDetailsPage() {
   const [project, setProject] = useState<Project | null>(null);
   const [plannings, setPlannings] = useState<Planning[]>([]);
   const [selectedPlanningId, setSelectedPlanningId] = useState<number | null>(null);
+  const selectedPlanningIdRef = useRef(selectedPlanningId);
+  useEffect(() => {
+    selectedPlanningIdRef.current = selectedPlanningId;
+  }, [selectedPlanningId]);
   const [planningDetail, setPlanningDetail] = useState<PlanningDetail | null>(null);
   const [planningBusy, setPlanningBusy] = useState(false);
   const [planningDetailBusy, setPlanningDetailBusy] = useState(false);
@@ -413,17 +417,22 @@ export default function ProjectDetailsPage() {
     if (!session || !selectedPlanning || selectedPlanning.status !== "draft" || isReadOnlyProject) {
       return;
     }
+    const requestedPlanningId = selectedPlanning.id;
     setPlanningMutationBusy(true);
     setError(null);
     try {
       const updated = await movePlanningTasks(
         projectId,
-        selectedPlanning.id,
+        requestedPlanningId,
         command,
         session,
         onSessionRefresh,
       );
-      setPlanningDetail(updated);
+      // The user may have switched to another planning version while this request was in flight;
+      // applying it now would silently replace that version's tree with a stale one.
+      if (selectedPlanningIdRef.current === requestedPlanningId) {
+        setPlanningDetail(updated);
+      }
     } catch (cause) {
       if (cause instanceof SessionExpiredError) {
         clearSession();

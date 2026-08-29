@@ -41,6 +41,23 @@ const tasks: Task[] = [
   task({ uid: 4, name: "D", parent_uid: null, position: 2 }),
 ];
 
+// Roots: A(1) > [B(1.1), C(1.2), D(1.3)], M(2, milestone), F(3)
+const groupTasks: Task[] = [
+  task({ uid: 1, name: "A", parent_uid: null, position: 1 }),
+  task({ uid: 2, name: "B", parent_uid: 1, position: 1 }),
+  task({ uid: 3, name: "C", parent_uid: 1, position: 2 }),
+  task({ uid: 4, name: "D", parent_uid: 1, position: 3 }),
+  task({ uid: 5, name: "M", parent_uid: null, position: 2, is_milestone: true }),
+  task({ uid: 6, name: "F", parent_uid: null, position: 3 }),
+];
+
+// G (root, no position) > [R(1, no position), P(no position)] > S(1)
+const unpositionedParentTasks: Task[] = [
+  task({ uid: 10, name: "R", parent_uid: null, position: 1 }),
+  task({ uid: 11, name: "P", parent_uid: null, position: undefined }),
+  task({ uid: 12, name: "S", parent_uid: 11, position: 1 }),
+];
+
 describe("normalizeSelectionToRoots", () => {
   it("drops a descendant when its ancestor is also selected", () => {
     const roots = normalizeSelectionToRoots(tasks, new Set([1, 2]));
@@ -62,6 +79,15 @@ describe("computeIndentCommand", () => {
   it("returns null when there is no previous sibling", () => {
     expect(computeIndentCommand(tasks, new Set([1]))).toBeNull();
   });
+
+  it("indents a contiguous group, preserving relative UID order", () => {
+    const command = computeIndentCommand(groupTasks, new Set([3, 4]));
+    expect(command).toEqual({ task_uids: [3, 4], target_parent_uid: 2, position: 1 });
+  });
+
+  it("returns null when the previous sibling is a milestone", () => {
+    expect(computeIndentCommand(groupTasks, new Set([6]))).toBeNull();
+  });
 });
 
 describe("computeOutdentCommand", () => {
@@ -72,6 +98,16 @@ describe("computeOutdentCommand", () => {
 
   it("returns null for a root task", () => {
     expect(computeOutdentCommand(tasks, new Set([1]))).toBeNull();
+  });
+
+  it("outdents a contiguous group, preserving relative UID order", () => {
+    const command = computeOutdentCommand(groupTasks, new Set([3, 4]));
+    expect(command).toEqual({ task_uids: [3, 4], target_parent_uid: null, position: 2 });
+  });
+
+  it("derives the insertion point from sibling order when the former parent has no position", () => {
+    const command = computeOutdentCommand(unpositionedParentTasks, new Set([12]));
+    expect(command).toEqual({ task_uids: [12], target_parent_uid: null, position: 3 });
   });
 });
 
@@ -100,5 +136,15 @@ describe("computeReorderCommand", () => {
 
   it("returns null when selection spans different parents", () => {
     expect(computeReorderCommand(tasks, new Set([2, 4]), "up")).toBeNull();
+  });
+
+  it("moves a contiguous group up, preserving relative UID order", () => {
+    const command = computeReorderCommand(groupTasks, new Set([3, 4]), "up");
+    expect(command).toEqual({ task_uids: [3, 4], target_parent_uid: 1, position: 1 });
+  });
+
+  it("moves a contiguous group down, preserving relative UID order", () => {
+    const command = computeReorderCommand(groupTasks, new Set([2, 3]), "down");
+    expect(command).toEqual({ task_uids: [2, 3], target_parent_uid: 1, position: 2 });
   });
 });

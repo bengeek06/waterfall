@@ -81,7 +81,8 @@ export function computeIndentCommand(
   const { siblings } = siblingsOf(first, tasks);
   const index = siblings.findIndex((sibling) => sibling.uid === first.uid);
   const previousSibling = siblings[index - 1];
-  if (index <= 0 || !previousSibling) {
+  if (index <= 0 || !previousSibling || previousSibling.is_milestone) {
+    // The move endpoint rejects a milestone as a parent; keep the action disabled instead of erroring.
     return null;
   }
   const childrenByParent = buildChildrenByParent(tasks);
@@ -112,10 +113,14 @@ export function computeOutdentCommand(
     return null;
   }
   const grandParentUid = currentParent.parent_uid ?? null;
+  // Derive the insertion point from the sorted sibling list: position is nullable and not unique,
+  // so it cannot be used directly to place the task right after its former parent.
+  const { siblings: grandSiblings } = siblingsOf(currentParent, tasks);
+  const currentParentIndex = grandSiblings.findIndex((sibling) => sibling.uid === currentParentUid);
   return {
     task_uids: roots.map((task) => task.uid),
     target_parent_uid: grandParentUid,
-    position: (currentParent.position ?? 0) + 1,
+    position: currentParentIndex + 2,
   };
 }
 
