@@ -212,6 +212,9 @@ async def upload_xml(
     if batch.project_id is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
     get_mutable_project_lock(db, batch.project_id, current_user.id)
+    # Re-read under the project lock: a concurrent writer may have finished while
+    # we waited to acquire it, leaving this instance stale.
+    db.refresh(batch)
     if batch.status != "pending":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -263,6 +266,9 @@ def run_batch(
     if batch.project_id is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
     project = get_mutable_project_lock(db, batch.project_id, current_user.id)
+    # Re-read under the project lock: a concurrent writer may have finished while
+    # we waited to acquire it, leaving this instance stale.
+    db.refresh(batch)
     if batch.status != "pending":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Batch is not pending")
 

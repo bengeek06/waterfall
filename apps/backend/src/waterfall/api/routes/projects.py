@@ -883,6 +883,9 @@ def move_planning_tasks_route(
     )
     try:
         move_planning_tasks(db, planning, payload)
+        # Capture the response while the row locks are still held so a concurrent
+        # writer cannot make us return a later transaction's state.
+        detail = _planning_detail(db, planning)
         db.commit()
     except PlanningTreeMoveNotFoundError as exc:
         db.rollback()
@@ -899,7 +902,7 @@ def move_planning_tasks_route(
             status_code=status.HTTP_409_CONFLICT,
             detail="Planning hierarchy conflicts with existing planning data",
         ) from exc
-    return _planning_detail(db, planning)
+    return detail
 
 
 router.add_api_route(
@@ -1999,14 +2002,9 @@ def update_task_description(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> TaskRead:
-    project, displayed_planning = get_mutable_project_with_displayed_planning_lock(
+    _project, displayed_planning = get_mutable_project_with_displayed_planning_lock(
         db, project_id, current_user.id
     )
-    if project.displayed_planning_id is not None and displayed_planning is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Displayed planning not found",
-        )
     if displayed_planning is not None:
         snapshot = (
             db.query(WfPlanningTaskSnapshot)
