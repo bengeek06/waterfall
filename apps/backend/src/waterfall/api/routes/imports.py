@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from waterfall.api.dependencies import get_current_active_user
+from waterfall.api.routes.projects import get_mutable_project_lock
 from waterfall.core.config import get_settings
 from waterfall.db.session import get_db
 from waterfall.models.ms_core import MsProject
@@ -208,9 +209,9 @@ async def upload_xml(
         )
 
     batch = _get_batch_or_404(db, batch_id, current_user.id)
-    project = db.get(MsProject, batch.project_id)
-    if project is not None:
-        ensure_project_mutable(project)
+    if batch.project_id is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    get_mutable_project_lock(db, batch.project_id, current_user.id)
     if batch.status != "pending":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -259,9 +260,9 @@ def run_batch(
     current_user: User = Depends(get_current_active_user),
 ) -> ImportRunAcceptedResponse:
     batch = _get_batch_or_404(db, batch_id, current_user.id)
-    project = db.get(MsProject, batch.project_id)
-    if project is not None:
-        ensure_project_mutable(project)
+    if batch.project_id is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    project = get_mutable_project_lock(db, batch.project_id, current_user.id)
     if batch.status != "pending":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Batch is not pending")
 
@@ -290,9 +291,6 @@ def run_batch(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Corrupted batch payload")
 
     xml_bytes = _read_source_xml(batch)
-
-    project = db.query(MsProject).filter(MsProject.id == batch.project_id).with_for_update().one()
-    ensure_project_mutable(project)
 
     accepted_at = datetime.now(UTC)
     if run_request.dry_run:
@@ -349,6 +347,10 @@ def run_batch(
     db.refresh(batch)
 
     try:
+        # The status commit above released the project row lock; re-acquire it
+        # immediately before mutating snapshots so a concurrent writer cannot
+        # change displayed_planning_id/status between the two transactions.
+        project = get_mutable_project_lock(db, batch.project_id, current_user.id)
         identical_source = (
             db.query(WfImportBatch.id)
             .filter(WfImportBatch.project_id == batch.project_id)
@@ -369,6 +371,22 @@ def run_batch(
         batch.log_json = json.dumps(payload)
         db.add(batch)
         db.commit()
+    except HTTPException as exc:
+        # Preserve the precise status/detail (e.g. project became read-only
+        # concurrently) instead of masking it as a generic import failure.
+        db.rollback()
+        failed_batch = _get_batch_or_404(db, batch_id, current_user.id)
+        failed_batch.status = "failed"
+        failed_batch.finished_at = datetime.now(UTC)
+        failed_batch.log_json = json.dumps(
+            {
+                "error": str(exc.detail),
+                "errors": [{"code": "IMPORT_FAILED", "message": str(exc.detail)}],
+            }
+        )
+        db.add(failed_batch)
+        db.commit()
+        raise
     except Exception as exc:
         db.rollback()
         failed_batch = _get_batch_or_404(db, batch_id, current_user.id)

@@ -130,6 +130,7 @@ def _recalculate_summary_fields(
     if start_at is None or finish_at is None:
         task.duration_minutes = None
     else:
+        # Future working-calendar integration belongs in this wall-clock calculation.
         task.duration_minutes = max(0, int((finish_at - start_at).total_seconds() // 60))
 
 

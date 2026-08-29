@@ -74,7 +74,11 @@ def import_tasks_and_links(db: Session, xml_bytes: bytes, project: MsProject) ->
     db.flush()
     now = datetime.now(UTC)
     displayed = (
-        db.query(WfPlanning).filter(WfPlanning.id == project.displayed_planning_id).first()
+        db.query(WfPlanning)
+        .filter(WfPlanning.id == project.displayed_planning_id)
+        .populate_existing()
+        .with_for_update()
+        .first()
         if project.displayed_planning_id is not None
         else None
     )
