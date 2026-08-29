@@ -23,8 +23,9 @@ function buildVisibleRows(tasks: Task[], collapsedUids: Set<number>): PlanningTr
     siblings.push(task);
     childrenByParent.set(parentKey, siblings);
   }
+  // The backend orders unpositioned tasks last; mirror that instead of treating null as position 0.
   for (const siblings of childrenByParent.values()) {
-    siblings.sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+    siblings.sort((a, b) => (a.position ?? Number.POSITIVE_INFINITY) - (b.position ?? Number.POSITIVE_INFINITY));
   }
 
   const rows: PlanningTreeRow[] = [];
@@ -121,8 +122,17 @@ export function PlanningTreeTable({ tasks, versionKey, readOnly = false }: Plann
     }
   }, [focusedUid]);
 
+  const readOnlyNotice = readOnly ? (
+    <p className="mt-2 text-xs text-muted-foreground">Version validée ou projet en lecture seule : édition désactivée.</p>
+  ) : null;
+
   if (!tasks.length) {
-    return <p className="py-6 text-sm text-muted-foreground">Le planning ne contient aucune tâche.</p>;
+    return (
+      <>
+        <p className="py-6 text-sm text-muted-foreground">Le planning ne contient aucune tâche.</p>
+        {readOnlyNotice}
+      </>
+    );
   }
 
   function toggleCollapsed(uid: number) {
@@ -278,9 +288,7 @@ export function PlanningTreeTable({ tasks, versionKey, readOnly = false }: Plann
             })}
           </TableBody>
         </Table>
-        {readOnly ? (
-          <p className="mt-2 text-xs text-muted-foreground">Version validée ou projet en lecture seule : édition désactivée.</p>
-        ) : null}
+        {readOnlyNotice}
       </CardContent>
     </Card>
   );

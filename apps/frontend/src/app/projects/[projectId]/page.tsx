@@ -1329,7 +1329,7 @@ export default function ProjectDetailsPage() {
               <PlanningTreeTable
                 tasks={planningDetail.tasks}
                 versionKey={selectedPlanning?.id ?? null}
-                readOnly={isReadOnlyProject || selectedPlanning?.status === "validated"}
+                readOnly={isReadOnlyProject || (selectedPlanning ? selectedPlanning.status !== "draft" : false)}
               />
             ) : null}
           </div>

@@ -52,6 +52,28 @@ describe("PlanningTreeTable", () => {
     expect(screen.getByText("Le planning ne contient aucune tâche.")).toBeInTheDocument();
   });
 
+  it("shows the read-only notice alongside the empty state", () => {
+    render(<PlanningTreeTable tasks={[]} versionKey={1} readOnly />);
+
+    expect(screen.getByText("Le planning ne contient aucune tâche.")).toBeInTheDocument();
+    expect(
+      screen.getByText("Version validée ou projet en lecture seule : édition désactivée."),
+    ).toBeInTheDocument();
+  });
+
+  it("orders siblings with no position after positioned ones instead of treating null as 0", () => {
+    const tasks: Task[] = [
+      task({ uid: 1, name: "Sans position", parent_uid: null, position: undefined }),
+      task({ uid: 2, name: "Position 1", parent_uid: null, position: 1 }),
+    ];
+
+    render(<PlanningTreeTable tasks={tasks} versionKey={1} />);
+
+    const names = screen.getAllByRole("row").slice(1).map((row) => row.textContent ?? "");
+    expect(names[0]).toContain("Position 1");
+    expect(names[1]).toContain("Sans position");
+  });
+
   it("collapsing a task hides only its descendants", () => {
     render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
 
