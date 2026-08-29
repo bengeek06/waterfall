@@ -14,6 +14,29 @@
         <xs:element name="MinutesPerWeek" type="xs:positiveInteger" minOccurs="0"/>
         <xs:element name="DaysPerMonth" type="xs:positiveInteger" minOccurs="0"/>
         <xs:element name="CurrencyCode" type="xs:string" minOccurs="0"/>
+        <xs:element name="Calendars" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Calendar" maxOccurs="unbounded">
+                <!--
+                  Waterfall is the source of truth for calendars; it never reads or
+                  reinterprets a Calendar node from an imported file (E5-02). Only UID
+                  is required so the element is recognizable; everything else (Name,
+                  WeekDays, exceptions, base-calendar references, ...) is accepted
+                  verbatim and skipped, so a real MS Project calendar of any shape
+                  never fails import validation. Waterfall's own export only ever
+                  emits UID/Name/WeekDays, which this wildcard also accepts.
+                -->
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="UID" type="xs:integer"/>
+                    <xs:any namespace="##targetNamespace" processContents="skip" minOccurs="0" maxOccurs="unbounded"/>
+                  </xs:sequence>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
         <xs:element name="Tasks" minOccurs="0">
           <xs:complexType>
             <xs:sequence>
@@ -36,6 +59,7 @@
                     <xs:element name="Summary" type="xs:boolean" minOccurs="0"/>
                     <xs:element name="Milestone" type="xs:boolean" minOccurs="0"/>
                     <xs:element name="Manual" type="xs:boolean" minOccurs="0"/>
+                    <xs:element name="CalendarUID" type="xs:integer" minOccurs="0"/>
                     <xs:element name="Notes" type="xs:string" minOccurs="0"/>
                     <xs:element name="PredecessorLink" minOccurs="0" maxOccurs="unbounded">
                       <xs:complexType>

@@ -1,6 +1,7 @@
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -16,6 +17,8 @@ from waterfall.db.session import get_db
 from waterfall.models.ms_core import MsProject, MsTask, MsTaskLink
 from waterfall.models.planning import WfPlanning, WfPlanningLinkSnapshot, WfPlanningTaskSnapshot
 from waterfall.models.resources import (
+    Calendar,
+    CalendarWeekday,
     CostCategory,
     CostType,
     Estimate,
@@ -2303,6 +2306,117 @@ def delete_task_role_assignment(
     db.commit()
 
 
+def _resolve_task_calendar_ids(db: Session, project_id: int, task_uids: set[int]) -> dict[int, int]:
+    """Resolve each exported task's working calendar id from its role assignments.
+
+    wf_task_role_assignment always references ms_task.id (the live task table),
+    never a wf_planning_task_snapshot row -- so the uid -> ms_task.id mapping is
+    resolved from ms_task regardless of whether the export is reading from a
+    planning snapshot or from ms_task directly.
+
+    A task may have several roles assigned with different calendars; MS Project
+    only carries a single CalendarUID per task. The issue (E5-02) does not
+    settle this ambiguity, so we deterministically keep the calendar of the
+    assigned role with the lowest role_id. Tasks without any role assignment,
+    or whose assigned roles have no calendar, are omitted from the mapping and
+    export without a Task/CalendarUID (MS Project then applies the project
+    calendar, which is the standard behaviour for an unset task calendar).
+
+    This intentionally does not filter on ResourceRole.is_active: a role
+    assignment is a historical fact about how a task was staffed, and export
+    determinism must not change retroactively just because the role was
+    deactivated after the assignment was made.
+    """
+    if not task_uids:
+        return {}
+
+    uid_by_task_id: dict[int, int] = {
+        task_id: uid
+        for task_id, uid in db.query(MsTask.id, MsTask.uid)
+        .filter(MsTask.project_id == project_id)
+        .filter(MsTask.uid.in_(task_uids))
+        .all()
+    }
+    if not uid_by_task_id:
+        return {}
+
+    rows = (
+        db.query(TaskRoleAssignment.task_id, ResourceRole.calendar_id)
+        .join(ResourceRole, TaskRoleAssignment.role_id == ResourceRole.id)
+        .filter(TaskRoleAssignment.task_id.in_(uid_by_task_id.keys()))
+        .order_by(TaskRoleAssignment.role_id.asc())
+        .all()
+    )
+
+    resolved: dict[int, int] = {}
+    for task_id, calendar_id in rows:
+        if calendar_id is None:
+            continue
+        uid = uid_by_task_id[task_id]
+        if uid in resolved:
+            continue
+        resolved[uid] = calendar_id
+    return resolved
+
+
+def _resolve_project_reference_calendar_id(
+    db: Session, task_calendar_ids: dict[int, int]
+) -> int | None:
+    """Pick the calendar id exported as the project's reference calendar.
+
+    The current data model has no explicit "project calendar" concept at the
+    ms_project level, so this is an E5-02 implementation decision: prefer the
+    well-known active STANDARD calendar, and otherwise fall back to the lowest
+    calendar id actually referenced by an exported task (deterministic, and
+    guarantees the calendar is one we are already exporting).
+    """
+    standard = (
+        db.query(Calendar)
+        .filter(Calendar.code == "STANDARD")
+        .filter(Calendar.is_active.is_(True))
+        .first()
+    )
+    if standard is not None:
+        return standard.id
+    if task_calendar_ids:
+        return min(task_calendar_ids.values())
+    return None
+
+
+def _calendar_header_minutes(
+    calendar: Calendar, weekdays: list[CalendarWeekday]
+) -> tuple[int, int, int] | None:
+    """Derive MinutesPerDay/MinutesPerWeek/DaysPerMonth from a calendar's weekdays.
+
+    Returns None when the calendar has no working day at all, so callers can
+    fall back to the legacy stored project values instead of dividing by zero.
+    """
+    working = [weekday for weekday in weekdays if weekday.hours_per_day > 0]
+    if not working:
+        return None
+    total_hours = sum((weekday.hours_per_day for weekday in working), start=Decimal(0))
+    minutes_per_day = round(total_hours / len(working) * 60)
+    minutes_per_week = round(total_hours * 60)
+    days_per_month = max(1, round(calendar.weeks_per_year * len(working) / 12))
+    return minutes_per_day, minutes_per_week, days_per_month
+
+
+def _calendar_working_time_to_text(hours_per_day: Decimal) -> str:
+    """Format a calendar day's working hours as a WorkingTime/ToTime xs:time value.
+
+    hours_per_day is capped at 24 by the DB constraint; a full 24h day would
+    format as "24:00:00", which is not a valid xs:time, so it is clamped to
+    "23:59:59" (E5-02 edge case, no MS Project semantic loss in practice since
+    a 24h/day working calendar is not a realistic scenario).
+    """
+    total_seconds = int(hours_per_day * 3600)
+    if total_seconds >= 24 * 3600:
+        return "23:59:59"
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
 @router.get("/{project_id}/export.xml")
 def export_project_xml(
     project_id: int,
@@ -2349,6 +2463,42 @@ def export_project_xml(
     for link in links:
         links_by_task_uid.setdefault(link.task_uid, []).append(link)
 
+    # Waterfall is the source of truth for working calendars (E5-02): CalendarUID
+    # values emitted below are always recomputed from wf_calendar.id, never
+    # replayed from an imported file's foreign uids (ms_project.calendar_uid /
+    # ms_task.calendar_uid), which are never read here.
+    task_calendar_ids = _resolve_task_calendar_ids(db, project_id, {task.uid for task in tasks})
+    reference_calendar_id = _resolve_project_reference_calendar_id(db, task_calendar_ids)
+
+    exported_calendar_ids = set(task_calendar_ids.values())
+    if reference_calendar_id is not None:
+        exported_calendar_ids.add(reference_calendar_id)
+
+    calendars_by_id: dict[int, Calendar] = {}
+    weekdays_by_calendar_id: dict[int, list[CalendarWeekday]] = {}
+    if exported_calendar_ids:
+        calendars_by_id = {
+            calendar.id: calendar
+            for calendar in db.query(Calendar).filter(Calendar.id.in_(exported_calendar_ids)).all()
+        }
+        for weekday in (
+            db.query(CalendarWeekday)
+            .filter(CalendarWeekday.calendar_id.in_(exported_calendar_ids))
+            .all()
+        ):
+            weekdays_by_calendar_id.setdefault(weekday.calendar_id, []).append(weekday)
+
+    header_minutes: tuple[int, int, int] | None = None
+    if reference_calendar_id is not None and reference_calendar_id in calendars_by_id:
+        header_minutes = _calendar_header_minutes(
+            calendars_by_id[reference_calendar_id],
+            weekdays_by_calendar_id.get(reference_calendar_id, []),
+        )
+    if header_minutes is None:
+        # No resolvable reference calendar, or it has no working day: preserve
+        # legacy behaviour (stored values, no Project/CalendarUID emitted).
+        reference_calendar_id = None
+
     ET.register_namespace("", MSP_NS)
     root = ET.Element(f"{{{MSP_NS}}}Project")
 
@@ -2368,12 +2518,53 @@ def export_project_xml(
     if finish_date is not None:
         ET.SubElement(root, f"{{{MSP_NS}}}FinishDate").text = finish_date
 
-    ET.SubElement(root, f"{{{MSP_NS}}}MinutesPerDay").text = str(project.minutes_per_day)
-    ET.SubElement(root, f"{{{MSP_NS}}}MinutesPerWeek").text = str(project.minutes_per_week)
-    ET.SubElement(root, f"{{{MSP_NS}}}DaysPerMonth").text = str(project.days_per_month)
+    if reference_calendar_id is not None:
+        ET.SubElement(root, f"{{{MSP_NS}}}CalendarUID").text = str(reference_calendar_id)
+
+    if header_minutes is not None:
+        minutes_per_day, minutes_per_week, days_per_month = header_minutes
+    else:
+        minutes_per_day = project.minutes_per_day
+        minutes_per_week = project.minutes_per_week
+        days_per_month = project.days_per_month
+    ET.SubElement(root, f"{{{MSP_NS}}}MinutesPerDay").text = str(minutes_per_day)
+    ET.SubElement(root, f"{{{MSP_NS}}}MinutesPerWeek").text = str(minutes_per_week)
+    ET.SubElement(root, f"{{{MSP_NS}}}DaysPerMonth").text = str(days_per_month)
 
     if project.currency_code is not None:
         ET.SubElement(root, f"{{{MSP_NS}}}CurrencyCode").text = project.currency_code
+
+    if exported_calendar_ids:
+        calendars_node = ET.SubElement(root, f"{{{MSP_NS}}}Calendars")
+        for calendar_id in sorted(exported_calendar_ids):
+            calendar = calendars_by_id.get(calendar_id)
+            if calendar is None:
+                continue
+            calendar_node = ET.SubElement(calendars_node, f"{{{MSP_NS}}}Calendar")
+            ET.SubElement(calendar_node, f"{{{MSP_NS}}}UID").text = str(calendar.id)
+            ET.SubElement(calendar_node, f"{{{MSP_NS}}}Name").text = calendar.name
+            weekdays_node = ET.SubElement(calendar_node, f"{{{MSP_NS}}}WeekDays")
+            hours_by_day_type = {
+                weekday.day_type: weekday.hours_per_day
+                for weekday in weekdays_by_calendar_id.get(calendar_id, [])
+            }
+            for day_type in range(1, 8):
+                hours_per_day = hours_by_day_type.get(day_type, Decimal(0))
+                weekday_node = ET.SubElement(weekdays_node, f"{{{MSP_NS}}}WeekDay")
+                ET.SubElement(weekday_node, f"{{{MSP_NS}}}DayType").text = str(day_type)
+                is_working = hours_per_day > 0
+                ET.SubElement(weekday_node, f"{{{MSP_NS}}}DayWorking").text = _bool_to_msp_flag(
+                    is_working
+                )
+                if is_working:
+                    working_times_node = ET.SubElement(weekday_node, f"{{{MSP_NS}}}WorkingTimes")
+                    working_time_node = ET.SubElement(
+                        working_times_node, f"{{{MSP_NS}}}WorkingTime"
+                    )
+                    ET.SubElement(working_time_node, f"{{{MSP_NS}}}FromTime").text = "00:00:00"
+                    ET.SubElement(
+                        working_time_node, f"{{{MSP_NS}}}ToTime"
+                    ).text = _calendar_working_time_to_text(hours_per_day)
 
     tasks_node = ET.SubElement(root, f"{{{MSP_NS}}}Tasks")
     for task in tasks:
@@ -2420,6 +2611,10 @@ def export_project_xml(
         )
         if task.is_manual is not None:
             ET.SubElement(task_node, f"{{{MSP_NS}}}Manual").text = _bool_to_msp_flag(task.is_manual)
+
+        task_calendar_id = task_calendar_ids.get(task.uid)
+        if task_calendar_id is not None and task_calendar_id in calendars_by_id:
+            ET.SubElement(task_node, f"{{{MSP_NS}}}CalendarUID").text = str(task_calendar_id)
 
         description = getattr(task, "notes", None) or descriptions_by_uid.get(task.uid)
         if description:

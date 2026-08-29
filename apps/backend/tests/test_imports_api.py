@@ -12,11 +12,13 @@ from waterfall.db.session import get_session_factory
 from waterfall.main import app
 from waterfall.models.ms_core import MsProject, MsTask
 from waterfall.models.planning import WfPlanning, WfPlanningLinkSnapshot, WfPlanningTaskSnapshot
+from waterfall.models.resources import Calendar, CalendarWeekday
 from waterfall.models.wf_core import WfChargeLine, WfImportBatch
 
 NS = {"ms": "http://schemas.microsoft.com/project"}
 EXAMPLE_XML = Path(__file__).resolve().parent / "planning_test.xml"
 EXAMPLE_XML_FILES = [EXAMPLE_XML]
+EXAMPLE_XML_WITH_CALENDARS = Path(__file__).resolve().parent / "planning_with_calendars.xml"
 
 
 def _xml_expected_counters(xml_path: Path) -> tuple[int, int]:
@@ -515,6 +517,64 @@ def test_import_batch_real_examples_via_api_with_counters(xml_path: Path) -> Non
         assert status_payload["status"] == "success"
         assert status_payload["counters"]["tasks"] == expected_tasks
         assert status_payload["counters"]["links"] == expected_links
+
+
+def test_import_of_custom_calendars_is_ignored_but_reported_as_warning() -> None:
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        calendar_count_before = session.query(Calendar).count()
+        weekday_count_before = session.query(CalendarWeekday).count()
+
+    with TestClient(app) as client:
+        headers = _auth_headers(client, "import.calendars@example.com")
+        project_id = _create_project(client, headers)
+
+        create_response: Response = client.post(
+            "/imports/v1/batches",
+            json={
+                "projectId": project_id,
+                "importMode": "standard",
+                "sourceName": EXAMPLE_XML_WITH_CALENDARS.name,
+            },
+            headers=headers,
+        )
+        assert create_response.status_code == 201
+        batch_id = create_response.json()["id"]
+
+        upload_response: Response = client.post(
+            f"/imports/v1/batches/{batch_id}/xml",
+            files={
+                "file": (
+                    EXAMPLE_XML_WITH_CALENDARS.name,
+                    EXAMPLE_XML_WITH_CALENDARS.read_bytes(),
+                    "application/xml",
+                )
+            },
+            headers=headers,
+        )
+        assert upload_response.status_code == 202
+
+        run_response: Response = client.post(
+            f"/imports/v1/batches/{batch_id}/run",
+            json={"dryRun": False, "confirm": True},
+            headers=headers,
+        )
+        assert run_response.status_code == 202
+
+        status_response: Response = client.get(
+            f"/imports/v1/batches/{batch_id}",
+            headers=headers,
+        )
+        assert status_response.status_code == 200
+        status_payload = cast(dict[str, Any], status_response.json())
+        assert status_payload["status"] == "success"
+        warnings = cast(list[dict[str, Any]], status_payload["warnings"])
+        assert len(warnings) == 1
+        assert warnings[0]["code"] == "CUSTOM_CALENDARS_IGNORED"
+
+    with session_factory() as session:
+        assert session.query(Calendar).count() == calendar_count_before
+        assert session.query(CalendarWeekday).count() == weekday_count_before
 
 
 def test_import_api_writes_draft_snapshots_and_preserves_validated_history() -> None:

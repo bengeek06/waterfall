@@ -77,6 +77,7 @@ class ParsedProject:
     currency_code: str | None
     tasks: tuple[ParsedTask, ...]
     links: tuple[ParsedLink, ...]
+    warnings: tuple[dict[str, object], ...] = ()
 
 
 class MsProjectValidationError(ValueError):
@@ -382,6 +383,28 @@ def parse_msproject_xml(xml_bytes: bytes) -> ParsedProject:
         issues.append(
             {"code": "MISSING_FINISH_DATE", "message": "ScheduleFromFinish requires FinishDate"}
         )
+
+    # Waterfall is the source of truth for working calendars (E5-02): custom
+    # calendars carried by an imported MS Project file are never written to
+    # wf_calendar/wf_calendar_weekday. Their presence is only surfaced as a
+    # non-blocking diagnostic so the import can proceed without silently
+    # dropping information the caller may want to reconcile manually.
+    warnings: list[dict[str, object]] = []
+    calendars_node = _child(root, "Calendars")
+    if calendars_node is not None:
+        calendar_count = len(_children(calendars_node, "Calendar"))
+        if calendar_count > 0:
+            warnings.append(
+                {
+                    "code": "CUSTOM_CALENDARS_IGNORED",
+                    "message": (
+                        f"{calendar_count} calendrier(s) personnalisé(s) du fichier source "
+                        "ignoré(s) : Waterfall reste le référentiel maître des calendriers "
+                        "de travail."
+                    ),
+                }
+            )
+
     if issues:
         raise MsProjectValidationError(issues)
 
@@ -401,4 +424,5 @@ def parse_msproject_xml(xml_bytes: bytes) -> ParsedProject:
         currency_code=_text(root, "CurrencyCode"),
         tasks=tuple(tasks),
         links=tuple(links),
+        warnings=tuple(warnings),
     )
