@@ -1,9 +1,11 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CalendarsTable, defaultWeekdays } from "./calendars-table";
 
 describe("CalendarsTable", () => {
+  afterEach(() => cleanup());
+
   it("renders existing calendars and exposes the add form", () => {
     const onWeekdayChange = vi.fn();
     render(
@@ -77,5 +79,67 @@ describe("CalendarsTable", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
     expect(onSave).toHaveBeenCalledWith(calendar);
+  });
+
+  it("reports the toggle action with the targeted calendar when deactivating", () => {
+    const onToggle = vi.fn();
+    const calendar = { id: 1, code: "STANDARD", name: "Calendrier standard", weeks_per_year: 47, is_active: true, weekdays: [] } as never;
+    render(
+      <CalendarsTable
+        items={[calendar]}
+        code=""
+        name=""
+        weeksPerYear="47"
+        weekdays={defaultWeekdays()}
+        draft={{ code: "", name: "", weeksPerYear: "47", weekdays: defaultWeekdays() }}
+        editingId={null}
+        busy={false}
+        onSubmit={(event) => event.preventDefault()}
+        onCodeChange={vi.fn()}
+        onNameChange={vi.fn()}
+        onWeeksPerYearChange={vi.fn()}
+        onWeekdayChange={vi.fn()}
+        onStartEdit={vi.fn()}
+        onDraftChange={vi.fn()}
+        onDraftWeekdayChange={vi.fn()}
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+        onToggle={onToggle}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Désactiver" }));
+    expect(onToggle).toHaveBeenCalledWith(calendar);
+  });
+
+  it("reports the toggle action with the targeted calendar when reactivating", () => {
+    const onToggle = vi.fn();
+    const calendar = { id: 2, code: "REDUIT", name: "Calendrier réduit", weeks_per_year: 40, is_active: false, weekdays: [] } as never;
+    render(
+      <CalendarsTable
+        items={[calendar]}
+        code=""
+        name=""
+        weeksPerYear="47"
+        weekdays={defaultWeekdays()}
+        draft={{ code: "", name: "", weeksPerYear: "47", weekdays: defaultWeekdays() }}
+        editingId={null}
+        busy={false}
+        onSubmit={(event) => event.preventDefault()}
+        onCodeChange={vi.fn()}
+        onNameChange={vi.fn()}
+        onWeeksPerYearChange={vi.fn()}
+        onWeekdayChange={vi.fn()}
+        onStartEdit={vi.fn()}
+        onDraftChange={vi.fn()}
+        onDraftWeekdayChange={vi.fn()}
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+        onToggle={onToggle}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Réactiver" }));
+    expect(onToggle).toHaveBeenCalledWith(calendar);
   });
 });
