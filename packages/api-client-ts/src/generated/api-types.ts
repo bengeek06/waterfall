@@ -799,6 +799,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/resources/calendars": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lister les calendriers de travail */
+        get: operations["listCalendars"];
+        put?: never;
+        /** Creer un calendrier de travail */
+        post: operations["createCalendar"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resources/calendars/{calendarId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lire un calendrier de travail */
+        get: operations["getCalendar"];
+        put?: never;
+        post?: never;
+        /** Desactiver un calendrier de travail */
+        delete: operations["deleteCalendar"];
+        options?: never;
+        head?: never;
+        /** Modifier un calendrier de travail */
+        patch: operations["updateCalendar"];
+        trace?: never;
+    };
     "/resources/nodes": {
         parameters: {
             query?: never;
@@ -1470,6 +1507,45 @@ export interface components {
                 [key: string]: number;
             };
         };
+        CalendarWeekdayCreate: {
+            /** @description DayType MS Project (1=dimanche .. 7=samedi) */
+            day_type: number;
+            hours_per_day: number;
+        };
+        CalendarWeekdayRead: components["schemas"]["CalendarWeekdayCreate"] & {
+            id: number;
+            calendar_id: number;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        CalendarCreate: {
+            code: string;
+            name: string;
+            weeks_per_year: number;
+            weekdays?: components["schemas"]["CalendarWeekdayCreate"][];
+        };
+        CalendarUpdate: {
+            code?: string;
+            name?: string;
+            weeks_per_year?: number;
+            is_active?: boolean;
+            /** @description Remplace integralement les jours de semaine du calendrier */
+            weekdays?: components["schemas"]["CalendarWeekdayCreate"][];
+        };
+        CalendarRead: {
+            id: number;
+            code: string;
+            name: string;
+            weeks_per_year: number;
+            is_active: boolean;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+            weekdays?: components["schemas"]["CalendarWeekdayRead"][];
+        };
         ResourceNodeCreate: {
             code: string;
             name: string;
@@ -1492,12 +1568,14 @@ export interface components {
         ResourceRoleCreate: {
             node_id: number;
             cost_category_id: number;
+            calendar_id?: number | null;
             code: string;
             name: string;
         };
         ResourceRoleUpdate: {
             node_id?: number;
             cost_category_id?: number;
+            calendar_id?: number | null;
             name?: string;
             is_active?: boolean;
         };
@@ -1749,6 +1827,8 @@ export interface components {
         CostLineId: number;
         /** @description Identifiant technique du noeud de ressources */
         NodeId: number;
+        /** @description Identifiant technique du calendrier */
+        CalendarId: number;
         /** @description Identifiant technique du role */
         RoleId: number;
         /** @description Identifiant technique de la categorie de cout */
@@ -3427,6 +3507,137 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["ProjectNotFound"];
+        };
+    };
+    listCalendars: {
+        parameters: {
+            query?: {
+                include_inactive?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Liste des calendriers */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarRead"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    createCalendar: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CalendarCreate"];
+            };
+        };
+        responses: {
+            /** @description Calendrier cree */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getCalendar: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique du calendrier */
+                calendarId: components["parameters"]["CalendarId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Calendrier */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ResourceNotFound"];
+        };
+    };
+    deleteCalendar: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique du calendrier */
+                calendarId: components["parameters"]["CalendarId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Calendrier desactive */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    updateCalendar: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique du calendrier */
+                calendarId: components["parameters"]["CalendarId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CalendarUpdate"];
+            };
+        };
+        responses: {
+            /** @description Calendrier modifie */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     listResourceNodes: {

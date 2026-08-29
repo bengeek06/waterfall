@@ -119,6 +119,10 @@ paths:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1export.xlsx
   /projects/{projectId}/export.xml:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1export.xml
+  /resources/calendars:
+    $ref: ./paths/resources.yaml#/~1resources~1calendars
+  /resources/calendars/{calendarId}:
+    $ref: ./paths/resources.yaml#/~1resources~1calendars~1{calendarId}
   /resources/nodes:
     $ref: ./paths/resources.yaml#/~1resources~1nodes
   /resources/nodes/{nodeId}:
@@ -270,6 +274,16 @@ components:
       $ref: ./components/schemas/EstimateCostLineRead.yaml
     EstimateAggregatesRead:
       $ref: ./components/schemas/EstimateAggregatesRead.yaml
+    CalendarWeekdayCreate:
+      $ref: ./components/schemas/CalendarWeekdayCreate.yaml
+    CalendarWeekdayRead:
+      $ref: ./components/schemas/CalendarWeekdayRead.yaml
+    CalendarCreate:
+      $ref: ./components/schemas/CalendarCreate.yaml
+    CalendarUpdate:
+      $ref: ./components/schemas/CalendarUpdate.yaml
+    CalendarRead:
+      $ref: ./components/schemas/CalendarRead.yaml
     ResourceNodeCreate:
       $ref: ./components/schemas/ResourceNodeCreate.yaml
     ResourceNodeUpdate:
@@ -329,6 +343,8 @@ components:
       $ref: ./components/parameters/CostLineId.yaml
     NodeId:
       $ref: ./components/parameters/NodeId.yaml
+    CalendarId:
+      $ref: ./components/parameters/CalendarId.yaml
     RoleId:
       $ref: ./components/parameters/RoleId.yaml
     CategoryId:

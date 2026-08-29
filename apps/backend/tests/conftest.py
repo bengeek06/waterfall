@@ -50,3 +50,10 @@ def reset_database() -> None:
         if engine.dialect.name == "sqlite":
             connection.exec_driver_sql("PRAGMA foreign_keys=ON")
     Base.metadata.create_all(bind=engine)
+
+
+@pytest.fixture(autouse=True)
+def reset_login_rate_limiter() -> None:
+    from waterfall.api.routes.auth import login_rate_limiter
+
+    login_rate_limiter.clear()

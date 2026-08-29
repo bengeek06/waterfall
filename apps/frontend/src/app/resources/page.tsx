@@ -18,6 +18,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import {
   ApiError,
   AuthUserAdmin,
+  Calendar,
   CostCategory,
   CostRate,
   CostType,
@@ -25,15 +26,18 @@ import {
   ResourceRole,
   RoleCapacity,
   SessionExpiredError,
+  createCalendar,
   createCostCategory,
   createCostRate,
   createCostType,
   createResourceNode,
   createResourceRole,
+  deleteCalendar,
   deleteResourceNode,
   createRoleCapacity,
   createUser,
   deleteUser,
+  getCalendars,
   getCostCategories,
   getCostRates,
   getCostTypes,
@@ -46,11 +50,13 @@ import {
   setInflationRate,
   setUserRole,
   setUserStatus,
+  updateCalendar,
   updateCostCategory,
   updateCostRate,
   updateCostType,
   updateRoleCapacity,
   updateResourceNode,
+  updateResourceRole,
 } from "@/lib/backend";
 import { clearSession, getSession, setSession, type SessionTokens } from "@/lib/session";
 import { SettingsTabs, type SettingsTab } from "@/components/settings-tabs";
@@ -61,6 +67,8 @@ import { CapacityTable } from "@/components/capacity-table";
 import { CostTypesTable } from "@/components/cost-types-table";
 import { CostCategoriesTable } from "@/components/cost-categories-table";
 import { ValuationPanel } from "@/components/valuation-panel";
+import { CalendarsTable, defaultWeekdays, type WeekdayDraft } from "@/components/calendars-table";
+import { RoleCalendarsTable } from "@/components/role-calendars-table";
 
 type Notice = { kind: "error" | "success"; message: string } | null;
 type PendingUserAction = { kind: "status" | "admin" | "delete"; user: AuthUserAdmin } | null;
@@ -87,11 +95,13 @@ export default function ResourcesPage() {
   const [nodes, setNodes] = useState<ResourceNode[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null);
   const [roles, setRoles] = useState<ResourceRole[]>([]);
+  const [calendars, setCalendars] = useState<Calendar[]>([]);
   const [costTypes, setCostTypes] = useState<CostType[]>([]);
   const [categories, setCategories] = useState<CostCategory[]>([]);
   const [rates, setRates] = useState<CostRate[]>([]);
   const [capacities, setCapacities] = useState<RoleCapacity[]>([]);
   const [capacityDrafts, setCapacityDrafts] = useState<Record<number, { personCount: string; availableHours: string }>>({});
+  const [roleCalendarDrafts, setRoleCalendarDrafts] = useState<Record<number, string>>({});
   const [users, setUsers] = useState<AuthUserAdmin[]>([]);
   const [busy, setBusy] = useState(true);
   const [actionBusy, setActionBusy] = useState(false);
@@ -115,6 +125,17 @@ export default function ResourcesPage() {
   const [roleName, setRoleName] = useState("");
   const [roleNodeId, setRoleNodeId] = useState("");
   const [roleCategoryId, setRoleCategoryId] = useState("");
+  const [calendarCode, setCalendarCode] = useState("");
+  const [calendarName, setCalendarName] = useState("");
+  const [calendarWeeksPerYear, setCalendarWeeksPerYear] = useState("47");
+  const [calendarWeekdays, setCalendarWeekdays] = useState<WeekdayDraft[]>(() => defaultWeekdays());
+  const [editingCalendarId, setEditingCalendarId] = useState<number | null>(null);
+  const [calendarDraft, setCalendarDraft] = useState<{ code: string; name: string; weeksPerYear: string; weekdays: WeekdayDraft[] }>({
+    code: "",
+    name: "",
+    weeksPerYear: "47",
+    weekdays: defaultWeekdays(),
+  });
   const [inflationYear] = useState(String(new Date().getFullYear()));
   const [inflationValue, setInflationValue] = useState("");
   const [displayCurrency, setDisplayCurrency] = useState("EUR");
@@ -158,6 +179,7 @@ export default function ResourcesPage() {
         const [
           nodeData,
           roleData,
+          calendarData,
           costTypeData,
           categoryData,
           rateData,
@@ -167,6 +189,7 @@ export default function ResourcesPage() {
         ] = await Promise.all([
           getResourceNodes(session, onSessionRefresh),
           getResourceRoles(session, onSessionRefresh),
+          getCalendars(session, onSessionRefresh, true),
           getCostTypes(session, onSessionRefresh, true),
           getCostCategories(session, onSessionRefresh, true),
           getCostRates(session, onSessionRefresh),
@@ -178,6 +201,8 @@ export default function ResourcesPage() {
         setSelectedNodeId((previous) => previous ?? nodeData[0]?.id ?? null);
         setRoleNodeId((previous) => previous || (nodeData[0] ? String(nodeData[0].id) : ""));
         setRoles(roleData);
+        setCalendars(calendarData);
+        setRoleCalendarDrafts(Object.fromEntries(roleData.map((role) => [role.id, role.calendar_id ? String(role.calendar_id) : ""])));
         setCostTypes(costTypeData);
         setCategories(categoryData);
         setRates(rateData);
@@ -393,6 +418,84 @@ export default function ResourcesPage() {
       setRoleCode("");
       setRoleName("");
     }, "Rôle créé.");
+  }
+
+  async function addCalendar(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!session) return;
+    await submitAction(async () => {
+      const created = await createCalendar(
+        {
+          code: calendarCode,
+          name: calendarName,
+          weeks_per_year: Number(calendarWeeksPerYear),
+          weekdays: calendarWeekdays,
+        },
+        session,
+        onSessionRefresh,
+      );
+      setCalendars((prev) => [...prev, created].sort((left, right) => left.code.localeCompare(right.code)));
+      setCalendarCode("");
+      setCalendarName("");
+      setCalendarWeeksPerYear("47");
+      setCalendarWeekdays(defaultWeekdays());
+    }, "Calendrier créé.");
+  }
+
+  function startEditCalendar(calendar: Calendar) {
+    setEditingCalendarId(calendar.id);
+    setCalendarDraft({
+      code: calendar.code,
+      name: calendar.name,
+      weeksPerYear: String(calendar.weeks_per_year),
+      weekdays: (calendar.weekdays ?? []).map((weekday) => ({ day_type: weekday.day_type, hours_per_day: String(weekday.hours_per_day) })),
+    });
+  }
+
+  async function saveCalendar(calendar: Calendar) {
+    if (!session) return;
+    await submitAction(async () => {
+      const updated = await updateCalendar(
+        calendar.id,
+        {
+          code: calendarDraft.code,
+          name: calendarDraft.name,
+          weeks_per_year: Number(calendarDraft.weeksPerYear),
+          weekdays: calendarDraft.weekdays,
+        },
+        session,
+        onSessionRefresh,
+      );
+      setCalendars((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+      setEditingCalendarId(null);
+    }, "Calendrier modifié.");
+  }
+
+  async function toggleCalendarActive(calendar: Calendar) {
+    if (!session) return;
+    await submitAction(async () => {
+      if (calendar.is_active) {
+        await deleteCalendar(calendar.id, session, onSessionRefresh);
+        setCalendars((prev) => prev.map((item) => (item.id === calendar.id ? { ...item, is_active: false } : item)));
+      } else {
+        const updated = await updateCalendar(calendar.id, { is_active: true }, session, onSessionRefresh);
+        setCalendars((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+      }
+    }, calendar.is_active ? "Calendrier désactivé." : "Calendrier réactivé.");
+  }
+
+  async function saveRoleCalendar(roleId: number) {
+    if (!session) return;
+    const draft = roleCalendarDrafts[roleId] ?? "";
+    await submitAction(async () => {
+      const updated = await updateResourceRole(
+        roleId,
+        { calendar_id: draft ? Number(draft) : null },
+        session,
+        onSessionRefresh,
+      );
+      setRoles((previous) => previous.map((role) => (role.id === updated.id ? updated : role)));
+    }, "Calendrier du rôle enregistré.");
   }
 
   async function saveAllValuation() {
@@ -636,6 +739,28 @@ export default function ResourcesPage() {
 
           </div>
           <CapacityTable roles={roles} drafts={capacityDrafts} actionBusy={actionBusy} onDraftChange={(roleId, draft) => setCapacityDrafts((previous) => ({ ...previous, [roleId]: draft }))} onSave={(roleId) => void saveRoleCapacity(roleId)} />
+          <RoleCalendarsTable roles={roles} calendars={calendars} drafts={roleCalendarDrafts} actionBusy={actionBusy} onDraftChange={(roleId, calendarId) => setRoleCalendarDrafts((previous) => ({ ...previous, [roleId]: calendarId }))} onSave={(roleId) => void saveRoleCalendar(roleId)} />
+          <CalendarsTable
+            items={calendars}
+            code={calendarCode}
+            name={calendarName}
+            weeksPerYear={calendarWeeksPerYear}
+            weekdays={calendarWeekdays}
+            draft={calendarDraft}
+            editingId={editingCalendarId}
+            busy={actionBusy}
+            onSubmit={addCalendar}
+            onCodeChange={setCalendarCode}
+            onNameChange={setCalendarName}
+            onWeeksPerYearChange={setCalendarWeeksPerYear}
+            onWeekdayChange={(dayType, value) => setCalendarWeekdays((previous) => previous.map((weekday) => (weekday.day_type === dayType ? { ...weekday, hours_per_day: value } : weekday)))}
+            onStartEdit={startEditCalendar}
+            onDraftChange={(field, value) => setCalendarDraft((previous) => ({ ...previous, [field]: value }))}
+            onDraftWeekdayChange={(dayType, value) => setCalendarDraft((previous) => ({ ...previous, weekdays: previous.weekdays.map((weekday) => (weekday.day_type === dayType ? { ...weekday, hours_per_day: value } : weekday)) }))}
+            onSave={(item) => void saveCalendar(item)}
+            onCancel={() => setEditingCalendarId(null)}
+            onToggle={(item) => void toggleCalendarActive(item)}
+          />
         </>
       ) : null}
 

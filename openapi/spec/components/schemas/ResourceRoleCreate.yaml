@@ -11,6 +11,10 @@ properties:
   cost_category_id:
     type: integer
     minimum: 1
+  calendar_id:
+    type: integer
+    minimum: 1
+    nullable: true
   code:
     type: string
     minLength: 1

@@ -3,7 +3,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 EstimateKind = Literal["initial", "remaining"]
 EstimateStatus = Literal["draft", "validated", "superseded", "archived"]
@@ -37,6 +37,12 @@ class CalendarWeekdayCreate(CalendarWeekdayBase):
     pass
 
 
+def _reject_duplicate_day_types(weekdays: list[CalendarWeekdayCreate]) -> None:
+    day_types = [weekday.day_type for weekday in weekdays]
+    if len(set(day_types)) != len(day_types):
+        raise ValueError("weekdays must not contain duplicate day_type values")
+
+
 class CalendarWeekdayUpdate(BaseModel):
     hours_per_day: Decimal | None = Field(default=None, ge=0, le=24, max_digits=4, decimal_places=2)
 
@@ -62,15 +68,27 @@ class CalendarBase(BaseModel):
 class CalendarCreate(CalendarBase):
     weekdays: list[CalendarWeekdayCreate] = Field(default_factory=list, max_length=7)
 
+    @model_validator(mode="after")
+    def validate_unique_weekdays(self) -> "CalendarCreate":
+        _reject_duplicate_day_types(self.weekdays)
+        return self
+
 
 class CalendarUpdate(BaseModel):
     code: str | None = Field(default=None, min_length=1, max_length=64)
     name: str | None = Field(default=None, min_length=1, max_length=255)
     weeks_per_year: int | None = Field(default=None, ge=1, le=53)
     is_active: bool | None = None
+    weekdays: list[CalendarWeekdayCreate] | None = Field(default=None, max_length=7)
 
     _normalize_code = field_validator("code")(_optional_text)
     _normalize_name = field_validator("name")(_optional_text)
+
+    @model_validator(mode="after")
+    def validate_unique_weekdays(self) -> "CalendarUpdate":
+        if self.weekdays is not None:
+            _reject_duplicate_day_types(self.weekdays)
+        return self
 
 
 class CalendarRead(CalendarBase):
@@ -80,6 +98,7 @@ class CalendarRead(CalendarBase):
     is_active: bool
     created_at: datetime
     updated_at: datetime
+    weekdays: list[CalendarWeekdayRead] = Field(default_factory=list)
 
 
 class ResourceNodeBase(BaseModel):
