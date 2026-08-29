@@ -28,6 +28,60 @@ def _optional_text(value: str | None) -> str | None:
     return _required_text(value)
 
 
+class CalendarWeekdayBase(BaseModel):
+    day_type: int = Field(ge=1, le=7)
+    hours_per_day: Decimal = Field(ge=0, le=24, max_digits=4, decimal_places=2)
+
+
+class CalendarWeekdayCreate(CalendarWeekdayBase):
+    pass
+
+
+class CalendarWeekdayUpdate(BaseModel):
+    hours_per_day: Decimal | None = Field(default=None, ge=0, le=24, max_digits=4, decimal_places=2)
+
+
+class CalendarWeekdayRead(CalendarWeekdayBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    calendar_id: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class CalendarBase(BaseModel):
+    code: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=255)
+    weeks_per_year: int = Field(ge=1, le=53)
+
+    _normalize_code = field_validator("code")(_required_text)
+    _normalize_name = field_validator("name")(_required_text)
+
+
+class CalendarCreate(CalendarBase):
+    weekdays: list[CalendarWeekdayCreate] = Field(default_factory=list, max_length=7)
+
+
+class CalendarUpdate(BaseModel):
+    code: str | None = Field(default=None, min_length=1, max_length=64)
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    weeks_per_year: int | None = Field(default=None, ge=1, le=53)
+    is_active: bool | None = None
+
+    _normalize_code = field_validator("code")(_optional_text)
+    _normalize_name = field_validator("name")(_optional_text)
+
+
+class CalendarRead(CalendarBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
 class ResourceNodeBase(BaseModel):
     code: str = Field(min_length=1, max_length=64)
     name: str = Field(min_length=1, max_length=255)
@@ -71,12 +125,14 @@ class ResourceRoleBase(BaseModel):
 class ResourceRoleCreate(ResourceRoleBase):
     node_id: int = Field(gt=0)
     cost_category_id: int = Field(gt=0)
+    calendar_id: int | None = Field(default=None, gt=0)
 
 
 class ResourceRoleUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     node_id: int | None = Field(default=None, gt=0)
     cost_category_id: int | None = Field(default=None, gt=0)
+    calendar_id: int | None = Field(default=None, gt=0)
     is_active: bool | None = None
 
     _normalize_name = field_validator("name")(_optional_text)
@@ -88,6 +144,7 @@ class ResourceRoleRead(ResourceRoleBase):
     id: int
     node_id: int
     cost_category_id: int
+    calendar_id: int | None
     is_active: bool
     created_at: datetime
     updated_at: datetime
