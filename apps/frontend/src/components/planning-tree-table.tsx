@@ -3,9 +3,16 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { Task } from "@/lib/backend";
+import {
+  computeIndentCommand,
+  computeOutdentCommand,
+  computeReorderCommand,
+  type PlanningMoveCommand,
+} from "@/lib/planning-tree";
 
 type PlanningTreeRow = Task & { depth: number; hasChildren: boolean };
 
@@ -96,9 +103,17 @@ type PlanningTreeTableProps = Readonly<{
   /** Any value identifying the loaded planning version; changing it resets local expand/selection state. */
   versionKey: number | string | null;
   readOnly?: boolean;
+  onMove?: (command: PlanningMoveCommand) => void;
+  mutationBusy?: boolean;
 }>;
 
-export function PlanningTreeTable({ tasks, versionKey, readOnly = false }: PlanningTreeTableProps) {
+export function PlanningTreeTable({
+  tasks,
+  versionKey,
+  readOnly = false,
+  onMove,
+  mutationBusy = false,
+}: PlanningTreeTableProps) {
   const [collapsedUids, setCollapsedUids] = useState<Set<number>>(new Set());
   const [selectedUids, setSelectedUids] = useState<Set<number>>(new Set());
   const [focusedUid, setFocusedUid] = useState<number | null>(null);
@@ -213,12 +228,65 @@ export function PlanningTreeTable({ tasks, versionKey, readOnly = false }: Plann
     handler(row);
   }
 
+  const indentCommand = computeIndentCommand(tasks, selectedUids);
+  const outdentCommand = computeOutdentCommand(tasks, selectedUids);
+  const moveUpCommand = computeReorderCommand(tasks, selectedUids, "up");
+  const moveDownCommand = computeReorderCommand(tasks, selectedUids, "down");
+
+  function dispatchMove(command: PlanningMoveCommand | null) {
+    if (command) {
+      onMove?.(command);
+    }
+  }
+
+  const actionsToolbar = !readOnly && onMove ? (
+    <div className="mb-3 flex flex-wrap gap-2">
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={!indentCommand || mutationBusy}
+        onClick={() => dispatchMove(indentCommand)}
+      >
+        Indenter
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={!outdentCommand || mutationBusy}
+        onClick={() => dispatchMove(outdentCommand)}
+      >
+        Désindenter
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={!moveUpCommand || mutationBusy}
+        onClick={() => dispatchMove(moveUpCommand)}
+      >
+        Monter
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={!moveDownCommand || mutationBusy}
+        onClick={() => dispatchMove(moveDownCommand)}
+      >
+        Descendre
+      </Button>
+    </div>
+  ) : null;
+
   return (
     <Card className="mt-4">
       <CardHeader>
         <CardTitle>Planning</CardTitle>
       </CardHeader>
       <CardContent>
+        {actionsToolbar}
         <Table>
           <TableHeader>
             <TableRow>

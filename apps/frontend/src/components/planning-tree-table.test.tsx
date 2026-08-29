@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Task } from "@/lib/backend";
 import { PlanningTreeTable } from "./planning-tree-table";
@@ -142,5 +142,51 @@ describe("PlanningTreeTable", () => {
     expect(
       screen.getByText("Version validée ou projet en lecture seule : édition désactivée."),
     ).toBeInTheDocument();
+  });
+
+  it("does not render the actions toolbar when read-only or without onMove", () => {
+    const { rerender } = render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+    expect(screen.queryByRole("button", { name: "Indenter" })).not.toBeInTheDocument();
+
+    rerender(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} readOnly onMove={() => {}} />);
+    expect(screen.queryByRole("button", { name: "Indenter" })).not.toBeInTheDocument();
+  });
+
+  it("disables Indenter when the selected task has no previous sibling", () => {
+    const onMove = vi.fn();
+    render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} onMove={onMove} />);
+
+    fireEvent.click(screen.getByText("Livrable"));
+    fireEvent.click(screen.getByRole("button", { name: "Indenter" }));
+
+    expect(onMove).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Indenter" })).toBeDisabled();
+  });
+
+  it("disables buttons while a mutation is busy even when a command would otherwise be valid", () => {
+    const onMove = vi.fn();
+    const siblings: Task[] = [
+      task({ uid: 1, name: "Premier", parent_uid: null, position: 1 }),
+      task({ uid: 2, name: "Second", parent_uid: null, position: 2 }),
+    ];
+    render(<PlanningTreeTable tasks={siblings} versionKey={1} onMove={onMove} mutationBusy />);
+
+    fireEvent.click(screen.getByText("Second"));
+
+    expect(screen.getByRole("button", { name: "Monter" })).toBeDisabled();
+  });
+
+  it("enables Monter and calls onMove with the computed command", () => {
+    const onMove = vi.fn();
+    const siblings: Task[] = [
+      task({ uid: 1, name: "Premier", parent_uid: null, position: 1 }),
+      task({ uid: 2, name: "Second", parent_uid: null, position: 2 }),
+    ];
+    render(<PlanningTreeTable tasks={siblings} versionKey={1} onMove={onMove} />);
+
+    fireEvent.click(screen.getByText("Second"));
+    fireEvent.click(screen.getByRole("button", { name: "Monter" }));
+
+    expect(onMove).toHaveBeenCalledWith({ task_uids: [2], target_parent_uid: null, position: 1 });
   });
 });

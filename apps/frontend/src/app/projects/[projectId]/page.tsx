@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   AlertDialog,
@@ -49,6 +49,7 @@ import {
   Project,
   Planning,
   PlanningDetail,
+  movePlanningTasks,
   ProjectEstimate,
   runImportBatch,
   savePlanningStructureDraft,
@@ -72,6 +73,7 @@ import {
   type PlanningStructureDraftRow,
 } from "@/lib/planning-structure";
 import { PlanningTreeTable } from "@/components/planning-tree-table";
+import type { PlanningMoveCommand } from "@/lib/planning-tree";
 import { ReadOnlyGantt } from "@/components/read-only-gantt";
 import { ProjectTabs, type ProjectTab } from "@/components/project-tabs";
 
@@ -86,9 +88,17 @@ export default function ProjectDetailsPage() {
   const [project, setProject] = useState<Project | null>(null);
   const [plannings, setPlannings] = useState<Planning[]>([]);
   const [selectedPlanningId, setSelectedPlanningId] = useState<number | null>(null);
+  const selectedPlanningIdRef = useRef(selectedPlanningId);
+  // Updated synchronously (not via effect) so an in-flight move can never observe a stale ID:
+  // an effect only runs after commit, leaving a window where a race could still slip through.
+  function updateSelectedPlanningId(next: number | null) {
+    selectedPlanningIdRef.current = next;
+    setSelectedPlanningId(next);
+  }
   const [planningDetail, setPlanningDetail] = useState<PlanningDetail | null>(null);
   const [planningBusy, setPlanningBusy] = useState(false);
   const [planningDetailBusy, setPlanningDetailBusy] = useState(false);
+  const [planningMutationBusy, setPlanningMutationBusy] = useState(false);
   const [structureOpen, setStructureOpen] = useState(false);
   const [editingProjectInfo, setEditingProjectInfo] = useState(false);
   const [projectInfoDraft, setProjectInfoDraft] = useState({ name: "", shortDescription: "" });
@@ -164,7 +174,7 @@ export default function ProjectDetailsPage() {
         setEstimates(estimatesData);
         setPlannings(planningsData);
         setStructureOpen(projectData.status === "cree");
-        setSelectedPlanningId(
+        updateSelectedPlanningId(
           projectData.displayed_planning_id ?? planningsData.at(-1)?.id ?? null,
         );
         setSelectedEstimateId((current) => current ?? estimatesData.at(-1)?.id ?? null);
@@ -354,7 +364,7 @@ export default function ProjectDetailsPage() {
       return;
     }
     if (isReadOnlyProject) {
-      setSelectedPlanningId(planningId);
+      updateSelectedPlanningId(planningId);
       return;
     }
     setPlanningBusy(true);
@@ -366,7 +376,7 @@ export default function ProjectDetailsPage() {
         session,
         onSessionRefresh,
       );
-      setSelectedPlanningId(planningId);
+      updateSelectedPlanningId(planningId);
       setProject(updatedProject);
     } catch (cause) {
       if (cause instanceof SessionExpiredError) {
@@ -403,6 +413,40 @@ export default function ProjectDetailsPage() {
       setError(cause instanceof ApiError ? cause.message : "Impossible de valider le planning.");
     } finally {
       setPlanningBusy(false);
+    }
+  }
+
+  async function movePlanningTaskSelection(command: PlanningMoveCommand) {
+    if (!session || !selectedPlanning || selectedPlanning.status !== "draft" || isReadOnlyProject) {
+      return;
+    }
+    const requestedPlanningId = selectedPlanning.id;
+    setPlanningMutationBusy(true);
+    setError(null);
+    try {
+      const updated = await movePlanningTasks(
+        projectId,
+        requestedPlanningId,
+        command,
+        session,
+        onSessionRefresh,
+      );
+      // The user may have switched to another planning version while this request was in flight;
+      // applying it now would silently replace that version's tree with a stale one.
+      if (selectedPlanningIdRef.current === requestedPlanningId) {
+        setPlanningDetail(updated);
+      }
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      if (selectedPlanningIdRef.current === requestedPlanningId) {
+        setError(cause instanceof ApiError ? cause.message : "Impossible de déplacer les tâches sélectionnées.");
+      }
+    } finally {
+      setPlanningMutationBusy(false);
     }
   }
 
@@ -450,7 +494,7 @@ export default function ProjectDetailsPage() {
       const savedDraft = await getPlanningStructureDraft(projectId, session, onSessionRefresh);
       setProject(updatedProject);
       setPlannings(planningMetadata);
-      setSelectedPlanningId(nextPlanningId);
+      updateSelectedPlanningId(nextPlanningId);
       const rows = savedDraft
         ? structureToDraftRows(savedDraft.structure)
         : getPlanningStructureDraftRows(reopenedDetail);
@@ -804,7 +848,7 @@ export default function ProjectDetailsPage() {
         : null;
       setProject(updatedProject);
       setPlannings(planningMetadata);
-      setSelectedPlanningId(nextPlanningId);
+      updateSelectedPlanningId(nextPlanningId);
       setPlanningDetail(detail);
       setStructureOpen(false);
     } catch (cause) {
@@ -985,7 +1029,7 @@ export default function ProjectDetailsPage() {
       } else {
         setPlanningDetail(null);
       }
-      setSelectedPlanningId(nextPlanningId);
+      updateSelectedPlanningId(nextPlanningId);
       setImportFeedback(
         refreshFailures.length
           ? `Import réussi, mais ${refreshFailures.join(" et ")} n'ont pas pu être actualisés. Recharge la page pour voir l'état à jour.`
@@ -1330,6 +1374,8 @@ export default function ProjectDetailsPage() {
                 tasks={planningDetail.tasks}
                 versionKey={selectedPlanning?.id ?? null}
                 readOnly={isReadOnlyProject || (selectedPlanning ? selectedPlanning.status !== "draft" : false)}
+                onMove={(command) => void movePlanningTaskSelection(command)}
+                mutationBusy={planningMutationBusy}
               />
             ) : null}
           </div>
