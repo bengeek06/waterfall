@@ -5,10 +5,18 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import type { PlanningTaskScheduleUpdate, Task } from "@/lib/backend";
+import type { PlanningTaskScheduleUpdate, Task, TaskLinkWrite } from "@/lib/backend";
 import {
   computeIndentCommand,
   computeOutdentCommand,
@@ -20,6 +28,28 @@ type PlanningTreeRow = Task & { depth: number; hasChildren: boolean };
 
 // MS Project standard predecessor link type codes (see wf_planning_link_snapshot check constraint).
 const LINK_TYPE_LABELS: Record<number, string> = { 0: "FF", 1: "FS", 2: "SF", 3: "SS" };
+const LINK_TYPE_OPTIONS = Object.entries(LINK_TYPE_LABELS).map(
+  ([value, label]) => [Number(value), label] as const,
+);
+
+// Local editing state for one row of the predecessor links dialog; converted to a TaskLinkWrite on submit.
+type LinkRowDraft = {
+  rowId: string;
+  predecessorUid: number | null;
+  linkType: number;
+  lagMinutes: string;
+};
+
+let nextLinkRowId = 0;
+function createLinkRowDraft(link?: { predecessor_uid: number; link_type: number; lag_tenth_minute?: number | null }): LinkRowDraft {
+  nextLinkRowId += 1;
+  return {
+    rowId: `link-row-${nextLinkRowId}`,
+    predecessorUid: link?.predecessor_uid ?? null,
+    linkType: link?.link_type ?? 1,
+    lagMinutes: link?.lag_tenth_minute ? String(link.lag_tenth_minute / 10) : "",
+  };
+}
 
 function buildVisibleRows(tasks: Task[], collapsedUids: Set<number>): PlanningTreeRow[] {
   const knownUids = new Set(tasks.map((task) => task.uid));
@@ -223,6 +253,8 @@ type PlanningTreeTableProps = Readonly<{
   readOnly?: boolean;
   onMove?: (command: PlanningMoveCommand) => void;
   onScheduleUpdate?: (taskUid: number, payload: PlanningTaskScheduleUpdate) => Promise<boolean>;
+  /** Replaces the full predecessor link list of one task; rejects with a user-facing message on failure. */
+  onEditLinks?: (payload: { taskUid: number; links: TaskLinkWrite[] }) => Promise<void>;
   mutationBusy?: boolean;
 }>;
 
@@ -232,6 +264,7 @@ export function PlanningTreeTable({
   readOnly = false,
   onMove,
   onScheduleUpdate,
+  onEditLinks,
   mutationBusy = false,
 }: PlanningTreeTableProps) {
   const [collapsedUids, setCollapsedUids] = useState<Set<number>>(new Set());
@@ -239,11 +272,19 @@ export function PlanningTreeTable({
   const [focusedUid, setFocusedUid] = useState<number | null>(null);
   const [renderedVersionKey, setRenderedVersionKey] = useState(versionKey);
   const [scheduleDrafts, setScheduleDrafts] = useState<Record<number, ScheduleDraft>>({});
+  const [editingTaskUid, setEditingTaskUid] = useState<number | null>(null);
+  const [linkRows, setLinkRows] = useState<LinkRowDraft[]>([]);
+  const [linkFormError, setLinkFormError] = useState<string | null>(null);
+  const [linkFormBusy, setLinkFormBusy] = useState(false);
   const rowRefs = useRef(new Map<number, HTMLTableRowElement>());
 
   // A different planning version must never reuse another version's expand/selection state.
   if (versionKey !== renderedVersionKey) {
     setRenderedVersionKey(versionKey);
+    setEditingTaskUid(null);
+    setLinkRows([]);
+    setLinkFormError(null);
+    setLinkFormBusy(false);
     setCollapsedUids(new Set());
     setSelectedUids(new Set());
     setFocusedUid(null);
@@ -624,6 +665,85 @@ export function PlanningTreeTable({
     }
   }
 
+  function openLinksDialog(row: PlanningTreeRow) {
+    setEditingTaskUid(row.uid);
+    setLinkRows((row.predecessor_links ?? []).map((link) => createLinkRowDraft(link)));
+    setLinkFormError(null);
+  }
+
+  function closeLinksDialog() {
+    setEditingTaskUid(null);
+    setLinkRows([]);
+    setLinkFormError(null);
+  }
+
+  function addLinkRow() {
+    setLinkRows((current) => [...current, createLinkRowDraft()]);
+  }
+
+  function removeLinkRow(rowId: string) {
+    setLinkRows((current) => current.filter((row) => row.rowId !== rowId));
+  }
+
+  function updateLinkRow(rowId: string, patch: Partial<LinkRowDraft>) {
+    setLinkRows((current) => current.map((row) => (row.rowId === rowId ? { ...row, ...patch } : row)));
+  }
+
+  async function submitLinks() {
+    if (editingTaskUid === null || !onEditLinks) {
+      return;
+    }
+    const missingPredecessor = linkRows.some((row) => row.predecessorUid === null);
+    if (missingPredecessor) {
+      setLinkFormError("Sélectionnez une tâche prédécesseure pour chaque ligne.");
+      return;
+    }
+    const seen = new Set<string>();
+    for (const row of linkRows) {
+      const dedupeKey = `${row.predecessorUid}-${row.linkType}`;
+      if (seen.has(dedupeKey)) {
+        setLinkFormError(
+          "Deux lignes ne peuvent pas référencer la même tâche prédécesseure avec le même type de lien.",
+        );
+        return;
+      }
+      seen.add(dedupeKey);
+    }
+    const links: TaskLinkWrite[] = [];
+    for (const row of linkRows) {
+      const trimmedLag = row.lagMinutes.trim();
+      const lagMinutesValue = trimmedLag === "" ? 0 : Number(trimmedLag);
+      if (!Number.isFinite(lagMinutesValue)) {
+        setLinkFormError("Le décalage doit être un nombre de minutes valide.");
+        return;
+      }
+      const lagTenthMinute = Math.round(lagMinutesValue * 10);
+      links.push({
+        predecessor_uid: row.predecessorUid as number,
+        link_type: row.linkType,
+        lag_tenth_minute: lagTenthMinute,
+        // The form always produces an explicit numeric lag (never "unset"), so lag_format is
+        // unconditionally 7 (elapsed minutes) — matching the backend/seed convention where
+        // lag_format is only null when lag_tenth_minute itself is null (see
+        // apps/backend/tests/test_planning_links.py and planning_structure.py's seed rows).
+        lag_format: 7,
+      });
+    }
+    setLinkFormError(null);
+    setLinkFormBusy(true);
+    try {
+      await onEditLinks({ taskUid: editingTaskUid, links });
+      closeLinksDialog();
+    } catch (cause) {
+      setLinkFormError(cause instanceof Error ? cause.message : "Impossible de mettre à jour les prédécesseurs.");
+    } finally {
+      setLinkFormBusy(false);
+    }
+  }
+
+  const editingTask = editingTaskUid !== null ? tasks.find((task) => task.uid === editingTaskUid) ?? null : null;
+  const linkCandidateTasks = tasks.filter((task) => task.uid !== editingTaskUid);
+
   const actionsToolbar = !readOnly && onMove ? (
     <div className="mb-3 flex flex-wrap gap-2">
       <Button
@@ -732,7 +852,26 @@ export function PlanningTreeTable({
                   </TableCell>
                   <TableCell>{taskTypeLabel(row)}</TableCell>
                   {renderScheduleCells(row)}
-                  <TableCell>{predecessorsLabel(row)}</TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-2">
+                      <span>{predecessorsLabel(row)}</span>
+                      {!readOnly && onEditLinks ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={mutationBusy}
+                          aria-label={`Éditer les prédécesseurs de ${row.name}`}
+                          onClick={(event: MouseEvent<HTMLButtonElement>) => {
+                            event.stopPropagation();
+                            openLinksDialog(row);
+                          }}
+                        >
+                          Éditer
+                        </Button>
+                      ) : null}
+                    </div>
+                  </TableCell>
                 </TableRow>
               );
             })}
@@ -740,6 +879,107 @@ export function PlanningTreeTable({
         </Table>
         {readOnlyNotice}
       </CardContent>
+      <Dialog
+        open={editingTask !== null}
+        onOpenChange={(open) => {
+          // Ignore close attempts (Escape, backdrop click, the header X) while a submission is
+          // in flight, otherwise the dialog could close before we know if it actually succeeded.
+          if (!open && !linkFormBusy) closeLinksDialog();
+        }}
+      >
+        <DialogContent>
+          {editingTask ? (
+            <>
+              <DialogHeader>
+                <DialogTitle>Prédécesseurs de {editingTask.name}</DialogTitle>
+                <DialogDescription>
+                  Ajoutez, modifiez ou supprimez les tâches prédécesseures de cette tâche.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="flex flex-col gap-3">
+                {linkRows.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">Aucun prédécesseur.</p>
+                ) : null}
+                {linkRows.map((row, rowIndex) => (
+                  <div key={row.rowId} className="flex flex-wrap items-center gap-2">
+                    <select
+                      aria-label="Tâche prédécesseure"
+                      className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+                      value={row.predecessorUid ?? ""}
+                      disabled={linkFormBusy}
+                      onChange={(event) =>
+                        updateLinkRow(row.rowId, {
+                          predecessorUid: event.target.value ? Number(event.target.value) : null,
+                        })
+                      }
+                    >
+                      <option value="">Sélectionner une tâche</option>
+                      {linkCandidateTasks.map((candidate) => (
+                        <option key={candidate.uid} value={candidate.uid}>
+                          {candidate.id_display ?? candidate.uid} - {candidate.name}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      aria-label="Type de lien"
+                      className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+                      value={row.linkType}
+                      disabled={linkFormBusy}
+                      onChange={(event) => updateLinkRow(row.rowId, { linkType: Number(event.target.value) })}
+                    >
+                      {LINK_TYPE_OPTIONS.map(([value, label]) => (
+                        <option key={value} value={value}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                    <Input
+                      aria-label="Décalage en minutes"
+                      type="number"
+                      className="w-24"
+                      value={row.lagMinutes}
+                      disabled={linkFormBusy}
+                      onChange={(event) => updateLinkRow(row.rowId, { lagMinutes: event.target.value })}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={linkFormBusy}
+                      aria-label={`Supprimer la ligne de prédécesseur ${rowIndex + 1}`}
+                      onClick={() => removeLinkRow(row.rowId)}
+                    >
+                      Supprimer
+                    </Button>
+                  </div>
+                ))}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={linkCandidateTasks.length === 0 || linkFormBusy}
+                  onClick={addLinkRow}
+                >
+                  Ajouter une ligne
+                </Button>
+                {linkFormError ? (
+                  <p role="alert" className="text-sm text-destructive">
+                    {linkFormError}
+                  </p>
+                ) : null}
+              </div>
+              <DialogFooter>
+                <Button type="button" variant="outline" disabled={linkFormBusy} onClick={closeLinksDialog}>
+                  Annuler
+                </Button>
+                <Button type="button" disabled={linkFormBusy || mutationBusy} onClick={() => void submitLinks()}>
+                  {linkFormBusy ? "Enregistrement..." : "Enregistrer"}
+                </Button>
+              </DialogFooter>
+            </>
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }

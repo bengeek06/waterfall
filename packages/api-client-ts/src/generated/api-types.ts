@@ -451,6 +451,23 @@ export interface paths {
         patch: operations["updatePlanningTaskSchedule"];
         trace?: never;
     };
+    "/projects/{projectId}/plannings/{planningId}/tasks/{taskUid}/links": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Remplacer les liens de predecesseurs d'une tache d'un brouillon de planning */
+        put: operations["replaceTaskPredecessorLinks"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/projects/{projectId}/plannings/{planningId}/validate": {
         parameters: {
             query?: never;
@@ -1699,6 +1716,15 @@ export interface components {
             finish_at?: string | null;
             duration_minutes?: number | null;
         };
+        TaskLinkWrite: {
+            predecessor_uid: number;
+            link_type: number;
+            lag_tenth_minute?: number | null;
+            lag_format?: number | null;
+        };
+        TaskLinksReplace: {
+            links: components["schemas"]["TaskLinkWrite"][];
+        };
     };
     responses: {
         /** @description Requete invalide */
@@ -1856,6 +1882,33 @@ export interface components {
         };
         /** @description La mise a jour du planning entre en conflit avec les donnees */
         UpdatePlanningTaskScheduleConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
+            };
+        };
+        /** @description Requete de mise a jour des liens invalide */
+        ReplaceTaskLinksBadRequest: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
+            };
+        };
+        /** @description Projet, planning ou tache introuvable pendant la mise a jour des liens */
+        ReplaceTaskLinksNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
+            };
+        };
+        /** @description La mise a jour des liens entre en conflit avec le planning */
+        ReplaceTaskLinksConflict: {
             headers: {
                 [name: string]: unknown;
             };
@@ -2769,6 +2822,41 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["UpdatePlanningTaskScheduleNotFound"];
             409: components["responses"]["UpdatePlanningTaskScheduleConflict"];
+        };
+    };
+    replaceTaskPredecessorLinks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de planning */
+                planningId: components["parameters"]["PlanningId"];
+                /** @description UID fonctionnel de la tache dans un projet */
+                taskUid: components["parameters"]["TaskUid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaskLinksReplace"];
+            };
+        };
+        responses: {
+            /** @description Arbre complet du brouillon mis a jour */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanningDetailRead"];
+                };
+            };
+            400: components["responses"]["ReplaceTaskLinksBadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ReplaceTaskLinksNotFound"];
+            409: components["responses"]["ReplaceTaskLinksConflict"];
         };
     };
     validatePlanning: {

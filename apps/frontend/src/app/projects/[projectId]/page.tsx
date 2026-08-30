@@ -51,11 +51,13 @@ import {
   PlanningDetail,
   movePlanningTasks,
   ProjectEstimate,
+  replaceTaskPredecessorLinks,
   runImportBatch,
   savePlanningStructureDraft,
   SessionExpiredError,
   type ImportDiff,
   type PlanningTaskScheduleUpdate,
+  type TaskLinkWrite,
   restoreSession,
   reopenPlanningStructure,
   setDisplayedPlanning,
@@ -81,6 +83,34 @@ import { ProjectTabs, type ProjectTab } from "@/components/project-tabs";
 
 const MAX_IMPORT_FILE_SIZE = 25 * 1024 * 1024;
 let nextStructureRowId = 2;
+
+// Backend link validation errors come back as raw English detail strings (see
+// PlanningLinkError subclasses); translate the ones surfaced by the predecessor
+// links dialog into actionable French copy instead of leaking backend internals.
+function describePredecessorLinksError(cause: unknown): string {
+  if (!(cause instanceof ApiError)) {
+    return "Impossible de mettre à jour les prédécesseurs.";
+  }
+  if (cause.status === 404) {
+    return "Une des tâches référencées est introuvable dans ce planning.";
+  }
+  if (cause.status === 409) {
+    if (cause.message.includes("is not a draft")) {
+      return "Le planning n'est plus modifiable (il a été validé entre-temps).";
+    }
+    return "Cette combinaison de prédécesseurs créerait un cycle dans le planning.";
+  }
+  if (cause.status === 400) {
+    if (cause.message.includes("own predecessor")) {
+      return "Une tâche ne peut pas être son propre prédécesseur.";
+    }
+    if (cause.message.includes("Duplicate predecessor link")) {
+      return "Deux lignes ne peuvent pas référencer la même tâche prédécesseure avec le même type de lien.";
+    }
+    return "Requête de prédécesseurs invalide.";
+  }
+  return cause.message || "Impossible de mettre à jour les prédécesseurs.";
+}
 export default function ProjectDetailsPage() {
   const router = useRouter();
   const params = useParams<{ projectId: string }>();
@@ -491,6 +521,51 @@ export default function ProjectDetailsPage() {
         setError(cause instanceof ApiError ? cause.message : "Impossible de mettre à jour la planification de la tâche.");
       }
       return false;
+    } finally {
+      setPlanningMutationBusy(false);
+    }
+  }
+
+  async function editTaskPredecessorLinksSelection(taskUid: number, links: TaskLinkWrite[]) {
+    // Unlike other mutation handlers in this file, this one is awaited by the dialog itself
+    // (PlanningTreeTable.submitLinks), which closes on any resolved promise. A silent `return`
+    // here would look like a success and close the dialog while discarding the user's edits, so
+    // every guard branch must reject explicitly instead.
+    if (!session) {
+      throw new Error("Session expirée : reconnecte-toi puis réessaie.");
+    }
+    if (!selectedPlanning || selectedPlanning.status !== "draft" || isReadOnlyProject) {
+      throw new Error("Ce planning n'est plus modifiable : les prédécesseurs n'ont pas été enregistrés.");
+    }
+    const requestedPlanningId = selectedPlanning.id;
+    setPlanningMutationBusy(true);
+    setError(null);
+    try {
+      const updated = await replaceTaskPredecessorLinks(
+        projectId,
+        requestedPlanningId,
+        taskUid,
+        { links },
+        session,
+        onSessionRefresh,
+      );
+      // The user may have switched to another planning version while this request was in flight;
+      // applying it now would silently replace that version's tree with a stale one.
+      if (selectedPlanningIdRef.current === requestedPlanningId) {
+        setPlanningDetail(updated);
+      }
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        throw cause;
+      }
+      const message = describePredecessorLinksError(cause);
+      if (selectedPlanningIdRef.current === requestedPlanningId) {
+        setError(message);
+      }
+      // Rethrown so the dialog itself can also surface a targeted, actionable error message.
+      throw new Error(message);
     } finally {
       setPlanningMutationBusy(false);
     }
@@ -1422,6 +1497,7 @@ export default function ProjectDetailsPage() {
                 readOnly={isReadOnlyProject || (selectedPlanning ? selectedPlanning.status !== "draft" : false)}
                 onMove={(command) => void movePlanningTaskSelection(command)}
                 onScheduleUpdate={(taskUid, payload) => updateTaskScheduleSelection(taskUid, payload)}
+                onEditLinks={(payload) => editTaskPredecessorLinksSelection(payload.taskUid, payload.links)}
                 mutationBusy={planningMutationBusy}
               />
             ) : null}
