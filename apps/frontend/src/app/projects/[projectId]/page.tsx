@@ -452,9 +452,14 @@ export default function ProjectDetailsPage() {
     }
   }
 
-  async function updateTaskScheduleSelection(taskUid: number, payload: PlanningTaskScheduleUpdate) {
+  // Returns whether the update was actually persisted server-side, so the caller (the tree
+  // table's inline schedule edit) knows whether it is safe to discard the user's local draft.
+  async function updateTaskScheduleSelection(
+    taskUid: number,
+    payload: PlanningTaskScheduleUpdate,
+  ): Promise<boolean> {
     if (!session || !selectedPlanning || selectedPlanning.status !== "draft" || isReadOnlyProject) {
-      return;
+      return false;
     }
     const requestedPlanningId = selectedPlanning.id;
     setPlanningMutationBusy(true);
@@ -469,19 +474,23 @@ export default function ProjectDetailsPage() {
         onSessionRefresh,
       );
       // The user may have switched to another planning version while this request was in flight;
-      // applying it now would silently replace that version's tree with a stale one.
+      // applying it now would silently replace that version's tree with a stale one. The update
+      // itself did succeed server-side though (only its local rendering is skipped here), so this
+      // still reports success to the caller.
       if (selectedPlanningIdRef.current === requestedPlanningId) {
         setPlanningDetail(updated);
       }
+      return true;
     } catch (cause) {
       if (cause instanceof SessionExpiredError) {
         clearSession();
         router.push("/login");
-        return;
+        return false;
       }
       if (selectedPlanningIdRef.current === requestedPlanningId) {
         setError(cause instanceof ApiError ? cause.message : "Impossible de mettre à jour la planification de la tâche.");
       }
+      return false;
     } finally {
       setPlanningMutationBusy(false);
     }
@@ -1412,7 +1421,7 @@ export default function ProjectDetailsPage() {
                 versionKey={selectedPlanning?.id ?? null}
                 readOnly={isReadOnlyProject || (selectedPlanning ? selectedPlanning.status !== "draft" : false)}
                 onMove={(command) => void movePlanningTaskSelection(command)}
-                onScheduleUpdate={(taskUid, payload) => void updateTaskScheduleSelection(taskUid, payload)}
+                onScheduleUpdate={(taskUid, payload) => updateTaskScheduleSelection(taskUid, payload)}
                 mutationBusy={planningMutationBusy}
               />
             ) : null}

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Task } from "@/lib/backend";
@@ -191,7 +191,7 @@ describe("PlanningTreeTable", () => {
   });
 
   it("does not offer schedule edition for a summary task even when editable", () => {
-    const onScheduleUpdate = vi.fn();
+    const onScheduleUpdate = vi.fn().mockResolvedValue(true);
     render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} onScheduleUpdate={onScheduleUpdate} />);
 
     expect(screen.queryByLabelText("Début de Poste")).not.toBeInTheDocument();
@@ -199,7 +199,7 @@ describe("PlanningTreeTable", () => {
   });
 
   it("does not offer schedule edition when read-only", () => {
-    const onScheduleUpdate = vi.fn();
+    const onScheduleUpdate = vi.fn().mockResolvedValue(true);
     render(
       <PlanningTreeTable tasks={threeLevelTasks} versionKey={1} onScheduleUpdate={onScheduleUpdate} readOnly />,
     );
@@ -208,7 +208,7 @@ describe("PlanningTreeTable", () => {
   });
 
   it("only exposes the start date for a manual milestone, deriving finish_at and duration", () => {
-    const onScheduleUpdate = vi.fn();
+    const onScheduleUpdate = vi.fn().mockResolvedValue(true);
     const tasks: Task[] = [
       task({
         uid: 1,
@@ -230,7 +230,7 @@ describe("PlanningTreeTable", () => {
   });
 
   it("disables the start date editor for an automatic milestone with a predecessor link", () => {
-    const onScheduleUpdate = vi.fn();
+    const onScheduleUpdate = vi.fn().mockResolvedValue(true);
     const tasks: Task[] = [
       task({
         uid: 1,
@@ -269,7 +269,7 @@ describe("PlanningTreeTable", () => {
     // distinguish an omitted start_at from an explicitly cleared one: both fall back to the
     // already-stored value, so a cleared field would 200 without changing anything. The client
     // must not fire that request.
-    const onScheduleUpdate = vi.fn();
+    const onScheduleUpdate = vi.fn().mockResolvedValue(true);
     const tasks: Task[] = [
       task({
         uid: 1,
@@ -293,7 +293,7 @@ describe("PlanningTreeTable", () => {
   });
 
   it("keeps the start date editor enabled for an automatic milestone with no predecessor link", () => {
-    const onScheduleUpdate = vi.fn();
+    const onScheduleUpdate = vi.fn().mockResolvedValue(true);
     const tasks: Task[] = [
       task({
         uid: 1,
@@ -315,7 +315,7 @@ describe("PlanningTreeTable", () => {
   });
 
   it("commits a manual task's start/finish/duration edit on blur", () => {
-    const onScheduleUpdate = vi.fn();
+    const onScheduleUpdate = vi.fn().mockResolvedValue(true);
     const tasks: Task[] = [
       task({
         uid: 1,
@@ -362,7 +362,7 @@ describe("PlanningTreeTable", () => {
     const originalTz = process.env.TZ;
     process.env.TZ = "America/New_York"; // UTC-5 (winter, no DST ambiguity for this fixed date)
     try {
-      const onScheduleUpdate = vi.fn();
+      const onScheduleUpdate = vi.fn().mockResolvedValue(true);
       const tasks: Task[] = [
         task({
           uid: 1,
@@ -399,7 +399,7 @@ describe("PlanningTreeTable", () => {
   });
 
   it("commits an Enter keypress in a schedule field immediately and blurs the input", () => {
-    const onScheduleUpdate = vi.fn();
+    const onScheduleUpdate = vi.fn().mockResolvedValue(true);
     const tasks: Task[] = [
       task({
         uid: 1,
@@ -429,7 +429,7 @@ describe("PlanningTreeTable", () => {
     // carry a non-zero, non-minute-aligned seconds component (a multiple of 6s), so
     // toDateTimeInputValue/fromDateTimeInputValue must round-trip seconds losslessly, or an
     // untouched start_at/finish_at would be silently truncated to :00 on every commit.
-    const onScheduleUpdate = vi.fn();
+    const onScheduleUpdate = vi.fn().mockResolvedValue(true);
     const tasks: Task[] = [
       task({
         uid: 1,
@@ -456,8 +456,38 @@ describe("PlanningTreeTable", () => {
     expect(payload.finish_at).toBe("2026-01-09T11:00:30.000Z");
   });
 
+  it("keeps the schedule draft in place when the update fails, instead of reverting to the stale value", async () => {
+    // If onScheduleUpdate's request fails (network error, server validation, conflict...) the
+    // draft must survive: clearing it regardless of outcome would make scheduleDraftFor(row) fall
+    // back to defaultScheduleDraft (the never-updated `row` prop), silently discarding whatever the
+    // user typed with no way to recover it.
+    const onScheduleUpdate = vi.fn().mockResolvedValue(false);
+    const tasks: Task[] = [
+      task({
+        uid: 1,
+        name: "Tâche manuelle",
+        parent_uid: null,
+        position: 1,
+        is_manual: true,
+        start_at: "2026-01-05T09:00:00Z",
+        finish_at: "2026-01-06T17:00:00Z",
+        duration_minutes: 480,
+      }),
+    ];
+    render(<PlanningTreeTable tasks={tasks} versionKey={1} onScheduleUpdate={onScheduleUpdate} />);
+
+    const durationInput = screen.getByLabelText<HTMLInputElement>("Durée de Tâche manuelle");
+    fireEvent.change(durationInput, { target: { value: "600" } });
+    fireEvent.blur(durationInput);
+
+    expect(onScheduleUpdate).toHaveBeenCalledTimes(1);
+    // Give the rejected/false-resolving update a chance to settle, then confirm the field still
+    // shows the user's typed value rather than having bounced back to the original 480.
+    await waitFor(() => expect(durationInput.value).toBe("600"));
+  });
+
   it("only allows duration edition for an automatic non-milestone task", () => {
-    const onScheduleUpdate = vi.fn();
+    const onScheduleUpdate = vi.fn().mockResolvedValue(true);
     const tasks: Task[] = [
       task({
         uid: 1,
@@ -485,7 +515,7 @@ describe("PlanningTreeTable", () => {
   it("rejects a 0 or empty duration edit on an automatic non-milestone task instead of sending a doomed request", () => {
     // _apply_automatic_schedule rejects a null/0/negative duration_minutes with a 400 server-side;
     // the client must not fire that request.
-    const onScheduleUpdate = vi.fn();
+    const onScheduleUpdate = vi.fn().mockResolvedValue(true);
     const tasks: Task[] = [
       task({
         uid: 1,
@@ -513,7 +543,7 @@ describe("PlanningTreeTable", () => {
   });
 
   it("does not commit a schedule edit on blur when nothing was typed", () => {
-    const onScheduleUpdate = vi.fn();
+    const onScheduleUpdate = vi.fn().mockResolvedValue(true);
     const tasks: Task[] = [
       task({
         uid: 1,
@@ -536,7 +566,7 @@ describe("PlanningTreeTable", () => {
   });
 
   it("does not commit a schedule edit while a mutation is busy", () => {
-    const onScheduleUpdate = vi.fn();
+    const onScheduleUpdate = vi.fn().mockResolvedValue(true);
     const tasks: Task[] = [
       task({
         uid: 1,
@@ -557,7 +587,7 @@ describe("PlanningTreeTable", () => {
   });
 
   it("switches a task to manual mode and sends its current schedule as the payload", async () => {
-    const onScheduleUpdate = vi.fn();
+    const onScheduleUpdate = vi.fn().mockResolvedValue(true);
     const tasks: Task[] = [
       task({
         uid: 1,
@@ -586,7 +616,7 @@ describe("PlanningTreeTable", () => {
   });
 
   it("switches a manual non-milestone task with a duration to automatic mode", async () => {
-    const onScheduleUpdate = vi.fn();
+    const onScheduleUpdate = vi.fn().mockResolvedValue(true);
     const tasks: Task[] = [
       task({
         uid: 1,
@@ -615,7 +645,7 @@ describe("PlanningTreeTable", () => {
   });
 
   it("switches a milestone's mode without sending finish_at or duration_minutes", async () => {
-    const onScheduleUpdate = vi.fn();
+    const onScheduleUpdate = vi.fn().mockResolvedValue(true);
     const tasks: Task[] = [
       task({
         uid: 1,
@@ -643,7 +673,7 @@ describe("PlanningTreeTable", () => {
   });
 
   it("does not let an arrow key on the mode selector bubble up to the row's navigation", () => {
-    const onScheduleUpdate = vi.fn();
+    const onScheduleUpdate = vi.fn().mockResolvedValue(true);
     const siblings: Task[] = [
       task({ uid: 1, name: "Premier", parent_uid: null, position: 1, is_manual: false }),
       task({ uid: 2, name: "Second", parent_uid: null, position: 2, is_manual: false }),
@@ -660,7 +690,7 @@ describe("PlanningTreeTable", () => {
   });
 
   it("disables the automatic option for a non-milestone task with no duration set", async () => {
-    const onScheduleUpdate = vi.fn();
+    const onScheduleUpdate = vi.fn().mockResolvedValue(true);
     const tasks: Task[] = [
       task({
         uid: 1,
@@ -684,7 +714,7 @@ describe("PlanningTreeTable", () => {
   });
 
   it("disables the automatic option for a non-milestone task with a zero duration", async () => {
-    const onScheduleUpdate = vi.fn();
+    const onScheduleUpdate = vi.fn().mockResolvedValue(true);
     const tasks: Task[] = [
       task({
         uid: 1,

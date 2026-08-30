@@ -192,7 +192,7 @@ type PlanningTreeTableProps = Readonly<{
   versionKey: number | string | null;
   readOnly?: boolean;
   onMove?: (command: PlanningMoveCommand) => void;
-  onScheduleUpdate?: (taskUid: number, payload: PlanningTaskScheduleUpdate) => void;
+  onScheduleUpdate?: (taskUid: number, payload: PlanningTaskScheduleUpdate) => Promise<boolean>;
   mutationBusy?: boolean;
 }>;
 
@@ -355,7 +355,7 @@ export function PlanningTreeTable({
     });
   }
 
-  function commitScheduleEdit(row: PlanningTreeRow) {
+  async function commitScheduleEdit(row: PlanningTreeRow) {
     if (!onScheduleUpdate || mutationBusy) {
       return;
     }
@@ -408,8 +408,15 @@ export function PlanningTreeTable({
       }
       payload = { is_manual: false, duration_minutes: durationMinutes };
     }
-    onScheduleUpdate(row.uid, payload);
-    clearScheduleDraft(row.uid);
+    // Only discard the draft once the update is confirmed persisted server-side: clearing it
+    // beforehand (or on failure) would make scheduleDraftFor(row) fall back to defaultScheduleDraft,
+    // which reflects the stale, pre-edit `row` values -- silently reverting the user's input to a
+    // value that was never actually saved, with no way to recover it. On failure the draft is left
+    // in place so the user still sees what they typed and can retry or correct it.
+    const succeeded = await onScheduleUpdate(row.uid, payload);
+    if (succeeded) {
+      clearScheduleDraft(row.uid);
+    }
   }
 
   function commitModeChange(row: PlanningTreeRow, isManual: boolean) {
@@ -424,7 +431,11 @@ export function PlanningTreeTable({
           finish_at: row.finish_at ?? null,
           duration_minutes: row.duration_minutes ?? null,
         };
-    onScheduleUpdate(row.uid, payload);
+    // No local draft to reconcile here (unlike commitScheduleEdit): the Select is driven directly
+    // by row.is_manual, so on failure it simply re-renders with the same (unchanged) value once
+    // the parent's data reload reflects the rejected request -- no stale-draft/lost-input risk to
+    // guard against, so this stays fire-and-forget.
+    void onScheduleUpdate(row.uid, payload);
   }
 
   function onScheduleFieldKeyDown(event: KeyboardEvent<HTMLInputElement>) {
@@ -471,7 +482,7 @@ export function PlanningTreeTable({
               disabled={mutationBusy || startConstrainedByPredecessors}
               onClick={(event) => event.stopPropagation()}
               onChange={(event) => updateScheduleDraft(row, "start_at", event.target.value)}
-              onBlur={() => commitScheduleEdit(row)}
+              onBlur={() => void commitScheduleEdit(row)}
               onKeyDown={onScheduleFieldKeyDown}
             />
           ) : (
@@ -488,7 +499,7 @@ export function PlanningTreeTable({
               disabled={mutationBusy}
               onClick={(event) => event.stopPropagation()}
               onChange={(event) => updateScheduleDraft(row, "finish_at", event.target.value)}
-              onBlur={() => commitScheduleEdit(row)}
+              onBlur={() => void commitScheduleEdit(row)}
               onKeyDown={onScheduleFieldKeyDown}
             />
           ) : (
@@ -510,7 +521,7 @@ export function PlanningTreeTable({
               disabled={mutationBusy}
               onClick={(event) => event.stopPropagation()}
               onChange={(event) => updateScheduleDraft(row, "duration_minutes", event.target.value)}
-              onBlur={() => commitScheduleEdit(row)}
+              onBlur={() => void commitScheduleEdit(row)}
               onKeyDown={onScheduleFieldKeyDown}
             />
           ) : (
