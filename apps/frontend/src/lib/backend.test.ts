@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { getPlanning } from "./backend";
+import { ApiError, getPlanning, updateResourceRole } from "./backend";
 
 describe("planning detail pagination", () => {
   afterEach(() => {
@@ -44,5 +44,47 @@ describe("planning detail pagination", () => {
     expect(String(fetchMock.mock.calls[0][0])).toContain("limit=200&offset=0");
     expect(String(fetchMock.mock.calls[1][0])).toContain("limit=200&offset=200");
     expect(String(fetchMock.mock.calls[2][0])).toContain("limit=200&offset=400");
+  });
+});
+
+describe("parseError", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("turns a FastAPI/Pydantic 422 detail array into a readable message", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          detail: [
+            { loc: ["body", "cost_category_id"], msg: "Field required", type: "missing" },
+            { loc: ["body", "calendar_id"], msg: "Input should be a valid integer", type: "int_type" },
+          ],
+        }),
+        { status: 422, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      updateResourceRole(1, { name: "Dev" }, { accessToken: "token" }, vi.fn()),
+    ).rejects.toMatchObject({
+      status: 422,
+      message: "cost_category_id: Field required; calendar_id: Input should be a valid integer",
+    } as Partial<ApiError>);
+  });
+
+  it("still surfaces a plain string detail as-is", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ detail: "Role not found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      updateResourceRole(1, { name: "Dev" }, { accessToken: "token" }, vi.fn()),
+    ).rejects.toMatchObject({ status: 404, message: "Role not found" } as Partial<ApiError>);
   });
 });

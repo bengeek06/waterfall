@@ -11,6 +11,10 @@ allOf:
     id:
       type: integer
       minimum: 1
+    calendar_id:
+      type: integer
+      minimum: 1
+      nullable: true
     is_active:
       type: boolean
     created_at:

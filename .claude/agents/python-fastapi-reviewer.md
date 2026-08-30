@@ -62,7 +62,7 @@ cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && cd apps/ba
 cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && cd apps/backend && pyright
 cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && cd apps/backend && pytest -q
 cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && cd apps/backend && alembic upgrade head   # and downgrade if a migration changed
-cd "$(git rev-parse --show-toplevel)" && npm run openapi:bundle   # if openapi/spec/** changed; then diff openapi/waterfall_v1.yaml
+cd "$(git rev-parse --show-toplevel)" && npm run openapi:bundle && npm run api-client:generate   # if openapi/spec/** changed; then diff both openapi/waterfall_v1.yaml and packages/api-client-ts/src/generated/api-types.ts
 ```
 
 Inspect the actual diff and, if useful, past Copilot findings on this repo:

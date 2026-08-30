@@ -37,6 +37,7 @@ export function RoleCalendarsTable(props: RoleCalendarsTableProps) {
                       aria-label={`Calendrier de ${role.code}`}
                       className="h-8 rounded-md border border-input bg-background px-2 text-sm"
                       value={draft}
+                      disabled={props.actionBusy}
                       onChange={(event) => props.onDraftChange(role.id, event.target.value)}
                     >
                       <option value="">Calendrier par défaut</option>

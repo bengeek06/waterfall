@@ -50,6 +50,18 @@ export class SessionExpiredError extends Error {
 
 let refreshInFlight: Promise<TokenResponse> | null = null;
 
+type PydanticValidationErrorItem = { loc?: (string | number)[]; msg?: string; type?: string };
+
+function formatValidationErrors(details: PydanticValidationErrorItem[]): string {
+  return details
+    .map((item) => {
+      const field = item.loc?.at(-1);
+      const msg = item.msg ?? "Valeur invalide";
+      return field === undefined ? msg : `${field}: ${msg}`;
+    })
+    .join("; ");
+}
+
 async function parseError(response: Response): Promise<string> {
   const text = await response.text();
   if (!text) {
@@ -57,7 +69,14 @@ async function parseError(response: Response): Promise<string> {
   }
 
   try {
-    const payload = JSON.parse(text) as { detail?: string; message?: string; error?: string };
+    const payload = JSON.parse(text) as {
+      detail?: string | PydanticValidationErrorItem[];
+      message?: string;
+      error?: string;
+    };
+    if (Array.isArray(payload.detail)) {
+      return formatValidationErrors(payload.detail) || text;
+    }
     return payload.detail ?? payload.message ?? payload.error ?? text;
   } catch {
     return text;
@@ -308,7 +327,7 @@ export function createResourceRole(
 
 export function updateResourceRole(
   roleId: number,
-  payload: { code?: string; name?: string; node_id?: number; cost_category_id?: number; calendar_id?: number | null; is_active?: boolean },
+  payload: { name?: string; node_id?: number; cost_category_id?: number; calendar_id?: number | null; is_active?: boolean },
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
 ) {

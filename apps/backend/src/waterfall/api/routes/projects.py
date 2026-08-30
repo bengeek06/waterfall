@@ -2313,23 +2313,52 @@ def delete_task_role_assignment(
     db.commit()
 
 
-def _resolve_project_reference_calendar_id(
-    db: Session, task_calendar_ids: dict[int, int]
-) -> int | None:
-    """Pick the calendar id exported as the project's reference calendar.
+def _resolve_project_reference_calendar(
+    standard_calendar_id: int | None,
+    task_calendar_ids: dict[int, int],
+    calendars_by_id: dict[int, Calendar],
+    weekdays_by_calendar_id: dict[int, list[CalendarWeekday]],
+) -> tuple[int | None, tuple[int, int, int] | None]:
+    """Pick the calendar exported as the project's reference calendar.
 
     The current data model has no explicit "project calendar" concept at the
     ms_project level, so this is an E5-02 implementation decision: prefer the
     well-known active STANDARD calendar, and otherwise fall back to the lowest
     calendar id actually referenced by an exported task (deterministic, and
     guarantees the calendar is one we are already exporting).
+
+    STANDARD can legally exist with no working day at all (an empty
+    ``weekdays`` list, or every day at 0 hours -- see ``CalendarCreate``), in
+    which case it would be useless as a reference calendar
+    (``_calendar_header_minutes`` cannot derive MinutesPerDay/Week from it).
+    Mirroring the fallback cascade already used by
+    ``calendar_schedule.resolve_calendars_for_tasks``
+    (see ``_has_any_working_day`` there), a STANDARD with no working day is
+    treated as if it did not exist, and resolution falls through to the same
+    "lowest referenced task calendar id" rule used when there is no STANDARD
+    at all -- rather than abandoning the reference calendar outright.
+
+    Returns ``(None, None)`` when no candidate calendar has any working day,
+    in which case the caller preserves legacy stored project header values.
     """
-    standard_calendar_id = resolve_default_calendar_id(db)
+    candidate_ids: list[int] = []
     if standard_calendar_id is not None:
-        return standard_calendar_id
+        candidate_ids.append(standard_calendar_id)
     if task_calendar_ids:
-        return min(task_calendar_ids.values())
-    return None
+        fallback_id = min(task_calendar_ids.values())
+        if fallback_id not in candidate_ids:
+            candidate_ids.append(fallback_id)
+
+    for calendar_id in candidate_ids:
+        calendar = calendars_by_id.get(calendar_id)
+        if calendar is None:
+            continue
+        header_minutes = _calendar_header_minutes(
+            calendar, weekdays_by_calendar_id.get(calendar_id, [])
+        )
+        if header_minutes is not None:
+            return calendar_id, header_minutes
+    return None, None
 
 
 def _calendar_header_minutes(
@@ -2417,11 +2446,15 @@ def export_project_xml(
     # replayed from an imported file's foreign uids (ms_project.calendar_uid /
     # ms_task.calendar_uid), which are never read here.
     task_calendar_ids = resolve_task_calendar_ids(db, project_id, {task.uid for task in tasks})
-    reference_calendar_id = _resolve_project_reference_calendar_id(db, task_calendar_ids)
+    standard_calendar_id = resolve_default_calendar_id(db)
 
+    # Load every candidate calendar (STANDARD plus every task-referenced one)
+    # up front, so the reference-calendar resolution below can check whether
+    # STANDARD actually has a working day before committing to it as the
+    # export's reference, instead of discovering that too late to fall back.
     exported_calendar_ids = set(task_calendar_ids.values())
-    if reference_calendar_id is not None:
-        exported_calendar_ids.add(reference_calendar_id)
+    if standard_calendar_id is not None:
+        exported_calendar_ids.add(standard_calendar_id)
 
     calendars_by_id: dict[int, Calendar] = {}
     weekdays_by_calendar_id: dict[int, list[CalendarWeekday]] = {}
@@ -2437,16 +2470,9 @@ def export_project_xml(
         ):
             weekdays_by_calendar_id.setdefault(weekday.calendar_id, []).append(weekday)
 
-    header_minutes: tuple[int, int, int] | None = None
-    if reference_calendar_id is not None and reference_calendar_id in calendars_by_id:
-        header_minutes = _calendar_header_minutes(
-            calendars_by_id[reference_calendar_id],
-            weekdays_by_calendar_id.get(reference_calendar_id, []),
-        )
-    if header_minutes is None:
-        # No resolvable reference calendar, or it has no working day: preserve
-        # legacy behaviour (stored values, no Project/CalendarUID emitted).
-        reference_calendar_id = None
+    reference_calendar_id, header_minutes = _resolve_project_reference_calendar(
+        standard_calendar_id, task_calendar_ids, calendars_by_id, weekdays_by_calendar_id
+    )
 
     ET.register_namespace("", MSP_NS)
     root = ET.Element(f"{{{MSP_NS}}}Project")

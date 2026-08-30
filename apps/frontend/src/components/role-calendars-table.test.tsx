@@ -44,4 +44,20 @@ describe("RoleCalendarsTable", () => {
     expect(screen.getByRole("option", { name: "REDUIT - Calendrier réduit (inactif)" })).toBeInTheDocument();
     expect(screen.getByLabelText("Calendrier de DEV")).toHaveValue("2");
   });
+
+  it("disables the calendar select while an action is in flight", () => {
+    render(
+      <RoleCalendarsTable
+        roles={[{ id: 1, code: "DEV", name: "Développeur", calendar_id: null } as never]}
+        calendars={[{ id: 2, code: "PARTTIME", name: "Temps partiel", is_active: true } as never]}
+        drafts={{}}
+        actionBusy={true}
+        onDraftChange={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByLabelText("Calendrier de DEV")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Enregistrer" })).toBeDisabled();
+  });
 });

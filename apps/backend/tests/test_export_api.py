@@ -406,6 +406,84 @@ def test_export_task_calendar_uses_lowest_role_id_among_multiple_assignments() -
         _assert_no_dangling_calendar_uid_references(root)
 
 
+def test_export_falls_back_to_task_calendar_when_standard_has_no_working_day() -> None:
+    """STANDARD is legally allowed to exist with no working day at all
+    (CalendarCreate.weekdays accepts an empty/all-zero week -- there is no
+    minimum). When that happens, the reference-calendar resolution must not
+    abandon the reference and fall back to the legacy stored project header
+    values: it must instead retry the same "lowest referenced task calendar
+    id" fallback already used when there is no STANDARD calendar at all, so
+    a perfectly usable task calendar is not discarded.
+    """
+    with TestClient(app) as client:
+        headers = _admin_headers(client, "export.standard_no_workday@example.com")
+
+        # STANDARD exists and is active, but every weekday is at 0h -- no
+        # working day, so it must be skipped as an unusable reference.
+        _create_calendar(client, headers, code="STANDARD", weeks_per_year=47, weekday_hours="0")
+
+        project_response: Response = client.post(
+            "/projects",
+            json={"name": "Standard without working day target"},
+            headers=headers,
+        )
+        assert project_response.status_code == 201
+        project_id = project_response.json()["id"]
+
+        task_response: Response = client.post(
+            f"/projects/{project_id}/tasks",
+            json={"name": "Task with usable role calendar"},
+            headers=headers,
+        )
+        assert task_response.status_code == 201
+        task_uid = cast(int, task_response.json()["uid"])
+
+        calendar_id = _create_calendar(
+            client, headers, code="CAL-USABLE", weeks_per_year=47, weekday_hours="7.00"
+        )
+        role_id = _create_role_with_calendar(
+            client, headers, suffix="USABLE", calendar_id=calendar_id
+        )
+
+        assignment_response: Response = client.post(
+            f"/projects/{project_id}/tasks/{task_uid}/role-assignments",
+            json={"role_id": role_id, "quantity": "1", "hours": "10"},
+            headers=headers,
+        )
+        assert assignment_response.status_code == 201
+
+        export_response: Response = client.get(
+            f"/projects/{project_id}/export.xml",
+            headers=headers,
+        )
+        assert export_response.status_code == 200
+
+        root = ET.fromstring(cast(bytes, export_response.content))
+
+        # The reference falls through to the usable task calendar, not None:
+        # Project/CalendarUID must point at it, not be omitted.
+        project_calendar_node = root.find("ms:CalendarUID", NS)
+        assert project_calendar_node is not None
+        assert project_calendar_node.text == str(calendar_id)
+
+        # MinutesPerDay/Week are derived from the fallback calendar (5 working
+        # days at 7h/day), not the legacy stored project values.
+        working_days = 5
+        hours_per_day = 7
+        expected_minutes_per_day = round(hours_per_day * 60)
+        expected_minutes_per_week = round(working_days * hours_per_day * 60)
+
+        minutes_per_day_node = root.find("ms:MinutesPerDay", NS)
+        minutes_per_week_node = root.find("ms:MinutesPerWeek", NS)
+        assert minutes_per_day_node is not None
+        assert minutes_per_week_node is not None
+        assert minutes_per_day_node.text == str(expected_minutes_per_day)
+        assert minutes_per_week_node.text == str(expected_minutes_per_week)
+
+        parse_msproject_xml(cast(bytes, export_response.content))
+        _assert_no_dangling_calendar_uid_references(root)
+
+
 def test_export_of_imported_project_never_reuses_source_calendar_uid() -> None:
     with TestClient(app) as client:
         headers = _admin_headers(client, "export.imported.calendars@example.com")

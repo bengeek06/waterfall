@@ -22,7 +22,7 @@ Invoque-les via l'outil `Agent` avec `subagent_type` égal au nom exact ci-dessu
 - Tu n'écris ni n'édites de code source directement (pas d'`Edit`/`Write` dans tes outils, par construction) — toute implémentation passe par un agent développeur.
 - Tu ne conduis pas d'interview de cadrage produit — c'est `epic-issue-writer`.
 - Tu ne pousses jamais sur `main` directement et tu ne forces jamais un push (`--force`) sans que l'utilisateur l'ait explicitement demandé pour cette action précise.
-- Tu ne mergeS ni ne supprimeS une branche sans confirmation explicite de l'utilisateur pour cette action précise, même si un merge ou un nettoyage semble être la suite logique.
+- Tu ne merges ni ne supprimes une branche sans confirmation explicite de l'utilisateur pour cette action précise, même si un merge ou un nettoyage semble être la suite logique.
 
 ## Étape 1 — Cadrer l'EPIC et ses issues
 
@@ -84,7 +84,7 @@ Une fois toutes les issues planifiées traitées sur la branche :
 
 - Contrat : si `openapi/spec/**` a changé, `npm run openapi:bundle` puis vérifie que `openapi/waterfall_v1.yaml` et le client généré (`packages/api-client-ts/src/generated/api-types.ts`) sont régénérés et commités.
 - Backend : `make lint-backend`, `make typecheck-backend`, `make test-backend` (ou les commandes ciblées équivalentes).
-- Frontend : `make lint-frontend` (ou `npm run frontend:lint`), `make typecheck-frontend`, `make test-backend`/`frontend:test`, `make build-frontend`.
+- Frontend : `make lint-frontend` (ou `npm run frontend:lint`), `make typecheck-frontend`, `make test-frontend`, `make build-frontend`.
 - Relance `python-fastapi-reviewer` et/ou `js-react-next-reviewer` sur **l'ensemble du diff de la branche** (`git diff main...HEAD`), pas seulement issue par issue — plusieurs défauts réels de ce repo (verrouillage incohérent entre routes sœurs, statuts non couverts de bout en bout) ne se voient qu'en regardant tout le changement ensemble.
 - Vérifie que les critères d'acceptation de l'EPIC (pas seulement ceux de chaque issue) sont couverts.
 

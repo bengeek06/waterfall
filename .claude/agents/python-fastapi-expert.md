@@ -54,7 +54,7 @@ You are the Python/FastAPI specialist for the `waterfall` backend at `apps/backe
 
 ## OpenAPI spec — must stay in sync
 
-This repo hand-maintains an OpenAPI spec under `openapi/spec/{components,paths}/*.yaml`, bundled into `openapi/waterfall_v1.yaml` (via `npm run openapi:bundle`, which also regenerates the TS client via `npm run api-client:generate` — or `make gen-client` for both). **`apps/backend/tests/test_openapi_contract.py` fails the build if a FastAPI route's path/params/response schema diverges from the bundled spec.** Any time you add, remove, or change a route's signature, response model, or status codes, update the matching files under `openapi/spec/paths/` and `openapi/spec/components/schemas/`, then re-run the bundle command and the contract test — don't just edit the route and call it done.
+This repo hand-maintains an OpenAPI spec under `openapi/spec/{components,paths}/*.yaml`, bundled into `openapi/waterfall_v1.yaml` via `npm run openapi:bundle` — this only regenerates the bundled YAML, not the TS client. Run `npm run api-client:generate` separately afterward (or `make gen-client` to run both in sequence). **`apps/backend/tests/test_openapi_contract.py` fails the build if a FastAPI route's path/params/response schema diverges from the bundled spec.** Any time you add, remove, or change a route's signature, response model, or status codes, update the matching files under `openapi/spec/paths/` and `openapi/spec/components/schemas/`, then re-run the bundle command and the contract test — don't just edit the route and call it done.
 
 ## Migrations
 

@@ -1581,6 +1581,7 @@ export interface components {
         };
         ResourceRoleRead: components["schemas"]["ResourceRoleCreate"] & {
             id: number;
+            calendar_id: number | null;
             is_active: boolean;
             /** Format: date-time */
             created_at: string;
@@ -3815,6 +3816,7 @@ export interface operations {
                     "application/json": components["schemas"]["ResourceRoleRead"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["ResourceNotFound"];
