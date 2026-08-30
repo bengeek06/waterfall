@@ -137,9 +137,35 @@ def resolve_default_calendar_id(db: Session) -> int | None:
     return calendar.id if calendar is not None else None
 
 
+def _day_capacity_minutes(hours: Decimal) -> int:
+    """Convert an ``hours_per_day`` value to whole minutes, by rounding.
+
+    Shared by every place that turns a ``CalendarWeekday.hours_per_day``
+    value into a per-day working-minutes capacity, so the hours->minutes
+    conversion only exists once. Rounding (not truncating via ``int(...)``)
+    matters here: ``hours_per_day`` is legally as small as ``0.01`` (the DB
+    constraint only enforces ``0 <= hours_per_day <= 24``), and
+    ``int(Decimal("0.01") * 60)`` truncates to ``0`` even though the value is
+    a genuine, non-zero working day. A day capacity of ``0`` minutes for a
+    day that ``_has_any_working_day`` reports as "working" is what causes
+    :func:`compute_finish_at`'s ``while remaining > 0`` loop to never make
+    progress -- see the regression tests guarding this in
+    ``test_calendar_schedule.py``.
+    """
+    return round(hours * 60)
+
+
 def _has_any_working_day(weekday_hours: WeekdayHours) -> bool:
-    """Return whether ``weekday_hours`` has at least one day with capacity > 0."""
-    return any(hours > 0 for hours in weekday_hours.values())
+    """Return whether ``weekday_hours`` has at least one day with capacity > 0.
+
+    Capacity is evaluated in whole minutes (via :func:`_day_capacity_minutes`),
+    not on the raw ``Decimal`` hours value: a hours value that is positive but
+    rounds down to 0 minutes (e.g. ``Decimal("0.001")``, which is not legal
+    per the DB constraint's 2-decimal precision but is defensively guarded
+    against here anyway) must not be reported as "working", or callers that
+    treat this as a green light to schedule with the calendar would hang.
+    """
+    return any(_day_capacity_minutes(hours) > 0 for hours in weekday_hours.values())
 
 
 def resolve_calendars_for_tasks(
@@ -236,7 +262,7 @@ def compute_finish_at(
         raise ValueError("duration_minutes must not be negative")
     if duration_minutes == 0:
         return start_at
-    if not any(hours > 0 for hours in weekday_hours.values()):
+    if not _has_any_working_day(weekday_hours):
         raise ValueError("calendar has no working day; scheduling would never terminate")
 
     remaining = duration_minutes
@@ -244,7 +270,7 @@ def compute_finish_at(
     last_worked_date = current_date
     last_day_minutes_used = 0
     while remaining > 0:
-        day_capacity = int(weekday_hours.get(_day_type(current_date), Decimal(0)) * 60)
+        day_capacity = _day_capacity_minutes(weekday_hours.get(_day_type(current_date), Decimal(0)))
         if day_capacity > 0:
             used = min(remaining, day_capacity)
             remaining -= used
@@ -285,7 +311,7 @@ def compute_working_minutes_between(
     current_date = start_at.date()
     finish_date = finish_at.date()
     while current_date <= finish_date:
-        day_capacity = int(weekday_hours.get(_day_type(current_date), Decimal(0)) * 60)
+        day_capacity = _day_capacity_minutes(weekday_hours.get(_day_type(current_date), Decimal(0)))
         if day_capacity > 0:
             shift_start = datetime.combine(current_date, start_at.time(), tzinfo=start_at.tzinfo)
             shift_end = shift_start + timedelta(minutes=day_capacity)

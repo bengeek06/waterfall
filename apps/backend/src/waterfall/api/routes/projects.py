@@ -2368,6 +2368,15 @@ def _calendar_header_minutes(
 
     Returns None when the calendar has no working day at all, so callers can
     fall back to the legacy stored project values instead of dividing by zero.
+
+    This intentionally does not reuse ``calendar_schedule._day_capacity_minutes``:
+    that helper converts a *single* day's ``hours_per_day`` to that day's
+    minute capacity, whereas ``minutes_per_day`` here is an *average* over all
+    working days and ``minutes_per_week`` is a *sum* across them -- a
+    different formula shape, not just the same hours->minutes conversion
+    applied once. It already rounds (not truncates) its own hours->minutes
+    conversions, so it does not share the truncation bug that motivated
+    ``_day_capacity_minutes``.
     """
     working = [weekday for weekday in weekdays if weekday.hours_per_day > 0]
     if not working:

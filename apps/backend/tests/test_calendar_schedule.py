@@ -66,6 +66,43 @@ def test_compute_finish_at_rejects_calendar_with_no_working_day() -> None:
         compute_finish_at(start, 100, NO_WORKING_DAY_HOURS)
 
 
+def test_compute_finish_at_hours_that_previously_truncated_to_zero_no_longer_hang() -> None:
+    """Regression test for a confirmed infinite-loop bug: hours_per_day is
+    legally as small as Decimal("0.01") (DB constraint is only 0 <= hours <=
+    24), and Decimal("0.01") * 60 = 0.6 minutes/day. The previous ``int(...)``
+    conversion truncated that to 0 minutes of daily capacity while
+    ``_has_any_working_day`` still reported the calendar as usable (0.01 > 0
+    on the raw value) -- so ``compute_finish_at``'s ``while remaining > 0``
+    loop would advance ``current_date`` forever without ever consuming
+    ``remaining``. ``round(...)`` instead rounds 0.6 up to a genuine 1
+    minute/day capacity, so scheduling now terminates correctly (in exactly
+    ``duration_minutes`` calendar days, since every day contributes 1
+    minute) instead of hanging."""
+    start = datetime(2026, 1, 5, 8, 0, tzinfo=UTC)
+    all_days_barely_positive_hours = {day_type: Decimal("0.01") for day_type in range(1, 8)}
+
+    finish = compute_finish_at(start, 5, all_days_barely_positive_hours)
+
+    assert finish == datetime(2026, 1, 9, 8, 1, tzinfo=UTC)
+    assert compute_working_minutes_between(start, finish, all_days_barely_positive_hours) == 5
+
+
+def test_compute_finish_at_still_rejects_a_calendar_whose_capacity_rounds_to_zero() -> None:
+    """Defense-in-depth companion to the above: an hours_per_day value below
+    what the DB's 2-decimal-place ``Numeric(4, 2)`` column can ever legally
+    store (e.g. Decimal("0.001"), which is not reachable through the API but
+    could in principle reach this function through a hand-built
+    ``WeekdayHours`` dict) still rounds down to 0 minutes/day. The
+    minute-aware ``_has_any_working_day`` guard must still catch that case
+    and raise instead of ever letting ``compute_finish_at`` spin on a
+    genuinely zero-capacity day."""
+    start = datetime(2026, 1, 5, 8, 0, tzinfo=UTC)
+    all_days_sub_precision_hours = {day_type: Decimal("0.001") for day_type in range(1, 8)}
+
+    with pytest.raises(ValueError, match="no working day"):
+        compute_finish_at(start, 5, all_days_sub_precision_hours)
+
+
 def test_compute_working_minutes_between_caps_finish_day_at_its_own_capacity() -> None:
     start = datetime(2026, 1, 5, 8, 0, tzinfo=UTC)
     finish = datetime(2026, 1, 7, 8, 0, tzinfo=UTC)
@@ -95,6 +132,21 @@ def test_compute_working_minutes_between_is_the_inverse_of_compute_finish_at(
     finish = compute_finish_at(start, duration_minutes, STANDARD_HOURS)
 
     assert compute_working_minutes_between(start, finish, STANDARD_HOURS) == duration_minutes
+
+
+def test_compute_finish_at_rounding_matches_previous_truncation_for_larger_fractions() -> None:
+    """Decimal("0.02") * 60 = 1.2 minutes/day, which both the previous
+    ``int(...)`` truncation and the new ``round(...)`` conversion collapse to
+    1 minute of daily capacity. This pins down that switching to rounding
+    does not silently change already-correct behaviour above the
+    Decimal("0.01") truncation edge case fixed by this regression."""
+    start = datetime(2026, 1, 5, 8, 0, tzinfo=UTC)
+    hours = {day_type: Decimal("0.02") for day_type in range(1, 8)}
+
+    finish = compute_finish_at(start, 1, hours)
+
+    assert finish == datetime(2026, 1, 5, 8, 1, tzinfo=UTC)
+    assert compute_working_minutes_between(start, finish, hours) == 1
 
 
 def test_compute_working_minutes_between_skips_weekend() -> None:
@@ -210,6 +262,83 @@ def test_resolve_calendars_for_tasks_falls_back_to_wall_clock_when_no_calendar_e
     assert resolved[1].source == "wall_clock_fallback"
     assert resolved[1].calendar_id is None
     assert all(hours == Decimal(24) for hours in resolved[1].weekday_hours.values())
+
+
+def test_resolve_calendars_for_tasks_resolves_role_calendar_with_minimal_legal_hours() -> None:
+    """Regression test: a role calendar where every day is Decimal("0.01")
+    hours -- the smallest positive value the DB's ``Numeric(4, 2)``
+    ``hours_per_day`` column can legally store -- must resolve as a usable
+    "role" calendar, not be discarded as if it had no working day.
+    0.01 * 60 = 0.6 minutes/day, which correctly *rounds* up to a genuine 1
+    minute/day capacity. Before this fix (``int(...)`` truncation instead of
+    ``round(...)``), that capacity truncated to 0 minutes while still being
+    reported as usable, which would have hung the first time
+    ``compute_finish_at`` walked it -- this pins down that the fix resolves
+    the calendar correctly instead of merely making it fall through."""
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        barely_positive_calendar = Calendar(
+            code="BARELY-POSITIVE", name="Barely positive", weeks_per_year=47
+        )
+        session.add(barely_positive_calendar)
+        session.flush()
+        session.add_all(
+            CalendarWeekday(
+                calendar_id=barely_positive_calendar.id,
+                day_type=day_type,
+                hours_per_day=Decimal("0.01"),
+            )
+            for day_type in range(1, 8)
+        )
+
+        cost_type = CostType(code="MO", name="Main d'oeuvre", kind="labor")
+        session.add(cost_type)
+        session.flush()
+        category = CostCategory(
+            cost_type_id=cost_type.id,
+            accounting_code="DEV",
+            category_code="IDEX",
+            name="Developpement",
+        )
+        node = ResourceNode(code="IT", name="Departement informatique")
+        session.add_all([category, node])
+        session.flush()
+        role = ResourceRole(
+            node_id=node.id,
+            cost_category_id=category.id,
+            calendar_id=barely_positive_calendar.id,
+            code="DEV-BARELY-POSITIVE",
+            name="Developpeur calendrier presque vide",
+        )
+        session.add(role)
+        session.flush()
+        role_id = role.id
+        barely_positive_calendar_id = barely_positive_calendar.id
+        session.commit()
+
+    project_id, task_id = _create_project_with_task(uid=1)
+
+    with session_factory() as session:
+        session.add(
+            TaskRoleAssignment(
+                task_id=task_id,
+                role_id=role_id,
+                quantity=Decimal("1.00"),
+                hours=Decimal("10.00"),
+            )
+        )
+        session.commit()
+
+    with session_factory() as session:
+        resolved = resolve_calendars_for_tasks(session, project_id, {1})
+
+    assert resolved[1].source == "role"
+    assert resolved[1].calendar_id == barely_positive_calendar_id
+    assert all(hours == Decimal("0.01") for hours in resolved[1].weekday_hours.values())
+
+    start = datetime(2026, 1, 5, 8, 0, tzinfo=UTC)
+    finish = compute_finish_at(start, 5, resolved[1].weekday_hours)
+    assert finish == datetime(2026, 1, 9, 8, 1, tzinfo=UTC)
 
 
 def test_resolve_calendars_for_tasks_falls_through_when_role_calendar_has_no_working_day() -> None:
