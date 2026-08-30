@@ -467,15 +467,20 @@ def test_automatic_task_negative_working_day_lag_resolves_through_calendar_skipp
 ):
     """2nd E3-03 PR review round, finding #1: a negative (lead/advance)
     working-time ("d", lag_format=7) FS lag must also be resolved through the
-    applicable calendar, retreating to the preceding *working* day across a
-    weekend instead of falling back to raw wall-clock subtraction (which
+    applicable calendar, retreating to the preceding *working* day(s) across
+    a weekend instead of falling back to raw wall-clock subtraction (which
     would have landed on a non-working weekend day).
 
-    Predecessor A is moved to finish on a Monday. A 1 working day lead (the
-    STANDARD calendar's 7h/day capacity, matching
-    ``test_compute_start_at_working_day_lead_skips_weekend_backward`` in
-    test_calendar_schedule.py) must retreat to the preceding Friday, not the
-    Sunday a raw 420-minute wall-clock subtraction would produce.
+    Predecessor A is moved to finish on a Monday. A lag exceeding a single
+    day's working capacity is needed to unambiguously demonstrate the
+    weekend being skipped (a lag that fits within the anchor's own day's
+    capacity resolves within that same day -- see
+    ``test_compute_start_at_mono_day_fits_within_the_anchors_own_days_capacity``
+    in test_calendar_schedule.py -- and would not exercise the weekend-skip
+    path at all), so this uses 2 working days (2 * the STANDARD calendar's
+    7h/day capacity), mirroring
+    ``test_automatic_task_working_day_lag_format_resolves_through_calendar_skipping_weekend``
+    above.
     """
     with TestClient(app) as client:
         headers = _auth_headers(client)
@@ -491,13 +496,13 @@ def test_automatic_task_negative_working_day_lag_resolves_through_calendar_skipp
             )
             predecessor.finish_at = datetime(2026, 1, 12, 8, 0, tzinfo=UTC)  # Monday
             session.commit()
-        # -1 working day = -420 min = -4200 tenths of a minute.
+        # -2 working days = -840 min = -8400 tenths of a minute.
         _add_link(
             planning_id,
             task_uid=3,
             predecessor_uid=6,
             link_type=1,
-            lag_tenth_minute=-4200,
+            lag_tenth_minute=-8400,
             lag_format=7,
         )
 
@@ -509,12 +514,63 @@ def test_automatic_task_negative_working_day_lag_resolves_through_calendar_skipp
 
         assert response.status_code == 200
         leaf = _tasks_by_uid(cast(dict[str, Any], response.json()))[3]
-        # Monday 08:00 retreats 1 working day to Friday 01:00 (see
-        # compute_start_at's docstring: anchor's own day is not consumed),
-        # not the 2026-01-11 (Sunday) a naive 420-minute wall-clock
+        # Monday 08:00 retreats: Monday's own 7h (420 min) is consumed
+        # first, Sat/Sun contribute nothing, the remaining 420 min are
+        # consumed on the preceding Friday -> 2026-01-09 (Friday) 01:00, not
+        # the 2026-01-10 (Saturday) a naive 840-minute wall-clock
         # subtraction would produce.
         assert leaf["start_at"] == "2026-01-09T01:00:00"
         assert leaf["finish_at"] == "2026-01-09T02:00:00"
+
+
+def test_automatic_task_short_negative_lag_stays_within_the_anchors_own_day() -> None:
+    """Round-3 E3-03 PR review finding #1: a negative (lead/advance)
+    working-time lag short enough to fit within the predecessor's own
+    calendar day must resolve to earlier that *same* day, not retreat an
+    entire extra working day (and, in this case, an entire weekend) before
+    it starts counting down -- see
+    ``test_compute_start_at_short_lead_fits_within_the_anchors_own_day`` in
+    test_calendar_schedule.py for the underlying unit-level regression.
+
+    Predecessor A is moved to finish on a Monday. A 1-hour lead must resolve
+    to 1 hour earlier that same Monday.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_hierarchy(project_id)
+        _create_standard_calendar()
+        with get_session_factory()() as session:
+            predecessor = (
+                session.query(WfPlanningTaskSnapshot)
+                .filter(WfPlanningTaskSnapshot.planning_id == planning_id)
+                .filter(WfPlanningTaskSnapshot.uid == 6)
+                .one()
+            )
+            predecessor.finish_at = datetime(2026, 1, 12, 8, 0, tzinfo=UTC)  # Monday
+            session.commit()
+        # -1 hour = -60 min = -600 tenths of a minute.
+        _add_link(
+            planning_id,
+            task_uid=3,
+            predecessor_uid=6,
+            link_type=1,
+            lag_tenth_minute=-600,
+            lag_format=7,
+        )
+
+        response = client.patch(
+            _schedule_path(project_id, planning_id, 3),
+            json={"is_manual": False, "duration_minutes": 60},
+            headers=headers,
+        )
+
+        assert response.status_code == 200
+        leaf = _tasks_by_uid(cast(dict[str, Any], response.json()))[3]
+        # Monday 08:00 - 1h fits entirely within Monday's own capacity ->
+        # Monday 07:00, not the preceding Friday.
+        assert leaf["start_at"] == "2026-01-12T07:00:00"
+        assert leaf["finish_at"] == "2026-01-12T08:00:00"
 
 
 def test_automatic_task_negative_elapsed_lag_format_keeps_raw_wall_clock_arithmetic() -> None:
@@ -1011,6 +1067,87 @@ def test_editing_predecessor_does_not_reschedule_automatic_successor() -> None:
         leaf_after = _tasks_by_uid(cast(dict[str, Any], predecessor_response.json()))[3]
         assert leaf_after["start_at"] == leaf_before["start_at"]
         assert leaf_after["finish_at"] == leaf_before["finish_at"]
+
+
+def test_automatic_task_start_at_near_datetime_max_returns_400_not_500() -> None:
+    """Round-3 E3-03 PR review finding #2: ``compute_finish_at`` walks the
+    calendar day by day and can raise ``OverflowError`` (not just
+    ``ValueError``) when that walk is pushed past ``date.max``
+    (``9999-12-31``). This is a schema-valid request (``start_at`` is just a
+    very late, but legal, ``datetime``), so it must surface as the 400
+    already documented for an invalid schedule, not leak as an uncaught 500.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_hierarchy(project_id)
+        # No Calendar rows exist in this test's fresh schema, so the
+        # wall-clock fallback calendar applies: every day has a 1440
+        # min/day (24h) capacity. A duration exceeding a single day's
+        # capacity forces the forward walk to step past 9999-12-31
+        # (date.max), which raises OverflowError.
+        response = client.patch(
+            _schedule_path(project_id, planning_id, 3),
+            json={
+                "is_manual": False,
+                "start_at": "9999-12-31T00:00:00Z",
+                "duration_minutes": 1441,
+            },
+            headers=headers,
+        )
+
+        assert response.status_code == 400
+        assert isinstance(response.json()["detail"], str)
+
+
+def test_automatic_task_sparse_calendar_duration_rejected_without_hanging() -> None:
+    """Round-3 E3-03 PR review finding #3: ``duration_minutes``'s schema-level
+    upper bound (15 years of *working* minutes) does not by itself cap how
+    many calendar days ``compute_finish_at`` walks: a calendar with only a
+    sliver of capacity on a single weekday per week needs a huge number of
+    day-by-day loop iterations to absorb even a fraction of the maximum
+    allowed duration. This must be rejected by the hard iteration ceiling in
+    ``calendar_schedule.py`` (surfaced as a 400) rather than hang the
+    request. Deliberately does not assert on wall-clock timing -- only that
+    the expected error response comes back at all -- since a slow-but-
+    eventually-successful loop would also be an unacceptable outcome for
+    this test to silently tolerate under a stopwatch.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_hierarchy(project_id)
+        with get_session_factory()() as session:
+            calendar = Calendar(code="STANDARD", name="Standard", weeks_per_year=1)
+            session.add(calendar)
+            session.flush()
+            # Every day has 0 capacity except Monday, which has the DB's
+            # minimum legal non-zero capacity (0.01h = 1 min once rounded).
+            session.add_all(
+                CalendarWeekday(
+                    calendar_id=calendar.id,
+                    day_type=day_type,
+                    hours_per_day=Decimal("0.01") if day_type == 2 else Decimal("0.00"),
+                )
+                for day_type in range(1, 8)
+            )
+            session.commit()
+
+        response = client.patch(
+            _schedule_path(project_id, planning_id, 3),
+            json={
+                "is_manual": False,
+                "start_at": "2026-01-05T08:00:00Z",
+                # Near the schema's own upper bound (le=7_884_000): far more
+                # working minutes than a 1 min/day, 1 day/week calendar
+                # could ever plausibly absorb within the iteration ceiling.
+                "duration_minutes": 7_000_000,
+            },
+            headers=headers,
+        )
+
+        assert response.status_code == 400
+        assert isinstance(response.json()["detail"], str)
 
 
 def test_schedule_update_rejects_validated_planning_and_read_only_project() -> None:

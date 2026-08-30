@@ -142,8 +142,15 @@ function taskModeLabel(task: Task): string {
   return task.is_manual ? "Manuel" : "Automatique";
 }
 
-function durationMissing(task: Task): boolean {
-  return task.duration_minutes === null || task.duration_minutes === undefined;
+// Shared with the direct duration-edit guard in commitScheduleEdit: _apply_automatic_schedule
+// rejects a null/zero/negative duration with a 400, so both the "switch to automatic" affordance
+// and the direct edit must treat 0/negative the same as missing.
+function durationInvalidForAutomatic(task: Task): boolean {
+  return (
+    task.duration_minutes === null ||
+    task.duration_minutes === undefined ||
+    task.duration_minutes <= 0
+  );
 }
 
 function predecessorsLabel(task: Task): string {
@@ -502,10 +509,11 @@ export function PlanningTreeTable({
               <SelectContent>
                 <SelectItem value="manual">Manuel</SelectItem>
                 {/* A milestone's duration is always forced to 0 server-side, so it can always switch
-                    to automatic. A non-milestone task with no duration would be rejected by the
-                    server (_apply_automatic_schedule requires a duration), so disable the option
-                    rather than let the user hit a guaranteed 400. */}
-                <SelectItem value="auto" disabled={!row.is_milestone && durationMissing(row)}>
+                    to automatic. A non-milestone task with no duration, or a zero/negative one
+                    (a valid state for a manual task), would be rejected by the server
+                    (_apply_automatic_schedule requires a strictly positive duration), so disable
+                    the option rather than let the user hit a guaranteed 400. */}
+                <SelectItem value="auto" disabled={!row.is_milestone && durationInvalidForAutomatic(row)}>
                   Automatique
                 </SelectItem>
               </SelectContent>

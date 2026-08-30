@@ -104,45 +104,64 @@ def test_compute_finish_at_still_rejects_a_calendar_whose_capacity_rounds_to_zer
         compute_finish_at(start, 5, all_days_sub_precision_hours)
 
 
-def test_compute_start_at_mono_day_fits_within_the_preceding_days_capacity() -> None:
+def test_compute_start_at_short_lead_fits_within_the_anchors_own_day() -> None:
+    """A lead short enough to fit within the anchor's own day's remaining
+    capacity must resolve to earlier that *same* day, not skip back to the
+    calendar date before it.
+
+    Regression test for a confirmed bug: an earlier version of
+    :func:`compute_start_at` unconditionally started its backward walk on
+    ``anchor.date() - 1 day``, so even a 60-minute lead anchored on a Monday
+    morning (well within Monday's own 7h capacity) incorrectly resolved to
+    the *previous* Friday instead of staying on the Monday -- burning an
+    entire extra working day (and, in this case, a whole weekend) before it
+    even started counting down the lead."""
+    anchor = datetime(2026, 1, 5, 10, 0, tzinfo=UTC)  # Monday
+
+    assert compute_start_at(anchor, 60, STANDARD_HOURS) == datetime(2026, 1, 5, 9, 0, tzinfo=UTC)
+
+
+def test_compute_start_at_mono_day_fits_within_the_anchors_own_days_capacity() -> None:
     """Mirror of ``test_compute_finish_at_mono_day_fits_within_one_days_capacity``:
-    a lag under a single day's capacity resolves entirely within the calendar
-    date immediately before ``anchor``'s own date -- ``anchor``'s own day is
-    never consumed, see :func:`compute_start_at`'s docstring."""
+    a lag under a single day's capacity resolves entirely within ``anchor``'s
+    own calendar date -- symmetric to how :func:`compute_finish_at` makes
+    ``start_at``'s own date available to consume going forward."""
     anchor = datetime(2026, 1, 6, 8, 0, tzinfo=UTC)  # Tuesday
 
-    assert compute_start_at(anchor, 300, STANDARD_HOURS) == datetime(2026, 1, 5, 3, 0, tzinfo=UTC)
+    assert compute_start_at(anchor, 300, STANDARD_HOURS) == datetime(2026, 1, 6, 3, 0, tzinfo=UTC)
 
 
-def test_compute_start_at_working_day_lead_skips_weekend_backward() -> None:
-    """A 1 working day lead anchored on a Monday must retreat to the
-    preceding Friday (the previous working day), not simply subtract 24h of
-    raw wall-clock time into the weekend (which would land on a Sunday)."""
+def test_compute_start_at_multi_day_lead_skips_weekend_backward() -> None:
+    """A lead spanning two full working days' worth of capacity, anchored on
+    a Monday, must retreat across the intervening weekend to the preceding
+    Friday (consuming Monday's own capacity first, then walking backward
+    through the non-working Sunday/Saturday to reach Friday), not simply
+    subtract raw wall-clock time into the weekend."""
     anchor = datetime(2026, 1, 12, 8, 0, tzinfo=UTC)  # Monday
 
-    assert compute_start_at(anchor, 420, STANDARD_HOURS) == datetime(2026, 1, 9, 1, 0, tzinfo=UTC)
-    # Friday, not Sunday: a naive 24h wall-clock subtraction would have
-    # landed on 2026-01-11 (Sunday) instead.
-    assert compute_start_at(anchor, 420, STANDARD_HOURS).date() == date(2026, 1, 9)
+    assert compute_start_at(anchor, 840, STANDARD_HOURS) == datetime(2026, 1, 9, 1, 0, tzinfo=UTC)
+    # Friday, not Saturday/Sunday: the weekend is skipped entirely.
+    assert compute_start_at(anchor, 840, STANDARD_HOURS).date() == date(2026, 1, 9)
 
 
-def test_compute_start_at_working_day_lead_anchored_on_friday_lands_on_thursday() -> None:
-    """A 1 working day lead anchored on a Friday retreats to the adjacent
-    working day (Thursday), with no weekend to skip."""
+def test_compute_start_at_multi_day_lead_anchored_on_friday_lands_on_thursday() -> None:
+    """A lead spanning two full working days' worth of capacity, anchored on
+    a Friday, consumes Friday's own capacity then Thursday's -- both
+    weekdays, with no weekend to skip."""
     anchor = datetime(2026, 1, 9, 8, 0, tzinfo=UTC)  # Friday
 
-    assert compute_start_at(anchor, 420, STANDARD_HOURS) == datetime(2026, 1, 8, 1, 0, tzinfo=UTC)
+    assert compute_start_at(anchor, 840, STANDARD_HOURS) == datetime(2026, 1, 8, 1, 0, tzinfo=UTC)
 
 
 def test_compute_start_at_crosses_two_weekends() -> None:
-    """Mirror of ``test_compute_finish_at_crosses_two_weekends``, but not its
-    exact inverse: :func:`compute_start_at` excludes ``anchor``'s own
-    calendar date from the days it consumes (see its docstring), so a lag
-    exactly retracing ``compute_finish_at``'s forward walk lands one working
-    day earlier than that walk's own start."""
+    """Mirror of ``test_compute_finish_at_crosses_two_weekends``, and in fact
+    its exact inverse now that ``anchor``'s own calendar date is consumed
+    like any other day: retreating the same duration from
+    ``compute_finish_at``'s own result lands back on that call's original
+    ``start_at``."""
     anchor = datetime(2026, 1, 20, 11, 0, tzinfo=UTC)
 
-    assert compute_start_at(anchor, 4800, STANDARD_HOURS) == datetime(2026, 1, 2, 8, 0, tzinfo=UTC)
+    assert compute_start_at(anchor, 4800, STANDARD_HOURS) == datetime(2026, 1, 5, 8, 0, tzinfo=UTC)
 
 
 def test_compute_start_at_zero_duration_returns_anchor_unchanged() -> None:

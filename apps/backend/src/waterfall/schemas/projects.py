@@ -240,12 +240,22 @@ class PlanningTaskScheduleUpdate(BaseModel):
     # Upper-bounded at 15 years in minutes (365 * 24 * 60 = 525_600 per year,
     # * 15 = 7_884_000): far beyond any realistic single planning task's
     # duration, but well under the limits that would otherwise be reachable
-    # with an unbounded value -- ``compute_finish_at``
-    # (``waterfall.services.calendar_schedule``) walks forward one calendar
-    # day per loop iteration until this many minutes of working capacity are
-    # consumed, so an unbounded value can drive that loop for a very long
-    # time, overflow past ``datetime.max``, or exceed the PostgreSQL
-    # ``INTEGER`` column's ~2.1 billion range on ``flush()``.
+    # with an unbounded value -- e.g. exceeding the PostgreSQL ``INTEGER``
+    # column's ~2.1 billion range on ``flush()``.
+    #
+    # This bound alone does *not* cap how long ``compute_finish_at``/
+    # ``compute_start_at`` (``waterfall.services.calendar_schedule``) can
+    # spend walking the calendar day by day: ``duration_minutes`` counts
+    # *working* minutes, not calendar minutes, and a legally configured
+    # calendar can have an arbitrarily small non-zero capacity (down to 1
+    # minute/day once rounded) on as little as a single weekday per week.
+    # Consuming even a modest ``duration_minutes`` against such a calendar
+    # would need millions of day-by-day loop iterations. That risk is
+    # guarded directly inside those functions' loops (see
+    # ``_MAX_CALENDAR_DAYS_WALKED``/``_guard_max_days_walked`` in
+    # ``calendar_schedule.py``), independently of this schema-level bound,
+    # which remains useful on its own (integer overflow, obviously
+    # unreasonable input) but is not sufficient by itself.
     duration_minutes: int | None = Field(default=None, ge=0, le=7_884_000)
 
     @field_validator("start_at", "finish_at", mode="after")

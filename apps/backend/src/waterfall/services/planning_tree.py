@@ -376,9 +376,17 @@ def _apply_automatic_milestone_schedule(
     :func:`_resolve_fs_ss_lag`), hence resolving the task's own calendar here.
     """
     resolved_calendar = resolve_calendars_for_tasks(db, planning.project_id, {task.uid})[task.uid]
-    constraints = _resolve_predecessor_constraints(
-        links, tasks_by_uid, duration_minutes=0, resolved_calendar=resolved_calendar
-    )
+    # See the equivalent try/except in _apply_automatic_schedule: a
+    # working-time FS/SS lag resolved through _resolve_fs_ss_lag can raise
+    # OverflowError (not just ValueError) when walked past
+    # datetime.max/date.max.
+    try:
+        constraints = _resolve_predecessor_constraints(
+            links, tasks_by_uid, duration_minutes=0, resolved_calendar=resolved_calendar
+        )
+    except (ValueError, OverflowError) as exc:
+        raise PlanningTaskScheduleError(str(exc)) from exc
+
     if constraints:
         start_at = max(constraints)
     elif payload.start_at is not None:
@@ -564,9 +572,21 @@ def _apply_automatic_schedule(
     resolved_calendars = resolve_calendars_for_tasks(db, planning.project_id, {task.uid})
     resolved = resolved_calendars[task.uid]
 
-    constraints = _resolve_predecessor_constraints(
-        links, tasks_by_uid, duration_minutes, resolved_calendar=resolved
-    )
+    # _resolve_predecessor_constraints (via _resolve_fs_ss_lag's own
+    # compute_finish_at/compute_start_at calls for a working-time FS/SS lag)
+    # walks the calendar day by day and can raise OverflowError -- not just
+    # ValueError -- when the walk is pushed past datetime.max/date.max (e.g.
+    # a predecessor date close to datetime.max combined with a positive
+    # lag). This is a genuinely-invalid-input case from the caller's
+    # perspective, so it is caught here and surfaced as the same 400 as any
+    # other schedule validation failure.
+    try:
+        constraints = _resolve_predecessor_constraints(
+            links, tasks_by_uid, duration_minutes, resolved_calendar=resolved
+        )
+    except (ValueError, OverflowError) as exc:
+        raise PlanningTaskScheduleError(str(exc)) from exc
+
     if constraints:
         start_at = max(constraints)
     elif payload.start_at is not None:
@@ -578,9 +598,12 @@ def _apply_automatic_schedule(
             "start_at is required for an automatically scheduled task without predecessors"
         )
 
+    # compute_finish_at walks the calendar day by day too, and the same
+    # datetime.max/date.max overflow risk applies here for start_at + a
+    # large enough duration.
     try:
         finish_at = compute_finish_at(start_at, duration_minutes, resolved.weekday_hours)
-    except ValueError as exc:
+    except (ValueError, OverflowError) as exc:
         raise PlanningTaskScheduleError(str(exc)) from exc
 
     task.start_at = start_at

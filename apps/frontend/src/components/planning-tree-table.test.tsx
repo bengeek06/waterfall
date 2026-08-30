@@ -612,4 +612,28 @@ describe("PlanningTreeTable", () => {
       "true",
     );
   });
+
+  it("disables the automatic option for a non-milestone task with a zero duration", async () => {
+    const onScheduleUpdate = vi.fn();
+    const tasks: Task[] = [
+      task({
+        uid: 1,
+        name: "Tâche durée nulle",
+        parent_uid: null,
+        position: 1,
+        is_manual: true,
+        start_at: "2026-01-05T09:00:00Z",
+        finish_at: null,
+        duration_minutes: 0,
+      }),
+    ];
+    render(<PlanningTreeTable tasks={tasks} versionKey={1} onScheduleUpdate={onScheduleUpdate} />);
+
+    fireEvent.click(screen.getByLabelText("Mode de Tâche durée nulle"));
+
+    expect(await screen.findByRole("option", { name: "Automatique" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  });
 });
