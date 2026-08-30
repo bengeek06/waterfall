@@ -8,7 +8,17 @@ from contextlib import contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import pytest
+from alembic.autogenerate import compare_metadata
+from alembic.migration import MigrationContext
 from sqlalchemy import Engine, create_engine, inspect, text
+from sqlalchemy.engine import make_url
+
+from _postgres_support import (
+    ephemeral_postgres_database,
+    postgres_admin_url,
+    postgres_reachable,
+)
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 
@@ -48,6 +58,20 @@ def _downgrade_alembic(database_url: str, revision: str) -> None:
         capture_output=True,
         text=True,
     )
+
+
+@pytest.fixture
+def postgres_database_url() -> Generator[str]:
+    admin_url = postgres_admin_url()
+    if not postgres_reachable(admin_url):
+        pytest.skip(
+            "PostgreSQL is not reachable at "
+            f"{make_url(admin_url).render_as_string(hide_password=True)}; set "
+            "TEST_POSTGRES_URL or start the docker-compose postgres service to run "
+            "this test."
+        )
+    with ephemeral_postgres_database(admin_url) as database_url:
+        yield database_url
 
 
 def test_migration_upgrade_creates_expected_schema() -> None:
@@ -207,3 +231,84 @@ def test_migration_downgrade_drops_all_tables() -> None:
 
         with _disposable_engine(database_url) as engine, engine.connect() as connection:
             assert "ms_project" in inspect(connection).get_table_names()
+
+
+def _assert_schema_matches_orm_metadata(database_url: str) -> None:
+    """Diff a post-`upgrade head` schema against Base.metadata via alembic's comparator.
+
+    A non-empty diff means a model changed without a matching migration (or vice versa).
+    `compare_server_default` is enabled explicitly (alongside the already-default
+    `compare_type`) so a future `server_default` added to a model without a matching
+    migration default is also caught.
+    """
+    # Importing the models package registers every mapped class on Base.metadata;
+    # nothing else in this test module triggers that import chain.
+    from waterfall.models import User
+
+    _ = User.__tablename__
+    from waterfall.db.base import Base
+
+    _run_alembic(database_url, "head")
+
+    with _disposable_engine(database_url) as engine, engine.connect() as connection:
+        migration_context = MigrationContext.configure(
+            connection, opts={"compare_type": True, "compare_server_default": True}
+        )
+        diffs = compare_metadata(migration_context, Base.metadata)
+
+    assert diffs == [], f"Schema drift between migrations and ORM models: {diffs!r}"
+
+
+def test_migration_schema_matches_orm_metadata() -> None:
+    """SQLite variant: fast, but notoriously unreliable for compare_type on some types
+    (Boolean, Numeric, timezone-aware DateTime). Kept as a quick complement to the
+    PostgreSQL variant below, which is the production-representative check."""
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "migration.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        _assert_schema_matches_orm_metadata(database_url)
+
+
+def test_postgres_migration_schema_matches_orm_metadata(postgres_database_url: str) -> None:
+    """PostgreSQL variant: the production-representative schema-drift guard for #45."""
+    _assert_schema_matches_orm_metadata(postgres_database_url)
+
+
+def test_postgres_migration_upgrade_head_succeeds(postgres_database_url: str) -> None:
+    # Regression test for the original bug: ms_project's FKs to wf_planning/wf_estimate
+    # were emitted before those tables existed. SQLite tolerates forward references at
+    # CREATE TABLE time, PostgreSQL does not, so only a real PostgreSQL run catches a
+    # future migration reintroducing this ordering mistake.
+    _run_alembic(postgres_database_url, "head")
+
+    with _disposable_engine(postgres_database_url) as engine, engine.connect() as connection:
+        inspector = inspect(connection)
+        table_names = set(inspector.get_table_names())
+        assert {
+            "ms_project",
+            "ms_task",
+            "wf_planning",
+            "wf_planning_task_snapshot",
+            "wf_estimate",
+            "wf_estimate_task_row",
+        }.issubset(table_names)
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260829_0002"
+
+
+def test_postgres_migration_is_reversible(postgres_database_url: str) -> None:
+    _run_alembic(postgres_database_url, "head")
+    _downgrade_alembic(postgres_database_url, "base")
+
+    with _disposable_engine(postgres_database_url) as engine, engine.connect() as connection:
+        table_names = set(inspect(connection).get_table_names())
+        assert "ms_project" not in table_names
+        assert "wf_planning" not in table_names
+        assert "wf_estimate" not in table_names
+
+    _run_alembic(postgres_database_url, "head")
+
+    with _disposable_engine(postgres_database_url) as engine, engine.connect() as connection:
+        table_names = set(inspect(connection).get_table_names())
+        assert "ms_project" in table_names
+        assert "wf_planning" in table_names
+        assert "wf_estimate" in table_names

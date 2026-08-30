@@ -1,10 +1,8 @@
 import os
 import sys
-import warnings
 from pathlib import Path
 
 import pytest
-from sqlalchemy.exc import SAWarning
 
 SRC = Path(__file__).resolve().parents[1] / "src"
 if str(SRC) not in sys.path:
@@ -40,13 +38,16 @@ def reset_database() -> None:
     engine = get_engine()
     with engine.begin() as connection:
         if engine.dialect.name == "sqlite":
+            # The ms_project <-> wf_planning <-> wf_estimate FK cycle is closed via
+            # use_alter=True on the model constraints (see models/ms_core.py), which
+            # is enough for SQLAlchemy to resolve table creation/drop order without
+            # an SAWarning. SQLite itself still inlines FK constraints in CREATE TABLE
+            # regardless of use_alter (it has no ALTER TABLE ADD CONSTRAINT support),
+            # so leftover rows from a previous test can still trip FK enforcement
+            # while tables involved in the cycle are dropped one at a time; disabling
+            # the pragma for the drop keeps that ordering-independent.
             connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
-        # The ms_project <-> wf_planning <-> wf_estimate FK cycle is intentional; the
-        # drop already runs with foreign keys disabled, so only silence the table-sort
-        # warning locally for this teardown.
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", SAWarning)
-            Base.metadata.drop_all(bind=connection)
+        Base.metadata.drop_all(bind=connection)
         if engine.dialect.name == "sqlite":
             connection.exec_driver_sql("PRAGMA foreign_keys=ON")
     Base.metadata.create_all(bind=engine)

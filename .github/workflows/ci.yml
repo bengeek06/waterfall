@@ -50,6 +50,21 @@ jobs:
       run:
         working-directory: apps/backend
 
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: waterfall
+          POSTGRES_PASSWORD: waterfall
+          POSTGRES_DB: waterfall
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U waterfall -d waterfall"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -76,6 +91,8 @@ jobs:
         run: pyright
 
       - name: Pytest
+        env:
+          TEST_POSTGRES_URL: postgresql+psycopg://waterfall:waterfall@localhost:5432/waterfall
         run: pytest -q
 
   frontend-quality:
