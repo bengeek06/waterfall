@@ -1,7 +1,8 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, type Calendar } from "@/lib/backend";
+import { ApiError, type Calendar, type ResourceRole } from "@/lib/backend";
+import { defaultWeekdays } from "@/components/calendars-table";
 
 const mocks = vi.hoisted(() => ({
   getResourceNodes: vi.fn(),
@@ -13,8 +14,10 @@ const mocks = vi.hoisted(() => ({
   getInflationRates: vi.fn(),
   getRoleCapacities: vi.fn(),
   getUsers: vi.fn(),
+  createCalendar: vi.fn(),
   updateCalendar: vi.fn(),
   deleteCalendar: vi.fn(),
+  updateResourceRole: vi.fn(),
   router: { push: vi.fn() },
 }));
 
@@ -41,8 +44,10 @@ vi.mock("@/lib/backend", async () => {
     getInflationRates: mocks.getInflationRates,
     getRoleCapacities: mocks.getRoleCapacities,
     getUsers: mocks.getUsers,
+    createCalendar: mocks.createCalendar,
     updateCalendar: mocks.updateCalendar,
     deleteCalendar: mocks.deleteCalendar,
+    updateResourceRole: mocks.updateResourceRole,
   };
 });
 
@@ -70,9 +75,19 @@ const inactiveCalendar: Calendar = {
   weekdays: [],
 };
 
-async function renderResourcesTab(calendars: Calendar[]) {
+const roleFixture: ResourceRole = {
+  id: 10,
+  code: "DEV",
+  name: "Développeur",
+  node_id: 1,
+  cost_category_id: 1,
+  calendar_id: null,
+  is_active: true,
+} as never;
+
+async function renderResourcesTab(calendars: Calendar[], roles: ResourceRole[] = []) {
   mocks.getResourceNodes.mockResolvedValue([]);
-  mocks.getResourceRoles.mockResolvedValue([]);
+  mocks.getResourceRoles.mockResolvedValue(roles);
   mocks.getCalendars.mockResolvedValue(calendars);
   mocks.getCostTypes.mockResolvedValue([]);
   mocks.getCostCategories.mockResolvedValue([]);
@@ -130,5 +145,111 @@ describe("ResourcesPage calendar toggle", () => {
     await waitFor(() => expect(screen.getByText("Calendrier assigné à un rôle actif.")).toBeInTheDocument());
     expect(screen.getByRole("button", { name: "Désactiver" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Réactiver" })).not.toBeInTheDocument();
+  });
+});
+
+describe("ResourcesPage calendar mutations", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("creates a calendar via the add form, appends it to the list, and resets the form", async () => {
+    const createdCalendar: Calendar = {
+      id: 3,
+      code: "NEW",
+      name: "Nouveau calendrier",
+      weeks_per_year: 45,
+      is_active: true,
+      created_at: "2026-08-01T00:00:00Z",
+      updated_at: "2026-08-01T00:00:00Z",
+      weekdays: [],
+    };
+    mocks.createCalendar.mockResolvedValue(createdCalendar);
+    await renderResourcesTab([activeCalendar]);
+
+    const codeInput = screen.getByLabelText("Code du nouveau calendrier");
+    fireEvent.change(codeInput, { target: { value: "NEW" } });
+    fireEvent.change(screen.getByLabelText("Nom du nouveau calendrier"), { target: { value: "Nouveau calendrier" } });
+    fireEvent.change(screen.getByLabelText("Semaines par an du nouveau calendrier"), { target: { value: "45" } });
+
+    const addRow = codeInput.closest("tr");
+    if (!addRow) throw new Error("add row not found");
+    fireEvent.click(within(addRow).getByRole("button", { name: "Ajouter" }));
+
+    await waitFor(() =>
+      expect(mocks.createCalendar).toHaveBeenCalledWith(
+        { code: "NEW", name: "Nouveau calendrier", weeks_per_year: 45, weekdays: defaultWeekdays() },
+        expect.anything(),
+        expect.anything(),
+      ),
+    );
+
+    await waitFor(() => expect(screen.getByText("NEW")).toBeInTheDocument());
+    expect(screen.getByLabelText("Code du nouveau calendrier")).toHaveValue("");
+    expect(screen.getByLabelText("Nom du nouveau calendrier")).toHaveValue("");
+    expect(screen.getByLabelText("Semaines par an du nouveau calendrier")).toHaveValue(47);
+  });
+
+  it("saves edits to an existing calendar, replaces it in the list, and exits edit mode", async () => {
+    const updatedCalendar: Calendar = { ...activeCalendar, code: "STD2", name: "Calendrier standard v2" };
+    mocks.updateCalendar.mockResolvedValue(updatedCalendar);
+    await renderResourcesTab([activeCalendar]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Modifier" }));
+    fireEvent.change(screen.getByLabelText("Code de STANDARD"), { target: { value: "STD2" } });
+    fireEvent.change(screen.getByLabelText("Nom de STANDARD"), { target: { value: "Calendrier standard v2" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+
+    await waitFor(() =>
+      expect(mocks.updateCalendar).toHaveBeenCalledWith(
+        1,
+        { code: "STD2", name: "Calendrier standard v2", weeks_per_year: 47, weekdays: [] },
+        expect.anything(),
+        expect.anything(),
+      ),
+    );
+
+    await waitFor(() => expect(screen.getByText("STD2")).toBeInTheDocument());
+    expect(screen.queryByText("STANDARD")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Annuler" })).not.toBeInTheDocument();
+  });
+
+  it("assigns a calendar to a role and reflects the update in the select", async () => {
+    const otherCalendar: Calendar = {
+      id: 3,
+      code: "OTHER",
+      name: "Autre calendrier",
+      weeks_per_year: 44,
+      is_active: true,
+      created_at: "2026-08-01T00:00:00Z",
+      updated_at: "2026-08-01T00:00:00Z",
+      weekdays: [],
+    };
+    const updatedRole: ResourceRole = { ...roleFixture, calendar_id: otherCalendar.id } as never;
+    mocks.updateResourceRole.mockResolvedValue(updatedRole);
+    await renderResourcesTab([activeCalendar, otherCalendar], [roleFixture]);
+
+    const select = screen.getByLabelText(`Calendrier de ${roleFixture.code}`);
+    fireEvent.change(select, { target: { value: String(otherCalendar.id) } });
+
+    const roleRow = select.closest("tr");
+    if (!roleRow) throw new Error("role row not found");
+    fireEvent.click(within(roleRow).getByRole("button", { name: "Enregistrer" }));
+
+    await waitFor(() =>
+      expect(mocks.updateResourceRole).toHaveBeenCalledWith(
+        roleFixture.id,
+        { calendar_id: otherCalendar.id },
+        expect.anything(),
+        expect.anything(),
+      ),
+    );
+
+    await waitFor(() => expect(select).toHaveValue(String(otherCalendar.id)));
   });
 });

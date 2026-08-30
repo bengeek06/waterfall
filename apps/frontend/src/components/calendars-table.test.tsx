@@ -27,6 +27,7 @@ describe("CalendarsTable", () => {
         draft={{ code: "", name: "", weeksPerYear: "47", weekdays: defaultWeekdays() }}
         editingId={null}
         busy={false}
+        calendarIdsInUseByActiveRoles={new Set()}
         onSubmit={(event) => event.preventDefault()}
         onCodeChange={vi.fn()}
         onNameChange={vi.fn()}
@@ -63,6 +64,7 @@ describe("CalendarsTable", () => {
         draft={{ code: "STANDARD", name: "Calendrier standard", weeksPerYear: "47", weekdays: defaultWeekdays() }}
         editingId={1}
         busy={false}
+        calendarIdsInUseByActiveRoles={new Set()}
         onSubmit={(event) => event.preventDefault()}
         onCodeChange={vi.fn()}
         onNameChange={vi.fn()}
@@ -94,6 +96,7 @@ describe("CalendarsTable", () => {
         draft={{ code: "", name: "", weeksPerYear: "47", weekdays: defaultWeekdays() }}
         editingId={null}
         busy={false}
+        calendarIdsInUseByActiveRoles={new Set()}
         onSubmit={(event) => event.preventDefault()}
         onCodeChange={vi.fn()}
         onNameChange={vi.fn()}
@@ -125,6 +128,7 @@ describe("CalendarsTable", () => {
         draft={{ code: "", name: "", weeksPerYear: "47", weekdays: defaultWeekdays() }}
         editingId={null}
         busy={false}
+        calendarIdsInUseByActiveRoles={new Set()}
         onSubmit={(event) => event.preventDefault()}
         onCodeChange={vi.fn()}
         onNameChange={vi.fn()}
@@ -140,6 +144,72 @@ describe("CalendarsTable", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Réactiver" }));
+    expect(onToggle).toHaveBeenCalledWith(calendar);
+  });
+
+  it("disables the deactivate button and shows a hint when the calendar is assigned to an active role", () => {
+    const calendar = { id: 1, code: "STANDARD", name: "Calendrier standard", weeks_per_year: 47, is_active: true, weekdays: [] } as never;
+    render(
+      <CalendarsTable
+        items={[calendar]}
+        code=""
+        name=""
+        weeksPerYear="47"
+        weekdays={defaultWeekdays()}
+        draft={{ code: "", name: "", weeksPerYear: "47", weekdays: defaultWeekdays() }}
+        editingId={null}
+        busy={false}
+        calendarIdsInUseByActiveRoles={new Set([1])}
+        onSubmit={(event) => event.preventDefault()}
+        onCodeChange={vi.fn()}
+        onNameChange={vi.fn()}
+        onWeeksPerYearChange={vi.fn()}
+        onWeekdayChange={vi.fn()}
+        onStartEdit={vi.fn()}
+        onDraftChange={vi.fn()}
+        onDraftWeekdayChange={vi.fn()}
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+        onToggle={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Désactiver" })).toBeDisabled();
+    expect(screen.getByText("Assigné à un rôle actif")).toBeInTheDocument();
+  });
+
+  it("keeps the deactivate button enabled when the calendar is not assigned to an active role", () => {
+    const onToggle = vi.fn();
+    const calendar = { id: 1, code: "STANDARD", name: "Calendrier standard", weeks_per_year: 47, is_active: true, weekdays: [] } as never;
+    render(
+      <CalendarsTable
+        items={[calendar]}
+        code=""
+        name=""
+        weeksPerYear="47"
+        weekdays={defaultWeekdays()}
+        draft={{ code: "", name: "", weeksPerYear: "47", weekdays: defaultWeekdays() }}
+        editingId={null}
+        busy={false}
+        calendarIdsInUseByActiveRoles={new Set()}
+        onSubmit={(event) => event.preventDefault()}
+        onCodeChange={vi.fn()}
+        onNameChange={vi.fn()}
+        onWeeksPerYearChange={vi.fn()}
+        onWeekdayChange={vi.fn()}
+        onStartEdit={vi.fn()}
+        onDraftChange={vi.fn()}
+        onDraftWeekdayChange={vi.fn()}
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+        onToggle={onToggle}
+      />,
+    );
+
+    const button = screen.getByRole("button", { name: "Désactiver" });
+    expect(button).not.toBeDisabled();
+    expect(screen.queryByText("Assigné à un rôle actif")).not.toBeInTheDocument();
+    fireEvent.click(button);
     expect(onToggle).toHaveBeenCalledWith(calendar);
   });
 });

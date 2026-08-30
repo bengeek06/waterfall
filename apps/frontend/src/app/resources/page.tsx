@@ -625,6 +625,9 @@ export default function ResourcesPage() {
   }
 
   const categoryNameById = new Map(categories.map((category) => [category.id, category.name]));
+  const calendarIdsInUseByActiveRoles = new Set(
+    roles.filter((role) => role.is_active && role.calendar_id != null).map((role) => role.calendar_id as number),
+  );
   const organizationRows = useMemo(() => flattenOrganization(nodes, collapsedNodeIds), [nodes, collapsedNodeIds]);
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? null;
   const selectedRoles = selectedNodeId === null ? [] : roles.filter((role) => role.node_id === selectedNodeId);
@@ -749,6 +752,7 @@ export default function ResourcesPage() {
             draft={calendarDraft}
             editingId={editingCalendarId}
             busy={actionBusy}
+            calendarIdsInUseByActiveRoles={calendarIdsInUseByActiveRoles}
             onSubmit={addCalendar}
             onCodeChange={setCalendarCode}
             onNameChange={setCalendarName}

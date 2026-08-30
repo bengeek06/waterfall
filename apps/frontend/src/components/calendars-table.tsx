@@ -38,6 +38,7 @@ export type CalendarsTableProps = {
   draft: CalendarDraft;
   editingId: number | null;
   busy: boolean;
+  calendarIdsInUseByActiveRoles: Set<number>;
   onSubmit: FormEventHandler<HTMLFormElement>;
   onCodeChange: (value: string) => void;
   onNameChange: (value: string) => void;
@@ -93,6 +94,7 @@ export function CalendarsTable(props: CalendarsTableProps) {
               </TableRow>
               {props.items.map((item) => {
                 const editing = props.editingId === item.id;
+                const inUseByActiveRole = item.is_active && props.calendarIdsInUseByActiveRoles.has(item.id);
                 return (
                   <TableRow key={item.id} className={item.is_active ? undefined : "opacity-55"}>
                     <TableCell>{editing ? <Input aria-label={`Code de ${item.code}`} value={props.draft.code} onChange={(event) => props.onDraftChange("code", event.target.value)} /> : <span className="font-medium">{item.code}</span>}</TableCell>
@@ -129,7 +131,8 @@ export function CalendarsTable(props: CalendarsTableProps) {
                         ) : (
                           <Button size="sm" variant="outline" type="button" onClick={() => props.onStartEdit(item)}>Modifier</Button>
                         )}
-                        <Button size="sm" variant="outline" type="button" disabled={props.busy} onClick={() => props.onToggle(item)}>{item.is_active ? "Désactiver" : "Réactiver"}</Button>
+                        <Button size="sm" variant="outline" type="button" disabled={props.busy || inUseByActiveRole} onClick={() => props.onToggle(item)}>{item.is_active ? "Désactiver" : "Réactiver"}</Button>
+                        {inUseByActiveRole ? <span className="text-xs text-muted-foreground">Assigné à un rôle actif</span> : null}
                       </div>
                     </TableCell>
                   </TableRow>

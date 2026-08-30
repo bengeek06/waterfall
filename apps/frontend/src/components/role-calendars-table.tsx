@@ -26,6 +26,9 @@ export function RoleCalendarsTable(props: RoleCalendarsTableProps) {
           <TableBody>
             {props.roles.map((role) => {
               const draft = props.drafts[role.id] ?? (role.calendar_id ? String(role.calendar_id) : "");
+              const assignedInactiveCalendar = role.calendar_id != null && !activeCalendars.some((calendar) => calendar.id === role.calendar_id)
+                ? props.calendars.find((calendar) => calendar.id === role.calendar_id)
+                : undefined;
               return (
                 <TableRow key={role.id}>
                   <TableCell><span className="font-medium">{role.code}</span> {role.name}</TableCell>
@@ -37,6 +40,9 @@ export function RoleCalendarsTable(props: RoleCalendarsTableProps) {
                       onChange={(event) => props.onDraftChange(role.id, event.target.value)}
                     >
                       <option value="">Calendrier par défaut</option>
+                      {assignedInactiveCalendar ? (
+                        <option value={assignedInactiveCalendar.id}>{assignedInactiveCalendar.code} - {assignedInactiveCalendar.name} (inactif)</option>
+                      ) : null}
                       {activeCalendars.map((calendar) => <option key={calendar.id} value={calendar.id}>{calendar.code} - {calendar.name}</option>)}
                     </select>
                   </TableCell>
