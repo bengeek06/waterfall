@@ -1,0 +1,5 @@
+description: Combinaison mode/dates/duree invalide pour la tache
+content:
+  application/json:
+    schema:
+      $ref: ../schemas/FastAPIErrorResponse.yaml

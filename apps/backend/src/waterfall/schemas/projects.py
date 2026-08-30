@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Annotated, Literal
 
@@ -89,6 +89,7 @@ class TaskRead(BaseModel):
     outline_level: int | None
     start_at: datetime | None
     finish_at: datetime | None
+    duration_minutes: int | None
     percent_complete: int | None
     is_summary: bool
     is_milestone: bool
@@ -218,6 +219,40 @@ class PlanningTaskMove(BaseModel):
     task_uids: list[Annotated[int, Field(ge=1)]] = Field(min_length=1)
     target_parent_uid: int | None = Field(default=None, gt=0)
     position: int = Field(ge=1)
+
+
+class PlanningTaskScheduleUpdate(BaseModel):
+    """Manual/automatic scheduling edit for a single draft planning task (E3-03).
+
+    ``is_manual`` is required: this endpoint's purpose is to switch (or
+    confirm) a task's scheduling mode, so the target mode must always be
+    stated explicitly rather than defaulted. ``start_at``/``finish_at``/
+    ``duration_minutes`` are optional because their requiredness depends on
+    the task's mode and structural flags (manual/automatic/milestone), which
+    is validated server-side in ``waterfall.services.planning_tree`` -- not
+    at the schema level, since it cannot be expressed as a static per-field
+    rule.
+    """
+
+    is_manual: bool
+    start_at: datetime | None = None
+    finish_at: datetime | None = None
+    duration_minutes: int | None = Field(default=None, ge=0)
+
+    @field_validator("start_at", "finish_at", mode="after")
+    @classmethod
+    def _drop_tzinfo(cls, value: datetime | None) -> datetime | None:
+        """Normalize to a naive UTC datetime, matching the storage convention
+        already used for ``WfPlanningTaskSnapshot.start_at``/``finish_at``
+        (populated as naive wall-clock values by the MS Project XML import,
+        see ``waterfall.services.msproject_xml._datetime``). Without this,
+        an offset-aware value parsed from a client-supplied ``...Z`` payload
+        could not be compared (``min``/``max``) against a sibling task's
+        naive value freshly reloaded from the database in the same request.
+        """
+        if value is not None and value.tzinfo is not None:
+            return value.astimezone(UTC).replace(tzinfo=None)
+        return value
 
 
 class FastAPIErrorResponse(BaseModel):

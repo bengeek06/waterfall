@@ -77,6 +77,8 @@ paths:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1plannings~1{planningId}
   /projects/{projectId}/plannings/{planningId}/tasks/move:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1plannings~1{planningId}~1tasks~1move
+  /projects/{projectId}/plannings/{planningId}/tasks/{taskUid}:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1plannings~1{planningId}~1tasks~1{taskUid}
   /projects/{projectId}/plannings/{planningId}/validate:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1plannings~1{planningId}~1validate
   /projects/{projectId}/plannings/{planningId}/reference:
