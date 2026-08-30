@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from typing import overload
@@ -11,6 +12,7 @@ from waterfall.schemas.projects import PlanningTaskMove, PlanningTaskScheduleUpd
 from waterfall.services.calendar_schedule import (
     ResolvedCalendar,
     compute_finish_at,
+    compute_start_at,
     compute_working_minutes_between,
     resolve_calendars_for_tasks,
 )
@@ -415,24 +417,56 @@ def _resolve_fs_ss_lag(
     lag_format: int | None,
     resolved_calendar: ResolvedCalendar,
 ) -> datetime:
-    """Advance an FS/SS predecessor ``anchor`` date by its link's lag.
+    """Advance (or retreat) an FS/SS predecessor ``anchor`` date by its link's lag.
 
     An elapsed ``lag_format`` (or an absent one, see
-    :func:`_is_elapsed_lag_format`) keeps the pre-existing raw wall-clock
-    ``timedelta`` arithmetic. A working-time ``lag_format`` instead resolves
-    through the task's applicable calendar via :func:`compute_finish_at` --
-    the same "advance N working minutes forward" primitive already used to
-    schedule a task's own duration in :func:`_apply_automatic_schedule`. A
-    lag that fits within a single calendar day always resolves within that
+    :func:`_is_elapsed_lag_format`), or a zero lag, keeps the pre-existing raw
+    wall-clock ``timedelta`` arithmetic -- there is no calendar to resolve a
+    zero offset through regardless of format. A working-time ``lag_format``
+    instead resolves through the task's applicable calendar: a positive lag
+    (the ordinary case) via :func:`compute_finish_at`, the same "advance N
+    working minutes forward" primitive already used to schedule a task's own
+    duration in :func:`_apply_automatic_schedule`; a negative lag -- a valid
+    MS Project "lead"/advance, per the LinkLag field in this repo's own
+    bundled MSPDI schema, which places no restriction on the sign -- via
+    :func:`compute_start_at`, the equivalent "retreat N working minutes
+    backward" primitive. Before this was handled, *any* negative working-time
+    lag silently fell back to raw wall-clock arithmetic, which could retreat
+    into a non-working day (e.g. landing on a weekend) instead of the correct
+    preceding working day.
+
+    A lag that fits within a single calendar day always resolves within that
     same date regardless of the anchor's time-of-day (identical to how
     ``compute_finish_at`` already behaves for a task's own duration, see
     ``test_compute_finish_at_mono_day_fits_within_one_days_capacity`` in
     ``test_calendar_schedule.py``); only a lag exceeding a day's working
-    capacity walks forward across non-working days (e.g. a weekend).
+    capacity walks forward (or backward) across non-working days (e.g. a
+    weekend).
+
+    ``lag_minutes`` is a float (``lag_tenth_minute / 10``, see
+    :func:`_resolve_predecessor_constraints`) and can carry a sub-minute
+    fraction (e.g. ``lag_tenth_minute=5`` -> ``lag_minutes=0.5``).
+    :func:`compute_finish_at`/:func:`compute_start_at` both require an
+    ``int`` ``duration_minutes`` and only ever make progress in whole-minute
+    steps, so the calendar walk is applied to ``lag_minutes``'s truncated
+    integer part only (``math.trunc``, not ``round`` -- ``round(0.5)`` would
+    silently drop the entire lag to ``0`` under Python's banker's rounding),
+    and the leftover sub-minute remainder (``lag_minutes - whole``, always
+    strictly under a minute in absolute value) is layered back on afterwards
+    as a raw ``timedelta``. That remainder can never by itself cross a
+    calendar day/working-hour boundary the whole-minute walk didn't already
+    resolve, so adding it on top is exact.
     """
-    if _is_elapsed_lag_format(lag_format) or lag_minutes <= 0:
+    if _is_elapsed_lag_format(lag_format) or lag_minutes == 0:
         return anchor + timedelta(minutes=lag_minutes)
-    return compute_finish_at(anchor, round(lag_minutes), resolved_calendar.weekday_hours)
+
+    whole_minutes = math.trunc(lag_minutes)
+    remainder_minutes = lag_minutes - whole_minutes
+    if lag_minutes > 0:
+        base = compute_finish_at(anchor, whole_minutes, resolved_calendar.weekday_hours)
+    else:
+        base = compute_start_at(anchor, -whole_minutes, resolved_calendar.weekday_hours)
+    return base + timedelta(minutes=remainder_minutes)
 
 
 def _resolve_predecessor_constraints(

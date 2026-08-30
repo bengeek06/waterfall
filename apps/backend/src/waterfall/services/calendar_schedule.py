@@ -283,6 +283,60 @@ def compute_finish_at(
     )
 
 
+def compute_start_at(
+    anchor: datetime, duration_minutes: int, weekday_hours: WeekdayHours
+) -> datetime:
+    """Schedule ``duration_minutes`` of working time backward, counting back
+    from (but not including) ``anchor``'s own calendar date.
+
+    The reverse-direction counterpart of :func:`compute_finish_at`, added for
+    E3-03's PR review finding on negative (lead/advance) predecessor link lag
+    (see ``_resolve_fs_ss_lag`` in ``waterfall.services.planning_tree``):
+    "N working minutes before ``anchor``".
+
+    Deliberately *not* a literal mirror of :func:`compute_finish_at`'s own-day
+    -inclusive walk: :func:`compute_finish_at` treats ``start_at``'s date as
+    the first day of work (the task begins executing there), so its capacity
+    is available to consume. ``anchor`` here instead plays the role of a
+    reference point being counted back *from* -- e.g. a predecessor's own
+    ``start_at``/``finish_at`` -- not a day of work belonging to the lag
+    itself, so the walk starts on the calendar date immediately *before*
+    ``anchor``'s date. This is what makes "1 working day before a Friday"
+    resolve to the previous working day (Thursday), and "1 working day before
+    a Monday" skip the intervening non-working weekend and resolve to the
+    preceding Friday, rather than eating into the anchor's own day first.
+
+    Mirrors :func:`compute_finish_at`'s day-stepping loop structure (walking
+    one calendar day at a time, consuming each day's full capacity until
+    ``remaining`` is exhausted), just in the opposite direction and with the
+    final day's consumed minutes subtracted from -- instead of added to --
+    ``anchor``'s time-of-day on the last (earliest) day walked.
+    """
+    if duration_minutes < 0:
+        raise ValueError("duration_minutes must not be negative")
+    if duration_minutes == 0:
+        return anchor
+    if not _has_any_working_day(weekday_hours):
+        raise ValueError("calendar has no working day; scheduling would never terminate")
+
+    remaining = duration_minutes
+    current_date = anchor.date() - timedelta(days=1)
+    last_worked_date = current_date
+    last_day_minutes_used = 0
+    while remaining > 0:
+        day_capacity = _day_capacity_minutes(weekday_hours.get(_day_type(current_date), Decimal(0)))
+        if day_capacity > 0:
+            used = min(remaining, day_capacity)
+            remaining -= used
+            last_worked_date = current_date
+            last_day_minutes_used = used
+        current_date -= timedelta(days=1)
+
+    return datetime.combine(last_worked_date, anchor.time(), tzinfo=anchor.tzinfo) - timedelta(
+        minutes=last_day_minutes_used
+    )
+
+
 def compute_working_minutes_between(
     start_at: datetime, finish_at: datetime, weekday_hours: WeekdayHours
 ) -> int:

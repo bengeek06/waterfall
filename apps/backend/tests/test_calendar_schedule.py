@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
@@ -16,6 +16,7 @@ from waterfall.models.resources import (
 )
 from waterfall.services.calendar_schedule import (
     compute_finish_at,
+    compute_start_at,
     compute_working_minutes_between,
     resolve_calendars_for_tasks,
 )
@@ -101,6 +102,67 @@ def test_compute_finish_at_still_rejects_a_calendar_whose_capacity_rounds_to_zer
 
     with pytest.raises(ValueError, match="no working day"):
         compute_finish_at(start, 5, all_days_sub_precision_hours)
+
+
+def test_compute_start_at_mono_day_fits_within_the_preceding_days_capacity() -> None:
+    """Mirror of ``test_compute_finish_at_mono_day_fits_within_one_days_capacity``:
+    a lag under a single day's capacity resolves entirely within the calendar
+    date immediately before ``anchor``'s own date -- ``anchor``'s own day is
+    never consumed, see :func:`compute_start_at`'s docstring."""
+    anchor = datetime(2026, 1, 6, 8, 0, tzinfo=UTC)  # Tuesday
+
+    assert compute_start_at(anchor, 300, STANDARD_HOURS) == datetime(2026, 1, 5, 3, 0, tzinfo=UTC)
+
+
+def test_compute_start_at_working_day_lead_skips_weekend_backward() -> None:
+    """A 1 working day lead anchored on a Monday must retreat to the
+    preceding Friday (the previous working day), not simply subtract 24h of
+    raw wall-clock time into the weekend (which would land on a Sunday)."""
+    anchor = datetime(2026, 1, 12, 8, 0, tzinfo=UTC)  # Monday
+
+    assert compute_start_at(anchor, 420, STANDARD_HOURS) == datetime(2026, 1, 9, 1, 0, tzinfo=UTC)
+    # Friday, not Sunday: a naive 24h wall-clock subtraction would have
+    # landed on 2026-01-11 (Sunday) instead.
+    assert compute_start_at(anchor, 420, STANDARD_HOURS).date() == date(2026, 1, 9)
+
+
+def test_compute_start_at_working_day_lead_anchored_on_friday_lands_on_thursday() -> None:
+    """A 1 working day lead anchored on a Friday retreats to the adjacent
+    working day (Thursday), with no weekend to skip."""
+    anchor = datetime(2026, 1, 9, 8, 0, tzinfo=UTC)  # Friday
+
+    assert compute_start_at(anchor, 420, STANDARD_HOURS) == datetime(2026, 1, 8, 1, 0, tzinfo=UTC)
+
+
+def test_compute_start_at_crosses_two_weekends() -> None:
+    """Mirror of ``test_compute_finish_at_crosses_two_weekends``, but not its
+    exact inverse: :func:`compute_start_at` excludes ``anchor``'s own
+    calendar date from the days it consumes (see its docstring), so a lag
+    exactly retracing ``compute_finish_at``'s forward walk lands one working
+    day earlier than that walk's own start."""
+    anchor = datetime(2026, 1, 20, 11, 0, tzinfo=UTC)
+
+    assert compute_start_at(anchor, 4800, STANDARD_HOURS) == datetime(2026, 1, 2, 8, 0, tzinfo=UTC)
+
+
+def test_compute_start_at_zero_duration_returns_anchor_unchanged() -> None:
+    anchor = datetime(2026, 1, 5, 8, 0, tzinfo=UTC)
+
+    assert compute_start_at(anchor, 0, STANDARD_HOURS) == anchor
+
+
+def test_compute_start_at_rejects_negative_duration() -> None:
+    anchor = datetime(2026, 1, 5, 8, 0, tzinfo=UTC)
+
+    with pytest.raises(ValueError):
+        compute_start_at(anchor, -1, STANDARD_HOURS)
+
+
+def test_compute_start_at_rejects_calendar_with_no_working_day() -> None:
+    anchor = datetime(2026, 1, 5, 8, 0, tzinfo=UTC)
+
+    with pytest.raises(ValueError):
+        compute_start_at(anchor, 100, NO_WORKING_DAY_HOURS)
 
 
 def test_compute_working_minutes_between_caps_finish_day_at_its_own_capacity() -> None:

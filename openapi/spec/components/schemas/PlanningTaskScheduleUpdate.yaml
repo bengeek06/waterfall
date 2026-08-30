@@ -15,4 +15,5 @@ properties:
   duration_minutes:
     type: integer
     minimum: 0
+    maximum: 7884000
     nullable: true

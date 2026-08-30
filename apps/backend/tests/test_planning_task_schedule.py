@@ -462,6 +462,137 @@ def test_automatic_task_working_day_lag_format_resolves_through_calendar_skippin
         assert leaf["finish_at"] == "2026-01-12T16:00:00"
 
 
+def test_automatic_task_negative_working_day_lag_resolves_through_calendar_skipping_weekend() -> (
+    None
+):
+    """2nd E3-03 PR review round, finding #1: a negative (lead/advance)
+    working-time ("d", lag_format=7) FS lag must also be resolved through the
+    applicable calendar, retreating to the preceding *working* day across a
+    weekend instead of falling back to raw wall-clock subtraction (which
+    would have landed on a non-working weekend day).
+
+    Predecessor A is moved to finish on a Monday. A 1 working day lead (the
+    STANDARD calendar's 7h/day capacity, matching
+    ``test_compute_start_at_working_day_lead_skips_weekend_backward`` in
+    test_calendar_schedule.py) must retreat to the preceding Friday, not the
+    Sunday a raw 420-minute wall-clock subtraction would produce.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_hierarchy(project_id)
+        _create_standard_calendar()
+        with get_session_factory()() as session:
+            predecessor = (
+                session.query(WfPlanningTaskSnapshot)
+                .filter(WfPlanningTaskSnapshot.planning_id == planning_id)
+                .filter(WfPlanningTaskSnapshot.uid == 6)
+                .one()
+            )
+            predecessor.finish_at = datetime(2026, 1, 12, 8, 0, tzinfo=UTC)  # Monday
+            session.commit()
+        # -1 working day = -420 min = -4200 tenths of a minute.
+        _add_link(
+            planning_id,
+            task_uid=3,
+            predecessor_uid=6,
+            link_type=1,
+            lag_tenth_minute=-4200,
+            lag_format=7,
+        )
+
+        response = client.patch(
+            _schedule_path(project_id, planning_id, 3),
+            json={"is_manual": False, "duration_minutes": 60},
+            headers=headers,
+        )
+
+        assert response.status_code == 200
+        leaf = _tasks_by_uid(cast(dict[str, Any], response.json()))[3]
+        # Monday 08:00 retreats 1 working day to Friday 01:00 (see
+        # compute_start_at's docstring: anchor's own day is not consumed),
+        # not the 2026-01-11 (Sunday) a naive 420-minute wall-clock
+        # subtraction would produce.
+        assert leaf["start_at"] == "2026-01-09T01:00:00"
+        assert leaf["finish_at"] == "2026-01-09T02:00:00"
+
+
+def test_automatic_task_negative_elapsed_lag_format_keeps_raw_wall_clock_arithmetic() -> None:
+    """The elapsed ("ed", lag_format=8) counterpart of the negative-lag test
+    above must keep the pre-existing raw wall-clock behaviour unchanged for a
+    negative lag too: subtracted directly with no calendar involved, landing
+    on the weekend instead of being pushed back to the preceding working
+    day."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_hierarchy(project_id)
+        _create_standard_calendar()
+        with get_session_factory()() as session:
+            predecessor = (
+                session.query(WfPlanningTaskSnapshot)
+                .filter(WfPlanningTaskSnapshot.planning_id == planning_id)
+                .filter(WfPlanningTaskSnapshot.uid == 6)
+                .one()
+            )
+            predecessor.finish_at = datetime(2026, 1, 12, 8, 0, tzinfo=UTC)  # Monday
+            session.commit()
+        # -1 elapsed day = -1440 min = -14400 tenths of a minute.
+        _add_link(
+            planning_id,
+            task_uid=3,
+            predecessor_uid=6,
+            link_type=1,
+            lag_tenth_minute=-14400,
+            lag_format=8,
+        )
+
+        response = client.patch(
+            _schedule_path(project_id, planning_id, 3),
+            json={"is_manual": False, "duration_minutes": 60},
+            headers=headers,
+        )
+
+        assert response.status_code == 200
+        leaf = _tasks_by_uid(cast(dict[str, Any], response.json()))[3]
+        # Monday 08:00 - 24h raw wall-clock = Sunday 08:00 (unchanged).
+        assert leaf["start_at"] == "2026-01-11T08:00:00"
+
+
+def test_automatic_task_sub_minute_lag_preserves_fractional_offset() -> None:
+    """2nd E3-03 PR review round, finding #2: ``lag_tenth_minute=5`` (0.5
+    minutes) in a working-time format must resolve to a 30-second offset, not
+    silently vanish to a zero offset -- which is what ``round(0.5)`` (Python
+    banker's rounding rounds halves to even) previously produced."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_hierarchy(project_id)
+        _create_standard_calendar()
+        # 0.5 minutes = 5 tenths of a minute.
+        _add_link(
+            planning_id,
+            task_uid=3,
+            predecessor_uid=6,
+            link_type=1,
+            lag_tenth_minute=5,
+            lag_format=7,
+        )
+
+        response = client.patch(
+            _schedule_path(project_id, planning_id, 3),
+            json={"is_manual": False, "duration_minutes": 60},
+            headers=headers,
+        )
+
+        assert response.status_code == 200
+        leaf = _tasks_by_uid(cast(dict[str, Any], response.json()))[3]
+        # Predecessor A finishes at 2026-01-05T10:00:00; a vanished (rounded
+        # to zero) lag would incorrectly also produce 10:00:00.
+        assert leaf["start_at"] == "2026-01-05T10:00:30"
+        assert leaf["finish_at"] == "2026-01-05T11:00:30"
+
+
 def test_automatic_task_elapsed_lag_format_keeps_raw_wall_clock_arithmetic() -> None:
     """The elapsed ("ed", lag_format=8) counterpart of the test above must
     keep the pre-existing raw wall-clock behaviour unchanged: the lag is
@@ -927,6 +1058,57 @@ def test_schedule_update_rejects_validated_planning_and_read_only_project() -> N
             _schedule_path(project_id, second_planning_id, 3), json=payload, headers=headers
         )
         assert read_only.status_code == 409
+
+
+def test_schedule_update_rejects_duration_minutes_above_upper_bound() -> None:
+    """2nd E3-03 PR review round, finding #3: an unbounded ``duration_minutes``
+    could drive ``compute_finish_at``'s day-stepping loop for a very long
+    time, overflow past ``datetime.max``, or exceed the PostgreSQL
+    ``INTEGER`` column's range. Rejected at the Pydantic validation layer,
+    surfaced as a 400 (not FastAPI's default 422) by
+    ``_PlanningTaskBodyValidationRoute``, which this endpoint shares with the
+    tree-move endpoint precisely so a malformed request body is reported the
+    same way as any other business-rule violation on this resource -- before
+    it ever reaches ``update_planning_task_schedule``."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_hierarchy(project_id)
+
+        response = client.patch(
+            _schedule_path(project_id, planning_id, 3),
+            json={
+                "is_manual": True,
+                "start_at": "2026-01-05T08:00:00Z",
+                "duration_minutes": 7_884_001,
+            },
+            headers=headers,
+        )
+
+        assert response.status_code == 400
+        assert isinstance(response.json()["detail"], list)
+
+
+def test_schedule_update_accepts_duration_minutes_at_upper_bound() -> None:
+    """The boundary value itself (exactly 15 years in minutes) must still be
+    accepted -- the bound is inclusive, only values strictly above it are
+    rejected."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_hierarchy(project_id)
+
+        response = client.patch(
+            _schedule_path(project_id, planning_id, 3),
+            json={
+                "is_manual": True,
+                "start_at": "2026-01-05T08:00:00Z",
+                "duration_minutes": 7_884_000,
+            },
+            headers=headers,
+        )
+
+        assert response.status_code == 200
 
 
 def test_schedule_update_returns_404_for_unknown_task() -> None:

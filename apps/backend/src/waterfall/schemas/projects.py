@@ -237,7 +237,16 @@ class PlanningTaskScheduleUpdate(BaseModel):
     is_manual: bool
     start_at: datetime | None = None
     finish_at: datetime | None = None
-    duration_minutes: int | None = Field(default=None, ge=0)
+    # Upper-bounded at 15 years in minutes (365 * 24 * 60 = 525_600 per year,
+    # * 15 = 7_884_000): far beyond any realistic single planning task's
+    # duration, but well under the limits that would otherwise be reachable
+    # with an unbounded value -- ``compute_finish_at``
+    # (``waterfall.services.calendar_schedule``) walks forward one calendar
+    # day per loop iteration until this many minutes of working capacity are
+    # consumed, so an unbounded value can drive that loop for a very long
+    # time, overflow past ``datetime.max``, or exceed the PostgreSQL
+    # ``INTEGER`` column's ~2.1 billion range on ``flush()``.
+    duration_minutes: int | None = Field(default=None, ge=0, le=7_884_000)
 
     @field_validator("start_at", "finish_at", mode="after")
     @classmethod

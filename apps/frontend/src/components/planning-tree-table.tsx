@@ -52,7 +52,13 @@ function buildVisibleRows(tasks: Task[], collapsedUids: Set<number>): PlanningTr
 }
 
 function formatDate(value: string | null | undefined): string {
-  return value ? new Date(value).toLocaleDateString("fr-FR") : "-";
+  if (!value) {
+    return "-";
+  }
+  // Read-only counterpart of toDateTimeInputValue's UTC convention (see below): parse the
+  // naive-UTC backend value as UTC, then format in UTC too, so this display never disagrees
+  // with the editable fields or shifts across a midnight boundary for a non-UTC viewer.
+  return new Date(asUtcIsoString(value)).toLocaleDateString("fr-FR", { timeZone: "UTC" });
 }
 
 function formatDurationMinutes(minutes: number | null | undefined): string {
@@ -73,24 +79,49 @@ function formatDurationMinutes(minutes: number | null | undefined): string {
   return `${hours}h${remainderMinutes}min`;
 }
 
-// datetime-local inputs use "yyyy-MM-ddTHH:mm" in local time, with no timezone/seconds component.
+// The backend stores/returns naive-UTC datetimes (no offset, e.g. "2026-01-09T08:00:00"). A
+// string with no trailing "Z"/numeric offset is otherwise interpreted by `new Date(...)` as
+// *local* time (standard JS behaviour), which silently shifts every value by the browser's UTC
+// offset for any non-UTC user. Force it to be read as UTC by appending "Z" when no offset is
+// already present.
+function asUtcIsoString(value: string): string {
+  return /(?:Z|[+-]\d{2}:?\d{2})$/.test(value) ? value : `${value}Z`;
+}
+
+// Timezone convention (deliberate, keep toDateTimeInputValue/fromDateTimeInputValue symmetric):
+// this field always displays and edits the value's *UTC* components, not the browser's local
+// time. A native `datetime-local` input has no timezone concept of its own, so "local time" here
+// would actually mean "the browser's local time", which has no clean, lossless round-trip back to
+// the naive-UTC value the backend expects without extra local<->UTC conversion. Treating the
+// component's yyyy-MM-ddTHH:mm as UTC end-to-end is simpler and fully reversible in every browser
+// timezone; it trades away a "shows my local time" UX nicety in favour of never corrupting dates.
 function toDateTimeInputValue(value: string | null | undefined): string {
   if (!value) {
     return "";
   }
-  const date = new Date(value);
+  const date = new Date(asUtcIsoString(value));
   if (Number.isNaN(date.getTime())) {
     return "";
   }
   const pad = (n: number) => String(n).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}T${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
 }
+
+const DATETIME_INPUT_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/;
 
 function fromDateTimeInputValue(value: string): string | null {
   if (!value) {
     return null;
   }
-  const date = new Date(value);
+  // Symmetric with toDateTimeInputValue: the field's yyyy-MM-ddTHH:mm components are UTC, so they
+  // must be parsed as UTC directly (Date.UTC), not through `new Date(value)`, which would
+  // reinterpret them as local time and reintroduce the same corruption this is fixing.
+  const match = DATETIME_INPUT_PATTERN.exec(value);
+  if (!match) {
+    return null;
+  }
+  const [year, month, day, hour, minute] = match.slice(1).map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day, hour, minute));
   if (Number.isNaN(date.getTime())) {
     return null;
   }
@@ -334,10 +365,17 @@ export function PlanningTreeTable({
     } else {
       // Automatic, non-milestone tasks only allow editing the duration; start/finish are always
       // recomputed by the server from the calendar and predecessors.
-      payload = {
-        is_manual: false,
-        duration_minutes: draft.duration_minutes === "" ? null : Number(draft.duration_minutes),
-      };
+      const durationMinutes = draft.duration_minutes === "" ? null : Number(draft.duration_minutes);
+      // _apply_automatic_schedule rejects a null/zero/negative duration with a 400. Bail out
+      // before the request instead of sending one guaranteed to fail; the draft is intentionally
+      // left in place (not cleared) so the user's in-progress, still-invalid value stays visible
+      // to correct rather than silently reverting to the last committed value. Mirrors the same
+      // guard already applied when switching a task into automatic mode (see the "Automatique"
+      // SelectItem's `disabled` condition below), just covering the direct-edit path too.
+      if (durationMinutes === null || durationMinutes <= 0) {
+        return;
+      }
+      payload = { is_manual: false, duration_minutes: durationMinutes };
     }
     onScheduleUpdate(row.uid, payload);
     clearScheduleDraft(row.uid);
@@ -374,6 +412,19 @@ export function PlanningTreeTable({
     const editable = !row.is_summary && !readOnly && Boolean(onScheduleUpdate);
     const draft = scheduleDraftFor(row);
     const startEditable = editable && (row.is_milestone || row.is_manual);
+    // The client cannot know whether a predecessor link actually resolves to a schedule
+    // constraint server-side (`_apply_automatic_milestone_schedule` only ignores payload.start_at
+    // once `_resolve_predecessor_constraints` yields at least one value, which additionally
+    // requires the predecessor to itself already have a start_at/finish_at) -- only whether a
+    // predecessor link exists at all. Using "has at least one predecessor link" as a proxy is a
+    // documented, deliberate over-approximation: worst case a not-yet-constraining link disables
+    // the field a little early, which is far preferable to accepting an edit guaranteed to be
+    // silently reverted by the server.
+    const startConstrainedByPredecessors =
+      row.is_milestone && !row.is_manual && Boolean(row.predecessor_links?.length);
+    const startHelpText = startConstrainedByPredecessors
+      ? "Date déterminée par les prédécesseurs"
+      : undefined;
     const finishEditable = editable && !row.is_milestone && row.is_manual;
     const durationEditable = editable && !row.is_milestone;
     return (
@@ -382,9 +433,10 @@ export function PlanningTreeTable({
           {startEditable ? (
             <Input
               type="datetime-local"
-              aria-label={`Début de ${row.name}`}
+              aria-label={startHelpText ? `Début de ${row.name} (${startHelpText})` : `Début de ${row.name}`}
+              title={startHelpText}
               value={draft.start_at}
-              disabled={mutationBusy}
+              disabled={mutationBusy || startConstrainedByPredecessors}
               onClick={(event) => event.stopPropagation()}
               onChange={(event) => updateScheduleDraft(row, "start_at", event.target.value)}
               onBlur={() => commitScheduleEdit(row)}
@@ -414,7 +466,11 @@ export function PlanningTreeTable({
           {durationEditable ? (
             <Input
               type="number"
-              min={0}
+              // An automatic non-milestone task requires a strictly positive duration server-side
+              // (_apply_automatic_schedule rejects null/0/negative with a 400); a manual task's
+              // duration is always accepted, including 0/null. `min` is a browser hint only
+              // (commitScheduleEdit below is the real guard against a doomed request).
+              min={row.is_manual ? 0 : 1}
               step={1}
               aria-label={`Durée de ${row.name}`}
               value={draft.duration_minutes}

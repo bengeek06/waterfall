@@ -229,6 +229,63 @@ describe("PlanningTreeTable", () => {
     expect(screen.queryByLabelText("Durée de Jalon")).not.toBeInTheDocument();
   });
 
+  it("disables the start date editor for an automatic milestone with a predecessor link", () => {
+    const onScheduleUpdate = vi.fn();
+    const tasks: Task[] = [
+      task({
+        uid: 1,
+        name: "Prédécesseur",
+        parent_uid: null,
+        position: 1,
+        start_at: "2026-01-05T09:00:00Z",
+        finish_at: "2026-01-05T17:00:00Z",
+        duration_minutes: 480,
+      }),
+      task({
+        uid: 2,
+        name: "Jalon auto",
+        parent_uid: null,
+        position: 2,
+        is_milestone: true,
+        is_manual: false,
+        start_at: "2026-01-06T09:00:00Z",
+        finish_at: "2026-01-06T09:00:00Z",
+        duration_minutes: 0,
+        predecessor_links: [{ predecessor_uid: 1, link_type: 1, lag_tenth_minute: 0 }],
+      }),
+    ];
+    render(<PlanningTreeTable tasks={tasks} versionKey={1} onScheduleUpdate={onScheduleUpdate} />);
+
+    // The server always lets a predecessor's contributed constraint win over payload.start_at
+    // once one exists (_apply_automatic_milestone_schedule); editing here would be a no-op
+    // guaranteed to be silently reverted, so the field is disabled with an explanatory label.
+    const startInput = screen.getByLabelText("Début de Jalon auto (Date déterminée par les prédécesseurs)");
+    expect(startInput).toBeDisabled();
+    expect(startInput).toHaveAttribute("title", "Date déterminée par les prédécesseurs");
+  });
+
+  it("keeps the start date editor enabled for an automatic milestone with no predecessor link", () => {
+    const onScheduleUpdate = vi.fn();
+    const tasks: Task[] = [
+      task({
+        uid: 1,
+        name: "Jalon auto",
+        parent_uid: null,
+        position: 1,
+        is_milestone: true,
+        is_manual: false,
+        start_at: "2026-01-06T09:00:00Z",
+        finish_at: "2026-01-06T09:00:00Z",
+        duration_minutes: 0,
+        predecessor_links: [],
+      }),
+    ];
+    render(<PlanningTreeTable tasks={tasks} versionKey={1} onScheduleUpdate={onScheduleUpdate} />);
+
+    const startInput = screen.getByLabelText("Début de Jalon auto");
+    expect(startInput).not.toBeDisabled();
+  });
+
   it("commits a manual task's start/finish/duration edit on blur", () => {
     const onScheduleUpdate = vi.fn();
     const tasks: Task[] = [
@@ -254,7 +311,54 @@ describe("PlanningTreeTable", () => {
     expect(taskUid).toBe(1);
     expect(payload.is_manual).toBe(true);
     expect(payload.duration_minutes).toBe(480);
-    expect(new Date(payload.start_at).toISOString()).toBe(new Date("2026-01-06T09:00").toISOString());
+    // The datetime-local field's components are UTC (see toDateTimeInputValue/fromDateTimeInputValue
+    // in planning-tree-table.tsx), so "2026-01-06T09:00" must round-trip to exactly this UTC
+    // instant regardless of the host's local timezone -- not whatever `new Date("2026-01-06T09:00")`
+    // (local-time interpretation) would produce.
+    expect(payload.start_at).toBe("2026-01-06T09:00:00.000Z");
+  });
+
+  it("does not shift naive-UTC backend datetimes when the browser runs in a non-UTC timezone", () => {
+    // The backend returns naive-UTC datetimes with no offset (e.g. "2026-01-09T08:00:00").
+    // `new Date(...)` on such a string is interpreted as *local* time by JS, which silently
+    // shifted every displayed/round-tripped value by the browser's UTC offset before this fix.
+    // Force a non-UTC timezone here so this regression is actually exercised (this test would
+    // have failed against the pre-fix implementation in any timezone other than UTC, including
+    // this one).
+    const originalTz = process.env.TZ;
+    process.env.TZ = "America/New_York"; // UTC-5 (winter, no DST ambiguity for this fixed date)
+    try {
+      const onScheduleUpdate = vi.fn();
+      const tasks: Task[] = [
+        task({
+          uid: 1,
+          name: "Tâche manuelle",
+          parent_uid: null,
+          position: 1,
+          is_manual: true,
+          start_at: "2026-01-09T08:00:00",
+          finish_at: "2026-01-09T08:00:00",
+          duration_minutes: 480,
+        }),
+      ];
+      render(<PlanningTreeTable tasks={tasks} versionKey={1} onScheduleUpdate={onScheduleUpdate} />);
+
+      const startInput = screen.getByLabelText<HTMLInputElement>("Début de Tâche manuelle");
+      // toDateTimeInputValue must display the value's UTC components (08:00), not the
+      // timezone-shifted local ones (which would be 03:00 in America/New_York).
+      expect(startInput.value).toBe("2026-01-09T08:00");
+
+      // Editing the minutes only (leaving the UTC-displayed date/hour untouched) and committing
+      // must produce exactly that UTC instant back through fromDateTimeInputValue, with no
+      // timezone-induced drift -- this is the round-trip that corrupted data pre-fix.
+      fireEvent.change(startInput, { target: { value: "2026-01-09T08:05" } });
+      fireEvent.blur(startInput);
+
+      expect(onScheduleUpdate).toHaveBeenCalledTimes(1);
+      expect(onScheduleUpdate.mock.calls[0][1].start_at).toBe("2026-01-09T08:05:00.000Z");
+    } finally {
+      process.env.TZ = originalTz;
+    }
   });
 
   it("commits an Enter keypress in a schedule field immediately and blurs the input", () => {
@@ -306,6 +410,36 @@ describe("PlanningTreeTable", () => {
     fireEvent.blur(durationInput);
 
     expect(onScheduleUpdate).toHaveBeenCalledWith(1, { is_manual: false, duration_minutes: 120 });
+  });
+
+  it("rejects a 0 or empty duration edit on an automatic non-milestone task instead of sending a doomed request", () => {
+    // _apply_automatic_schedule rejects a null/0/negative duration_minutes with a 400 server-side;
+    // the client must not fire that request.
+    const onScheduleUpdate = vi.fn();
+    const tasks: Task[] = [
+      task({
+        uid: 1,
+        name: "Tâche auto",
+        parent_uid: null,
+        position: 1,
+        is_manual: false,
+        start_at: "2026-01-05T09:00:00Z",
+        finish_at: "2026-01-06T17:00:00Z",
+        duration_minutes: 480,
+      }),
+    ];
+    render(<PlanningTreeTable tasks={tasks} versionKey={1} onScheduleUpdate={onScheduleUpdate} />);
+
+    const durationInput = screen.getByLabelText("Durée de Tâche auto");
+    expect(durationInput).toHaveAttribute("min", "1");
+
+    fireEvent.change(durationInput, { target: { value: "0" } });
+    fireEvent.blur(durationInput);
+    expect(onScheduleUpdate).not.toHaveBeenCalled();
+
+    fireEvent.change(durationInput, { target: { value: "" } });
+    fireEvent.blur(durationInput);
+    expect(onScheduleUpdate).not.toHaveBeenCalled();
   });
 
   it("does not commit a schedule edit on blur when nothing was typed", () => {
