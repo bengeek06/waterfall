@@ -436,8 +436,16 @@ def update_role(
         _get_or_404(db, ResourceNode, values["node_id"], "Resource node")
     if "cost_category_id" in values:
         _get_active_category_or_400(db, values["cost_category_id"])
-    if values.get("calendar_id") is not None:
-        _get_active_calendar_or_400(db, values["calendar_id"])
+    # Validate/lock the *effective* calendar (payload value if provided, else the
+    # role's current one) whenever the role ends up active with a calendar_id --
+    # not just when calendar_id itself is part of this PATCH. Otherwise
+    # reactivating a role via {"is_active": true} alone could silently leave it
+    # pointing at a calendar that was deactivated while the role was inactive.
+    # See issue #50 for the original locking rationale.
+    effective_calendar_id = values.get("calendar_id", role.calendar_id)
+    effective_is_active = values.get("is_active", role.is_active)
+    if effective_is_active and effective_calendar_id is not None:
+        _get_active_calendar_or_400(db, effective_calendar_id)
     for field, value in values.items():
         setattr(role, field, value)
     db.add(role)

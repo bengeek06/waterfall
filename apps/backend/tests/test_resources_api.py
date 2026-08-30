@@ -687,6 +687,76 @@ def test_role_rejects_unknown_or_inactive_calendar() -> None:
         assert patched.status_code == 404
 
 
+def test_role_reactivation_revalidates_effective_calendar() -> None:
+    """Regression test: PATCHing only `is_active` must still enforce that an
+    active role's calendar is active, even when `calendar_id` itself is not
+    part of the payload.
+
+    Reproduces the gap found in PR #60 review: an inactive role can end up
+    referencing a calendar that gets deactivated while the role is inactive
+    (allowed, since no *active* role references it). Reactivating the role via
+    `{"is_active": true}` alone must revalidate the calendar it still carries,
+    not just calendars explicitly passed in the same PATCH.
+    """
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        context = _create_role_context(client, headers, "REACT")
+        calendar_id = cast(
+            dict[str, Any],
+            client.post(
+                "/resources/calendars",
+                json={"code": "STANDARD-REACT", "name": "Standard", "weeks_per_year": 47},
+                headers=headers,
+            ).json(),
+        )["id"]
+        role_id = cast(
+            dict[str, Any],
+            client.post(
+                "/resources/roles",
+                json={
+                    "code": "DEV-REACT",
+                    "name": "Developpeur",
+                    "node_id": context["node_id"],
+                    "cost_category_id": context["cost_category_id"],
+                    "calendar_id": calendar_id,
+                },
+                headers=headers,
+            ).json(),
+        )["id"]
+
+        deactivate_role: Response = client.patch(
+            f"/resources/roles/{role_id}",
+            json={"is_active": False},
+            headers=headers,
+        )
+        assert deactivate_role.status_code == 200
+
+        # Allowed: no active role references this calendar anymore.
+        deactivate_calendar: Response = client.patch(
+            f"/resources/calendars/{calendar_id}",
+            json={"is_active": False},
+            headers=headers,
+        )
+        assert deactivate_calendar.status_code == 200
+        assert deactivate_calendar.json()["is_active"] is False
+
+        # Reactivating the role without touching calendar_id must still catch
+        # that its (unchanged) calendar is inactive.
+        reactivate_role: Response = client.patch(
+            f"/resources/roles/{role_id}",
+            json={"is_active": True},
+            headers=headers,
+        )
+        assert reactivate_role.status_code == 400
+        assert reactivate_role.json()["detail"] == "Calendar is inactive and cannot be assigned"
+
+        # The role must remain inactive -- the rejected PATCH must not have
+        # partially applied.
+        unchanged: Response = client.get(f"/resources/roles/{role_id}", headers=headers)
+        assert unchanged.status_code == 200
+        assert unchanged.json()["is_active"] is False
+
+
 def test_calendar_writes_require_admin() -> None:
     with TestClient(app) as client:
         headers = _register_user(client, "calendars.user@example.com")

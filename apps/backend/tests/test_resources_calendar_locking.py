@@ -30,6 +30,7 @@ tests/conftest.py's `reset_database` fixture.
 from __future__ import annotations
 
 from collections.abc import Generator
+from typing import cast
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -77,6 +78,41 @@ def _seed_calendar(session: Session) -> int:
     session.add(calendar)
     session.commit()
     return calendar.id
+
+
+def _seed_inactive_role_with_calendar(session: Session, calendar_id: int) -> int:
+    """Seeds an *inactive* role that still carries a (currently active) calendar_id.
+
+    Mirrors the state a role reaches before the reactivation scenario in issue
+    PR #60's follow-up: a role can be deactivated while its calendar is still
+    active, and later the calendar can be deactivated independently (allowed,
+    since no active role references it at that point).
+    """
+    from waterfall.models.resources import CostCategory, CostType, ResourceNode, ResourceRole
+
+    cost_type = CostType(code="MO-LOCK", name="Main d'oeuvre", kind="labor")
+    session.add(cost_type)
+    session.flush()
+    category = CostCategory(
+        cost_type_id=cost_type.id,
+        accounting_code="MO-CAT-LOCK",
+        name="Developpement",
+    )
+    session.add(category)
+    node = ResourceNode(code="IT-LOCK", name="Informatique")
+    session.add(node)
+    session.flush()
+    role = ResourceRole(
+        node_id=node.id,
+        cost_category_id=category.id,
+        calendar_id=calendar_id,
+        code="DEV-LOCK",
+        name="Developpeur",
+        is_active=False,
+    )
+    session.add(role)
+    session.commit()
+    return role.id
 
 
 def test_calendar_lock_blocks_concurrent_active_role_assignment(
@@ -137,6 +173,77 @@ def test_calendar_lock_blocks_concurrent_active_role_assignment(
 
             reassigned = _get_active_calendar_or_400(session_b, calendar_id)
             assert reassigned.is_active is True
+            session_b.commit()
+        finally:
+            session_a.close()
+            session_b.close()
+    finally:
+        engine.dispose()
+
+
+def test_role_reactivation_lock_blocks_on_concurrent_calendar_deactivation(
+    postgres_app_database_url: str,
+) -> None:
+    """Extends the issue #50 regression to the reactivation gap found in PR #60 review.
+
+    Before that fix, `update_role` only validated/locked `calendar_id` when it was
+    explicitly present in the PATCH payload. A role could sit inactive while still
+    referencing a calendar that later gets deactivated (allowed, since no *active*
+    role references it at that point), then be reactivated via `{"is_active": true}`
+    alone -- never revalidating or locking that calendar, and so never contending
+    with a concurrent deactivation of it at all.
+
+    This test drives the real `update_role` route function directly (not just the
+    guard helper, as in the test above) to prove the reactivation path now takes
+    the same `SELECT ... FOR UPDATE` lock on the role's *effective* (unchanged)
+    calendar_id, and is queued behind a concurrent deactivation exactly like an
+    explicit `calendar_id` change would be.
+    """
+    from waterfall.api.routes.resources import (
+        _get_calendar_for_update_or_404,  # pyright: ignore[reportPrivateUsage]
+        update_role,
+    )
+    from waterfall.models.user import User
+    from waterfall.schemas.resources import ResourceRoleUpdate
+
+    engine = create_engine(postgres_app_database_url, future=True)
+    session_factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    try:
+        with session_factory() as seed_session:
+            calendar_id = _seed_calendar(seed_session)
+            role_id = _seed_inactive_role_with_calendar(seed_session, calendar_id)
+
+        session_a = session_factory()
+        session_b = session_factory()
+        try:
+            # Session A: start of the deactivation path -- locks the row, no commit yet.
+            locked_calendar = _get_calendar_for_update_or_404(session_a, calendar_id)
+            assert locked_calendar.is_active is True
+
+            # Session B: reactivate the role via `is_active` alone -- calendar_id is
+            # not part of this payload, so only the effective-calendar check added by
+            # the fix makes this contend for the same row lock as session A.
+            session_b.execute(text("SET LOCAL lock_timeout = '200ms'"))
+            with pytest.raises(OperationalError, match="lock timeout"):
+                update_role(
+                    role_id,
+                    ResourceRoleUpdate(is_active=True),
+                    db=session_b,
+                    _=cast(User, None),
+                )
+            session_b.rollback()
+
+            # Session A abandons the deactivation attempt without writing
+            # is_active=False, simply releasing its lock so session B can proceed.
+            session_a.rollback()
+
+            reactivated = update_role(
+                role_id,
+                ResourceRoleUpdate(is_active=True),
+                db=session_b,
+                _=cast(User, None),
+            )
+            assert reactivated.is_active is True
             session_b.commit()
         finally:
             session_a.close()
