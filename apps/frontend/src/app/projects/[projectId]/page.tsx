@@ -55,11 +55,13 @@ import {
   savePlanningStructureDraft,
   SessionExpiredError,
   type ImportDiff,
+  type PlanningTaskScheduleUpdate,
   restoreSession,
   reopenPlanningStructure,
   setDisplayedPlanning,
   setPlanningReference,
   updateEstimateCostLine,
+  updatePlanningTaskSchedule,
   updateProject,
   uploadImportSourceXml,
   validatePlanning,
@@ -444,6 +446,41 @@ export default function ProjectDetailsPage() {
       }
       if (selectedPlanningIdRef.current === requestedPlanningId) {
         setError(cause instanceof ApiError ? cause.message : "Impossible de déplacer les tâches sélectionnées.");
+      }
+    } finally {
+      setPlanningMutationBusy(false);
+    }
+  }
+
+  async function updateTaskScheduleSelection(taskUid: number, payload: PlanningTaskScheduleUpdate) {
+    if (!session || !selectedPlanning || selectedPlanning.status !== "draft" || isReadOnlyProject) {
+      return;
+    }
+    const requestedPlanningId = selectedPlanning.id;
+    setPlanningMutationBusy(true);
+    setError(null);
+    try {
+      const updated = await updatePlanningTaskSchedule(
+        projectId,
+        requestedPlanningId,
+        taskUid,
+        payload,
+        session,
+        onSessionRefresh,
+      );
+      // The user may have switched to another planning version while this request was in flight;
+      // applying it now would silently replace that version's tree with a stale one.
+      if (selectedPlanningIdRef.current === requestedPlanningId) {
+        setPlanningDetail(updated);
+      }
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      if (selectedPlanningIdRef.current === requestedPlanningId) {
+        setError(cause instanceof ApiError ? cause.message : "Impossible de mettre à jour la planification de la tâche.");
       }
     } finally {
       setPlanningMutationBusy(false);
@@ -1375,6 +1412,7 @@ export default function ProjectDetailsPage() {
                 versionKey={selectedPlanning?.id ?? null}
                 readOnly={isReadOnlyProject || (selectedPlanning ? selectedPlanning.status !== "draft" : false)}
                 onMove={(command) => void movePlanningTaskSelection(command)}
+                onScheduleUpdate={(taskUid, payload) => void updateTaskScheduleSelection(taskUid, payload)}
                 mutationBusy={planningMutationBusy}
               />
             ) : null}

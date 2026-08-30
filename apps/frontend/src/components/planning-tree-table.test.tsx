@@ -189,4 +189,253 @@ describe("PlanningTreeTable", () => {
 
     expect(onMove).toHaveBeenCalledWith({ task_uids: [2], target_parent_uid: null, position: 1 });
   });
+
+  it("does not offer schedule edition for a summary task even when editable", () => {
+    const onScheduleUpdate = vi.fn();
+    render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} onScheduleUpdate={onScheduleUpdate} />);
+
+    expect(screen.queryByLabelText("Début de Poste")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Mode de Poste")).not.toBeInTheDocument();
+  });
+
+  it("does not offer schedule edition when read-only", () => {
+    const onScheduleUpdate = vi.fn();
+    render(
+      <PlanningTreeTable tasks={threeLevelTasks} versionKey={1} onScheduleUpdate={onScheduleUpdate} readOnly />,
+    );
+
+    expect(screen.queryByLabelText("Début de Livrable")).not.toBeInTheDocument();
+  });
+
+  it("only exposes the start date for a manual milestone, deriving finish_at and duration", () => {
+    const onScheduleUpdate = vi.fn();
+    const tasks: Task[] = [
+      task({
+        uid: 1,
+        name: "Jalon",
+        parent_uid: null,
+        position: 1,
+        is_milestone: true,
+        is_manual: true,
+        start_at: "2026-01-05T09:00:00Z",
+        finish_at: "2026-01-05T09:00:00Z",
+        duration_minutes: 0,
+      }),
+    ];
+    render(<PlanningTreeTable tasks={tasks} versionKey={1} onScheduleUpdate={onScheduleUpdate} />);
+
+    expect(screen.getByLabelText("Début de Jalon")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Fin de Jalon")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Durée de Jalon")).not.toBeInTheDocument();
+  });
+
+  it("commits a manual task's start/finish/duration edit on blur", () => {
+    const onScheduleUpdate = vi.fn();
+    const tasks: Task[] = [
+      task({
+        uid: 1,
+        name: "Tâche manuelle",
+        parent_uid: null,
+        position: 1,
+        is_manual: true,
+        start_at: "2026-01-05T09:00:00Z",
+        finish_at: "2026-01-06T17:00:00Z",
+        duration_minutes: 480,
+      }),
+    ];
+    render(<PlanningTreeTable tasks={tasks} versionKey={1} onScheduleUpdate={onScheduleUpdate} />);
+
+    const startInput = screen.getByLabelText("Début de Tâche manuelle");
+    fireEvent.change(startInput, { target: { value: "2026-01-06T09:00" } });
+    fireEvent.blur(startInput);
+
+    expect(onScheduleUpdate).toHaveBeenCalledTimes(1);
+    const [taskUid, payload] = onScheduleUpdate.mock.calls[0];
+    expect(taskUid).toBe(1);
+    expect(payload.is_manual).toBe(true);
+    expect(payload.duration_minutes).toBe(480);
+    expect(new Date(payload.start_at).toISOString()).toBe(new Date("2026-01-06T09:00").toISOString());
+  });
+
+  it("commits an Enter keypress in a schedule field immediately and blurs the input", () => {
+    const onScheduleUpdate = vi.fn();
+    const tasks: Task[] = [
+      task({
+        uid: 1,
+        name: "Tâche manuelle",
+        parent_uid: null,
+        position: 1,
+        is_manual: true,
+        start_at: "2026-01-05T09:00:00Z",
+        finish_at: "2026-01-06T17:00:00Z",
+        duration_minutes: 480,
+      }),
+    ];
+    render(<PlanningTreeTable tasks={tasks} versionKey={1} onScheduleUpdate={onScheduleUpdate} />);
+
+    const durationInput = screen.getByLabelText("Durée de Tâche manuelle");
+    durationInput.focus();
+    fireEvent.change(durationInput, { target: { value: "600" } });
+    fireEvent.keyDown(durationInput, { key: "Enter" });
+
+    expect(onScheduleUpdate).toHaveBeenCalledTimes(1);
+    expect(onScheduleUpdate.mock.calls[0][1].duration_minutes).toBe(600);
+  });
+
+  it("only allows duration edition for an automatic non-milestone task", () => {
+    const onScheduleUpdate = vi.fn();
+    const tasks: Task[] = [
+      task({
+        uid: 1,
+        name: "Tâche auto",
+        parent_uid: null,
+        position: 1,
+        is_manual: false,
+        start_at: "2026-01-05T09:00:00Z",
+        finish_at: "2026-01-06T17:00:00Z",
+        duration_minutes: 480,
+      }),
+    ];
+    render(<PlanningTreeTable tasks={tasks} versionKey={1} onScheduleUpdate={onScheduleUpdate} />);
+
+    expect(screen.queryByLabelText("Début de Tâche auto")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Fin de Tâche auto")).not.toBeInTheDocument();
+
+    const durationInput = screen.getByLabelText("Durée de Tâche auto");
+    fireEvent.change(durationInput, { target: { value: "120" } });
+    fireEvent.blur(durationInput);
+
+    expect(onScheduleUpdate).toHaveBeenCalledWith(1, { is_manual: false, duration_minutes: 120 });
+  });
+
+  it("does not commit a schedule edit while a mutation is busy", () => {
+    const onScheduleUpdate = vi.fn();
+    const tasks: Task[] = [
+      task({
+        uid: 1,
+        name: "Tâche manuelle",
+        parent_uid: null,
+        position: 1,
+        is_manual: true,
+        start_at: "2026-01-05T09:00:00Z",
+        finish_at: "2026-01-06T17:00:00Z",
+        duration_minutes: 480,
+      }),
+    ];
+    render(
+      <PlanningTreeTable tasks={tasks} versionKey={1} onScheduleUpdate={onScheduleUpdate} mutationBusy />,
+    );
+
+    expect(screen.getByLabelText("Début de Tâche manuelle")).toBeDisabled();
+  });
+
+  it("switches a task to manual mode and sends its current schedule as the payload", async () => {
+    const onScheduleUpdate = vi.fn();
+    const tasks: Task[] = [
+      task({
+        uid: 1,
+        name: "Tâche auto",
+        parent_uid: null,
+        position: 1,
+        is_manual: false,
+        start_at: "2026-01-05T09:00:00Z",
+        finish_at: "2026-01-06T17:00:00Z",
+        duration_minutes: 480,
+      }),
+    ];
+    render(<PlanningTreeTable tasks={tasks} versionKey={1} onScheduleUpdate={onScheduleUpdate} />);
+
+    fireEvent.click(screen.getByLabelText("Mode de Tâche auto"));
+    const manualOption = await screen.findByRole("option", { name: "Manuel" });
+    fireEvent.pointerDown(manualOption);
+    fireEvent.click(manualOption);
+
+    expect(onScheduleUpdate).toHaveBeenCalledWith(1, {
+      is_manual: true,
+      start_at: "2026-01-05T09:00:00Z",
+      finish_at: "2026-01-06T17:00:00Z",
+      duration_minutes: 480,
+    });
+  });
+
+  it("switches a manual non-milestone task with a duration to automatic mode", async () => {
+    const onScheduleUpdate = vi.fn();
+    const tasks: Task[] = [
+      task({
+        uid: 1,
+        name: "Tâche manuelle",
+        parent_uid: null,
+        position: 1,
+        is_manual: true,
+        start_at: "2026-01-05T09:00:00Z",
+        finish_at: "2026-01-06T17:00:00Z",
+        duration_minutes: 480,
+      }),
+    ];
+    render(<PlanningTreeTable tasks={tasks} versionKey={1} onScheduleUpdate={onScheduleUpdate} />);
+
+    fireEvent.click(screen.getByLabelText("Mode de Tâche manuelle"));
+    const automaticOption = await screen.findByRole("option", { name: "Automatique" });
+    fireEvent.pointerDown(automaticOption);
+    fireEvent.click(automaticOption);
+
+    expect(onScheduleUpdate).toHaveBeenCalledWith(1, {
+      is_manual: false,
+      start_at: "2026-01-05T09:00:00Z",
+      finish_at: "2026-01-06T17:00:00Z",
+      duration_minutes: 480,
+    });
+  });
+
+  it("switches a milestone's mode without sending finish_at or duration_minutes", async () => {
+    const onScheduleUpdate = vi.fn();
+    const tasks: Task[] = [
+      task({
+        uid: 1,
+        name: "Jalon",
+        parent_uid: null,
+        position: 1,
+        is_milestone: true,
+        is_manual: true,
+        start_at: "2026-01-05T09:00:00Z",
+        finish_at: "2026-01-05T09:00:00Z",
+        duration_minutes: 0,
+      }),
+    ];
+    render(<PlanningTreeTable tasks={tasks} versionKey={1} onScheduleUpdate={onScheduleUpdate} />);
+
+    fireEvent.click(screen.getByLabelText("Mode de Jalon"));
+    const automaticOption = await screen.findByRole("option", { name: "Automatique" });
+    fireEvent.pointerDown(automaticOption);
+    fireEvent.click(automaticOption);
+
+    expect(onScheduleUpdate).toHaveBeenCalledWith(1, {
+      is_manual: false,
+      start_at: "2026-01-05T09:00:00Z",
+    });
+  });
+
+  it("disables the automatic option for a non-milestone task with no duration set", async () => {
+    const onScheduleUpdate = vi.fn();
+    const tasks: Task[] = [
+      task({
+        uid: 1,
+        name: "Tâche sans durée",
+        parent_uid: null,
+        position: 1,
+        is_manual: true,
+        start_at: "2026-01-05T09:00:00Z",
+        finish_at: null,
+        duration_minutes: null,
+      }),
+    ];
+    render(<PlanningTreeTable tasks={tasks} versionKey={1} onScheduleUpdate={onScheduleUpdate} />);
+
+    fireEvent.click(screen.getByLabelText("Mode de Tâche sans durée"));
+
+    expect(await screen.findByRole("option", { name: "Automatique" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  });
 });

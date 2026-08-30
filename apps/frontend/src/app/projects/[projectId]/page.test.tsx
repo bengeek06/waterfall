@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   setDisplayedPlanning: vi.fn(),
   setPlanningReference: vi.fn(),
   movePlanningTasks: vi.fn(),
+  updatePlanningTaskSchedule: vi.fn(),
   savePlanningStructureDraft: vi.fn(),
   getPlanningStructureDraft: vi.fn(),
   createPlanningStructure: vi.fn(),
@@ -50,6 +51,7 @@ vi.mock("@/lib/backend", async () => {
     setDisplayedPlanning: mocks.setDisplayedPlanning,
     setPlanningReference: mocks.setPlanningReference,
     movePlanningTasks: mocks.movePlanningTasks,
+    updatePlanningTaskSchedule: mocks.updatePlanningTaskSchedule,
     savePlanningStructureDraft: mocks.savePlanningStructureDraft,
     getPlanningStructureDraft: mocks.getPlanningStructureDraft,
     createPlanningStructure: mocks.createPlanningStructure,
@@ -133,6 +135,7 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     mocks.setDisplayedPlanning.mockReset();
     mocks.setPlanningReference.mockReset();
     mocks.movePlanningTasks.mockReset();
+    mocks.updatePlanningTaskSchedule.mockReset();
     mocks.savePlanningStructureDraft.mockReset();
     mocks.getPlanningStructureDraft.mockReset();
     mocks.createPlanningStructure.mockReset();
@@ -663,6 +666,90 @@ describe("ProjectDetailsPage planning lifecycle", () => {
 
     rejectMove(new Error("move failed"));
     await waitFor(() => expect(screen.queryByText("Impossible de déplacer les tâches sélectionnées.")).not.toBeInTheDocument());
+    expect(screen.getByText("Tâche 2")).toBeInTheDocument();
+  });
+
+  it("sends a schedule update and replaces the planning detail with the full server response", async () => {
+    const draft = planning({ id: 2, status: "draft" });
+    const initialDetail: PlanningDetail = {
+      ...draft,
+      tasks: [{ ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Tâche éditable", duration_minutes: 480 }],
+      links: [],
+    };
+    const updatedDetail: PlanningDetail = {
+      ...draft,
+      tasks: [{ ...initialDetail.tasks[0], name: "Tâche mise à jour", duration_minutes: 600 }],
+      links: [],
+    };
+    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draft.id }));
+    mocks.listPlannings.mockResolvedValue([draft]);
+    mocks.getPlanning.mockResolvedValue(initialDetail);
+    mocks.updatePlanningTaskSchedule.mockResolvedValue(updatedDetail);
+
+    render(<ProjectDetailsPage />);
+
+    const durationInput = await screen.findByLabelText("Durée de Tâche éditable");
+    fireEvent.change(durationInput, { target: { value: "600" } });
+    fireEvent.blur(durationInput);
+
+    await waitFor(() =>
+      expect(mocks.updatePlanningTaskSchedule).toHaveBeenCalledWith(
+        1,
+        draft.id,
+        10,
+        expect.objectContaining({ duration_minutes: 600 }),
+        expect.anything(),
+        expect.anything(),
+      ),
+    );
+    expect(await screen.findByText("Tâche mise à jour")).toBeInTheDocument();
+  });
+
+  it("ignores a schedule update response for a planning that is no longer selected", async () => {
+    const draftA = planning({ id: 2, status: "draft" });
+    const draftB = planning({ id: 6, status: "draft", version_number: 2 });
+    const detailA: PlanningDetail = {
+      ...draftA,
+      tasks: [{ ...detail(draftA).tasks[0], uid: 10, id_display: 10, name: "Tâche éditable", duration_minutes: 480 }],
+      links: [],
+    };
+    const detailB = detail(draftB);
+    const staleDetail: PlanningDetail = {
+      ...draftA,
+      tasks: [{ ...detailA.tasks[0], name: "Réponse obsolète" }],
+      links: [],
+    };
+    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draftA.id }));
+    mocks.listPlannings.mockResolvedValue([draftA, draftB]);
+    mocks.getPlanning.mockImplementation(async (_projectId, planningId) =>
+      planningId === draftA.id ? detailA : detailB,
+    );
+    mocks.setDisplayedPlanning.mockImplementation(async (_projectId, planningId) =>
+      project({ status: "initialise", displayed_planning_id: planningId }),
+    );
+    let resolveScheduleUpdate!: (value: PlanningDetail) => void;
+    mocks.updatePlanningTaskSchedule.mockImplementation(
+      () => new Promise<PlanningDetail>((resolve) => {
+        resolveScheduleUpdate = resolve;
+      }),
+    );
+
+    render(<ProjectDetailsPage />);
+
+    const durationInput = await screen.findByLabelText("Durée de Tâche éditable");
+    fireEvent.change(durationInput, { target: { value: "600" } });
+    fireEvent.blur(durationInput);
+    await waitFor(() => expect(mocks.updatePlanningTaskSchedule).toHaveBeenCalledTimes(1));
+
+    fireEvent.change(await screen.findByRole("combobox", { name: "Version affichée" }), {
+      target: { value: String(draftB.id) },
+    });
+    await waitFor(() => expect(screen.getByText("Tâche 2")).toBeInTheDocument());
+
+    resolveScheduleUpdate(staleDetail);
+    await waitFor(() => expect(mocks.updatePlanningTaskSchedule).toHaveResolved());
+
+    expect(screen.queryByText("Réponse obsolète")).not.toBeInTheDocument();
     expect(screen.getByText("Tâche 2")).toBeInTheDocument();
   });
 });

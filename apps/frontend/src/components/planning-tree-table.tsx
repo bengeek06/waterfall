@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import type { Task } from "@/lib/backend";
+import type { PlanningTaskScheduleUpdate, Task } from "@/lib/backend";
 import {
   computeIndentCommand,
   computeOutdentCommand,
@@ -53,20 +55,46 @@ function formatDate(value: string | null | undefined): string {
   return value ? new Date(value).toLocaleDateString("fr-FR") : "-";
 }
 
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
+function formatDurationMinutes(minutes: number | null | undefined): string {
+  if (minutes === null || minutes === undefined) {
+    return "-";
+  }
+  if (minutes === 0) {
+    return "0";
+  }
+  const hours = Math.floor(minutes / 60);
+  const remainderMinutes = minutes % 60;
+  if (hours === 0) {
+    return `${remainderMinutes}min`;
+  }
+  if (remainderMinutes === 0) {
+    return `${hours}h`;
+  }
+  return `${hours}h${remainderMinutes}min`;
+}
 
-// TaskRead does not expose duration_minutes; derive a display-only duration from the scheduled dates.
-function formatDuration(startAt: string | null | undefined, finishAt: string | null | undefined): string {
-  if (!startAt || !finishAt) {
-    return "-";
+// datetime-local inputs use "yyyy-MM-ddTHH:mm" in local time, with no timezone/seconds component.
+function toDateTimeInputValue(value: string | null | undefined): string {
+  if (!value) {
+    return "";
   }
-  const start = new Date(startAt).getTime();
-  const finish = new Date(finishAt).getTime();
-  if (Number.isNaN(start) || Number.isNaN(finish) || finish < start) {
-    return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
   }
-  const days = Math.max(Math.round((finish - start) / MS_PER_DAY), 0);
-  return `${days} j`;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function fromDateTimeInputValue(value: string): string | null {
+  if (!value) {
+    return null;
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  return date.toISOString();
 }
 
 function taskTypeLabel(task: Task): string {
@@ -81,6 +109,10 @@ function taskModeLabel(task: Task): string {
     return "-";
   }
   return task.is_manual ? "Manuel" : "Automatique";
+}
+
+function durationMissing(task: Task): boolean {
+  return task.duration_minutes === null || task.duration_minutes === undefined;
 }
 
 function predecessorsLabel(task: Task): string {
@@ -98,12 +130,19 @@ function predecessorsLabel(task: Task): string {
     .join(", ");
 }
 
+type ScheduleDraft = {
+  start_at: string;
+  finish_at: string;
+  duration_minutes: string;
+};
+
 type PlanningTreeTableProps = Readonly<{
   tasks: Task[];
   /** Any value identifying the loaded planning version; changing it resets local expand/selection state. */
   versionKey: number | string | null;
   readOnly?: boolean;
   onMove?: (command: PlanningMoveCommand) => void;
+  onScheduleUpdate?: (taskUid: number, payload: PlanningTaskScheduleUpdate) => void;
   mutationBusy?: boolean;
 }>;
 
@@ -112,12 +151,14 @@ export function PlanningTreeTable({
   versionKey,
   readOnly = false,
   onMove,
+  onScheduleUpdate,
   mutationBusy = false,
 }: PlanningTreeTableProps) {
   const [collapsedUids, setCollapsedUids] = useState<Set<number>>(new Set());
   const [selectedUids, setSelectedUids] = useState<Set<number>>(new Set());
   const [focusedUid, setFocusedUid] = useState<number | null>(null);
   const [renderedVersionKey, setRenderedVersionKey] = useState(versionKey);
+  const [scheduleDrafts, setScheduleDrafts] = useState<Record<number, ScheduleDraft>>({});
   const rowRefs = useRef(new Map<number, HTMLTableRowElement>());
 
   // A different planning version must never reuse another version's expand/selection state.
@@ -126,14 +167,20 @@ export function PlanningTreeTable({
     setCollapsedUids(new Set());
     setSelectedUids(new Set());
     setFocusedUid(null);
+    setScheduleDrafts({});
   }
 
   const rows = useMemo(() => buildVisibleRows(tasks, collapsedUids), [tasks, collapsedUids]);
   const rowIndexByUid = useMemo(() => new Map(rows.map((row, index) => [row.uid, index])), [rows]);
 
   useEffect(() => {
-    if (focusedUid !== null) {
-      rowRefs.current.get(focusedUid)?.focus();
+    if (focusedUid === null) {
+      return;
+    }
+    const rowElement = rowRefs.current.get(focusedUid);
+    // Do not steal focus back to the row when it is already inside one of its inline edit controls.
+    if (rowElement && !rowElement.contains(document.activeElement)) {
+      rowElement.focus();
     }
   }, [focusedUid]);
 
@@ -226,6 +273,187 @@ export function PlanningTreeTable({
     }
     event.preventDefault();
     handler(row);
+  }
+
+  function defaultScheduleDraft(row: PlanningTreeRow): ScheduleDraft {
+    return {
+      start_at: toDateTimeInputValue(row.start_at),
+      finish_at: toDateTimeInputValue(row.finish_at),
+      duration_minutes: row.duration_minutes === null || row.duration_minutes === undefined ? "" : String(row.duration_minutes),
+    };
+  }
+
+  function scheduleDraftFor(row: PlanningTreeRow): ScheduleDraft {
+    return scheduleDrafts[row.uid] ?? defaultScheduleDraft(row);
+  }
+
+  function updateScheduleDraft(row: PlanningTreeRow, field: keyof ScheduleDraft, value: string) {
+    setScheduleDrafts((current) => ({
+      ...current,
+      [row.uid]: { ...(current[row.uid] ?? defaultScheduleDraft(row)), [field]: value },
+    }));
+  }
+
+  function clearScheduleDraft(uid: number) {
+    setScheduleDrafts((current) => {
+      if (!(uid in current)) {
+        return current;
+      }
+      const next = { ...current };
+      delete next[uid];
+      return next;
+    });
+  }
+
+  function commitScheduleEdit(row: PlanningTreeRow) {
+    if (!onScheduleUpdate || mutationBusy) {
+      return;
+    }
+    const draft = scheduleDraftFor(row);
+    let payload: PlanningTaskScheduleUpdate;
+    if (row.is_milestone) {
+      // A milestone only exposes its start date: duration and finish are always forced by the
+      // server, so omitting them here avoids conflicting with a stale finish_at/duration.
+      payload = { is_manual: Boolean(row.is_manual), start_at: fromDateTimeInputValue(draft.start_at) };
+    } else if (row.is_manual) {
+      // Intentional: `is_manual: null/undefined` (e.g. a task imported without an explicit mode)
+      // is treated the same as `false` here, so the first edit on such a task — regardless of
+      // which field the user touched — assigns it "automatique". This is a deliberate product
+      // decision, not an oversight; do not "fix" it into a three-way branch.
+      payload = {
+        is_manual: true,
+        start_at: fromDateTimeInputValue(draft.start_at),
+        finish_at: fromDateTimeInputValue(draft.finish_at),
+        duration_minutes: draft.duration_minutes === "" ? null : Number(draft.duration_minutes),
+      };
+    } else {
+      // Automatic, non-milestone tasks only allow editing the duration; start/finish are always
+      // recomputed by the server from the calendar and predecessors.
+      payload = {
+        is_manual: false,
+        duration_minutes: draft.duration_minutes === "" ? null : Number(draft.duration_minutes),
+      };
+    }
+    onScheduleUpdate(row.uid, payload);
+    clearScheduleDraft(row.uid);
+  }
+
+  function commitModeChange(row: PlanningTreeRow, isManual: boolean) {
+    if (!onScheduleUpdate || mutationBusy) {
+      return;
+    }
+    const payload: PlanningTaskScheduleUpdate = row.is_milestone
+      ? { is_manual: isManual, start_at: row.start_at ?? null }
+      : {
+          is_manual: isManual,
+          start_at: row.start_at ?? null,
+          finish_at: row.finish_at ?? null,
+          duration_minutes: row.duration_minutes ?? null,
+        };
+    onScheduleUpdate(row.uid, payload);
+  }
+
+  function onScheduleFieldKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    // Editing a field must never bubble up to the row's own navigation shortcuts (arrows, space...).
+    event.stopPropagation();
+    if (event.key === "Enter") {
+      event.preventDefault();
+      // Blurring alone triggers the field's onBlur handler, which already commits the edit;
+      // calling commitScheduleEdit here too would fire two identical PATCH requests in the
+      // same tick, since the mutationBusy guard has not re-rendered yet at that point.
+      event.currentTarget.blur();
+    }
+  }
+
+  function renderScheduleCells(row: PlanningTreeRow) {
+    const editable = !row.is_summary && !readOnly && Boolean(onScheduleUpdate);
+    const draft = scheduleDraftFor(row);
+    const startEditable = editable && (row.is_milestone || row.is_manual);
+    const finishEditable = editable && !row.is_milestone && row.is_manual;
+    const durationEditable = editable && !row.is_milestone;
+    return (
+      <>
+        <TableCell>
+          {startEditable ? (
+            <Input
+              type="datetime-local"
+              aria-label={`Début de ${row.name}`}
+              value={draft.start_at}
+              disabled={mutationBusy}
+              onClick={(event) => event.stopPropagation()}
+              onChange={(event) => updateScheduleDraft(row, "start_at", event.target.value)}
+              onBlur={() => commitScheduleEdit(row)}
+              onKeyDown={onScheduleFieldKeyDown}
+            />
+          ) : (
+            formatDate(row.start_at)
+          )}
+        </TableCell>
+        <TableCell>
+          {finishEditable ? (
+            <Input
+              type="datetime-local"
+              aria-label={`Fin de ${row.name}`}
+              value={draft.finish_at}
+              disabled={mutationBusy}
+              onClick={(event) => event.stopPropagation()}
+              onChange={(event) => updateScheduleDraft(row, "finish_at", event.target.value)}
+              onBlur={() => commitScheduleEdit(row)}
+              onKeyDown={onScheduleFieldKeyDown}
+            />
+          ) : (
+            formatDate(row.finish_at)
+          )}
+        </TableCell>
+        <TableCell>
+          {durationEditable ? (
+            <Input
+              type="number"
+              min={0}
+              step={1}
+              aria-label={`Durée de ${row.name}`}
+              value={draft.duration_minutes}
+              disabled={mutationBusy}
+              onClick={(event) => event.stopPropagation()}
+              onChange={(event) => updateScheduleDraft(row, "duration_minutes", event.target.value)}
+              onBlur={() => commitScheduleEdit(row)}
+              onKeyDown={onScheduleFieldKeyDown}
+            />
+          ) : (
+            formatDurationMinutes(row.duration_minutes)
+          )}
+        </TableCell>
+        <TableCell>
+          {editable ? (
+            <Select
+              value={row.is_manual ? "manual" : "auto"}
+              onValueChange={(value) => commitModeChange(row, value === "manual")}
+              disabled={mutationBusy}
+            >
+              <SelectTrigger
+                aria-label={`Mode de ${row.name}`}
+                size="sm"
+                onClick={(event: MouseEvent<HTMLButtonElement>) => event.stopPropagation()}
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="manual">Manuel</SelectItem>
+                {/* A milestone's duration is always forced to 0 server-side, so it can always switch
+                    to automatic. A non-milestone task with no duration would be rejected by the
+                    server (_apply_automatic_schedule requires a duration), so disable the option
+                    rather than let the user hit a guaranteed 400. */}
+                <SelectItem value="auto" disabled={!row.is_milestone && durationMissing(row)}>
+                  Automatique
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          ) : (
+            taskModeLabel(row)
+          )}
+        </TableCell>
+      </>
+    );
   }
 
   const indentCommand = computeIndentCommand(tasks, selectedUids);
@@ -346,10 +574,7 @@ export function PlanningTreeTable({
                     </div>
                   </TableCell>
                   <TableCell>{taskTypeLabel(row)}</TableCell>
-                  <TableCell>{formatDate(row.start_at)}</TableCell>
-                  <TableCell>{formatDate(row.finish_at)}</TableCell>
-                  <TableCell>{formatDuration(row.start_at, row.finish_at)}</TableCell>
-                  <TableCell>{taskModeLabel(row)}</TableCell>
+                  {renderScheduleCells(row)}
                   <TableCell>{predecessorsLabel(row)}</TableCell>
                 </TableRow>
               );
