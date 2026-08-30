@@ -141,6 +141,11 @@ export function ProjectsTable({
     ],
     [],
   );
+  // TanStack Table's own row/column helpers are known-incompatible with React Compiler
+  // memoization (they return new function identities on every call); this component
+  // doesn't rely on referential stability of anything derived from `table`, so skipping
+  // compiler memoization here is safe.
+  // eslint-disable-next-line react-hooks/incompatible-library
   const table = useReactTable({
     data: projects,
     columns,
