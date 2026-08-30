@@ -185,12 +185,12 @@ def test_planning_contract_matches_runtime_shapes() -> None:
         (_normalize_path(path), method)
         for path in relevant
         for method in static_paths[path]
-        if method in {"get", "post", "patch", "delete"}
+        if method in {"get", "post", "put", "patch", "delete"}
     } == {
         (_normalize_path(path), method)
         for path in runtime_paths
         for method in runtime_paths[path]
-        if method in {"get", "post", "patch", "delete"}
+        if method in {"get", "post", "put", "patch", "delete"}
         and (
             "/plannings" in path
             or "/planning-tree" in path
@@ -206,7 +206,7 @@ def test_planning_contract_matches_runtime_shapes() -> None:
             if _normalize_path(candidate) == _normalize_path(path)
         )
         for method in static_paths[path]:
-            if method not in {"get", "post", "patch", "delete"}:
+            if method not in {"get", "post", "put", "patch", "delete"}:
                 continue
             static_operation = cast(dict[str, Any], static_paths[path][method])
             runtime_operation = cast(dict[str, Any], runtime_paths[runtime_path][method])

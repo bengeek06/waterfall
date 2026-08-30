@@ -1,0 +1,5 @@
+description: Requete de mise a jour des liens invalide
+content:
+  application/json:
+    schema:
+      $ref: ../schemas/FastAPIErrorResponse.yaml

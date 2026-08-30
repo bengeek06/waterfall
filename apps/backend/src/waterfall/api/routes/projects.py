@@ -60,6 +60,7 @@ from waterfall.schemas.projects import (
     TaskCreate,
     TaskDescriptionUpdate,
     TaskLinkRead,
+    TaskLinksReplace,
     TaskRead,
     TaskRoleAssignmentCreate,
     TaskRoleAssignmentRead,
@@ -67,6 +68,9 @@ from waterfall.schemas.projects import (
 )
 from waterfall.schemas.resources import CostTypeKind
 from waterfall.services import (
+    PlanningLinkError,
+    PlanningLinkInvariantError,
+    PlanningLinkNotFoundError,
     PlanningTaskScheduleError,
     PlanningTreeInvariantError,
     PlanningTreeMoveError,
@@ -78,6 +82,7 @@ from waterfall.services import (
     generate_planning_structure,
     load_planning_structure_draft,
     move_planning_tasks,
+    replace_task_predecessor_links,
     resolve_default_calendar_id,
     resolve_task_calendar_ids,
     save_planning_structure_draft,
@@ -999,6 +1004,59 @@ router.add_api_route(
     },
     route_class_override=_PlanningTaskBodyValidationRoute,
 )
+
+
+@router.put(
+    "/{project_id}/plannings/{planning_id}/tasks/{task_uid}/links",
+    response_model=PlanningDetailRead,
+    responses={
+        status.HTTP_400_BAD_REQUEST: {
+            "model": FastAPIErrorResponse,
+            "description": "Requete de mise a jour des liens invalide",
+        },
+        status.HTTP_404_NOT_FOUND: {
+            "model": FastAPIErrorResponse,
+            "description": "Projet, planning ou tache introuvable pendant la mise a jour des liens",
+        },
+        status.HTTP_409_CONFLICT: {
+            "model": FastAPIErrorResponse,
+            "description": "La mise a jour des liens entre en conflit avec le planning",
+        },
+    },
+)
+def replace_task_predecessor_links_route(
+    project_id: int,
+    planning_id: int,
+    task_uid: int,
+    payload: TaskLinksReplace,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> PlanningDetailRead:
+    _, planning = get_mutable_draft_planning_with_locks(
+        db, project_id, planning_id, current_user.id
+    )
+    try:
+        replace_task_predecessor_links(db, planning, task_uid, payload.links)
+        # Capture the response while the row locks are still held so a concurrent
+        # writer cannot make us return a later transaction's state.
+        detail = _planning_detail(db, planning)
+        db.commit()
+    except PlanningLinkNotFoundError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except PlanningLinkInvariantError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except PlanningLinkError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Planning links conflict with existing planning data",
+        ) from exc
+    return detail
 
 
 @router.post("/{project_id}/plannings/{planning_id}/validate", response_model=PlanningRead)

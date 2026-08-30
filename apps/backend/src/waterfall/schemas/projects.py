@@ -109,6 +109,17 @@ class PlanningLinkRead(TaskLinkRead):
     task_uid: int
 
 
+class TaskLinkWrite(BaseModel):
+    predecessor_uid: int = Field(ge=1)
+    link_type: int = Field(ge=0, le=3)
+    lag_tenth_minute: int | None = None
+    lag_format: int | None = None
+
+
+class TaskLinksReplace(BaseModel):
+    links: list[TaskLinkWrite]
+
+
 class TaskDescriptionUpdate(BaseModel):
     description: str | None = Field(default=None, max_length=10000)
 
