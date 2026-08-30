@@ -649,6 +649,117 @@ def test_automatic_task_sub_minute_lag_preserves_fractional_offset() -> None:
         assert leaf["finish_at"] == "2026-01-05T11:00:30"
 
 
+def test_automatic_task_sub_minute_lag_that_exactly_exhausts_a_days_capacity_rolls_over() -> None:
+    """5th E3-03 PR review round, finding #1: a working-time lag whose whole-
+    minute part exactly exhausts the last working day it touches -- plus a
+    non-zero sub-minute remainder -- must roll the remainder over into the
+    next working day, not strand it past that day's working window close.
+
+    Predecessor A finishes on a Friday (2026-01-09 08:00, STANDARD 7h/day =
+    420 min capacity). ``lag=420.5`` minutes: the whole-minute part (420)
+    exactly matches Friday's full-day capacity, so a naive
+    truncate-then-add-remainder implementation would return
+    "Friday 15:00:00" (``compute_finish_at``'s exact-match, no-rollover
+    instant) plus a raw 30-second ``timedelta`` on top, landing 30 seconds
+    past Friday's working window close instead of rolling over the weekend
+    into Monday.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_hierarchy(project_id)
+        _create_standard_calendar()
+        with get_session_factory()() as session:
+            predecessor = (
+                session.query(WfPlanningTaskSnapshot)
+                .filter(WfPlanningTaskSnapshot.planning_id == planning_id)
+                .filter(WfPlanningTaskSnapshot.uid == 6)
+                .one()
+            )
+            predecessor.finish_at = datetime(2026, 1, 9, 8, 0, tzinfo=UTC)  # Friday
+            session.commit()
+        # 420.5 minutes = 4205 tenths of a minute.
+        _add_link(
+            planning_id,
+            task_uid=3,
+            predecessor_uid=6,
+            link_type=1,
+            lag_tenth_minute=4205,
+            lag_format=7,
+        )
+
+        response = client.patch(
+            _schedule_path(project_id, planning_id, 3),
+            json={"is_manual": False, "duration_minutes": 60},
+            headers=headers,
+        )
+
+        assert response.status_code == 200
+        leaf = _tasks_by_uid(cast(dict[str, Any], response.json()))[3]
+        # Friday's 420 min capacity is fully consumed, the leftover 0.5
+        # minutes roll over into Monday (Sat/Sun contribute nothing) ->
+        # Monday 08:00:30, not Friday 15:00:30 (past the working window).
+        assert leaf["start_at"] == "2026-01-12T08:00:30"
+        assert leaf["finish_at"] == "2026-01-12T09:00:30"
+
+
+def test_automatic_task_negative_sub_minute_lag_exhausting_a_days_capacity_rolls_over() -> None:
+    """Symmetric (lead/advance) counterpart of
+    ``test_automatic_task_sub_minute_lag_that_exactly_exhausts_a_days_capacity_rolls_over``:
+    a negative working-time lag whose whole-minute part exactly exhausts the
+    last working day it retreats through, plus a non-zero sub-minute
+    remainder, must roll the remainder over into the preceding working day,
+    not strand it past that day's working window open.
+
+    Predecessor A finishes on a Monday (2026-01-12 08:00, STANDARD 7h/day =
+    420 min capacity). ``lag=-420.5`` minutes: the whole-minute part (420)
+    exactly matches Monday's full-day capacity, so a naive
+    truncate-then-add-remainder implementation would return
+    "Monday 01:00:00" (``compute_start_at``'s exact-match, no-rollover
+    instant, using only Monday's own capacity) minus a raw 30-second
+    ``timedelta`` on top, staying within Monday instead of rolling over the
+    weekend into the preceding Friday.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_hierarchy(project_id)
+        _create_standard_calendar()
+        with get_session_factory()() as session:
+            predecessor = (
+                session.query(WfPlanningTaskSnapshot)
+                .filter(WfPlanningTaskSnapshot.planning_id == planning_id)
+                .filter(WfPlanningTaskSnapshot.uid == 6)
+                .one()
+            )
+            predecessor.finish_at = datetime(2026, 1, 12, 8, 0, tzinfo=UTC)  # Monday
+            session.commit()
+        # -420.5 minutes = -4205 tenths of a minute.
+        _add_link(
+            planning_id,
+            task_uid=3,
+            predecessor_uid=6,
+            link_type=1,
+            lag_tenth_minute=-4205,
+            lag_format=7,
+        )
+
+        response = client.patch(
+            _schedule_path(project_id, planning_id, 3),
+            json={"is_manual": False, "duration_minutes": 60},
+            headers=headers,
+        )
+
+        assert response.status_code == 200
+        leaf = _tasks_by_uid(cast(dict[str, Any], response.json()))[3]
+        # Monday's own 420 min capacity is fully consumed retreating
+        # backward, the leftover 0.5 minutes roll over into the preceding
+        # Friday (Sat/Sun contribute nothing) -> Friday 07:59:30, not
+        # Monday 00:59:30 (past Monday's working window open).
+        assert leaf["start_at"] == "2026-01-09T07:59:30"
+        assert leaf["finish_at"] == "2026-01-09T08:59:30"
+
+
 def test_automatic_task_elapsed_lag_format_keeps_raw_wall_clock_arithmetic() -> None:
     """The elapsed ("ed", lag_format=8) counterpart of the test above must
     keep the pre-existing raw wall-clock behaviour unchanged: the lag is

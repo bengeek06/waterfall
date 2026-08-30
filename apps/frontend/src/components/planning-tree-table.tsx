@@ -369,7 +369,19 @@ export function PlanningTreeTable({
     if (row.is_milestone) {
       // A milestone only exposes its start date: duration and finish are always forced by the
       // server, so omitting them here avoids conflicting with a stale finish_at/duration.
-      payload = { is_manual: Boolean(row.is_manual), start_at: fromDateTimeInputValue(draft.start_at) };
+      const startAt = fromDateTimeInputValue(draft.start_at);
+      // The milestone schedule payload has no way to distinguish "field omitted" from "field
+      // explicitly cleared": both _apply_manual_milestone_schedule and
+      // _apply_automatic_milestone_schedule treat a null start_at as "not provided" and silently
+      // fall back to the already-stored value. Sending a cleared field would therefore succeed
+      // (200) but change nothing, then bounce the input back to its old value with no feedback.
+      // Bail out before the request instead, the same way the automatic-duration guard below
+      // does; the draft is intentionally left in place (not cleared) so the empty value stays
+      // visible to correct rather than silently reverting.
+      if (startAt === null) {
+        return;
+      }
+      payload = { is_manual: Boolean(row.is_manual), start_at: startAt };
     } else if (row.is_manual) {
       // Intentional: `is_manual: null/undefined` (e.g. a task imported without an explicit mode)
       // is treated the same as `false` here, so the first edit on such a task — regardless of

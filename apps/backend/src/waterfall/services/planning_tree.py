@@ -469,25 +469,55 @@ def _resolve_fs_ss_lag(
     fraction (e.g. ``lag_tenth_minute=5`` -> ``lag_minutes=0.5``).
     :func:`compute_finish_at`/:func:`compute_start_at` both require an
     ``int`` ``duration_minutes`` and only ever make progress in whole-minute
-    steps, so the calendar walk is applied to ``lag_minutes``'s truncated
-    integer part only (``math.trunc``, not ``round`` -- ``round(0.5)`` would
-    silently drop the entire lag to ``0`` under Python's banker's rounding),
-    and the leftover sub-minute remainder (``lag_minutes - whole``, always
-    strictly under a minute in absolute value) is layered back on afterwards
-    as a raw ``timedelta``. That remainder can never by itself cross a
-    calendar day/working-hour boundary the whole-minute walk didn't already
-    resolve, so adding it on top is exact.
+    steps.
+
+    5th E3-03 PR review round, finding #1: an earlier version of this
+    function walked ``math.trunc(lag_minutes)`` whole minutes and then
+    layered the sub-minute remainder on top as a raw ``timedelta``. That is
+    unsound whenever the truncated whole-minute walk exactly exhausts the
+    last working day's capacity it touches: ``compute_finish_at`` (and
+    symmetrically ``compute_start_at``) resolve an exact capacity match by
+    returning that day's own closing (opening) instant *without* rolling
+    over to the next (preceding) working day -- see their docstrings/
+    implementation in ``calendar_schedule.py``. Adding the leftover
+    remainder on top of that instant as a raw ``timedelta`` then pushes the
+    result past the working window's boundary on a day that has no more
+    capacity left (e.g. lag=420.5 minutes with a Friday of exactly 420
+    minutes' capacity: ``whole_minutes=420`` returns "Friday 15:00:00" --
+    the exact end of Friday's window -- and naively adding the 0.5-minute
+    remainder produces "Friday 15:00:30", stranded 30 seconds past close,
+    instead of rolling over into the next working day (e.g. Monday) the way
+    a 421st working minute legitimately would.
+
+    Instead, this walks ``math.ceil(abs(lag_minutes))`` whole minutes --
+    rounding the absolute value *up* rather than truncating it down -- so
+    the calendar walk itself resolves any day/working-hour boundary the
+    extra fractional minute would cross, exactly like any other whole-minute
+    walk. The walk then overshoots the true (fractional) lag by
+    ``complement_minutes = ceil(abs(lag_minutes)) - abs(lag_minutes)``,
+    always strictly less than one minute, which is corrected by stepping the
+    result back by that same complement -- in the direction *opposite* the
+    walk's own direction of travel: a positive lag walks forward via
+    :func:`compute_finish_at`, so the overshoot is undone by subtracting the
+    complement (moving the result slightly earlier); a negative lag
+    (lead/advance) walks backward via :func:`compute_start_at`, so the
+    overshoot is undone by adding the complement (moving the result slightly
+    later). Because the complement is always under a minute, this correction
+    step can only move the result within the same working window the
+    whole-minute walk already landed inside -- it can never itself cross
+    another day/working-hour boundary, unlike the remainder in the old
+    truncate-then-add approach.
     """
     if _is_elapsed_lag_format(lag_format) or lag_minutes == 0:
         return anchor + timedelta(minutes=lag_minutes)
 
-    whole_minutes = math.trunc(lag_minutes)
-    remainder_minutes = lag_minutes - whole_minutes
+    whole_minutes = math.ceil(abs(lag_minutes))
+    complement_minutes = whole_minutes - abs(lag_minutes)
     if lag_minutes > 0:
         base = compute_finish_at(anchor, whole_minutes, resolved_calendar.weekday_hours)
-    else:
-        base = compute_start_at(anchor, -whole_minutes, resolved_calendar.weekday_hours)
-    return base + timedelta(minutes=remainder_minutes)
+        return base - timedelta(minutes=complement_minutes)
+    base = compute_start_at(anchor, whole_minutes, resolved_calendar.weekday_hours)
+    return base + timedelta(minutes=complement_minutes)
 
 
 def _resolve_predecessor_constraints(

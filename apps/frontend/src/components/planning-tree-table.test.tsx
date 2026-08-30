@@ -264,6 +264,34 @@ describe("PlanningTreeTable", () => {
     expect(startInput).toHaveAttribute("title", "Date déterminée par les prédécesseurs");
   });
 
+  it("rejects an emptied start date edit on a milestone instead of sending a no-op request", () => {
+    // Neither _apply_manual_milestone_schedule nor _apply_automatic_milestone_schedule can
+    // distinguish an omitted start_at from an explicitly cleared one: both fall back to the
+    // already-stored value, so a cleared field would 200 without changing anything. The client
+    // must not fire that request.
+    const onScheduleUpdate = vi.fn();
+    const tasks: Task[] = [
+      task({
+        uid: 1,
+        name: "Jalon",
+        parent_uid: null,
+        position: 1,
+        is_milestone: true,
+        is_manual: true,
+        start_at: "2026-01-05T09:00:00Z",
+        finish_at: "2026-01-05T09:00:00Z",
+        duration_minutes: 0,
+      }),
+    ];
+    render(<PlanningTreeTable tasks={tasks} versionKey={1} onScheduleUpdate={onScheduleUpdate} />);
+
+    const startInput = screen.getByLabelText("Début de Jalon");
+    fireEvent.change(startInput, { target: { value: "" } });
+    fireEvent.blur(startInput);
+
+    expect(onScheduleUpdate).not.toHaveBeenCalled();
+  });
+
   it("keeps the start date editor enabled for an automatic milestone with no predecessor link", () => {
     const onScheduleUpdate = vi.fn();
     const tasks: Task[] = [
