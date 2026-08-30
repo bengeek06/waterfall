@@ -39,20 +39,29 @@ class MsProject(Base):
             "'en_cours', 'termine', 'abandonne')",
             name="ck_ms_project_status",
         ),
+        # These three constraints close an unresolvable cycle between ms_project,
+        # wf_planning, and wf_estimate (ms_project references rows that in turn
+        # reference ms_project.id). use_alter=True defers them to a post-create
+        # ALTER TABLE (matching how migrations/versions/20260823_0001_initial_schema.py
+        # already adds them after all three tables exist), which lets
+        # create_all()/drop_all()/autogenerate resolve the cycle without warning.
         ForeignKeyConstraint(
             ["id", "planning_reference_id"],
             ["wf_planning.project_id", "wf_planning.id"],
             name="fk_ms_project_planning_reference",
+            use_alter=True,
         ),
         ForeignKeyConstraint(
             ["id", "displayed_planning_id"],
             ["wf_planning.project_id", "wf_planning.id"],
             name="fk_ms_project_displayed_planning",
+            use_alter=True,
         ),
         ForeignKeyConstraint(
             ["reference_estimate_id"],
             ["wf_estimate.id"],
             name="fk_ms_project_reference_estimate",
+            use_alter=True,
         ),
     )
 
