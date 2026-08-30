@@ -2190,6 +2190,11 @@ def create_task_role_assignment(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> TaskRoleAssignmentRead:
+    # Known v1 limitation shared with update_task_role_assignment and
+    # delete_task_role_assignment below: adding/changing/removing a role
+    # assignment here does not recalculate duration_minutes on any draft
+    # planning summary task above it -- that only happens on the next
+    # move_planning_tasks call (see planning_tree.py). Left for E3-03.
     project = _get_project_or_404(db, project_id, current_user.id)
     ensure_project_mutable(project)
     if project.displayed_planning_id is not None:

@@ -565,3 +565,185 @@ def test_export_of_imported_project_preserves_original_dates_without_a_move() ->
             "1": ("2026-11-30T09:00:00", "2027-01-15T18:00:00"),
             "2": ("2027-01-18T09:00:00", "2027-06-25T18:00:00"),
         }
+
+
+def _import_xml_into_project(
+    client: TestClient, headers: dict[str, str], project_id: int, xml_bytes: bytes, source_name: str
+) -> None:
+    create_response: Response = client.post(
+        "/imports/v1/batches",
+        json={
+            "projectId": project_id,
+            "importMode": "standard",
+            "sourceName": source_name,
+        },
+        headers=headers,
+    )
+    assert create_response.status_code == 201
+    batch_id = create_response.json()["id"]
+
+    upload_response: Response = client.post(
+        f"/imports/v1/batches/{batch_id}/xml",
+        files={"file": (source_name, xml_bytes, "application/xml")},
+        headers=headers,
+    )
+    assert upload_response.status_code == 202
+
+    run_response: Response = client.post(
+        f"/imports/v1/batches/{batch_id}/run",
+        json={"dryRun": False, "confirm": True},
+        headers=headers,
+    )
+    assert run_response.status_code == 202
+
+    status_response: Response = client.get(
+        f"/imports/v1/batches/{batch_id}",
+        headers=headers,
+    )
+    assert status_response.status_code == 200
+    assert cast(dict[str, Any], status_response.json())["status"] == "success"
+
+
+def test_export_then_reimport_round_trip_preserves_tasks_and_links() -> None:
+    """EPIC E5 (#40) acceptance criterion: a Waterfall export must survive a
+    full reimport, with tasks, dates/durations and dependency links intact.
+
+    CalendarUID values are deliberately not compared across the two projects
+    since the export always renumbers them from wf_calendar.id (E5-02); only
+    their presence/structure (hours_per_day) is checked.
+    """
+    with TestClient(app) as client:
+        headers = _admin_headers(client, "export.roundtrip@example.com")
+
+        # A STANDARD calendar so the project reference calendar resolves
+        # deterministically (E5-02 fallback rule), same setup as the other
+        # calendar-aware export tests in this module.
+        standard_calendar_id = _create_calendar(
+            client, headers, code="STANDARD", weeks_per_year=47, weekday_hours="7.00"
+        )
+
+        source_project_response: Response = client.post(
+            "/projects",
+            json={"name": "Round-trip source"},
+            headers=headers,
+        )
+        assert source_project_response.status_code == 201
+        source_project_id = cast(int, source_project_response.json()["id"])
+
+        # wf_task_role_assignment always references ms_task.id, never a
+        # wf_planning_task_snapshot row (see calendar_schedule.py), and
+        # create_task_role_assignment rejects assignments on tasks that only
+        # exist as a planning snapshot (see its "Snapshot-only tasks..." 409
+        # guard). Creating this legacy "shadow" ms_task *before* the XML
+        # import below -- while the project still has no displayed planning,
+        # so POST /tasks takes the legacy-task code path instead of creating
+        # another snapshot -- gives task uid 1 a matching row in both tables,
+        # which is what lets it receive a role assignment further down
+        # without touching the snapshot's own name/dates used by the export.
+        shadow_task_response: Response = client.post(
+            f"/projects/{source_project_id}/tasks",
+            json={"name": "shadow-task-for-role-assignment"},
+            headers=headers,
+        )
+        assert shadow_task_response.status_code == 201
+        shadow_task_uid = cast(int, shadow_task_response.json()["uid"])
+
+        _import_xml_into_project(
+            client,
+            headers,
+            source_project_id,
+            EXAMPLE_XML_WITH_CALENDARS.read_bytes(),
+            EXAMPLE_XML_WITH_CALENDARS.name,
+        )
+
+        source_tasks_before = cast(
+            list[dict[str, Any]],
+            client.get(f"/projects/{source_project_id}/tasks", headers=headers).json(),
+        )
+        assert len(source_tasks_before) == 2
+        first_task_uid = cast(
+            int,
+            next(t for t in source_tasks_before if t["name"] == "Etude documentaire")["uid"],
+        )
+        assert first_task_uid == shadow_task_uid
+
+        # Assign a role backed by a real calendar to that task, so the export
+        # carries a task-level CalendarUID through the round trip too.
+        calendar_id = _create_calendar(
+            client, headers, code="RT-CAL", weeks_per_year=47, weekday_hours="8.00"
+        )
+        role_id = _create_role_with_calendar(client, headers, suffix="RT", calendar_id=calendar_id)
+        assignment_response: Response = client.post(
+            f"/projects/{source_project_id}/tasks/{first_task_uid}/role-assignments",
+            json={"role_id": role_id, "quantity": "1", "hours": "10"},
+            headers=headers,
+        )
+        assert assignment_response.status_code == 201
+
+        export_response: Response = client.get(
+            f"/projects/{source_project_id}/export.xml",
+            headers=headers,
+        )
+        assert export_response.status_code == 200
+        exported_xml = cast(bytes, export_response.content)
+        parse_msproject_xml(exported_xml)
+
+        source_tasks = cast(
+            list[dict[str, Any]],
+            client.get(f"/projects/{source_project_id}/tasks", headers=headers).json(),
+        )
+        source_by_uid = {task["uid"]: task for task in source_tasks}
+
+        target_project_response: Response = client.post(
+            "/projects",
+            json={"name": "Round-trip target"},
+            headers=headers,
+        )
+        assert target_project_response.status_code == 201
+        target_project_id = cast(int, target_project_response.json()["id"])
+
+        _import_xml_into_project(
+            client, headers, target_project_id, exported_xml, "export_round_trip.xml"
+        )
+
+        target_tasks = cast(
+            list[dict[str, Any]],
+            client.get(f"/projects/{target_project_id}/tasks", headers=headers).json(),
+        )
+        target_by_uid = {task["uid"]: task for task in target_tasks}
+
+        assert set(source_by_uid) == set(target_by_uid)
+        for uid, source_task in source_by_uid.items():
+            target_task = target_by_uid[uid]
+            assert target_task["name"] == source_task["name"]
+            assert target_task["start_at"] == source_task["start_at"]
+            assert target_task["finish_at"] == source_task["finish_at"]
+            assert target_task["is_milestone"] == source_task["is_milestone"]
+            assert target_task["is_summary"] == source_task["is_summary"]
+
+            source_links = {
+                (link["predecessor_uid"], link["link_type"])
+                for link in source_task["predecessor_links"]
+            }
+            target_links = {
+                (link["predecessor_uid"], link["link_type"])
+                for link in target_task["predecessor_links"]
+            }
+            assert source_links == target_links
+
+        target_export_response: Response = client.get(
+            f"/projects/{target_project_id}/export.xml",
+            headers=headers,
+        )
+        assert target_export_response.status_code == 200
+        target_root = ET.fromstring(cast(bytes, target_export_response.content))
+        target_calendar_uids = {
+            node.text for node in target_root.findall("ms:Calendars/ms:Calendar/ms:UID", NS)
+        }
+        # CalendarUIDs are renumbered from wf_calendar.id on every export, so
+        # comparing raw values across the two projects is meaningless; only
+        # assert that a calendar is present and matches known wf_calendar ids.
+        assert target_calendar_uids <= {str(standard_calendar_id), str(calendar_id)}
+        assert target_calendar_uids
+
+        _assert_no_dangling_calendar_uid_references(target_root)

@@ -7,6 +7,14 @@ implicit 24h/day calendar), and exposes pure duration<->dates scheduling
 functions. These are used today by the summary-task duration recalculation
 in :mod:`waterfall.services.planning_tree`, and are designed to be reused by
 a future "automatic mode" task scheduler (E3-03, out of scope here).
+
+Known v1 limitation: durations resolved through this module are only ever
+recomputed as a side effect of a planning-tree move (``move_planning_tasks``).
+Editing a calendar's weekdays, changing a role's assigned calendar, or
+adding/removing a task's role assignment does not retroactively recalculate
+the ``duration_minutes`` already stored on a draft planning task -- it stays
+stale until the next move. This is accepted for v1 (draft-only edge case)
+and is expected to be revisited by E3-03's broader scheduling rework.
 """
 
 from __future__ import annotations

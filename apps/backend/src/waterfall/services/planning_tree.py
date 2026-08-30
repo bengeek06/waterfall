@@ -153,6 +153,16 @@ def _recalculate_summary_fields(
         task.duration_minutes = max(
             0, compute_working_minutes_between(start_at, finish_at, resolved.weekday_hours)
         )
+        # Known v1 limitation (not fixed here, see the PR review that flagged
+        # it): this is the *only* place duration_minutes gets recalculated
+        # for a calendar-aware summary task, and it only runs as a side
+        # effect of move_planning_tasks (drag/drop reordering). If a role's
+        # calendar or a task's role assignment changes afterwards on a draft
+        # planning, the previously stored duration_minutes is left stale
+        # until the next move -- there is no invalidation hook today. Full
+        # invalidation is deliberately out of scope (draft-only edge case,
+        # low value for the size of the change) and is left for E3-03, which
+        # will need to revisit this scheduling logic more broadly anyway.
 
 
 def _validate_target_parent(

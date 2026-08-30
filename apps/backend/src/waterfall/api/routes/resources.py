@@ -161,6 +161,17 @@ def _get_active_calendar_or_400(db: Session, calendar_id: int) -> Calendar:
     return calendar
 
 
+def _ensure_calendar_not_assigned_to_active_role(db: Session, calendar_id: int) -> None:
+    assigned_role = (
+        db.query(ResourceRole.id)
+        .filter(ResourceRole.calendar_id == calendar_id)
+        .filter(ResourceRole.is_active.is_(True))
+        .first()
+    )
+    if assigned_role is not None:
+        raise _conflict("Calendar is assigned to active resource roles and cannot be deactivated")
+
+
 def _weekdays_by_calendar(db: Session, calendar_ids: list[int]) -> dict[int, list[CalendarWeekday]]:
     if not calendar_ids:
         return {}
@@ -253,6 +264,12 @@ def update_calendar(
     calendar = _get_or_404(db, Calendar, calendar_id, "Calendar")
     values = payload.model_dump(exclude_unset=True)
     values.pop("weekdays", None)
+    if values.get("is_active") is False:
+        _ensure_calendar_not_assigned_to_active_role(db, calendar_id)
+    # Known v1 limitation: editing an active calendar's weekdays here does not
+    # recalculate duration_minutes on any draft planning task whose role is
+    # already staffed with this calendar -- that only happens on the next
+    # move_planning_tasks call (see planning_tree.py). Left for E3-03.
     for field, value in values.items():
         setattr(calendar, field, value)
     db.add(calendar)
@@ -270,14 +287,7 @@ def delete_calendar(
     _: User = Depends(get_current_admin_user),
 ) -> None:
     calendar = _get_or_404(db, Calendar, calendar_id, "Calendar")
-    assigned_role = (
-        db.query(ResourceRole.id)
-        .filter(ResourceRole.calendar_id == calendar_id)
-        .filter(ResourceRole.is_active.is_(True))
-        .first()
-    )
-    if assigned_role is not None:
-        raise _conflict("Calendar is assigned to active resource roles and cannot be deleted")
+    _ensure_calendar_not_assigned_to_active_role(db, calendar_id)
     calendar.is_active = False
     db.add(calendar)
     _commit(db, "Calendar deletion conflicts with existing data")

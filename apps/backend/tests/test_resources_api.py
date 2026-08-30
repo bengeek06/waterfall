@@ -566,6 +566,60 @@ def test_calendar_delete_deactivates_and_blocks_when_assigned() -> None:
         assert "STANDARD" in inactive_codes
 
 
+def test_calendar_patch_deactivate_blocks_when_assigned() -> None:
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        context = _create_role_context(client, headers, "CALPATCH")
+        calendar_id = cast(
+            dict[str, Any],
+            client.post(
+                "/resources/calendars",
+                json={"code": "STANDARD-PATCH", "name": "Standard", "weeks_per_year": 47},
+                headers=headers,
+            ).json(),
+        )["id"]
+        role_response: Response = client.post(
+            "/resources/roles",
+            json={
+                "code": "DEV-CAL-PATCH",
+                "name": "Developpeur",
+                "node_id": context["node_id"],
+                "cost_category_id": context["cost_category_id"],
+                "calendar_id": calendar_id,
+            },
+            headers=headers,
+        )
+        assert role_response.status_code == 201
+
+        blocked: Response = client.patch(
+            f"/resources/calendars/{calendar_id}",
+            json={"is_active": False},
+            headers=headers,
+        )
+        assert blocked.status_code == 409
+
+        active_codes = [
+            calendar["code"]
+            for calendar in cast(
+                list[dict[str, Any]], client.get("/resources/calendars", headers=headers).json()
+            )
+        ]
+        assert "STANDARD-PATCH" in active_codes
+
+        client.patch(
+            f"/resources/roles/{cast(dict[str, Any], role_response.json())['id']}",
+            json={"is_active": False},
+            headers=headers,
+        )
+        allowed: Response = client.patch(
+            f"/resources/calendars/{calendar_id}",
+            json={"is_active": False},
+            headers=headers,
+        )
+        assert allowed.status_code == 200
+        assert allowed.json()["is_active"] is False
+
+
 def test_role_rejects_unknown_or_inactive_calendar() -> None:
     with TestClient(app) as client:
         headers = _admin_headers(client)
