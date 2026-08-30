@@ -151,8 +151,21 @@ def _descendant_node_ids(db: Session, node_id: int) -> set[int]:
     return descendants
 
 
+def _get_calendar_for_update_or_404(db: Session, calendar_id: int) -> Calendar:
+    # Locks the Calendar row for the remainder of the transaction (released on
+    # commit/rollback) so a concurrent request cannot read a stale is_active value
+    # between this check and the write it guards -- see issue #50. SQLite (used by
+    # the default test suite) has no SELECT ... FOR UPDATE semantics; SQLAlchemy's
+    # sqlite dialect silently drops the clause, so this is a no-op there and existing
+    # SQLite-backed tests are unaffected. The lock only takes effect on PostgreSQL.
+    calendar = db.query(Calendar).filter(Calendar.id == calendar_id).with_for_update().first()
+    if calendar is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Calendar not found")
+    return calendar
+
+
 def _get_active_calendar_or_400(db: Session, calendar_id: int) -> Calendar:
-    calendar = _get_or_404(db, Calendar, calendar_id, "Calendar")
+    calendar = _get_calendar_for_update_or_404(db, calendar_id)
     if not calendar.is_active:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -261,7 +274,7 @@ def update_calendar(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_admin_user),
 ) -> CalendarRead:
-    calendar = _get_or_404(db, Calendar, calendar_id, "Calendar")
+    calendar = _get_calendar_for_update_or_404(db, calendar_id)
     values = payload.model_dump(exclude_unset=True)
     values.pop("weekdays", None)
     if values.get("is_active") is False:
@@ -286,7 +299,7 @@ def delete_calendar(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_admin_user),
 ) -> None:
-    calendar = _get_or_404(db, Calendar, calendar_id, "Calendar")
+    calendar = _get_calendar_for_update_or_404(db, calendar_id)
     _ensure_calendar_not_assigned_to_active_role(db, calendar_id)
     calendar.is_active = False
     db.add(calendar)
