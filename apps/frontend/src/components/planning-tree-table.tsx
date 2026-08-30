@@ -309,6 +309,11 @@ export function PlanningTreeTable({
     if (!onScheduleUpdate || mutationBusy) {
       return;
     }
+    // No draft entry means the user never actually typed into one of this row's fields (e.g. just
+    // tabbed through on focus/blur): nothing changed, so nothing should be committed.
+    if (!(row.uid in scheduleDrafts)) {
+      return;
+    }
     const draft = scheduleDraftFor(row);
     let payload: PlanningTaskScheduleUpdate;
     if (row.is_milestone) {
@@ -434,6 +439,7 @@ export function PlanningTreeTable({
                 aria-label={`Mode de ${row.name}`}
                 size="sm"
                 onClick={(event: MouseEvent<HTMLButtonElement>) => event.stopPropagation()}
+                onKeyDown={(event: KeyboardEvent<HTMLButtonElement>) => event.stopPropagation()}
               >
                 <SelectValue />
               </SelectTrigger>

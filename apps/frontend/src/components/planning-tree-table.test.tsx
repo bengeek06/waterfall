@@ -308,6 +308,29 @@ describe("PlanningTreeTable", () => {
     expect(onScheduleUpdate).toHaveBeenCalledWith(1, { is_manual: false, duration_minutes: 120 });
   });
 
+  it("does not commit a schedule edit on blur when nothing was typed", () => {
+    const onScheduleUpdate = vi.fn();
+    const tasks: Task[] = [
+      task({
+        uid: 1,
+        name: "Tâche manuelle",
+        parent_uid: null,
+        position: 1,
+        is_manual: true,
+        start_at: "2026-01-05T09:00:00Z",
+        finish_at: "2026-01-06T17:00:00Z",
+        duration_minutes: 480,
+      }),
+    ];
+    render(<PlanningTreeTable tasks={tasks} versionKey={1} onScheduleUpdate={onScheduleUpdate} />);
+
+    const startInput = screen.getByLabelText("Début de Tâche manuelle");
+    fireEvent.focus(startInput);
+    fireEvent.blur(startInput);
+
+    expect(onScheduleUpdate).not.toHaveBeenCalled();
+  });
+
   it("does not commit a schedule edit while a mutation is busy", () => {
     const onScheduleUpdate = vi.fn();
     const tasks: Task[] = [
@@ -413,6 +436,23 @@ describe("PlanningTreeTable", () => {
       is_manual: false,
       start_at: "2026-01-05T09:00:00Z",
     });
+  });
+
+  it("does not let an arrow key on the mode selector bubble up to the row's navigation", () => {
+    const onScheduleUpdate = vi.fn();
+    const siblings: Task[] = [
+      task({ uid: 1, name: "Premier", parent_uid: null, position: 1, is_manual: false }),
+      task({ uid: 2, name: "Second", parent_uid: null, position: 2, is_manual: false }),
+    ];
+    render(<PlanningTreeTable tasks={siblings} versionKey={1} onScheduleUpdate={onScheduleUpdate} />);
+
+    const trigger = screen.getByLabelText("Mode de Premier");
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+
+    // If the keydown had bubbled to the row, the row navigation handler would have moved focus
+    // to the sibling row (see the useEffect that re-focuses the row matching focusedUid).
+    expect(document.activeElement).toBe(trigger);
   });
 
   it("disables the automatic option for a non-milestone task with no duration set", async () => {

@@ -137,7 +137,12 @@ def _seed_hierarchy(project_id: int) -> int:
 
 
 def _add_link(
-    planning_id: int, task_uid: int, predecessor_uid: int, link_type: int, lag_tenth_minute: int
+    planning_id: int,
+    task_uid: int,
+    predecessor_uid: int,
+    link_type: int,
+    lag_tenth_minute: int,
+    lag_format: int | None = None,
 ) -> None:
     with get_session_factory()() as session:
         session.add(
@@ -147,7 +152,27 @@ def _add_link(
                 predecessor_uid=predecessor_uid,
                 link_type=link_type,
                 lag_tenth_minute=lag_tenth_minute,
+                lag_format=lag_format,
             )
+        )
+        session.commit()
+
+
+def _create_standard_calendar() -> None:
+    """A Mon-Fri 7h/day calendar, matching STANDARD_HOURS in
+    test_calendar_schedule.py, used by the lag_format regression tests below
+    to demonstrate a working-time lag skipping a weekend."""
+    with get_session_factory()() as session:
+        calendar = Calendar(code="STANDARD", name="Standard", weeks_per_year=47)
+        session.add(calendar)
+        session.flush()
+        session.add_all(
+            CalendarWeekday(
+                calendar_id=calendar.id,
+                day_type=day_type,
+                hours_per_day=Decimal("0.00") if day_type in (1, 7) else Decimal("7.00"),
+            )
+            for day_type in range(1, 8)
         )
         session.commit()
 
@@ -380,6 +405,129 @@ def test_automatic_task_multiple_predecessors_uses_latest_constraint() -> None:
         leaf = _tasks_by_uid(cast(dict[str, Any], response.json()))[3]
         assert leaf["start_at"] == "2026-01-05T12:00:00"
         assert leaf["finish_at"] == "2026-01-05T16:00:00"
+
+
+def test_automatic_task_working_day_lag_format_resolves_through_calendar_skipping_weekend() -> None:
+    """E3-03 PR review finding #2: a working-time ("d", lag_format=7) FS lag
+    is resolved through the applicable calendar, like a task's own duration,
+    instead of raw wall-clock arithmetic.
+
+    Predecessor A is moved to finish on a Friday. A lag that fits within a
+    single calendar day always resolves within that same date regardless of
+    the anchor's time-of-day (identical to how ``compute_finish_at`` already
+    behaves for a task's own duration -- see
+    ``test_compute_finish_at_mono_day_fits_within_one_days_capacity`` in
+    test_calendar_schedule.py), so the smallest lag that unambiguously
+    demonstrates the weekend being skipped is one exceeding a single day's
+    working capacity: 2 working days (2 * the STANDARD calendar's 7h/day
+    capacity), mirroring test_compute_finish_at_skips_non_working_days.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_hierarchy(project_id)
+        _create_standard_calendar()
+        with get_session_factory()() as session:
+            predecessor = (
+                session.query(WfPlanningTaskSnapshot)
+                .filter(WfPlanningTaskSnapshot.planning_id == planning_id)
+                .filter(WfPlanningTaskSnapshot.uid == 6)
+                .one()
+            )
+            predecessor.finish_at = datetime(2026, 1, 9, 8, 0, tzinfo=UTC)  # Friday
+            session.commit()
+        # 2 working days = 2 * 7h * 60 min = 840 min = 8400 tenths of a minute.
+        _add_link(
+            planning_id,
+            task_uid=3,
+            predecessor_uid=6,
+            link_type=1,
+            lag_tenth_minute=8400,
+            lag_format=7,
+        )
+
+        response = client.patch(
+            _schedule_path(project_id, planning_id, 3),
+            json={"is_manual": False, "duration_minutes": 60},
+            headers=headers,
+        )
+
+        assert response.status_code == 200
+        leaf = _tasks_by_uid(cast(dict[str, Any], response.json()))[3]
+        # Friday 08:00: Friday's 7h (420 min) is consumed first, Sat/Sun
+        # contribute nothing, the remaining 420 min are consumed on Monday ->
+        # 2026-01-12 (Monday) 15:00, not the naive Sunday a raw 840-minute
+        # wall-clock addition would produce.
+        assert leaf["start_at"] == "2026-01-12T15:00:00"
+        assert leaf["finish_at"] == "2026-01-12T16:00:00"
+
+
+def test_automatic_task_elapsed_lag_format_keeps_raw_wall_clock_arithmetic() -> None:
+    """The elapsed ("ed", lag_format=8) counterpart of the test above must
+    keep the pre-existing raw wall-clock behaviour unchanged: the lag is
+    added directly with no calendar involved, landing on the weekend instead
+    of being pushed to the next working day."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_hierarchy(project_id)
+        _create_standard_calendar()
+        with get_session_factory()() as session:
+            predecessor = (
+                session.query(WfPlanningTaskSnapshot)
+                .filter(WfPlanningTaskSnapshot.planning_id == planning_id)
+                .filter(WfPlanningTaskSnapshot.uid == 6)
+                .one()
+            )
+            predecessor.finish_at = datetime(2026, 1, 9, 8, 0, tzinfo=UTC)  # Friday
+            session.commit()
+        # 1 elapsed day = 1440 min = 14400 tenths of a minute.
+        _add_link(
+            planning_id,
+            task_uid=3,
+            predecessor_uid=6,
+            link_type=1,
+            lag_tenth_minute=14400,
+            lag_format=8,
+        )
+
+        response = client.patch(
+            _schedule_path(project_id, planning_id, 3),
+            json={"is_manual": False, "duration_minutes": 60},
+            headers=headers,
+        )
+
+        assert response.status_code == 200
+        leaf = _tasks_by_uid(cast(dict[str, Any], response.json()))[3]
+        # Friday 08:00 + 24h raw wall-clock = Saturday 08:00 (unchanged).
+        assert leaf["start_at"] == "2026-01-10T08:00:00"
+        # The task's own duration is unaffected by this fix and stays
+        # calendar-aware regardless of the lag_format used to reach start_at.
+        assert leaf["finish_at"] == "2026-01-12T09:00:00"
+
+
+def test_automatic_task_missing_lag_format_keeps_raw_wall_clock_arithmetic() -> None:
+    """An absent ``<LagFormat>`` (legal per the MSPDI schema) must preserve
+    the pre-existing raw wall-clock lag arithmetic -- the only behaviour
+    available before lag_format was read at all -- rather than silently
+    defaulting untagged data to the new calendar-aware path."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_hierarchy(project_id)
+        _add_link(planning_id, task_uid=3, predecessor_uid=6, link_type=1, lag_tenth_minute=300)
+
+        response = client.patch(
+            _schedule_path(project_id, planning_id, 3),
+            json={"is_manual": False, "duration_minutes": 240},
+            headers=headers,
+        )
+
+        assert response.status_code == 200
+        leaf = _tasks_by_uid(cast(dict[str, Any], response.json()))[3]
+        # Predecessor A finishes at 10:00, +30 min lag => 10:30 (unchanged).
+        assert leaf["start_at"] == "2026-01-05T10:30:00"
+        assert leaf["finish_at"] == "2026-01-05T14:30:00"
 
 
 def test_automatic_task_finish_finish_predecessor_uses_documented_raw_minute_approximation() -> (
@@ -677,6 +825,61 @@ def test_automatic_milestone_without_predecessor_or_any_start_at_is_rejected() -
 
         assert response.status_code == 400
         assert isinstance(response.json()["detail"], str)
+
+
+def test_editing_predecessor_does_not_reschedule_automatic_successor() -> None:
+    """E3-03 PR review finding #3, documented "Known v1 limitation": editing a
+    task only recalculates its summary *ancestors* (see
+    ``_recalculate_ancestor_summaries``), never its *successors* -- other
+    tasks whose ``WfPlanningLinkSnapshot`` references it as
+    ``predecessor_uid`` -- even when a successor is in automatic mode.
+
+    This test freezes that current (non-cascading) behaviour: uid=3 (Leaf) is
+    first put in automatic mode with an FS link on uid=6 (Predecessor A),
+    landing on dates consistent with its constraint. Predecessor A is then
+    edited to finish much later. Per issue #73 ("Automatic-mode successors
+    are not rescheduled when their predecessor's dates change"), uid=3 is
+    *not* revisited and keeps its now-constraint-violating dates -- this test
+    must be replaced with a positive cascade assertion once #73 is
+    implemented, not just deleted.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_hierarchy(project_id)
+        _add_link(planning_id, task_uid=3, predecessor_uid=6, link_type=1, lag_tenth_minute=300)
+
+        automatic_response = client.patch(
+            _schedule_path(project_id, planning_id, 3),
+            json={"is_manual": False, "duration_minutes": 240},
+            headers=headers,
+        )
+        assert automatic_response.status_code == 200
+        leaf_before = _tasks_by_uid(cast(dict[str, Any], automatic_response.json()))[3]
+        # Predecessor A finishes at 10:00, +30 min lag => 10:30 (same math as
+        # test_automatic_task_finish_start_predecessor_sets_start_after_predecessor_finish).
+        assert leaf_before["start_at"] == "2026-01-05T10:30:00"
+        assert leaf_before["finish_at"] == "2026-01-05T14:30:00"
+
+        predecessor_response = client.patch(
+            _schedule_path(project_id, planning_id, 6),
+            json={
+                "is_manual": True,
+                "start_at": "2026-02-01T08:00:00Z",
+                "finish_at": "2026-02-01T09:00:00Z",
+            },
+            headers=headers,
+        )
+        assert predecessor_response.status_code == 200
+        predecessor = _tasks_by_uid(cast(dict[str, Any], predecessor_response.json()))[6]
+        assert predecessor["finish_at"] == "2026-02-01T09:00:00"
+
+        # uid=3 is untouched by this request: it keeps its pre-edit dates,
+        # which now violate its own FS constraint against uid=6 -- the
+        # documented v1 gap tracked by issue #73.
+        leaf_after = _tasks_by_uid(cast(dict[str, Any], predecessor_response.json()))[3]
+        assert leaf_after["start_at"] == leaf_before["start_at"]
+        assert leaf_after["finish_at"] == leaf_before["finish_at"]
 
 
 def test_schedule_update_rejects_validated_planning_and_read_only_project() -> None:

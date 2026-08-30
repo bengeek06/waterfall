@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
+from typing import overload
 
 from sqlalchemy.orm import Session
 
@@ -37,6 +38,66 @@ class PlanningTaskScheduleError(PlanningTreeMoveError):
     is no structural-invariant case analogous to
     :class:`PlanningTreeInvariantError` for a single-task schedule edit.
     """
+
+
+@overload
+def _to_naive_utc(value: datetime) -> datetime: ...
+@overload
+def _to_naive_utc(value: None) -> None: ...
+@overload
+def _to_naive_utc(value: datetime | None) -> datetime | None: ...
+def _to_naive_utc(value: datetime | None) -> datetime | None:
+    """Normalize a possibly tz-aware datetime to naive UTC.
+
+    ``WfPlanningTaskSnapshot.start_at``/``finish_at`` are declared as
+    ``DateTime(timezone=True)``, but the application-level storage convention
+    (see ``PlanningTaskScheduleUpdate._drop_tzinfo`` in
+    ``waterfall.schemas.projects``) is naive UTC wall-clock, matching the MS
+    Project XML import/export round-trip (``msproject_xml._datetime`` /
+    ``routes.projects._dt_to_msp_text``). On PostgreSQL (the production
+    target), this column type returns real timezone-aware ``datetime``
+    objects on ``SELECT`` regardless of how the value was written, whereas a
+    client-supplied payload value has already been normalized to naive by
+    ``_drop_tzinfo``. Comparing (``min``/``max``) or arithmetic-combining a
+    freshly reloaded, aware value with an already-naive one raises
+    ``TypeError: can't compare offset-naive and offset-aware datetimes`` --
+    invisible under SQLite, which does not preserve ``tzinfo`` across a
+    round trip, so every value it returns is already naive. Every read of a
+    ``start_at``/``finish_at`` value in this module that feeds into a
+    comparison or gets propagated into a written value must go through this
+    function first, to keep a single, consistent naive-UTC representation
+    regardless of which value happened to come from the database versus the
+    request payload.
+    """
+    if value is not None and value.tzinfo is not None:
+        return value.astimezone(UTC).replace(tzinfo=None)
+    return value
+
+
+# MSPDI LagFormat/DurationFormat numeric convention, confirmed directly from
+# this repo's own bundled schema documentation (see the "LagFormat"
+# annotation in resources/msproject-schemas/2016/tasks_2016_schema.xml):
+# "Values are: 3=m, 4=em, 5=h, 6=eh, 7=d, 8=ed, 9=w, 10=ew, 11=mo, 12=emo,
+# 19=%, 20=e%, 35=m?, 36=em?, 37=h?, 38=eh?, 39=d?, 40=ed?, 41=w?, 42=ew?,
+# 43=mo?, 44=emo?, 51=%? and 52=e%?." The "e" prefix denotes *elapsed* (raw
+# wall-clock) time; its absence denotes a *working-time* unit that must be
+# resolved through the applicable calendar. This codebase's own generated
+# planning data (see ``services.planning_structure``) and its MS Project XML
+# fixtures exclusively use 7 ("d", working days) for predecessor link lag.
+_ELAPSED_LAG_FORMATS = frozenset({4, 6, 8, 10, 12, 20, 36, 38, 40, 42, 44, 52})
+
+
+def _is_elapsed_lag_format(lag_format: int | None) -> bool:
+    """Whether an MSPDI ``LagFormat`` value denotes elapsed (raw wall-clock) lag.
+
+    ``None`` -- an omitted ``<LagFormat>``, legal per the MSPDI schema
+    (``minOccurs="0"``) -- is treated as elapsed, preserving this module's
+    pre-existing raw wall-clock lag arithmetic when no format is specified;
+    that was the only behaviour available before ``lag_format`` was read at
+    all, and defaulting absent data to the calendar-aware path would be an
+    unreviewed, untested behaviour change.
+    """
+    return lag_format is None or lag_format in _ELAPSED_LAG_FORMATS
 
 
 def _task_order(task: WfPlanningTaskSnapshot) -> tuple[int, int, int]:
@@ -145,8 +206,21 @@ def _recalculate_summary_fields(
         return
 
     task.is_summary = True
-    start_dates = [child.start_at for child in children if child.start_at is not None]
-    finish_dates = [child.finish_at for child in children if child.finish_at is not None]
+    # Normalized to naive UTC (see _to_naive_utc) before min()/max(): children
+    # freshly reloaded from the database are timezone-aware on PostgreSQL,
+    # while a sibling task just edited in the same request (e.g. through
+    # update_planning_task_schedule) carries an already-naive value from the
+    # request payload. Mixing the two raises TypeError on PostgreSQL.
+    start_dates = [
+        normalized
+        for child in children
+        if (normalized := _to_naive_utc(child.start_at)) is not None
+    ]
+    finish_dates = [
+        normalized
+        for child in children
+        if (normalized := _to_naive_utc(child.finish_at)) is not None
+    ]
     task.start_at = min(start_dates) if start_dates else None
     task.finish_at = max(finish_dates) if finish_dates else None
     start_at = task.start_at
@@ -270,7 +344,7 @@ def _apply_manual_milestone_schedule(
     and normalized: ``payload.start_at`` if provided, else the task's own
     already-stored ``start_at``.
     """
-    start_at = payload.start_at if payload.start_at is not None else task.start_at
+    start_at = payload.start_at if payload.start_at is not None else _to_naive_utc(task.start_at)
     if start_at is None:
         raise PlanningTaskScheduleError("start_at is required to schedule a milestone")
 
@@ -282,6 +356,8 @@ def _apply_manual_milestone_schedule(
 
 
 def _apply_automatic_milestone_schedule(
+    db: Session,
+    planning: WfPlanning,
     links: list[WfPlanningLinkSnapshot],
     tasks_by_uid: dict[int, WfPlanningTaskSnapshot],
     task: WfPlanningTaskSnapshot,
@@ -293,15 +369,20 @@ def _apply_automatic_milestone_schedule(
     falling back to ``payload.start_at`` then the task's own stored
     ``start_at`` when it has no predecessor link contributing a constraint.
     Since a milestone's duration is always 0, its finish_at always equals its
-    start_at -- no calendar-aware forward computation is needed.
+    start_at -- no calendar-aware forward computation is needed for the
+    milestone's own duration, but its predecessor links' lag still is (see
+    :func:`_resolve_fs_ss_lag`), hence resolving the task's own calendar here.
     """
-    constraints = _resolve_predecessor_constraints(links, tasks_by_uid, duration_minutes=0)
+    resolved_calendar = resolve_calendars_for_tasks(db, planning.project_id, {task.uid})[task.uid]
+    constraints = _resolve_predecessor_constraints(
+        links, tasks_by_uid, duration_minutes=0, resolved_calendar=resolved_calendar
+    )
     if constraints:
         start_at = max(constraints)
     elif payload.start_at is not None:
         start_at = payload.start_at
     elif task.start_at is not None:
-        start_at = task.start_at
+        start_at = _to_naive_utc(task.start_at)
     else:
         raise PlanningTaskScheduleError(
             "start_at is required for an automatically scheduled milestone without predecessors"
@@ -328,10 +409,37 @@ def _apply_manual_schedule(
     task.duration_minutes = payload.duration_minutes
 
 
+def _resolve_fs_ss_lag(
+    anchor: datetime,
+    lag_minutes: float,
+    lag_format: int | None,
+    resolved_calendar: ResolvedCalendar,
+) -> datetime:
+    """Advance an FS/SS predecessor ``anchor`` date by its link's lag.
+
+    An elapsed ``lag_format`` (or an absent one, see
+    :func:`_is_elapsed_lag_format`) keeps the pre-existing raw wall-clock
+    ``timedelta`` arithmetic. A working-time ``lag_format`` instead resolves
+    through the task's applicable calendar via :func:`compute_finish_at` --
+    the same "advance N working minutes forward" primitive already used to
+    schedule a task's own duration in :func:`_apply_automatic_schedule`. A
+    lag that fits within a single calendar day always resolves within that
+    same date regardless of the anchor's time-of-day (identical to how
+    ``compute_finish_at`` already behaves for a task's own duration, see
+    ``test_compute_finish_at_mono_day_fits_within_one_days_capacity`` in
+    ``test_calendar_schedule.py``); only a lag exceeding a day's working
+    capacity walks forward across non-working days (e.g. a weekend).
+    """
+    if _is_elapsed_lag_format(lag_format) or lag_minutes <= 0:
+        return anchor + timedelta(minutes=lag_minutes)
+    return compute_finish_at(anchor, round(lag_minutes), resolved_calendar.weekday_hours)
+
+
 def _resolve_predecessor_constraints(
     links: list[WfPlanningLinkSnapshot],
     tasks_by_uid: dict[int, WfPlanningTaskSnapshot],
     duration_minutes: int,
+    resolved_calendar: ResolvedCalendar,
 ) -> list[datetime]:
     """Derive start_at lower-bound constraints from a task's predecessor links.
 
@@ -339,7 +447,9 @@ def _resolve_predecessor_constraints(
     is stored in tenths of a minute and converted to minutes here.
 
     FS and SS constraints are resolved directly from the predecessor's own
-    stored ``finish_at``/``start_at`` -- exact, no approximation.
+    stored ``finish_at``/``start_at`` -- exact, no approximation -- and,
+    since E3-03's lag_format fix, calendar-aware for a working-time
+    ``lag_format`` (see :func:`_resolve_fs_ss_lag`).
 
     Known v1 limitation: FF and SF constraints logically bound the
     *successor's finish* date, not its start. Resolving them exactly would
@@ -355,6 +465,9 @@ def _resolve_predecessor_constraints(
     calendar-aware backward computation. Accepted for v1 per the E3-03 issue;
     a regression test freezes this documented behaviour rather than silently
     tolerating it. Revisit if FF/SF links turn out to be common in practice.
+    lag_format is deliberately not applied here either, to avoid partially
+    "fixing" an already-documented approximation with an inconsistent mix of
+    exact and approximate handling within the same formula.
     """
     constraints: list[datetime] = []
     for link in links:
@@ -362,17 +475,27 @@ def _resolve_predecessor_constraints(
         if predecessor is None:
             continue
         lag_minutes = (link.lag_tenth_minute or 0) / 10
-        if link.link_type == 1 and predecessor.finish_at is not None:  # FS
-            constraints.append(predecessor.finish_at + timedelta(minutes=lag_minutes))
-        elif link.link_type == 3 and predecessor.start_at is not None:  # SS
-            constraints.append(predecessor.start_at + timedelta(minutes=lag_minutes))
-        elif link.link_type == 0 and predecessor.finish_at is not None:  # FF (approximated)
+        predecessor_finish = _to_naive_utc(predecessor.finish_at)
+        predecessor_start = _to_naive_utc(predecessor.start_at)
+        if link.link_type == 1 and predecessor_finish is not None:  # FS
             constraints.append(
-                predecessor.finish_at + timedelta(minutes=lag_minutes - duration_minutes)
+                _resolve_fs_ss_lag(
+                    predecessor_finish, lag_minutes, link.lag_format, resolved_calendar
+                )
             )
-        elif link.link_type == 2 and predecessor.start_at is not None:  # SF (approximated)
+        elif link.link_type == 3 and predecessor_start is not None:  # SS
             constraints.append(
-                predecessor.start_at + timedelta(minutes=lag_minutes - duration_minutes)
+                _resolve_fs_ss_lag(
+                    predecessor_start, lag_minutes, link.lag_format, resolved_calendar
+                )
+            )
+        elif link.link_type == 0 and predecessor_finish is not None:  # FF (approximated)
+            constraints.append(
+                predecessor_finish + timedelta(minutes=lag_minutes - duration_minutes)
+            )
+        elif link.link_type == 2 and predecessor_start is not None:  # SF (approximated)
+            constraints.append(
+                predecessor_start + timedelta(minutes=lag_minutes - duration_minutes)
             )
     return constraints
 
@@ -401,20 +524,26 @@ def _apply_automatic_schedule(
             "An automatically scheduled task requires a positive duration_minutes"
         )
 
-    constraints = _resolve_predecessor_constraints(links, tasks_by_uid, duration_minutes)
+    # Resolved before _resolve_predecessor_constraints (rather than only
+    # afterwards, as before the E3-03 lag_format fix) because a working-time
+    # FS/SS lag now needs the task's own calendar too, not just its duration.
+    resolved_calendars = resolve_calendars_for_tasks(db, planning.project_id, {task.uid})
+    resolved = resolved_calendars[task.uid]
+
+    constraints = _resolve_predecessor_constraints(
+        links, tasks_by_uid, duration_minutes, resolved_calendar=resolved
+    )
     if constraints:
         start_at = max(constraints)
     elif payload.start_at is not None:
         start_at = payload.start_at
     elif task.start_at is not None:
-        start_at = task.start_at
+        start_at = _to_naive_utc(task.start_at)
     else:
         raise PlanningTaskScheduleError(
             "start_at is required for an automatically scheduled task without predecessors"
         )
 
-    resolved_calendars = resolve_calendars_for_tasks(db, planning.project_id, {task.uid})
-    resolved = resolved_calendars[task.uid]
     try:
         finish_at = compute_finish_at(start_at, duration_minutes, resolved.weekday_hours)
     except ValueError as exc:
@@ -474,6 +603,19 @@ def update_planning_task_schedule(
 
     Only reads predecessor links (:class:`WfPlanningLinkSnapshot`); editing
     the links themselves is out of scope (E3-04).
+
+    Known v1 limitation: only ``task``'s summary *ancestors* are recalculated
+    afterwards (see :func:`_recalculate_ancestor_summaries`). Its
+    *successors* -- other tasks whose :class:`WfPlanningLinkSnapshot`
+    references ``task_uid`` as ``predecessor_uid`` -- are never revisited,
+    even when they are in automatic mode. Editing ``task``'s dates can
+    therefore leave an automatic successor with dates that violate its own
+    FS/SS/FF/SF constraint until that successor is itself edited separately.
+    This mirrors the FF/SF approximation already documented in
+    :func:`_resolve_predecessor_constraints`: accepted for v1, tracked by
+    issue #73 ("Automatic-mode successors are not rescheduled when their
+    predecessor's dates change"), with a regression test freezing the
+    current (non-cascading) behaviour rather than leaving the gap untested.
     """
     tasks = (
         db.query(WfPlanningTaskSnapshot)
@@ -499,7 +641,7 @@ def update_planning_task_schedule(
             .filter(WfPlanningLinkSnapshot.task_uid == task_uid)
             .all()
         )
-        _apply_automatic_milestone_schedule(links, tasks_by_uid, task, payload)
+        _apply_automatic_milestone_schedule(db, planning, links, tasks_by_uid, task, payload)
     elif payload.is_manual:
         _apply_manual_schedule(task, payload)
     else:
