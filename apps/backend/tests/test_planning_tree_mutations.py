@@ -601,6 +601,48 @@ def test_move_rejects_milestone_as_target_parent() -> None:
         assert response.status_code == 409
 
 
+def test_move_recalculating_summary_with_near_date_max_child_returns_400_not_500() -> None:
+    """Round-4 E3-03 PR review finding: ``compute_working_minutes_between``
+    (used by ``_recalculate_summary_fields`` to derive a summary task's
+    ``duration_minutes`` from its children) walks the calendar day by day,
+    exactly like ``compute_finish_at``/``compute_start_at``, but -- unlike
+    those two -- had no iteration ceiling of its own. Any move recalculates
+    the *whole* tree's summary durations (not just the moved subtree), so a
+    task that already carries an unreasonably far ``finish_at`` (e.g. from a
+    prior manual-mode edit, which has no server-side range validation, see
+    ``_apply_manual_schedule``) makes an otherwise unrelated move trip the
+    same unbounded walk. This must surface as the 400 already documented for
+    an invalid move, not leak as an uncaught 500, and must return promptly
+    rather than looping for an unreasonable number of iterations.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        _, planning_id = _seed_plannings(project_id)
+        with get_session_factory()() as session:
+            leaf = (
+                session.query(WfPlanningTaskSnapshot)
+                .filter(WfPlanningTaskSnapshot.planning_id == planning_id)
+                .filter(WfPlanningTaskSnapshot.uid == 3)
+                .one()
+            )
+            # uid=3 is a child of Group A (uid=1, summary): its finish_at
+            # feeds directly into Group A's max(finish_dates) recalculation.
+            leaf.finish_at = datetime(9999, 12, 31, 0, 0, tzinfo=UTC)
+            session.commit()
+
+        # An unrelated move (uid=6 has no relationship to Group A) still
+        # recalculates every summary task's duration in the whole tree.
+        response = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/tasks/move",
+            json={"task_uids": [6], "target_parent_uid": 4, "position": 1},
+            headers=headers,
+        )
+
+        assert response.status_code == 400
+        assert isinstance(response.json()["detail"], str)
+
+
 def test_move_rejects_validated_planning_and_read_only_project() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)

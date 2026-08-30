@@ -303,6 +303,12 @@ describe("PlanningTreeTable", () => {
     render(<PlanningTreeTable tasks={tasks} versionKey={1} onScheduleUpdate={onScheduleUpdate} />);
 
     const startInput = screen.getByLabelText("Début de Tâche manuelle");
+    // jsdom's own datetime-local value sanitization always truncates to minute precision
+    // regardless of `step`, so a seconds-carrying value can't be simulated through this input's
+    // change event here; the seconds round-trip itself is covered separately below (see "preserves
+    // a manual task's non-zero seconds when only the duration field is edited"), which never goes
+    // through this DOM sanitization path. A missing seconds group defaults to :00 (see
+    // DATETIME_INPUT_PATTERN).
     fireEvent.change(startInput, { target: { value: "2026-01-06T09:00" } });
     fireEvent.blur(startInput);
 
@@ -345,7 +351,10 @@ describe("PlanningTreeTable", () => {
 
       const startInput = screen.getByLabelText<HTMLInputElement>("Début de Tâche manuelle");
       // toDateTimeInputValue must display the value's UTC components (08:00), not the
-      // timezone-shifted local ones (which would be 03:00 in America/New_York).
+      // timezone-shifted local ones (which would be 03:00 in America/New_York). jsdom's own
+      // datetime-local value sanitization always truncates to minute precision regardless of
+      // `step`, so `.value` here reads "08:00" even though toDateTimeInputValue itself produced
+      // "08:00:00" (real browsers with `step="1"` preserve the seconds subfield instead).
       expect(startInput.value).toBe("2026-01-09T08:00");
 
       // Editing the minutes only (leaving the UTC-displayed date/hour untouched) and committing
@@ -384,6 +393,39 @@ describe("PlanningTreeTable", () => {
 
     expect(onScheduleUpdate).toHaveBeenCalledTimes(1);
     expect(onScheduleUpdate.mock.calls[0][1].duration_minutes).toBe(600);
+  });
+
+  it("preserves a manual task's non-zero seconds when only the duration field is edited", () => {
+    // commitScheduleEdit always resends start_at/finish_at/duration_minutes together for a manual
+    // task, even when the user only touched the duration field. lag_tenth_minute-derived dates can
+    // carry a non-zero, non-minute-aligned seconds component (a multiple of 6s), so
+    // toDateTimeInputValue/fromDateTimeInputValue must round-trip seconds losslessly, or an
+    // untouched start_at/finish_at would be silently truncated to :00 on every commit.
+    const onScheduleUpdate = vi.fn();
+    const tasks: Task[] = [
+      task({
+        uid: 1,
+        name: "Tâche manuelle",
+        parent_uid: null,
+        position: 1,
+        is_manual: true,
+        start_at: "2026-01-09T10:00:30",
+        finish_at: "2026-01-09T11:00:30",
+        duration_minutes: 60,
+      }),
+    ];
+    render(<PlanningTreeTable tasks={tasks} versionKey={1} onScheduleUpdate={onScheduleUpdate} />);
+
+    const durationInput = screen.getByLabelText("Durée de Tâche manuelle");
+    fireEvent.change(durationInput, { target: { value: "90" } });
+    fireEvent.blur(durationInput);
+
+    expect(onScheduleUpdate).toHaveBeenCalledTimes(1);
+    const [taskUid, payload] = onScheduleUpdate.mock.calls[0];
+    expect(taskUid).toBe(1);
+    expect(payload.duration_minutes).toBe(90);
+    expect(payload.start_at).toBe("2026-01-09T10:00:30.000Z");
+    expect(payload.finish_at).toBe("2026-01-09T11:00:30.000Z");
   });
 
   it("only allows duration edition for an automatic non-milestone task", () => {

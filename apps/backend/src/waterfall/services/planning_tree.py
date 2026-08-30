@@ -312,7 +312,20 @@ def move_planning_tasks(
     resolved_calendars = resolve_calendars_for_tasks(
         db, planning.project_id, set(tasks_by_uid.keys())
     )
-    _recalculate_outline(tasks_by_uid, resolved_calendars)
+    # _recalculate_outline recalculates every summary task's duration via
+    # _recalculate_summary_fields, which walks the affected calendar day by
+    # day through compute_working_minutes_between. That walk can raise
+    # ValueError (the iteration ceiling in _guard_max_days_walked) or
+    # OverflowError (date arithmetic pushed past date.max) when a moved
+    # task's manually-scheduled start_at/finish_at is unreasonably far in
+    # the future -- manual tasks have no server-side range validation (see
+    # _apply_manual_schedule), so this is a genuinely-invalid-input case
+    # rather than an internal error, and is surfaced as the same 400 as any
+    # other PlanningTreeMoveError.
+    try:
+        _recalculate_outline(tasks_by_uid, resolved_calendars)
+    except (ValueError, OverflowError) as exc:
+        raise PlanningTreeMoveError(str(exc)) from exc
 
 
 def _check_milestone_duration_and_finish_consistency(
@@ -711,5 +724,19 @@ def update_planning_task_schedule(
         _apply_automatic_schedule(db, planning, tasks_by_uid, links, task, payload)
 
     task.is_manual = payload.is_manual
-    _recalculate_ancestor_summaries(db, planning, tasks_by_uid, task)
+    # _recalculate_ancestor_summaries recalculates every summary ancestor's
+    # duration via _recalculate_summary_fields, which walks the affected
+    # calendar day by day through compute_working_minutes_between. That walk
+    # can raise ValueError (the iteration ceiling in _guard_max_days_walked)
+    # or OverflowError (date arithmetic pushed past date.max) when a manually
+    # scheduled task's start_at/finish_at is unreasonably far in the future
+    # -- manual tasks have no server-side range validation (see
+    # _apply_manual_schedule), so a task like that landing under a summary
+    # ancestor is a genuinely-invalid-input case rather than an internal
+    # error, and is surfaced as the same 400 as any other schedule
+    # validation failure.
+    try:
+        _recalculate_ancestor_summaries(db, planning, tasks_by_uid, task)
+    except (ValueError, OverflowError) as exc:
+        raise PlanningTaskScheduleError(str(exc)) from exc
     return task

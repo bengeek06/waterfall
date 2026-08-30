@@ -93,8 +93,16 @@ function asUtcIsoString(value: string): string {
 // time. A native `datetime-local` input has no timezone concept of its own, so "local time" here
 // would actually mean "the browser's local time", which has no clean, lossless round-trip back to
 // the naive-UTC value the backend expects without extra local<->UTC conversion. Treating the
-// component's yyyy-MM-ddTHH:mm as UTC end-to-end is simpler and fully reversible in every browser
-// timezone; it trades away a "shows my local time" UX nicety in favour of never corrupting dates.
+// component's yyyy-MM-ddTHH:mm:ss as UTC end-to-end is simpler and fully reversible in every
+// browser timezone; it trades away a "shows my local time" UX nicety in favour of never corrupting
+// dates.
+//
+// Seconds are included (not just minutes) because a manual task's start_at/finish_at can carry a
+// non-zero seconds component derived from a predecessor link's lag_tenth_minute (stored at a
+// 6-second resolution). commitScheduleEdit always resends all three schedule fields on any single
+// field edit (e.g. editing only the duration), so dropping seconds here would silently truncate an
+// untouched start_at/finish_at on every commit. `step="1"` on the corresponding <Input
+// type="datetime-local"> is required for the browser to surface/accept this seconds component.
 function toDateTimeInputValue(value: string | null | undefined): string {
   if (!value) {
     return "";
@@ -104,24 +112,28 @@ function toDateTimeInputValue(value: string | null | undefined): string {
     return "";
   }
   const pad = (n: number) => String(n).padStart(2, "0");
-  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}T${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}T${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}`;
 }
 
-const DATETIME_INPUT_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/;
+// Seconds are captured as an optional group: toDateTimeInputValue always emits them, but a
+// `type="datetime-local"` field's seconds granularity ultimately depends on the host browser
+// honouring `step="1"` (and jsdom's own value-sanitization in tests never keeps them at all), so
+// this stays defensive and treats a missing seconds group as :00 rather than rejecting the value.
+const DATETIME_INPUT_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/;
 
 function fromDateTimeInputValue(value: string): string | null {
   if (!value) {
     return null;
   }
-  // Symmetric with toDateTimeInputValue: the field's yyyy-MM-ddTHH:mm components are UTC, so they
-  // must be parsed as UTC directly (Date.UTC), not through `new Date(value)`, which would
+  // Symmetric with toDateTimeInputValue: the field's yyyy-MM-ddTHH:mm[:ss] components are UTC, so
+  // they must be parsed as UTC directly (Date.UTC), not through `new Date(value)`, which would
   // reinterpret them as local time and reintroduce the same corruption this is fixing.
   const match = DATETIME_INPUT_PATTERN.exec(value);
   if (!match) {
     return null;
   }
-  const [year, month, day, hour, minute] = match.slice(1).map(Number);
-  const date = new Date(Date.UTC(year, month - 1, day, hour, minute));
+  const [year, month, day, hour, minute, second] = match.slice(1).map((part) => (part === undefined ? 0 : Number(part)));
+  const date = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
   if (Number.isNaN(date.getTime())) {
     return null;
   }
@@ -440,6 +452,7 @@ export function PlanningTreeTable({
           {startEditable ? (
             <Input
               type="datetime-local"
+              step="1"
               aria-label={startHelpText ? `Début de ${row.name} (${startHelpText})` : `Début de ${row.name}`}
               title={startHelpText}
               value={draft.start_at}
@@ -457,6 +470,7 @@ export function PlanningTreeTable({
           {finishEditable ? (
             <Input
               type="datetime-local"
+              step="1"
               aria-label={`Fin de ${row.name}`}
               value={draft.finish_at}
               disabled={mutationBusy}

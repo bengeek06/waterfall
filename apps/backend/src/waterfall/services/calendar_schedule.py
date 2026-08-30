@@ -408,6 +408,15 @@ def compute_working_minutes_between(
     every day it walks. Round-tripping ``duration -> compute_finish_at ->
     compute_working_minutes_between`` must return the original duration; this
     is required by the future E3-03 automatic scheduler.
+
+    Guarded by the same :func:`_guard_max_days_walked` ceiling as
+    :func:`compute_finish_at`/:func:`compute_start_at`: unlike those two
+    functions, ``start_at``/``finish_at`` here are not derived from a bounded
+    ``duration_minutes`` walk -- they can be an arbitrary pair of dates (e.g.
+    a manually scheduled task's verbatim, unbounded ``start_at``/``finish_at``,
+    see ``PlanningTaskScheduleUpdate`` / ``_apply_manual_schedule`` in
+    ``waterfall.services.planning_tree``), so this loop needs its own
+    unbounded-iteration guard rather than inheriting one transitively.
     """
     if finish_at <= start_at:
         return 0
@@ -415,7 +424,9 @@ def compute_working_minutes_between(
     total_minutes = 0
     current_date = start_at.date()
     finish_date = finish_at.date()
+    days_walked = 0
     while current_date <= finish_date:
+        _guard_max_days_walked(days_walked)
         day_capacity = _day_capacity_minutes(weekday_hours.get(_day_type(current_date), Decimal(0)))
         if day_capacity > 0:
             shift_start = datetime.combine(current_date, start_at.time(), tzinfo=start_at.tzinfo)
@@ -426,4 +437,5 @@ def compute_working_minutes_between(
                 overlap_minutes = int((overlap_end - overlap_start).total_seconds() // 60)
                 total_minutes += min(overlap_minutes, day_capacity)
         current_date += timedelta(days=1)
+        days_walked += 1
     return total_minutes

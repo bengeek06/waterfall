@@ -1150,6 +1150,43 @@ def test_automatic_task_sparse_calendar_duration_rejected_without_hanging() -> N
         assert isinstance(response.json()["detail"], str)
 
 
+def test_manual_task_near_date_max_recalculating_ancestor_summary_returns_400_not_500() -> None:
+    """Round-4 E3-03 PR review finding: ``compute_working_minutes_between``
+    (used by ``_recalculate_summary_fields``, which
+    ``_recalculate_ancestor_summaries`` reuses to keep a summary ancestor's
+    ``duration_minutes`` in sync after a schedule edit) walks the calendar
+    day by day exactly like ``compute_finish_at``/``compute_start_at``, but
+    -- unlike those two -- had no iteration ceiling of its own. A manually
+    scheduled task's ``start_at``/``finish_at`` is stored verbatim with no
+    server-side range validation (see ``_apply_manual_schedule``), so a
+    child dated near ``date.max`` under a summary parent makes this
+    unbounded walk reachable through the ordinary schedule-edit endpoint.
+    This must surface as the 400 already documented for an invalid
+    schedule, not leak as an uncaught 500, and must return promptly rather
+    than looping for an unreasonable number of iterations.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_hierarchy(project_id)
+
+        # uid=3 (Leaf) is a child of uid=2 (Mid, summary), itself a child of
+        # uid=1 (Root, summary): its finish_at feeds directly into both
+        # ancestors' max(finish_dates) recalculation.
+        response = client.patch(
+            _schedule_path(project_id, planning_id, 3),
+            json={
+                "is_manual": True,
+                "start_at": "2026-01-05T08:00:00Z",
+                "finish_at": "9999-12-31T00:00:00Z",
+            },
+            headers=headers,
+        )
+
+        assert response.status_code == 400
+        assert isinstance(response.json()["detail"], str)
+
+
 def test_schedule_update_rejects_validated_planning_and_read_only_project() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)
