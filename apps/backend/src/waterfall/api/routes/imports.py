@@ -129,6 +129,29 @@ def _get_batch_or_404(db: Session, batch_id: int, owner_id: int) -> WfImportBatc
     return batch
 
 
+def _parse_issue_list(raw_items: object) -> list[ImportIssue]:
+    if not isinstance(raw_items, list):
+        return []
+    items: list[ImportIssue] = []
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        code = item.get("code")
+        message = item.get("message")
+        if isinstance(code, str) and isinstance(message, str):
+            task_uid = item.get("taskUid")
+            predecessor_uid = item.get("predecessorUid")
+            items.append(
+                ImportIssue(
+                    code=code,
+                    message=message,
+                    taskUid=task_uid if isinstance(task_uid, int) else None,
+                    predecessorUid=predecessor_uid if isinstance(predecessor_uid, int) else None,
+                )
+            )
+    return items
+
+
 def _planning_counters(db: Session, planning_id: int) -> tuple[int, int]:
     task_count = (
         db.scalar(
@@ -376,11 +399,12 @@ def run_batch(
             .first()
             is not None
         )
-        task_count, link_count = import_tasks_and_links(db, xml_bytes, project)
+        task_count, link_count, import_warnings = import_tasks_and_links(db, xml_bytes, project)
         batch.status = "success"
         batch.finished_at = datetime.now(UTC)
         payload["counters"] = {"tasks": task_count, "links": link_count}
         payload["errors"] = []
+        payload["warnings"] = list(import_warnings)
         payload["dry_run"] = False
         if identical_source:
             payload["identical_source"] = True
@@ -509,7 +533,7 @@ def get_batch(
         **batch_response.model_dump(by_alias=True),
         projectId=batch.project_id,
         counters=ImportCounters(tasks=task_count, links=link_count),
-        warnings=[],
+        warnings=_parse_issue_list(log_payload.get("warnings")),
     )
 
 
@@ -527,30 +551,12 @@ def list_batch_errors(
     if not batch.log_json:
         return ImportErrorListResponse(items=[])
 
+    log_payload: dict[str, object] = {}
     try:
-        payload = json.loads(batch.log_json)
+        loaded_payload = json.loads(batch.log_json)
+        if isinstance(loaded_payload, dict):
+            log_payload = loaded_payload
     except json.JSONDecodeError:
         return ImportErrorListResponse(items=[])
 
-    raw_items = payload.get("errors") if isinstance(payload, dict) else None
-    if not isinstance(raw_items, list):
-        return ImportErrorListResponse(items=[])
-
-    items: list[ImportIssue] = []
-    for item in raw_items:
-        if not isinstance(item, dict):
-            continue
-        code = item.get("code")
-        message = item.get("message")
-        if isinstance(code, str) and isinstance(message, str):
-            task_uid = item.get("taskUid")
-            predecessor_uid = item.get("predecessorUid")
-            items.append(
-                ImportIssue(
-                    code=code,
-                    message=message,
-                    taskUid=task_uid if isinstance(task_uid, int) else None,
-                    predecessorUid=predecessor_uid if isinstance(predecessor_uid, int) else None,
-                )
-            )
-    return ImportErrorListResponse(items=items)
+    return ImportErrorListResponse(items=_parse_issue_list(log_payload.get("errors")))

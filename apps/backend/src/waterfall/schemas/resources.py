@@ -3,7 +3,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 EstimateKind = Literal["initial", "remaining"]
 EstimateStatus = Literal["draft", "validated", "superseded", "archived"]
@@ -26,6 +26,79 @@ def _optional_text(value: str | None) -> str | None:
     if value is None:
         return None
     return _required_text(value)
+
+
+class CalendarWeekdayBase(BaseModel):
+    day_type: int = Field(ge=1, le=7)
+    hours_per_day: Decimal = Field(ge=0, le=24, max_digits=4, decimal_places=2)
+
+
+class CalendarWeekdayCreate(CalendarWeekdayBase):
+    pass
+
+
+def _reject_duplicate_day_types(weekdays: list[CalendarWeekdayCreate]) -> None:
+    day_types = [weekday.day_type for weekday in weekdays]
+    if len(set(day_types)) != len(day_types):
+        raise ValueError("weekdays must not contain duplicate day_type values")
+
+
+class CalendarWeekdayUpdate(BaseModel):
+    hours_per_day: Decimal | None = Field(default=None, ge=0, le=24, max_digits=4, decimal_places=2)
+
+
+class CalendarWeekdayRead(CalendarWeekdayBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    calendar_id: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class CalendarBase(BaseModel):
+    code: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=255)
+    weeks_per_year: int = Field(ge=1, le=53)
+
+    _normalize_code = field_validator("code")(_required_text)
+    _normalize_name = field_validator("name")(_required_text)
+
+
+class CalendarCreate(CalendarBase):
+    weekdays: list[CalendarWeekdayCreate] = Field(default_factory=list, max_length=7)
+
+    @model_validator(mode="after")
+    def validate_unique_weekdays(self) -> "CalendarCreate":
+        _reject_duplicate_day_types(self.weekdays)
+        return self
+
+
+class CalendarUpdate(BaseModel):
+    code: str | None = Field(default=None, min_length=1, max_length=64)
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    weeks_per_year: int | None = Field(default=None, ge=1, le=53)
+    is_active: bool | None = None
+    weekdays: list[CalendarWeekdayCreate] | None = Field(default=None, max_length=7)
+
+    _normalize_code = field_validator("code")(_optional_text)
+    _normalize_name = field_validator("name")(_optional_text)
+
+    @model_validator(mode="after")
+    def validate_unique_weekdays(self) -> "CalendarUpdate":
+        if self.weekdays is not None:
+            _reject_duplicate_day_types(self.weekdays)
+        return self
+
+
+class CalendarRead(CalendarBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+    weekdays: list[CalendarWeekdayRead] = Field(default_factory=list)
 
 
 class ResourceNodeBase(BaseModel):
@@ -71,12 +144,14 @@ class ResourceRoleBase(BaseModel):
 class ResourceRoleCreate(ResourceRoleBase):
     node_id: int = Field(gt=0)
     cost_category_id: int = Field(gt=0)
+    calendar_id: int | None = Field(default=None, gt=0)
 
 
 class ResourceRoleUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     node_id: int | None = Field(default=None, gt=0)
     cost_category_id: int | None = Field(default=None, gt=0)
+    calendar_id: int | None = Field(default=None, gt=0)
     is_active: bool | None = None
 
     _normalize_name = field_validator("name")(_optional_text)
@@ -88,6 +163,7 @@ class ResourceRoleRead(ResourceRoleBase):
     id: int
     node_id: int
     cost_category_id: int
+    calendar_id: int | None
     is_active: bool
     created_at: datetime
     updated_at: datetime

@@ -234,6 +234,28 @@ def test_planning_contract_matches_runtime_shapes() -> None:
         )
 
 
+def test_resource_calendar_contract_matches_runtime_shapes() -> None:
+    raw_document: object = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
+    static_document = cast(dict[str, Any], raw_document)
+    static_schemas = cast(dict[str, Any], static_document["components"])["schemas"]
+    runtime_schemas = cast(dict[str, Any], app.openapi()["components"])["schemas"]
+    for schema_name in (
+        "CalendarCreate",
+        "CalendarUpdate",
+        "CalendarRead",
+        "CalendarWeekdayCreate",
+        "CalendarWeekdayRead",
+        "ResourceRoleCreate",
+        "ResourceRoleUpdate",
+        "ResourceRoleRead",
+    ):
+        assert schema_name in static_schemas
+        assert schema_name in runtime_schemas
+        assert _schema_property_names(static_schemas[schema_name], static_schemas) == (
+            _schema_property_names(runtime_schemas[schema_name], runtime_schemas)
+        )
+
+
 def test_move_planning_tasks_documents_all_not_found_resources() -> None:
     raw_document: object = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
     static_document = cast(dict[str, Any], raw_document)

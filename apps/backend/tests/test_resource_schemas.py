@@ -13,6 +13,8 @@ from waterfall.schemas.projects import (
     TaskDescriptionUpdate,
 )
 from waterfall.schemas.resources import (
+    CalendarCreate,
+    CalendarWeekdayCreate,
     CostCategoryCreate,
     CostCategoryUpdate,
     CostRateCreate,
@@ -23,6 +25,49 @@ from waterfall.schemas.resources import (
     TaskRoleAssignmentCreate,
     TaskRoleAssignmentUpdate,
 )
+
+
+def test_calendar_schemas_accept_boundary_values() -> None:
+    calendar = CalendarCreate(
+        code="  STANDARD  ",
+        name="  Standard  ",
+        weeks_per_year=47,
+        weekdays=[
+            CalendarWeekdayCreate(day_type=day_type, hours_per_day=Decimal("7.00"))
+            for day_type in range(2, 7)
+        ],
+    )
+
+    assert calendar.code == "STANDARD"
+    assert calendar.name == "Standard"
+    assert len(calendar.weekdays) == 5
+    assert CalendarWeekdayCreate(day_type=1, hours_per_day=Decimal("0")).hours_per_day == 0
+    assert CalendarWeekdayCreate(day_type=7, hours_per_day=Decimal("24")).hours_per_day == 24
+    assert CalendarCreate(code="MIN", name="Min", weeks_per_year=1).weeks_per_year == 1
+    assert CalendarCreate(code="MAX", name="Max", weeks_per_year=53).weeks_per_year == 53
+
+
+def test_calendar_schemas_reject_out_of_range_values() -> None:
+    with pytest.raises(ValidationError):
+        CalendarWeekdayCreate(day_type=0, hours_per_day=Decimal("7"))
+
+    with pytest.raises(ValidationError):
+        CalendarWeekdayCreate(day_type=8, hours_per_day=Decimal("7"))
+
+    with pytest.raises(ValidationError):
+        CalendarWeekdayCreate(day_type=2, hours_per_day=Decimal("-1"))
+
+    with pytest.raises(ValidationError):
+        CalendarWeekdayCreate(day_type=2, hours_per_day=Decimal("24.01"))
+
+    with pytest.raises(ValidationError):
+        CalendarCreate(code="KO", name="Ko", weeks_per_year=0)
+
+    with pytest.raises(ValidationError):
+        CalendarCreate(code="KO", name="Ko", weeks_per_year=54)
+
+    with pytest.raises(ValidationError):
+        CalendarCreate(code="   ", name="Ko", weeks_per_year=47)
 
 
 def test_resource_schema_normalizes_text_values() -> None:

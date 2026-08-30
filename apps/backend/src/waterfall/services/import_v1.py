@@ -66,7 +66,9 @@ def _task_kwargs(task: Any, planning_id: int) -> dict[str, object]:
     }
 
 
-def import_tasks_and_links(db: Session, xml_bytes: bytes, project: MsProject) -> tuple[int, int]:
+def import_tasks_and_links(
+    db: Session, xml_bytes: bytes, project: MsProject
+) -> tuple[int, int, tuple[dict[str, object], ...]]:
     ensure_project_mutable(project)
     parsed = parse_msproject_xml(xml_bytes)
     _apply_project_metadata(project, parsed)
@@ -130,4 +132,4 @@ def import_tasks_and_links(db: Session, xml_bytes: bytes, project: MsProject) ->
     )
     project.displayed_planning_id = planning.id
     db.flush()
-    return len(parsed.tasks), len(parsed.links)
+    return len(parsed.tasks), len(parsed.links), parsed.warnings

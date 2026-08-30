@@ -30,7 +30,7 @@ def test_import_service_persists_tasks_links_and_notes() -> None:
         session.add(project)
         session.flush()
 
-        task_count, link_count = import_tasks_and_links(
+        task_count, link_count, warnings = import_tasks_and_links(
             session,
             EXAMPLE_XML.read_bytes(),
             project,
@@ -39,6 +39,7 @@ def test_import_service_persists_tasks_links_and_notes() -> None:
 
         assert task_count == 2
         assert link_count == 1
+        assert warnings == ()
         planning = session.query(WfPlanning).filter(WfPlanning.project_id == project.id).one()
         assert planning.status == "draft"
         assert project.displayed_planning_id == planning.id

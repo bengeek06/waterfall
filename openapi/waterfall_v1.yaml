@@ -1541,6 +1541,129 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/ProjectNotFound'
+  /resources/calendars:
+    get:
+      tags:
+        - resources
+      summary: Lister les calendriers de travail
+      operationId: listCalendars
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: include_inactive
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Liste des calendriers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CalendarRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags:
+        - resources
+      summary: Creer un calendrier de travail
+      operationId: createCalendar
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CalendarCreate'
+      responses:
+        '201':
+          description: Calendrier cree
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CalendarRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /resources/calendars/{calendarId}:
+    get:
+      tags:
+        - resources
+      summary: Lire un calendrier de travail
+      operationId: getCalendar
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CalendarId'
+      responses:
+        '200':
+          description: Calendrier
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CalendarRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
+    patch:
+      tags:
+        - resources
+      summary: Modifier un calendrier de travail
+      operationId: updateCalendar
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CalendarId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CalendarUpdate'
+      responses:
+        '200':
+          description: Calendrier modifie
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CalendarRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    delete:
+      tags:
+        - resources
+      summary: Desactiver un calendrier de travail
+      operationId: deleteCalendar
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CalendarId'
+      responses:
+        '204':
+          description: Calendrier desactive
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
   /resources/nodes:
     get:
       tags:
@@ -1709,6 +1832,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ResourceRoleRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -3330,6 +3455,128 @@ components:
           type: object
           additionalProperties:
             type: number
+    CalendarWeekdayCreate:
+      type: object
+      required:
+        - day_type
+        - hours_per_day
+      properties:
+        day_type:
+          type: integer
+          minimum: 1
+          maximum: 7
+          description: DayType MS Project (1=dimanche .. 7=samedi)
+        hours_per_day:
+          type: number
+          minimum: 0
+          maximum: 24
+    CalendarWeekdayRead:
+      allOf:
+        - $ref: '#/components/schemas/CalendarWeekdayCreate'
+        - type: object
+          required:
+            - id
+            - calendar_id
+            - created_at
+            - updated_at
+          properties:
+            id:
+              type: integer
+              minimum: 1
+            calendar_id:
+              type: integer
+              minimum: 1
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+    CalendarCreate:
+      type: object
+      required:
+        - code
+        - name
+        - weeks_per_year
+      properties:
+        code:
+          type: string
+          minLength: 1
+          maxLength: 64
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        weeks_per_year:
+          type: integer
+          minimum: 1
+          maximum: 53
+        weekdays:
+          type: array
+          maxItems: 7
+          items:
+            $ref: '#/components/schemas/CalendarWeekdayCreate'
+    CalendarUpdate:
+      type: object
+      properties:
+        code:
+          type: string
+          minLength: 1
+          maxLength: 64
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        weeks_per_year:
+          type: integer
+          minimum: 1
+          maximum: 53
+        is_active:
+          type: boolean
+        weekdays:
+          type: array
+          maxItems: 7
+          description: Remplace integralement les jours de semaine du calendrier
+          items:
+            $ref: '#/components/schemas/CalendarWeekdayCreate'
+    CalendarRead:
+      type: object
+      required:
+        - id
+        - code
+        - name
+        - weeks_per_year
+        - is_active
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: integer
+          minimum: 1
+        code:
+          type: string
+          minLength: 1
+          maxLength: 64
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        weeks_per_year:
+          type: integer
+          minimum: 1
+          maximum: 53
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        weekdays:
+          type: array
+          items:
+            $ref: '#/components/schemas/CalendarWeekdayRead'
     ResourceNodeCreate:
       type: object
       required:
@@ -3400,6 +3647,10 @@ components:
         cost_category_id:
           type: integer
           minimum: 1
+        calendar_id:
+          type: integer
+          minimum: 1
+          nullable: true
         code:
           type: string
           minLength: 1
@@ -3417,6 +3668,10 @@ components:
         cost_category_id:
           type: integer
           minimum: 1
+        calendar_id:
+          type: integer
+          minimum: 1
+          nullable: true
         name:
           type: string
           minLength: 1
@@ -3429,6 +3684,7 @@ components:
         - type: object
           required:
             - id
+            - calendar_id
             - is_active
             - created_at
             - updated_at
@@ -3436,6 +3692,10 @@ components:
             id:
               type: integer
               minimum: 1
+            calendar_id:
+              type: integer
+              minimum: 1
+              nullable: true
             is_active:
               type: boolean
             created_at:
@@ -3751,6 +4011,14 @@ components:
         type: integer
         minimum: 1
       description: Identifiant technique du noeud de ressources
+    CalendarId:
+      name: calendarId
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+      description: Identifiant technique du calendrier
     RoleId:
       name: roleId
       in: path

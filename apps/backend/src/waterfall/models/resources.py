@@ -18,6 +18,58 @@ from sqlalchemy.orm import Mapped, mapped_column
 from waterfall.db.base import Base
 
 
+class Calendar(Base):
+    __tablename__ = "wf_calendar"
+    __table_args__ = (
+        UniqueConstraint("code", name="uq_wf_calendar_code"),
+        CheckConstraint(
+            "weeks_per_year >= 1 AND weeks_per_year <= 53",
+            name="ck_wf_calendar_weeks_per_year",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    weeks_per_year: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+
+class CalendarWeekday(Base):
+    """Weekly working hours per MS Project DayType (1=Sunday .. 7=Saturday)."""
+
+    __tablename__ = "wf_calendar_weekday"
+    __table_args__ = (
+        UniqueConstraint("calendar_id", "day_type", name="uq_wf_calendar_weekday_day"),
+        CheckConstraint(
+            "day_type >= 1 AND day_type <= 7",
+            name="ck_wf_calendar_weekday_day_type",
+        ),
+        CheckConstraint(
+            "hours_per_day >= 0 AND hours_per_day <= 24",
+            name="ck_wf_calendar_weekday_hours",
+        ),
+        Index("idx_wf_calendar_weekday_calendar", "calendar_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    calendar_id: Mapped[int] = mapped_column(ForeignKey("wf_calendar.id"), nullable=False)
+    day_type: Mapped[int] = mapped_column(Integer, nullable=False)
+    hours_per_day: Mapped[Decimal] = mapped_column(Numeric(4, 2), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+
 class ResourceNode(Base):
     __tablename__ = "wf_resource_node"
     __table_args__ = (
@@ -43,11 +95,13 @@ class ResourceRole(Base):
     __table_args__ = (
         UniqueConstraint("code", name="uq_wf_resource_role_code"),
         Index("idx_wf_resource_role_node", "node_id"),
+        Index("idx_wf_resource_role_calendar", "calendar_id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     node_id: Mapped[int] = mapped_column(ForeignKey("wf_resource_node.id"), nullable=False)
     cost_category_id: Mapped[int] = mapped_column(ForeignKey("wf_cost_category.id"), nullable=False)
+    calendar_id: Mapped[int | None] = mapped_column(ForeignKey("wf_calendar.id"), nullable=True)
     code: Mapped[str] = mapped_column(String(64), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)

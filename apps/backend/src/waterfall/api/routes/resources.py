@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 from waterfall.api.dependencies import get_current_active_user, get_current_admin_user
 from waterfall.db.session import get_db
 from waterfall.models.resources import (
+    Calendar,
+    CalendarWeekday,
     CostCategory,
     CostRate,
     CostType,
@@ -20,6 +22,11 @@ from waterfall.models.resources import (
 )
 from waterfall.models.user import User
 from waterfall.schemas.resources import (
+    CalendarCreate,
+    CalendarRead,
+    CalendarUpdate,
+    CalendarWeekdayCreate,
+    CalendarWeekdayRead,
     CostCategoryCreate,
     CostCategoryRead,
     CostCategoryUpdate,
@@ -53,6 +60,14 @@ def _conflict(detail: str) -> HTTPException:
 def _commit(db: Session, detail: str) -> None:
     try:
         db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise _conflict(detail) from exc
+
+
+def _flush(db: Session, detail: str) -> None:
+    try:
+        db.flush()
     except IntegrityError as exc:
         db.rollback()
         raise _conflict(detail) from exc
@@ -134,6 +149,148 @@ def _descendant_node_ids(db: Session, node_id: int) -> set[int]:
                 descendants.add(child_id)
                 pending.append(child_id)
     return descendants
+
+
+def _get_active_calendar_or_400(db: Session, calendar_id: int) -> Calendar:
+    calendar = _get_or_404(db, Calendar, calendar_id, "Calendar")
+    if not calendar.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Calendar is inactive and cannot be assigned",
+        )
+    return calendar
+
+
+def _ensure_calendar_not_assigned_to_active_role(db: Session, calendar_id: int) -> None:
+    assigned_role = (
+        db.query(ResourceRole.id)
+        .filter(ResourceRole.calendar_id == calendar_id)
+        .filter(ResourceRole.is_active.is_(True))
+        .first()
+    )
+    if assigned_role is not None:
+        raise _conflict("Calendar is assigned to active resource roles and cannot be deactivated")
+
+
+def _weekdays_by_calendar(db: Session, calendar_ids: list[int]) -> dict[int, list[CalendarWeekday]]:
+    if not calendar_ids:
+        return {}
+    weekdays = (
+        db.query(CalendarWeekday)
+        .filter(CalendarWeekday.calendar_id.in_(calendar_ids))
+        .order_by(CalendarWeekday.calendar_id, CalendarWeekday.day_type)
+        .all()
+    )
+    grouped: dict[int, list[CalendarWeekday]] = {}
+    for weekday in weekdays:
+        grouped.setdefault(weekday.calendar_id, []).append(weekday)
+    return grouped
+
+
+def _calendar_read(calendar: Calendar, weekdays: list[CalendarWeekday]) -> CalendarRead:
+    payload = CalendarRead.model_validate(calendar)
+    payload.weekdays = [CalendarWeekdayRead.model_validate(weekday) for weekday in weekdays]
+    return payload
+
+
+def _replace_calendar_weekdays(
+    db: Session,
+    calendar_id: int,
+    weekdays: list[CalendarWeekdayCreate],
+) -> None:
+    db.query(CalendarWeekday).filter(CalendarWeekday.calendar_id == calendar_id).delete(
+        synchronize_session=False
+    )
+    for weekday in weekdays:
+        db.add(
+            CalendarWeekday(
+                calendar_id=calendar_id,
+                day_type=weekday.day_type,
+                hours_per_day=weekday.hours_per_day,
+            )
+        )
+
+
+@router.get("/calendars", response_model=list[CalendarRead])
+def list_calendars(
+    include_inactive: bool = Query(default=False),
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_active_user),
+) -> list[CalendarRead]:
+    query = db.query(Calendar)
+    if not include_inactive:
+        query = query.filter(Calendar.is_active.is_(True))
+    calendars = query.order_by(Calendar.code).all()
+    grouped = _weekdays_by_calendar(db, [calendar.id for calendar in calendars])
+    return [_calendar_read(calendar, grouped.get(calendar.id, [])) for calendar in calendars]
+
+
+@router.post("/calendars", response_model=CalendarRead, status_code=status.HTTP_201_CREATED)
+def create_calendar(
+    payload: CalendarCreate,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_admin_user),
+) -> CalendarRead:
+    calendar = Calendar(
+        code=payload.code,
+        name=payload.name,
+        weeks_per_year=payload.weeks_per_year,
+    )
+    db.add(calendar)
+    _flush(db, "Calendar code already exists")
+    _replace_calendar_weekdays(db, calendar.id, payload.weekdays)
+    _commit(db, "Calendar code already exists")
+    db.refresh(calendar)
+    return _calendar_read(calendar, _weekdays_by_calendar(db, [calendar.id]).get(calendar.id, []))
+
+
+@router.get("/calendars/{calendar_id}", response_model=CalendarRead)
+def get_calendar(
+    calendar_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_active_user),
+) -> CalendarRead:
+    calendar = _get_or_404(db, Calendar, calendar_id, "Calendar")
+    return _calendar_read(calendar, _weekdays_by_calendar(db, [calendar_id]).get(calendar_id, []))
+
+
+@router.patch("/calendars/{calendar_id}", response_model=CalendarRead)
+def update_calendar(
+    calendar_id: int,
+    payload: CalendarUpdate,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_admin_user),
+) -> CalendarRead:
+    calendar = _get_or_404(db, Calendar, calendar_id, "Calendar")
+    values = payload.model_dump(exclude_unset=True)
+    values.pop("weekdays", None)
+    if values.get("is_active") is False:
+        _ensure_calendar_not_assigned_to_active_role(db, calendar_id)
+    # Known v1 limitation: editing an active calendar's weekdays here does not
+    # recalculate duration_minutes on any draft planning task whose role is
+    # already staffed with this calendar -- that only happens on the next
+    # move_planning_tasks call (see planning_tree.py). Left for E3-03.
+    for field, value in values.items():
+        setattr(calendar, field, value)
+    db.add(calendar)
+    if payload.weekdays is not None:
+        _replace_calendar_weekdays(db, calendar_id, payload.weekdays)
+    _commit(db, "Calendar update conflicts with existing data")
+    db.refresh(calendar)
+    return _calendar_read(calendar, _weekdays_by_calendar(db, [calendar_id]).get(calendar_id, []))
+
+
+@router.delete("/calendars/{calendar_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_calendar(
+    calendar_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_admin_user),
+) -> None:
+    calendar = _get_or_404(db, Calendar, calendar_id, "Calendar")
+    _ensure_calendar_not_assigned_to_active_role(db, calendar_id)
+    calendar.is_active = False
+    db.add(calendar)
+    _commit(db, "Calendar deletion conflicts with existing data")
 
 
 @router.get("/nodes", response_model=list[ResourceNodeRead])
@@ -235,6 +392,8 @@ def create_role(
 ) -> ResourceRole:
     _get_or_404(db, ResourceNode, payload.node_id, "Resource node")
     _get_active_category_or_400(db, payload.cost_category_id)
+    if payload.calendar_id is not None:
+        _get_active_calendar_or_400(db, payload.calendar_id)
     role = ResourceRole(**payload.model_dump())
     db.add(role)
     _commit(db, "Resource role code already exists")
@@ -264,6 +423,8 @@ def update_role(
         _get_or_404(db, ResourceNode, values["node_id"], "Resource node")
     if "cost_category_id" in values:
         _get_active_category_or_400(db, values["cost_category_id"])
+    if values.get("calendar_id") is not None:
+        _get_active_calendar_or_400(db, values["calendar_id"])
     for field, value in values.items():
         setattr(role, field, value)
     db.add(role)

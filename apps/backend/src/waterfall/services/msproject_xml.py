@@ -21,13 +21,14 @@ _DURATION_RE = re.compile(
     r"(?:(?P<seconds>\d+(?:\.\d+)?)S)?)?$"
 )
 CANONICAL_NAMESPACE = "http://schemas.microsoft.com/project/2007"
-CANONICAL_SCHEMA_PATH = (
-    Path(__file__).resolve().parents[3]
-    / "resources"
-    / "msproject-schemas"
-    / "canonical"
-    / "waterfall_msproject_subset.xsd"
+_CANONICAL_SCHEMA_DIR = (
+    Path(__file__).resolve().parents[3] / "resources" / "msproject-schemas" / "canonical"
 )
+# Lenient: tolerates any real MS Project calendar shape, since Waterfall never
+# reads calendar content on import (E5-02).
+IMPORT_SCHEMA_PATH = _CANONICAL_SCHEMA_DIR / "waterfall_msproject_subset_import.xsd"
+# Strict: matches exactly what export_project_xml emits, to catch export bugs.
+EXPORT_SCHEMA_PATH = _CANONICAL_SCHEMA_DIR / "waterfall_msproject_subset_export.xsd"
 
 
 @dataclass(frozen=True)
@@ -77,6 +78,7 @@ class ParsedProject:
     currency_code: str | None
     tasks: tuple[ParsedTask, ...]
     links: tuple[ParsedLink, ...]
+    warnings: tuple[dict[str, object], ...] = ()
 
 
 class MsProjectValidationError(ValueError):
@@ -155,22 +157,33 @@ def format_duration(minutes: int | None) -> str | None:
     return f"PT{minutes}M"
 
 
-@lru_cache(maxsize=1)
-def _canonical_schema() -> etree.XMLSchema:
-    return etree.XMLSchema(etree.parse(str(CANONICAL_SCHEMA_PATH)))
+@lru_cache(maxsize=2)
+def _canonical_schema(schema_path: Path) -> etree.XMLSchema:
+    return etree.XMLSchema(etree.parse(str(schema_path)))
 
 
-def validate_canonical_xml(xml_bytes: bytes) -> None:
+def _validate_against(xml_bytes: bytes, schema_path: Path) -> None:
     document = etree.fromstring(xml_bytes)
     if document.nsmap.get(None) != CANONICAL_NAMESPACE:
         raise MsProjectValidationError(
             [{"code": "UNSUPPORTED_NAMESPACE", "message": "Canonical export requires /2007"}]
         )
-    if not _canonical_schema().validate(document):
+    schema = _canonical_schema(schema_path)
+    if not schema.validate(document):
         issues: list[dict[str, object]] = [
-            {"code": "XSD_VALIDATION", "message": str(_canonical_schema().error_log)}
+            {"code": "XSD_VALIDATION", "message": str(schema.error_log)}
         ]
         raise MsProjectValidationError(issues)
+
+
+def validate_canonical_xml(xml_bytes: bytes) -> None:
+    """Validate a file being imported, tolerating any real-world Calendar shape."""
+    _validate_against(xml_bytes, IMPORT_SCHEMA_PATH)
+
+
+def validate_canonical_export_xml(xml_bytes: bytes) -> None:
+    """Self-check Waterfall's own export against the exact shape it emits."""
+    _validate_against(xml_bytes, EXPORT_SCHEMA_PATH)
 
 
 def parse_msproject_xml(xml_bytes: bytes) -> ParsedProject:
@@ -382,6 +395,28 @@ def parse_msproject_xml(xml_bytes: bytes) -> ParsedProject:
         issues.append(
             {"code": "MISSING_FINISH_DATE", "message": "ScheduleFromFinish requires FinishDate"}
         )
+
+    # Waterfall is the source of truth for working calendars (E5-02): custom
+    # calendars carried by an imported MS Project file are never written to
+    # wf_calendar/wf_calendar_weekday. Their presence is only surfaced as a
+    # non-blocking diagnostic so the import can proceed without silently
+    # dropping information the caller may want to reconcile manually.
+    warnings: list[dict[str, object]] = []
+    calendars_node = _child(root, "Calendars")
+    if calendars_node is not None:
+        calendar_count = len(_children(calendars_node, "Calendar"))
+        if calendar_count > 0:
+            warnings.append(
+                {
+                    "code": "CUSTOM_CALENDARS_IGNORED",
+                    "message": (
+                        f"{calendar_count} calendrier(s) personnalisé(s) du fichier source "
+                        "ignoré(s) : Waterfall reste le référentiel maître des calendriers "
+                        "de travail."
+                    ),
+                }
+            )
+
     if issues:
         raise MsProjectValidationError(issues)
 
@@ -401,4 +436,5 @@ def parse_msproject_xml(xml_bytes: bytes) -> ParsedProject:
         currency_code=_text(root, "CurrencyCode"),
         tasks=tuple(tasks),
         links=tuple(links),
+        warnings=tuple(warnings),
     )

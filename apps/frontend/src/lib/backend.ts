@@ -9,6 +9,8 @@ export type ResourceRole = components["schemas"]["ResourceRoleRead"];
 export type CostType = components["schemas"]["CostTypeRead"];
 export type CostCategory = components["schemas"]["CostCategoryRead"];
 export type CostRate = components["schemas"]["CostRateRead"];
+export type Calendar = components["schemas"]["CalendarRead"];
+export type CalendarWeekday = components["schemas"]["CalendarWeekdayRead"];
 export type InflationRate = components["schemas"]["InflationRateRead"];
 export type RoleCapacity = components["schemas"]["RoleCapacityRead"];
 export type Project = components["schemas"]["ProjectRead"];
@@ -48,6 +50,18 @@ export class SessionExpiredError extends Error {
 
 let refreshInFlight: Promise<TokenResponse> | null = null;
 
+type PydanticValidationErrorItem = { loc?: (string | number)[]; msg?: string; type?: string };
+
+function formatValidationErrors(details: PydanticValidationErrorItem[]): string {
+  return details
+    .map((item) => {
+      const field = item.loc?.at(-1);
+      const msg = item.msg ?? "Valeur invalide";
+      return field === undefined ? msg : `${field}: ${msg}`;
+    })
+    .join("; ");
+}
+
 async function parseError(response: Response): Promise<string> {
   const text = await response.text();
   if (!text) {
@@ -55,7 +69,14 @@ async function parseError(response: Response): Promise<string> {
   }
 
   try {
-    const payload = JSON.parse(text) as { detail?: string; message?: string; error?: string };
+    const payload = JSON.parse(text) as {
+      detail?: string | PydanticValidationErrorItem[];
+      message?: string;
+      error?: string;
+    };
+    if (Array.isArray(payload.detail)) {
+      return formatValidationErrors(payload.detail) || text;
+    }
     return payload.detail ?? payload.message ?? payload.error ?? text;
   } catch {
     return text;
@@ -292,7 +313,7 @@ export function getResourceRoles(
 }
 
 export function createResourceRole(
-  payload: { code: string; name: string; node_id: number; cost_category_id: number },
+  payload: { code: string; name: string; node_id: number; cost_category_id: number; calendar_id?: number | null },
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
 ) {
@@ -300,6 +321,80 @@ export function createResourceRole(
     "/resources/roles",
     tokens,
     { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
+    onSessionRefresh,
+  );
+}
+
+export function updateResourceRole(
+  roleId: number,
+  payload: { name?: string; node_id?: number; cost_category_id?: number; calendar_id?: number | null; is_active?: boolean },
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<ResourceRole>(
+    `/resources/roles/${roleId}`,
+    tokens,
+    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
+    onSessionRefresh,
+  );
+}
+
+export function getCalendars(
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+  includeInactive = false,
+) {
+  const query = includeInactive ? "?include_inactive=true" : "";
+  return authRequest<Calendar[]>(
+    `/resources/calendars${query}`,
+    tokens,
+    { method: "GET" },
+    onSessionRefresh,
+  );
+}
+
+export function createCalendar(
+  payload: { code: string; name: string; weeks_per_year: number; weekdays: { day_type: number; hours_per_day: string }[] },
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<Calendar>(
+    "/resources/calendars",
+    tokens,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
+    onSessionRefresh,
+  );
+}
+
+export function updateCalendar(
+  calendarId: number,
+  payload: {
+    code?: string;
+    name?: string;
+    weeks_per_year?: number;
+    is_active?: boolean;
+    weekdays?: { day_type: number; hours_per_day: string }[];
+  },
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<Calendar>(
+    `/resources/calendars/${calendarId}`,
+    tokens,
+    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
+    onSessionRefresh,
+  );
+}
+
+export function deleteCalendar(
+  calendarId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<void>(
+    `/resources/calendars/${calendarId}`,
+    tokens,
+    { method: "DELETE" },
     onSessionRefresh,
   );
 }

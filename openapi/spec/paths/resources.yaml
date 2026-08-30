@@ -1,3 +1,126 @@
+/resources/calendars:
+  get:
+    tags:
+    - resources
+    summary: Lister les calendriers de travail
+    operationId: listCalendars
+    security:
+    - bearerAuth: []
+    parameters:
+    - name: include_inactive
+      in: query
+      required: false
+      schema:
+        type: boolean
+        default: false
+    responses:
+      '200':
+        description: Liste des calendriers
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: ../components/schemas/CalendarRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+  post:
+    tags:
+    - resources
+    summary: Creer un calendrier de travail
+    operationId: createCalendar
+    security:
+    - bearerAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/CalendarCreate.yaml
+    responses:
+      '201':
+        description: Calendrier cree
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/CalendarRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '403':
+        $ref: ../components/responses/Forbidden.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
+/resources/calendars/{calendarId}:
+  get:
+    tags:
+    - resources
+    summary: Lire un calendrier de travail
+    operationId: getCalendar
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/CalendarId.yaml
+    responses:
+      '200':
+        description: Calendrier
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/CalendarRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ResourceNotFound.yaml
+  patch:
+    tags:
+    - resources
+    summary: Modifier un calendrier de travail
+    operationId: updateCalendar
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/CalendarId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/CalendarUpdate.yaml
+    responses:
+      '200':
+        description: Calendrier modifie
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/CalendarRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '403':
+        $ref: ../components/responses/Forbidden.yaml
+      '404':
+        $ref: ../components/responses/ResourceNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
+  delete:
+    tags:
+    - resources
+    summary: Desactiver un calendrier de travail
+    operationId: deleteCalendar
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/CalendarId.yaml
+    responses:
+      '204':
+        description: Calendrier desactive
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '403':
+        $ref: ../components/responses/Forbidden.yaml
+      '404':
+        $ref: ../components/responses/ResourceNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
 /resources/nodes:
   get:
     tags:
@@ -166,6 +289,8 @@
           application/json:
             schema:
               $ref: ../components/schemas/ResourceRoleRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
       '401':
         $ref: ../components/responses/Unauthorized.yaml
       '403':

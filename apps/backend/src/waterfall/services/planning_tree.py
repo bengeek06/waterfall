@@ -6,6 +6,11 @@ from sqlalchemy.orm import Session
 
 from waterfall.models.planning import WfPlanning, WfPlanningTaskSnapshot
 from waterfall.schemas.projects import PlanningTaskMove
+from waterfall.services.calendar_schedule import (
+    ResolvedCalendar,
+    compute_working_minutes_between,
+    resolve_calendars_for_tasks,
+)
 
 
 class PlanningTreeMoveError(ValueError):
@@ -91,7 +96,10 @@ def _depth_first_task_uids(
     return ordered_uids
 
 
-def _recalculate_outline(tasks_by_uid: dict[int, WfPlanningTaskSnapshot]) -> None:
+def _recalculate_outline(
+    tasks_by_uid: dict[int, WfPlanningTaskSnapshot],
+    resolved_calendars: dict[int, ResolvedCalendar],
+) -> None:
     children_by_parent: dict[int | None, list[WfPlanningTaskSnapshot]] = defaultdict(list)
     for task in tasks_by_uid.values():
         children_by_parent[task.parent_uid].append(task)
@@ -104,13 +112,15 @@ def _recalculate_outline(tasks_by_uid: dict[int, WfPlanningTaskSnapshot]) -> Non
             task.outline_level = level
             task.outline_number = f"{prefix}.{position}" if prefix else str(position)
             update_children(task.uid, task.outline_number or "", level + 1)
-            _recalculate_summary_fields(task, children_by_parent[task.uid])
+            _recalculate_summary_fields(task, children_by_parent[task.uid], resolved_calendars)
 
     update_children(None, "", 1)
 
 
 def _recalculate_summary_fields(
-    task: WfPlanningTaskSnapshot, children: list[WfPlanningTaskSnapshot]
+    task: WfPlanningTaskSnapshot,
+    children: list[WfPlanningTaskSnapshot],
+    resolved_calendars: dict[int, ResolvedCalendar],
 ) -> None:
     if not children:
         if task.is_summary:
@@ -130,8 +140,29 @@ def _recalculate_summary_fields(
     if start_at is None or finish_at is None:
         task.duration_minutes = None
     else:
-        # Future working-calendar integration belongs in this wall-clock calculation.
-        task.duration_minutes = max(0, int((finish_at - start_at).total_seconds() // 60))
+        # E5-04: the summary duration is calendar-aware. The calendar used is
+        # resolved from the summary task's own assigned resource role,
+        # falling back to the org-wide default STANDARD calendar, and -- when
+        # no calendar exists in the system at all -- an implicit 24h/day
+        # calendar (source == "wall_clock_fallback") that is mathematically
+        # equivalent to the raw wall-clock diff (proven by
+        # test_compute_working_minutes_between_matches_wall_clock_diff_under_24h_calendar
+        # and the property test in test_calendar_schedule.py), so a single
+        # code path handles every tier.
+        resolved = resolved_calendars[task.uid]
+        task.duration_minutes = max(
+            0, compute_working_minutes_between(start_at, finish_at, resolved.weekday_hours)
+        )
+        # Known v1 limitation (not fixed here, see the PR review that flagged
+        # it): this is the *only* place duration_minutes gets recalculated
+        # for a calendar-aware summary task, and it only runs as a side
+        # effect of move_planning_tasks (drag/drop reordering). If a role's
+        # calendar or a task's role assignment changes afterwards on a draft
+        # planning, the previously stored duration_minutes is left stale
+        # until the next move -- there is no invalidation hook today. Full
+        # invalidation is deliberately out of scope (draft-only edge case,
+        # low value for the size of the change) and is left for E3-03, which
+        # will need to revisit this scheduling logic more broadly anyway.
 
 
 def _validate_target_parent(
@@ -188,4 +219,7 @@ def move_planning_tasks(
     for siblings in siblings_by_parent.values():
         for position, task in enumerate(siblings, start=1):
             task.position = position
-    _recalculate_outline(tasks_by_uid)
+    resolved_calendars = resolve_calendars_for_tasks(
+        db, planning.project_id, set(tasks_by_uid.keys())
+    )
+    _recalculate_outline(tasks_by_uid, resolved_calendars)

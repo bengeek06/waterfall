@@ -6,6 +6,8 @@ from sqlalchemy.exc import IntegrityError
 from waterfall.db.session import get_session_factory
 from waterfall.models.ms_core import MsProject, MsTask
 from waterfall.models.resources import (
+    Calendar,
+    CalendarWeekday,
     CostCategory,
     CostRate,
     CostType,
@@ -160,3 +162,105 @@ def test_resource_codes_are_unique() -> None:
             session.rollback()
         else:
             raise AssertionError("resource node codes must be unique")
+
+
+def _create_standard_calendar() -> int:
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        calendar = Calendar(code="STANDARD", name="Standard", weeks_per_year=47)
+        session.add(calendar)
+        session.flush()
+        session.add_all(
+            CalendarWeekday(
+                calendar_id=calendar.id,
+                day_type=day_type,
+                hours_per_day=Decimal("0.00") if day_type in (1, 7) else Decimal("7.00"),
+            )
+            for day_type in range(1, 8)
+        )
+        session.commit()
+        return calendar.id
+
+
+def test_calendar_persists_full_week() -> None:
+    calendar_id = _create_standard_calendar()
+
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        calendar = session.get(Calendar, calendar_id)
+        assert calendar is not None
+        assert calendar.weeks_per_year == 47
+        assert calendar.is_active is True
+
+        weekdays = (
+            session.query(CalendarWeekday)
+            .filter(CalendarWeekday.calendar_id == calendar_id)
+            .order_by(CalendarWeekday.day_type)
+            .all()
+        )
+        assert [weekday.day_type for weekday in weekdays] == [1, 2, 3, 4, 5, 6, 7]
+        assert [Decimal(weekday.hours_per_day) for weekday in weekdays] == [
+            Decimal("0.00"),
+            Decimal("7.00"),
+            Decimal("7.00"),
+            Decimal("7.00"),
+            Decimal("7.00"),
+            Decimal("7.00"),
+            Decimal("0.00"),
+        ]
+
+
+def test_calendar_weekday_rejects_hours_out_of_range() -> None:
+    calendar_id = _create_standard_calendar()
+
+    session_factory = get_session_factory()
+    for invalid_hours in (Decimal("-1.00"), Decimal("24.01")):
+        with session_factory() as session:
+            session.add(
+                CalendarWeekday(
+                    calendar_id=calendar_id,
+                    day_type=2,
+                    hours_per_day=invalid_hours,
+                )
+            )
+            try:
+                session.commit()
+            except IntegrityError:
+                session.rollback()
+            else:
+                raise AssertionError("hours_per_day must stay within [0, 24]")
+
+
+def test_calendar_weekday_rejects_duplicate_day_type() -> None:
+    calendar_id = _create_standard_calendar()
+
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        session.add(
+            CalendarWeekday(calendar_id=calendar_id, day_type=2, hours_per_day=Decimal("6.00"))
+        )
+        try:
+            session.commit()
+        except IntegrityError:
+            session.rollback()
+        else:
+            raise AssertionError("(calendar_id, day_type) must be unique")
+
+
+def test_resource_role_calendar_is_optional() -> None:
+    _, _, role_id = _seed_resource_graph()
+    calendar_id = _create_standard_calendar()
+
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        role = session.get(ResourceRole, role_id)
+        assert role is not None
+        assert role.calendar_id is None
+
+        role.calendar_id = calendar_id
+        session.commit()
+
+    with session_factory() as session:
+        role = session.get(ResourceRole, role_id)
+        assert role is not None
+        assert role.calendar_id == calendar_id

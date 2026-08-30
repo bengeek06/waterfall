@@ -1,5 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="http://schemas.microsoft.com/project/2007" xmlns="http://schemas.microsoft.com/project/2007" elementFormDefault="qualified">
+  <!--
+    Lenient validation for files imported into Waterfall (E5-02). Deliberately
+    does not model MS Project's real calendar schema (see the Calendar element
+    below) since Waterfall never reads calendar content on import. For the
+    strict schema used to self-check Waterfall's own export, see
+    waterfall_msproject_subset_export.xsd.
+  -->
   <xs:element name="Project">
     <xs:complexType>
       <xs:sequence>
@@ -14,6 +21,29 @@
         <xs:element name="MinutesPerWeek" type="xs:positiveInteger" minOccurs="0"/>
         <xs:element name="DaysPerMonth" type="xs:positiveInteger" minOccurs="0"/>
         <xs:element name="CurrencyCode" type="xs:string" minOccurs="0"/>
+        <xs:element name="Calendars" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Calendar" maxOccurs="unbounded">
+                <!--
+                  Waterfall is the source of truth for calendars; it never reads or
+                  reinterprets a Calendar node from an imported file (E5-02). Only UID
+                  is required so the element is recognizable; everything else (Name,
+                  WeekDays, exceptions, base-calendar references, ...) is accepted
+                  verbatim and skipped, so a real MS Project calendar of any shape
+                  never fails import validation. Waterfall's own export is validated
+                  separately against the strict waterfall_msproject_subset_export.xsd.
+                -->
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="UID" type="xs:integer"/>
+                    <xs:any namespace="##targetNamespace" processContents="skip" minOccurs="0" maxOccurs="unbounded"/>
+                  </xs:sequence>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
         <xs:element name="Tasks" minOccurs="0">
           <xs:complexType>
             <xs:sequence>
@@ -36,6 +66,7 @@
                     <xs:element name="Summary" type="xs:boolean" minOccurs="0"/>
                     <xs:element name="Milestone" type="xs:boolean" minOccurs="0"/>
                     <xs:element name="Manual" type="xs:boolean" minOccurs="0"/>
+                    <xs:element name="CalendarUID" type="xs:integer" minOccurs="0"/>
                     <xs:element name="Notes" type="xs:string" minOccurs="0"/>
                     <xs:element name="PredecessorLink" minOccurs="0" maxOccurs="unbounded">
                       <xs:complexType>
