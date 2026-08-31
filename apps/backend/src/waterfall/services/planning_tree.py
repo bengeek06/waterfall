@@ -13,6 +13,7 @@ from waterfall.services.calendar_schedule import (
     ResolvedCalendar,
     compute_finish_at,
     compute_start_at,
+    compute_start_at_for_finish_at_or_after,
     compute_working_minutes_between,
     resolve_calendars_for_tasks,
 )
@@ -553,12 +554,29 @@ def _resolve_predecessor_constraints(
     first offset by the link's lag through :func:`_resolve_lag_offset` --
     the same calendar-aware primitive FS/SS use -- to get the successor's
     target *finish* date, which is then converted into a start constraint via
-    :func:`compute_start_at`, the exact "N working minutes before this date"
-    primitive (see ``calendar_schedule.py``). This makes FF and SF exact and
-    calendar-aware too, on the same footing as FS/SS -- no raw wall-clock
-    approximation remains for any of the four link types (6th/7th E3-03 PR
-    review rounds: ``compute_start_at``, added for the FS/SS negative-lag
-    fix, turned out to be exactly the backward primitive FF/SF needed too).
+    :func:`compute_start_at_for_finish_at_or_after`. This makes FF and SF
+    exact and calendar-aware too, on the same footing as FS/SS -- no raw
+    wall-clock approximation remains for any of the four link types (6th/7th
+    E3-03 PR review rounds: ``compute_start_at``, added for the FS/SS
+    negative-lag fix, turned out to be exactly the backward primitive FF/SF
+    needed too).
+
+    Like FS/SS, FF and SF are lower bounds, not equalities: "the successor
+    finishes no earlier than target_finish" (10th E3-03 PR review round).
+    ``target_finish`` is not always itself a value the calendar can produce
+    as an exact finish -- most commonly because a raw wall-clock
+    (elapsed-format) lag lands it on a day with zero working capacity (e.g.
+    a Saturday under a Mon-Fri calendar); FS/SS never hit this because an
+    unreachable *start* is not an error (``compute_finish_at`` happily walks
+    forward from any calendar day, working or not), but an unreachable exact
+    *finish* used to be rejected outright by :func:`compute_start_at`. Using
+    :func:`compute_start_at_for_finish_at_or_after` instead resolves the
+    successor's start from the earliest finish that is both reachable under
+    the calendar and at or after ``target_finish`` -- returning
+    :func:`compute_start_at`'s own result verbatim whenever ``target_finish``
+    is already exactly reachable (no behaviour change for that, the common,
+    already-tested case), and only falling back to a later date when it is
+    not.
     """
     constraints: list[datetime] = []
     for link in links:
@@ -585,14 +603,18 @@ def _resolve_predecessor_constraints(
                 predecessor_finish, lag_minutes, link.lag_format, resolved_calendar
             )
             constraints.append(
-                compute_start_at(target_finish, duration_minutes, resolved_calendar.weekday_hours)
+                compute_start_at_for_finish_at_or_after(
+                    target_finish, duration_minutes, resolved_calendar.weekday_hours
+                )
             )
         elif link.link_type == 2 and predecessor_start is not None:  # SF
             target_finish = _resolve_lag_offset(
                 predecessor_start, lag_minutes, link.lag_format, resolved_calendar
             )
             constraints.append(
-                compute_start_at(target_finish, duration_minutes, resolved_calendar.weekday_hours)
+                compute_start_at_for_finish_at_or_after(
+                    target_finish, duration_minutes, resolved_calendar.weekday_hours
+                )
             )
     return constraints
 

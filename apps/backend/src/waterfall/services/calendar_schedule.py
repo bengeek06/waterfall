@@ -487,6 +487,72 @@ def compute_start_at(
     )
 
 
+def compute_start_at_for_finish_at_or_after(
+    target_finish: datetime, duration_minutes: int, weekday_hours: WeekdayHours
+) -> datetime:
+    """Resolve the ``start_at`` whose resulting finish is the earliest one
+    reachable at or after ``target_finish`` -- the correct CPM semantics for
+    an FF/SF predecessor-link constraint (10th E3-03 PR review round; see
+    ``_resolve_predecessor_constraints`` in ``waterfall.services.planning_tree``).
+
+    An FF/SF link only ever bounds the successor's finish *from below*: "the
+    successor finishes no earlier than target_finish", exactly mirroring how
+    an FS/SS link bounds the successor's *start* from below (see
+    ``_apply_automatic_schedule``, which takes ``max(constraints)`` over
+    every link). :func:`compute_start_at` alone only solves the strictly
+    narrower "finishes at *exactly* target_finish" case: when
+    ``target_finish`` is not itself a value :func:`compute_finish_at` could
+    ever produce for this calendar/duration -- most commonly because it
+    falls on a day with zero working capacity, e.g. a Saturday under a
+    Mon-Fri calendar, which a raw wall-clock (elapsed-format) lag can land
+    on freely since it is never calendar-snapped -- it raises ``ValueError``
+    even though a perfectly valid, later (but still minimal) finish exists
+    and should be used instead of rejecting an otherwise valid schedule.
+
+    Algorithm: try :func:`compute_start_at` against ``target_finish`` as-is
+    first. If it is exactly reachable (the common case, and the only case
+    before this fix), its result is returned verbatim -- no behaviour change
+    for it. Otherwise, walk ``target_finish`` forward one calendar day at a
+    time (same time-of-day at each step) and retry, until a day is found on
+    which :func:`compute_start_at` succeeds; that day's result is both
+    reachable and, by construction of the walk, the earliest such date
+    tried, hence "at or after" rather than an arbitrary later fallback.
+
+    This calendar model only ever expresses a *weekly repeating* pattern
+    (``CalendarWeekday.day_type`` 1-7 with no per-date holiday overrides --
+    see ``models.resources.CalendarWeekday``), so any calendar that has at
+    least one working day at all (already required to reach this point, see
+    the ``_has_any_working_day`` guard below) is guaranteed to repeat that
+    working day at least once every 7 calendar days; in practice this
+    forward walk converges within a handful of iterations for every
+    realistic calendar. It is still bounded by
+    :func:`_guard_max_days_walked`/``_MAX_CALENDAR_DAYS_WALKED`` regardless,
+    as defense-in-depth against a pathological input, matching every other
+    unbounded calendar walk in this module, and raises the same ``ValueError``
+    they do when that ceiling is hit.
+
+    Each retried day is still resolved through the exact same, unmodified
+    :func:`compute_start_at` -- exact and calendar-aware -- so the only new
+    behaviour this function introduces is *which* date is offered to it as
+    ``target_finish``; no naive/aware handling or sub-minute precision logic
+    already solved there is duplicated or reimplemented here.
+    """
+    if duration_minutes < 0:
+        raise ValueError("duration_minutes must not be negative")
+    if not _has_any_working_day(weekday_hours):
+        raise ValueError("calendar has no working day; scheduling would never terminate")
+
+    candidate_finish = target_finish
+    days_walked = 0
+    while True:
+        try:
+            return compute_start_at(candidate_finish, duration_minutes, weekday_hours)
+        except ValueError:
+            _guard_max_days_walked(days_walked)
+            days_walked += 1
+            candidate_finish += timedelta(days=1)
+
+
 def compute_working_minutes_between(
     start_at: datetime, finish_at: datetime, weekday_hours: WeekdayHours
 ) -> int:

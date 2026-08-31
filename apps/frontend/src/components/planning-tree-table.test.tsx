@@ -678,6 +678,67 @@ describe("PlanningTreeTable", () => {
     });
   });
 
+  it("clears a stale schedule draft left by a previously failed edit once a mode change on the same row succeeds", async () => {
+    // Reproduces the scenario the round-10 review flagged: a failed duration edit deliberately
+    // leaves its draft in place (see "keeps the schedule draft in place when the update fails"
+    // above); a subsequent, unrelated mode change on the same row then succeeds. commitModeChange
+    // must clear that leftover draft so the row's fresh, server-confirmed values are shown again
+    // instead of the stale, never-persisted "600".
+    const onScheduleUpdate = vi
+      .fn()
+      .mockResolvedValueOnce(false) // the duration edit below fails and its draft is kept
+      .mockResolvedValueOnce(true); // the mode change below succeeds
+    const initialTasks: Task[] = [
+      task({
+        uid: 1,
+        name: "Tâche manuelle",
+        parent_uid: null,
+        position: 1,
+        is_manual: true,
+        start_at: "2026-01-05T09:00:00Z",
+        finish_at: "2026-01-06T17:00:00Z",
+        duration_minutes: 480,
+      }),
+    ];
+    const { rerender } = render(
+      <PlanningTreeTable tasks={initialTasks} versionKey={1} onScheduleUpdate={onScheduleUpdate} />,
+    );
+
+    const durationInput = screen.getByLabelText<HTMLInputElement>("Durée de Tâche manuelle");
+    fireEvent.change(durationInput, { target: { value: "600" } });
+    fireEvent.blur(durationInput);
+
+    expect(onScheduleUpdate).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(durationInput.value).toBe("600"));
+
+    fireEvent.click(screen.getByLabelText("Mode de Tâche manuelle"));
+    const automaticOption = await screen.findByRole("option", { name: "Automatique" });
+    fireEvent.pointerDown(automaticOption);
+    fireEvent.click(automaticOption);
+
+    await waitFor(() => expect(onScheduleUpdate).toHaveBeenCalledTimes(2));
+
+    // Simulate the parent's data reload after the successful mode change, reflecting the server's
+    // fresh recomputed schedule.
+    const refreshedTasks: Task[] = [
+      task({
+        uid: 1,
+        name: "Tâche manuelle",
+        parent_uid: null,
+        position: 1,
+        is_manual: false,
+        start_at: "2026-01-05T09:00:00Z",
+        finish_at: "2026-01-06T17:00:00Z",
+        duration_minutes: 500,
+      }),
+    ];
+    rerender(<PlanningTreeTable tasks={refreshedTasks} versionKey={2} onScheduleUpdate={onScheduleUpdate} />);
+
+    await waitFor(() =>
+      expect(screen.getByLabelText<HTMLInputElement>("Durée de Tâche manuelle").value).toBe("500"),
+    );
+  });
+
   it("does not let an arrow key on the mode selector bubble up to the row's navigation", () => {
     const onScheduleUpdate = vi.fn().mockResolvedValue(true);
     const siblings: Task[] = [

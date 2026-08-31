@@ -1008,6 +1008,93 @@ def test_automatic_task_start_finish_predecessor_resolves_through_calendar_skipp
         assert leaf["finish_at"] == "2026-01-09T01:00:00"
 
 
+def test_automatic_task_finish_finish_target_on_non_working_day_falls_back_to_monday() -> None:
+    """10th E3-03 PR review round: an FF link's target finish date is a lower
+    bound ("finishes no earlier than"), not an equality -- exactly like an
+    FS/SS link already bounds the successor's *start*. Before this fix, a
+    ``target_finish`` landing on a day with zero working capacity made
+    ``compute_start_at`` raise ``ValueError`` (no start can produce an exact
+    finish on a non-working day), which was surfaced as a 400 even though
+    the successor legitimately finishing on the next working day satisfies
+    the FF constraint perfectly well.
+
+    Predecessor A is moved to finish on a Friday, and a 1-*elapsed*-day lag
+    (raw wall-clock, not calendar-aware -- see ``_is_elapsed_lag_format``)
+    lands the target finish on the following Saturday, which has zero
+    capacity under the Mon-Fri calendar. ``compute_start_at_for_finish_at_or_after``
+    walks the target forward to Monday, where the successor's 60-minute
+    duration resolves normally: start_at = Monday 07:00, finish_at = Monday
+    08:00 (manually verified against ``compute_start_at_for_finish_at_or_after``
+    directly, see ``test_calendar_schedule.py``'s counterpart for the pure
+    calendar-primitive-level assertion).
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_hierarchy(project_id)
+        _create_standard_calendar()
+        with get_session_factory()() as session:
+            predecessor = (
+                session.query(WfPlanningTaskSnapshot)
+                .filter(WfPlanningTaskSnapshot.planning_id == planning_id)
+                .filter(WfPlanningTaskSnapshot.uid == 6)
+                .one()
+            )
+            predecessor.finish_at = datetime(2026, 1, 9, 8, 0, tzinfo=UTC)  # Friday
+            session.commit()
+        # 1 elapsed day = 1440 min = 14400 tenths of a minute; lag_format
+        # omitted (None), which _is_elapsed_lag_format treats as elapsed raw
+        # wall-clock -- it is NOT calendar-snapped, so it can (and here does)
+        # land on a non-working day.
+        _add_link(planning_id, task_uid=3, predecessor_uid=6, link_type=0, lag_tenth_minute=14400)
+
+        response = client.patch(
+            _schedule_path(project_id, planning_id, 3),
+            json={"is_manual": False, "duration_minutes": 60},
+            headers=headers,
+        )
+
+        assert response.status_code == 200
+        leaf = _tasks_by_uid(cast(dict[str, Any], response.json()))[3]
+        assert leaf["start_at"] == "2026-01-12T07:00:00"
+        assert leaf["finish_at"] == "2026-01-12T08:00:00"
+
+
+def test_automatic_task_start_finish_target_on_non_working_day_falls_back_to_monday() -> None:
+    """SF (link_type=2) counterpart of the FF non-working-day fallback test
+    above -- same underlying bug (10th E3-03 PR review round), same fix,
+    anchored on the predecessor's ``start_at`` instead of its ``finish_at``.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_hierarchy(project_id)
+        _create_standard_calendar()
+        with get_session_factory()() as session:
+            predecessor = (
+                session.query(WfPlanningTaskSnapshot)
+                .filter(WfPlanningTaskSnapshot.planning_id == planning_id)
+                .filter(WfPlanningTaskSnapshot.uid == 7)
+                .one()
+            )
+            predecessor.start_at = datetime(2026, 1, 9, 8, 0, tzinfo=UTC)  # Friday
+            session.commit()
+        # 1 elapsed day = 1440 min = 14400 tenths of a minute, same as the FF
+        # test above -- target_finish also lands on the following Saturday.
+        _add_link(planning_id, task_uid=3, predecessor_uid=7, link_type=2, lag_tenth_minute=14400)
+
+        response = client.patch(
+            _schedule_path(project_id, planning_id, 3),
+            json={"is_manual": False, "duration_minutes": 60},
+            headers=headers,
+        )
+
+        assert response.status_code == 200
+        leaf = _tasks_by_uid(cast(dict[str, Any], response.json()))[3]
+        assert leaf["start_at"] == "2026-01-12T07:00:00"
+        assert leaf["finish_at"] == "2026-01-12T08:00:00"
+
+
 def test_automatic_task_uses_assigned_role_calendar_for_duration() -> None:
     """E5-04's calendar resolution is reused: a non-standard calendar
     assigned via the task's resource role produces a different finish_at

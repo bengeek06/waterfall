@@ -452,7 +452,7 @@ export function PlanningTreeTable({
     }
   }
 
-  function commitModeChange(row: PlanningTreeRow, isManual: boolean) {
+  async function commitModeChange(row: PlanningTreeRow, isManual: boolean) {
     if (!onScheduleUpdate || mutationBusy) {
       return;
     }
@@ -464,11 +464,19 @@ export function PlanningTreeTable({
           finish_at: row.finish_at ?? null,
           duration_minutes: row.duration_minutes ?? null,
         };
-    // No local draft to reconcile here (unlike commitScheduleEdit): the Select is driven directly
-    // by row.is_manual, so on failure it simply re-renders with the same (unchanged) value once
-    // the parent's data reload reflects the rejected request -- no stale-draft/lost-input risk to
-    // guard against, so this stays fire-and-forget.
-    void onScheduleUpdate(row.uid, payload);
+    // The mode change itself has no draft of its own to reconcile (unlike commitScheduleEdit):
+    // the Select is driven directly by row.is_manual, so on failure it simply re-renders with the
+    // same (unchanged) value once the parent's data reload reflects the rejected request -- no
+    // stale-draft/lost-input risk from *this* request to guard against. However, a *previous*
+    // schedule-field edit on this same row may have failed and left its draft in place
+    // (deliberately, so the user's invalid/unsaved input stays visible -- see commitScheduleEdit).
+    // If this mode change then succeeds, the server returns fresh start/finish/duration values,
+    // but scheduleDraftFor(row) would keep serving that stale leftover draft instead. Clear it on
+    // success so the fields reflect the row's new, server-confirmed values.
+    const succeeded = await onScheduleUpdate(row.uid, payload);
+    if (succeeded) {
+      clearScheduleDraft(row.uid);
+    }
   }
 
   function onScheduleFieldKeyDown(event: KeyboardEvent<HTMLInputElement>) {
@@ -565,7 +573,7 @@ export function PlanningTreeTable({
           {editable ? (
             <Select
               value={row.is_manual ? "manual" : "auto"}
-              onValueChange={(value) => commitModeChange(row, value === "manual")}
+              onValueChange={(value) => void commitModeChange(row, value === "manual")}
               disabled={mutationBusy}
             >
               <SelectTrigger

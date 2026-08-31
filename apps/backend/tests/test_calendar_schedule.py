@@ -19,6 +19,7 @@ from waterfall.services.calendar_schedule import (
     _has_any_working_day,  # pyright: ignore[reportPrivateUsage]
     compute_finish_at,
     compute_start_at,
+    compute_start_at_for_finish_at_or_after,
     compute_working_minutes_between,
     resolve_calendars_for_tasks,
 )
@@ -342,6 +343,81 @@ def test_compute_start_at_rejects_an_anchor_unreachable_under_a_sparse_calendar(
 
     with pytest.raises(ValueError, match="not reachable"):
         compute_start_at(anchor, 100, monday_only_hours)
+
+
+def test_compute_start_at_for_finish_at_or_after_matches_when_exactly_reachable() -> None:
+    """10th E3-03 PR review round: when ``target_finish`` is itself exactly
+    reachable (the common case, and the only case before this fix), the new
+    lower-bound-aware primitive must return exactly the same value as the
+    plain :func:`compute_start_at` it wraps -- no behaviour change for
+    already-tested FF/SF scenarios."""
+    anchor = datetime(2026, 1, 12, 15, 0, tzinfo=UTC)  # Monday, exactly reachable.
+
+    assert compute_start_at_for_finish_at_or_after(anchor, 60, STANDARD_HOURS) == compute_start_at(
+        anchor, 60, STANDARD_HOURS
+    )
+
+
+def test_compute_start_at_for_finish_at_or_after_falls_back_to_next_working_day() -> None:
+    """Regression test for the 10th E3-03 PR review round's confirmed bug:
+    an FF/SF ``target_finish`` landing on a non-working day (here a Saturday,
+    reachable e.g. via an elapsed-format lag that is never calendar-snapped)
+    must resolve to the earliest reachable finish *at or after* it, not raise
+    ``ValueError``. Same-day-of-week/time walked forward to the next Monday:
+    ``compute_start_at(Monday 08:00, 60, STANDARD_HOURS)`` resolves to
+    Monday 07:00, which is exactly what is returned here."""
+    target_finish = datetime(2026, 1, 10, 8, 0, tzinfo=UTC)  # Saturday.
+
+    start_at = compute_start_at_for_finish_at_or_after(target_finish, 60, STANDARD_HOURS)
+
+    assert start_at == datetime(2026, 1, 12, 7, 0, tzinfo=UTC)  # Monday.
+    assert compute_finish_at(start_at, 60, STANDARD_HOURS) == datetime(
+        2026, 1, 12, 8, 0, tzinfo=UTC
+    )
+    # The resulting finish is at or after the original (unreachable) target.
+    assert compute_finish_at(start_at, 60, STANDARD_HOURS) >= target_finish
+
+
+def test_compute_start_at_for_finish_at_or_after_walks_past_a_multi_day_non_working_stretch() -> (
+    None
+):
+    """The forward walk is not limited to a single weekend: anchored on a
+    Thursday under a Monday-only calendar (three non-working days in a row:
+    Tue/Wed/Thu, plus the surrounding weekend), it must keep walking forward
+    until it reaches the next Monday rather than giving up early."""
+    monday_only_hours = {
+        day_type: Decimal("8.00") if day_type == 2 else Decimal("0.00") for day_type in range(1, 8)
+    }
+    target_finish = datetime(2026, 1, 8, 12, 0, tzinfo=UTC)  # Thursday.
+
+    start_at = compute_start_at_for_finish_at_or_after(target_finish, 100, monday_only_hours)
+
+    assert start_at.date() == date(2026, 1, 12)  # The following Monday.
+    finish_at = compute_finish_at(start_at, 100, monday_only_hours)
+    assert finish_at.date() == date(2026, 1, 12)
+    assert finish_at >= target_finish
+
+
+def test_compute_start_at_for_finish_at_or_after_zero_duration_returns_target_unchanged() -> None:
+    target_finish = datetime(2026, 1, 10, 8, 0, tzinfo=UTC)  # Saturday; irrelevant for duration 0.
+
+    result = compute_start_at_for_finish_at_or_after(target_finish, 0, STANDARD_HOURS)
+
+    assert result == target_finish
+
+
+def test_compute_start_at_for_finish_at_or_after_rejects_negative_duration() -> None:
+    target_finish = datetime(2026, 1, 5, 8, 0, tzinfo=UTC)
+
+    with pytest.raises(ValueError):
+        compute_start_at_for_finish_at_or_after(target_finish, -1, STANDARD_HOURS)
+
+
+def test_compute_start_at_for_finish_at_or_after_rejects_calendar_with_no_working_day() -> None:
+    target_finish = datetime(2026, 1, 5, 8, 0, tzinfo=UTC)
+
+    with pytest.raises(ValueError):
+        compute_start_at_for_finish_at_or_after(target_finish, 100, NO_WORKING_DAY_HOURS)
 
 
 def test_compute_working_minutes_between_caps_finish_day_at_its_own_capacity() -> None:
