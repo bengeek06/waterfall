@@ -624,7 +624,6 @@ def test_resolve_calendars_for_tasks_resolves_role_calendar_with_minimal_legal_h
             node_id=node.id,
             cost_category_id=category.id,
             calendar_id=barely_positive_calendar.id,
-            code="DEV-BARELY-POSITIVE",
             name="Developpeur calendrier presque vide",
         )
         session.add(role)
@@ -693,7 +692,6 @@ def test_resolve_calendars_for_tasks_falls_through_when_role_calendar_has_no_wor
             node_id=node.id,
             cost_category_id=category.id,
             calendar_id=empty_calendar.id,
-            code="DEV-EMPTY",
             name="Developpeur calendrier vide",
         )
         session.add(role)

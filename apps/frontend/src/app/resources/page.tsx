@@ -121,7 +121,6 @@ export default function ResourcesPage() {
   const [costTypeCode, setCostTypeCode] = useState("");
   const [costTypeName, setCostTypeName] = useState("");
   const [costTypeKind, setCostTypeKind] = useState<CostType["kind"]>("other");
-  const [roleCode, setRoleCode] = useState("");
   const [roleName, setRoleName] = useState("");
   const [roleNodeId, setRoleNodeId] = useState("");
   const [roleCategoryId, setRoleCategoryId] = useState("");
@@ -406,7 +405,6 @@ export default function ResourcesPage() {
     await submitAction(async () => {
       const created = await createResourceRole(
         {
-          code: roleCode,
           name: roleName,
           node_id: Number(roleNodeId),
           cost_category_id: Number(roleCategoryId),
@@ -414,8 +412,7 @@ export default function ResourcesPage() {
         session,
         onSessionRefresh,
       );
-      setRoles((prev) => [...prev, created].sort((left, right) => left.code.localeCompare(right.code)));
-      setRoleCode("");
+      setRoles((prev) => [...prev, created].sort((left, right) => left.name.localeCompare(right.name)));
       setRoleName("");
     }, "Rôle créé.");
   }
@@ -625,6 +622,7 @@ export default function ResourcesPage() {
   }
 
   const categoryNameById = new Map(categories.map((category) => [category.id, category.name]));
+  const nodeCodeById = new Map(nodes.map((node) => [node.id, node.code]));
   const calendarIdsInUseByActiveRoles = new Set(
     roles.filter((role) => role.is_active && role.calendar_id != null).map((role) => role.calendar_id as number),
   );
@@ -738,11 +736,11 @@ export default function ResourcesPage() {
             onNodeChange={(field, value) => { if (field === "code") setNodeCode(value); if (field === "name") setNodeName(value); if (field === "parent") setNodeParentId(value); }}
           />
 
-          <RolesPanel selectedNode={selectedNode} selectedRoles={selectedRoles} nodes={nodes} categories={categories} costTypes={costTypes} roleCode={roleCode} roleName={roleName} roleNodeId={roleNodeId} roleCategoryId={roleCategoryId} actionBusy={actionBusy} categoryNames={categoryNameById} onSubmit={addRole} onCodeChange={setRoleCode} onNameChange={setRoleName} onNodeChange={(value) => { setRoleNodeId(value); setSelectedNodeId(Number(value)); }} onCategoryChange={setRoleCategoryId} />
+          <RolesPanel selectedNode={selectedNode} selectedRoles={selectedRoles} nodes={nodes} categories={categories} costTypes={costTypes} roleName={roleName} roleNodeId={roleNodeId} roleCategoryId={roleCategoryId} actionBusy={actionBusy} categoryNames={categoryNameById} onSubmit={addRole} onNameChange={setRoleName} onNodeChange={(value) => { setRoleNodeId(value); setSelectedNodeId(Number(value)); }} onCategoryChange={setRoleCategoryId} />
 
           </div>
-          <CapacityTable roles={roles} drafts={capacityDrafts} actionBusy={actionBusy} onDraftChange={(roleId, draft) => setCapacityDrafts((previous) => ({ ...previous, [roleId]: draft }))} onSave={(roleId) => void saveRoleCapacity(roleId)} />
-          <RoleCalendarsTable roles={roles} calendars={calendars} drafts={roleCalendarDrafts} actionBusy={actionBusy} onDraftChange={(roleId, calendarId) => setRoleCalendarDrafts((previous) => ({ ...previous, [roleId]: calendarId }))} onSave={(roleId) => void saveRoleCalendar(roleId)} />
+          <CapacityTable roles={roles} drafts={capacityDrafts} actionBusy={actionBusy} nodeCodeById={nodeCodeById} onDraftChange={(roleId, draft) => setCapacityDrafts((previous) => ({ ...previous, [roleId]: draft }))} onSave={(roleId) => void saveRoleCapacity(roleId)} />
+          <RoleCalendarsTable roles={roles} calendars={calendars} drafts={roleCalendarDrafts} actionBusy={actionBusy} nodeCodeById={nodeCodeById} onDraftChange={(roleId, calendarId) => setRoleCalendarDrafts((previous) => ({ ...previous, [roleId]: calendarId }))} onSave={(roleId) => void saveRoleCalendar(roleId)} />
           <CalendarsTable
             items={calendars}
             code={calendarCode}

@@ -375,7 +375,7 @@ export function getResourceRoles(
 }
 
 export function createResourceRole(
-  payload: { code: string; name: string; node_id: number; cost_category_id: number; calendar_id?: number | null },
+  payload: { name: string; node_id: number; cost_category_id: number; calendar_id?: number | null },
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
 ) {

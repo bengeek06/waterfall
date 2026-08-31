@@ -93,7 +93,6 @@ class ResourceNode(Base):
 class ResourceRole(Base):
     __tablename__ = "wf_resource_role"
     __table_args__ = (
-        UniqueConstraint("code", name="uq_wf_resource_role_code"),
         Index("idx_wf_resource_role_node", "node_id"),
         Index("idx_wf_resource_role_calendar", "calendar_id"),
     )
@@ -102,7 +101,6 @@ class ResourceRole(Base):
     node_id: Mapped[int] = mapped_column(ForeignKey("wf_resource_node.id"), nullable=False)
     cost_category_id: Mapped[int] = mapped_column(ForeignKey("wf_cost_category.id"), nullable=False)
     calendar_id: Mapped[int | None] = mapped_column(ForeignKey("wf_calendar.id"), nullable=True)
-    code: Mapped[str] = mapped_column(String(64), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -340,7 +338,7 @@ class EstimateLine(Base):
     task_id: Mapped[int | None] = mapped_column(ForeignKey("ms_task.id"), nullable=True)
     role_id: Mapped[int | None] = mapped_column(ForeignKey("wf_resource_role.id"), nullable=True)
     task_name: Mapped[str] = mapped_column(String(512), nullable=False)
-    role_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    role_code: Mapped[str] = mapped_column(String(255), nullable=False)
     role_name: Mapped[str] = mapped_column(String(255), nullable=False)
     accounting_code: Mapped[str] = mapped_column(String(64), nullable=False)
     year: Mapped[int] = mapped_column(Integer, nullable=False)

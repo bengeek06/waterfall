@@ -141,13 +141,11 @@ def _seed_roles() -> tuple[int, int]:
         labor_role = ResourceRole(
             node_id=child.id,
             cost_category_id=labor_category.id,
-            code="DEV",
             name="Développeur",
         )
         supply_role = ResourceRole(
             node_id=child.id,
             cost_category_id=supply_category.id,
-            code="CABLE",
             name="Câble",
         )
         session.add_all([labor_role, supply_role])
@@ -1167,7 +1165,7 @@ def test_task_role_assignment_lifecycle_and_labor_validation() -> None:
         assert create_response.status_code == 201
         assignment = cast(dict[str, Any], create_response.json())
         assignment_id = cast(int, assignment["id"])
-        assert assignment["role_code"] == "DEV"
+        assert assignment["role_code"] == "Développeur"
         assert assignment["accounting_code"] == "MO-DEV"
 
         list_response = client.get(

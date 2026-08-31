@@ -100,9 +100,12 @@ def test_migration_upgrade_creates_expected_schema() -> None:
             planning_columns = {column["name"] for column in inspector.get_columns("wf_planning")}
             assert "structure_draft_json" in planning_columns
 
+            role_columns = {column["name"] for column in inspector.get_columns("wf_resource_role")}
+            assert "code" not in role_columns
+
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260829_0002"
+                == "20260831_0003"
             )
 
 
@@ -191,7 +194,7 @@ def test_calendar_migration_is_reversible() -> None:
         database_path = Path(temporary_directory) / "migration.db"
         database_url = f"sqlite+pysqlite:///{database_path}"
         _run_alembic(database_url, "head")
-        _downgrade_alembic(database_url, "-1")
+        _downgrade_alembic(database_url, "20260823_0001")
 
         with _disposable_engine(database_url) as engine, engine.connect() as connection:
             inspector = inspect(connection)
@@ -212,6 +215,83 @@ def test_calendar_migration_is_reversible() -> None:
             assert "wf_calendar" in inspector.get_table_names()
             role_columns = {column["name"] for column in inspector.get_columns("wf_resource_role")}
             assert "calendar_id" in role_columns
+
+
+def test_resource_role_code_removal_migration_is_reversible() -> None:
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "migration.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        _run_alembic(database_url, "head")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            inspector = inspect(connection)
+            role_columns = {column["name"] for column in inspector.get_columns("wf_resource_role")}
+            assert "code" not in role_columns
+
+        # Seed two roles (past the point "code" was dropped) so the downgrade below is
+        # exercised against a table with more than one row: a static server_default for
+        # the resurrected "code" column would give every row the same value and blow up
+        # the unique constraint the downgrade re-creates.
+        with _disposable_engine(database_url) as engine, engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO wf_cost_type "
+                    "(id, code, name, kind, is_active, created_at, updated_at) "
+                    "VALUES (1, 'MO', 'Main d''oeuvre', 'labor', 1, "
+                    "'2026-01-01 00:00:00', '2026-01-01 00:00:00')"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO wf_cost_category (id, cost_type_id, accounting_code, name, "
+                    "is_active, created_at, updated_at) VALUES (1, 1, 'DEV', 'Developpement', 1, "
+                    "'2026-01-01 00:00:00', '2026-01-01 00:00:00')"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO wf_resource_node (id, code, name, is_active, "
+                    "created_at, updated_at) VALUES (1, 'IT', 'Informatique', 1, "
+                    "'2026-01-01 00:00:00', '2026-01-01 00:00:00')"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO wf_resource_role "
+                    "(id, node_id, cost_category_id, name, is_active, created_at, updated_at) "
+                    "VALUES "
+                    "(1, 1, 1, 'Developpeur', 1, '2026-01-01 00:00:00', '2026-01-01 00:00:00'), "
+                    "(2, 1, 1, 'Architecte', 1, '2026-01-01 00:00:00', '2026-01-01 00:00:00')"
+                )
+            )
+
+        _downgrade_alembic(database_url, "20260829_0002")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            inspector = inspect(connection)
+            role_columns = {column["name"] for column in inspector.get_columns("wf_resource_role")}
+            assert "code" in role_columns
+            unique_constraints = inspector.get_unique_constraints("wf_resource_role")
+            assert any(constraint["column_names"] == ["code"] for constraint in unique_constraints)
+            assert (
+                connection.scalar(text("SELECT version_num FROM alembic_version"))
+                == "20260829_0002"
+            )
+
+            codes = connection.execute(
+                text("SELECT id, code FROM wf_resource_role ORDER BY id")
+            ).all()
+            assert [row[0] for row in codes] == [1, 2]
+            role_codes = [row[1] for row in codes]
+            assert all(role_codes), "downgraded roles must keep a non-empty code"
+            assert len(set(role_codes)) == len(role_codes), "downgraded role codes must be unique"
+
+        _run_alembic(database_url, "head")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            inspector = inspect(connection)
+            role_columns = {column["name"] for column in inspector.get_columns("wf_resource_role")}
+            assert "code" not in role_columns
 
 
 def test_migration_downgrade_drops_all_tables() -> None:
@@ -292,7 +372,7 @@ def test_postgres_migration_upgrade_head_succeeds(postgres_database_url: str) ->
             "wf_estimate",
             "wf_estimate_task_row",
         }.issubset(table_names)
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260829_0002"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260831_0003"
 
 
 def test_postgres_migration_is_reversible(postgres_database_url: str) -> None:

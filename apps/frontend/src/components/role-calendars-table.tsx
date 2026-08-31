@@ -10,6 +10,7 @@ type RoleCalendarsTableProps = {
   calendars: Calendar[];
   drafts: Record<number, string>;
   actionBusy: boolean;
+  nodeCodeById: Map<number, string>;
   onDraftChange: (roleId: number, calendarId: string) => void;
   onSave: (roleId: number) => void;
 };
@@ -29,12 +30,13 @@ export function RoleCalendarsTable(props: RoleCalendarsTableProps) {
               const assignedInactiveCalendar = role.calendar_id != null && !activeCalendars.some((calendar) => calendar.id === role.calendar_id)
                 ? props.calendars.find((calendar) => calendar.id === role.calendar_id)
                 : undefined;
+              const nodeCode = props.nodeCodeById.get(role.node_id) ?? "?";
               return (
                 <TableRow key={role.id}>
-                  <TableCell><span className="font-medium">{role.code}</span> {role.name}</TableCell>
+                  <TableCell>{role.name} — {nodeCode}</TableCell>
                   <TableCell>
                     <select
-                      aria-label={`Calendrier de ${role.code}`}
+                      aria-label={`Calendrier de ${role.name} — ${nodeCode}`}
                       className="h-8 rounded-md border border-input bg-background px-2 text-sm"
                       value={draft}
                       disabled={props.actionBusy}

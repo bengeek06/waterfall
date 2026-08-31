@@ -106,7 +106,6 @@ def _seed_inactive_role_with_calendar(session: Session, calendar_id: int) -> int
         node_id=node.id,
         cost_category_id=category.id,
         calendar_id=calendar_id,
-        code="DEV-LOCK",
         name="Developpeur",
         is_active=False,
     )
