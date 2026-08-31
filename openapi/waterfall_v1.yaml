@@ -4380,11 +4380,13 @@ components:
           schema:
             $ref: '#/components/schemas/FastAPIErrorResponse'
     DeletePlanningTasksConflict:
-      description: Suppression en cascade non confirmee (detail.code=CASCADE_CONFIRMATION_REQUIRED, avec la liste des uid descendants dans detail.descendant_uids), ou tache referencee par un devis, une affectation ou une charge (detail.code=TASK_REFERENCED, avec la liste des uid references dans detail.task_uids)
+      description: Suppression en cascade non confirmee (detail.code=CASCADE_CONFIRMATION_REQUIRED, avec la liste des uid descendants dans detail.descendant_uids), ou tache referencee par un devis, une affectation ou une charge (detail.code=TASK_REFERENCED, avec la liste des uid references dans detail.task_uids). D'autres conflits (planning non brouillon, conflit d'integrite sur la hierarchie) renvoient le detail texte brut generique FastAPI plutot que ce detail structure.
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/PlanningTaskDeleteConflict'
+            oneOf:
+              - $ref: '#/components/schemas/PlanningTaskDeleteConflict'
+              - $ref: '#/components/schemas/FastAPIErrorResponse'
     EstimateNotFound:
       description: Devis introuvable
       content:

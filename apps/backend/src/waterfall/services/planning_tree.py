@@ -5,6 +5,7 @@ from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from typing import overload
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from waterfall.models.ms_core import MsTask
@@ -415,8 +416,39 @@ def create_planning_task(
             )
         insert_index = sibling_uids.index(insert_after_uid) + 1
 
-    max_uid = max((task.uid for task in tasks), default=0)
-    max_id_display = max((task.id_display or 0 for task in tasks), default=0)
+    # uid/id_display must be unique across every version of this project, not
+    # just the current draft: WfPlanningTaskSnapshot.uid is a stable identity
+    # reused across planning versions (see task_references.py) and MsTask
+    # rows carry legacy references that must never collide with a snapshot
+    # uid either. Scoping the max to the current draft's own tasks would let
+    # a freshly-deleted-then-recreated uid collide with a task still alive
+    # in another version of the same project.
+    project_snapshot_max_uid = (
+        db.query(func.max(WfPlanningTaskSnapshot.uid))
+        .join(WfPlanning, WfPlanning.id == WfPlanningTaskSnapshot.planning_id)
+        .filter(WfPlanning.project_id == planning.project_id)
+        .scalar()
+        or 0
+    )
+    project_snapshot_max_id_display = (
+        db.query(func.max(WfPlanningTaskSnapshot.id_display))
+        .join(WfPlanning, WfPlanning.id == WfPlanningTaskSnapshot.planning_id)
+        .filter(WfPlanning.project_id == planning.project_id)
+        .scalar()
+        or 0
+    )
+    project_ms_task_max_uid = (
+        db.query(func.max(MsTask.uid)).filter(MsTask.project_id == planning.project_id).scalar()
+        or 0
+    )
+    project_ms_task_max_id_display = (
+        db.query(func.max(MsTask.id_display))
+        .filter(MsTask.project_id == planning.project_id)
+        .scalar()
+        or 0
+    )
+    max_uid = max(project_snapshot_max_uid, project_ms_task_max_uid)
+    max_id_display = max(project_snapshot_max_id_display, project_ms_task_max_id_display)
 
     new_task = WfPlanningTaskSnapshot(
         planning_id=planning.id,

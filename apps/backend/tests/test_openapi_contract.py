@@ -397,6 +397,14 @@ def test_delete_planning_tasks_conflict_response_declares_dedicated_schema() -> 
     does for ``move``) is not enough on its own -- it would pass even if both
     still pointed at the same generic schema -- so this also asserts the
     dedicated schema's actual shape.
+
+    The 409 is documented as a ``oneOf`` of ``PlanningTaskDeleteConflict``
+    (the structured cascade/reference conflicts) and ``FastAPIErrorResponse``
+    (the plain-string conflicts that ``delete_planning_tasks_route`` also
+    raises -- e.g. "Planning is not a draft", or an ``IntegrityError`` on the
+    hierarchy) -- see PR #78's Copilot review finding #2: those code paths
+    never actually return the structured shape, so documenting it exclusively
+    was inaccurate.
     """
     raw_document: object = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
     static_document = cast(dict[str, Any], raw_document)
@@ -405,9 +413,14 @@ def test_delete_planning_tasks_conflict_response_declares_dedicated_schema() -> 
         "/projects/{projectId}/plannings/{planningId}/tasks/delete"
     ]["post"]
     conflict_response = static_components["responses"]["DeletePlanningTasksConflict"]
-    assert conflict_response["content"]["application/json"]["schema"]["$ref"] == (
-        "#/components/schemas/PlanningTaskDeleteConflict"
-    )
+    conflict_schema_refs = {
+        member["$ref"]
+        for member in conflict_response["content"]["application/json"]["schema"]["oneOf"]
+    }
+    assert conflict_schema_refs == {
+        "#/components/schemas/PlanningTaskDeleteConflict",
+        "#/components/schemas/FastAPIErrorResponse",
+    }
     assert delete_operation["responses"]["409"]["$ref"] == (
         "#/components/responses/DeletePlanningTasksConflict"
     )

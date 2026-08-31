@@ -612,6 +612,61 @@ def test_delete_large_cascade_batches_reference_checks_instead_of_per_task_queri
 
 
 # ---------------------------------------------------------------------------
+# uid uniqueness spans every version of the project, not just the current draft
+# ---------------------------------------------------------------------------
+
+
+def test_create_task_after_delete_does_not_collide_with_uid_alive_in_another_version() -> None:
+    """A recreated uid must stay unique across every version of the project.
+
+    ``uid`` is a stable identity reused across planning versions (see
+    ``task_references.py``): deleting the highest-uid task from the current
+    draft and immediately creating a new one must not reuse a uid that is
+    still alive in another version of the same project, even though that
+    version isn't the one being mutated here.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_planning(project_id)
+
+        # A second, already-validated version of the same project still has a
+        # live task at uid=6, the highest uid in the seeded draft.
+        with get_session_factory()() as session:
+            other_planning = WfPlanning(project_id=project_id, version_number=2, status="validated")
+            session.add(other_planning)
+            session.flush()
+            session.add(
+                WfPlanningTaskSnapshot(
+                    planning_id=other_planning.id,
+                    uid=6,
+                    name="Root leaf (validated copy)",
+                    position=1,
+                    is_summary=False,
+                    is_milestone=False,
+                )
+            )
+            session.commit()
+
+        deleted = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/tasks/delete",
+            json={"task_uids": [6]},
+            headers=headers,
+        )
+        assert deleted.status_code == 200
+
+        created = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/tasks",
+            json={"name": "New root"},
+            headers=headers,
+        )
+        assert created.status_code == 200
+        tasks = _tasks_by_uid(cast(dict[str, Any], created.json()))
+        new_uid = next(uid for uid, task in tasks.items() if task["name"] == "New root")
+        assert new_uid != 6
+
+
+# ---------------------------------------------------------------------------
 # Renumbering after delete then create (inverse of the legacy gap-preserving behaviour)
 # ---------------------------------------------------------------------------
 
