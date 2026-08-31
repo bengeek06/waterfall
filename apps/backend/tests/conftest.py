@@ -18,11 +18,16 @@ os.environ.setdefault("ACCESS_TOKEN_EXPIRE_MINUTES", "30")
 @pytest.fixture(autouse=True, scope="session")
 def prepare_test_environment():
     from waterfall.core.config import get_settings
+    from waterfall.db.base import Base
     from waterfall.db.session import get_engine, get_session_factory
 
     get_settings.cache_clear()
     get_engine.cache_clear()
     get_session_factory.cache_clear()
+
+    # Schema is created once for the whole session; reset_database (below) empties
+    # rows between tests instead of paying a fresh DROP+CREATE DDL cycle per test.
+    Base.metadata.create_all(bind=get_engine())
 
     yield
 
@@ -36,21 +41,37 @@ def reset_database() -> None:
     from waterfall.db.session import get_engine
 
     engine = get_engine()
-    with engine.begin() as connection:
-        if engine.dialect.name == "sqlite":
+    is_sqlite = engine.dialect.name == "sqlite"
+    with engine.connect() as connection:
+        if is_sqlite:
             # The ms_project <-> wf_planning <-> wf_estimate FK cycle is closed via
             # use_alter=True on the model constraints (see models/ms_core.py), which
             # is enough for SQLAlchemy to resolve table creation/drop order without
             # an SAWarning. SQLite itself still inlines FK constraints in CREATE TABLE
             # regardless of use_alter (it has no ALTER TABLE ADD CONSTRAINT support),
             # so leftover rows from a previous test can still trip FK enforcement
-            # while tables involved in the cycle are dropped one at a time; disabling
-            # the pragma for the drop keeps that ordering-independent.
+            # while tables involved in the cycle are emptied one at a time; disabling
+            # the pragma for the delete keeps that ordering-independent. Issued outside
+            # any transaction: SQLite silently no-ops a foreign_keys pragma change made
+            # mid-transaction, and (unlike the DDL this fixture used to run) a plain
+            # DELETE starts a real one, so toggling it back on would otherwise never
+            # actually take effect once this fixture is done.
             connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
-        Base.metadata.drop_all(bind=connection)
-        if engine.dialect.name == "sqlite":
+        # Delete rows (children before parents) instead of dropping and recreating the
+        # schema: DDL churn on every one of ~280 tests was the dominant cost of the
+        # suite (~1.3s/test just in fixture setup). SQLite reassigns a table's
+        # INTEGER PRIMARY KEY rowid starting at 1 once it is empty (these models don't
+        # use the AUTOINCREMENT keyword), so this is behaviorally equivalent to a full
+        # recreate for anything the test suite asserts on.
+        for table in reversed(Base.metadata.sorted_tables):
+            connection.execute(table.delete())
+        # Commit before re-enabling the pragma: the deletes above autobegan this
+        # connection's SQLAlchemy transaction, and the pragma is a no-op while one is
+        # still open (see the comment above).
+        connection.commit()
+        if is_sqlite:
             connection.exec_driver_sql("PRAGMA foreign_keys=ON")
-    Base.metadata.create_all(bind=engine)
+            connection.commit()
 
 
 @pytest.fixture(autouse=True)
