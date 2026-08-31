@@ -1,4 +1,5 @@
-from datetime import UTC, date, datetime
+import random
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -15,6 +16,7 @@ from waterfall.models.resources import (
     TaskRoleAssignment,
 )
 from waterfall.services.calendar_schedule import (
+    _has_any_working_day,  # pyright: ignore[reportPrivateUsage]
     compute_finish_at,
     compute_start_at,
     compute_working_minutes_between,
@@ -182,6 +184,164 @@ def test_compute_start_at_rejects_calendar_with_no_working_day() -> None:
 
     with pytest.raises(ValueError):
         compute_start_at(anchor, 100, NO_WORKING_DAY_HOURS)
+
+
+def test_compute_start_at_variable_capacity_calendar_reviewer_counter_example() -> None:
+    """Regression test for the 9th PR-review round's confirmed round-trip
+    bug: a calendar whose working days have *different* capacities from one
+    another (Monday=7h, Tuesday=4h) broke ``compute_start_at``, because an
+    earlier version derived ``start_at``'s time-of-day from ``anchor.time()
+    - last_day_minutes_used`` -- mixing ``anchor``'s own (Tuesday) clock time
+    with a quantity of minutes actually consumed on a *different* day
+    (Monday, the resulting ``start_date``), which has a different capacity.
+
+    Walking forward from the previous (buggy) result confirms the bug: from
+    ``Monday 05:00`` for 500 minutes lands on ``Tuesday 06:20``, not back on
+    the original ``Tuesday 09:20`` anchor. The fix must round-trip exactly:
+    ``compute_finish_at(compute_start_at(anchor, 500, cal), 500, cal) ==
+    anchor``, landing on ``Monday 08:00`` (Monday's own 420-minute capacity
+    consumed in full, leaving exactly 80 minutes -- not 500 minus a whole
+    Monday plus a naive subtraction from Tuesday's clock time -- for
+    Tuesday's truncated terminal chunk)."""
+    variable_hours = {
+        1: Decimal("0.00"),  # Sunday
+        2: Decimal("7.00"),  # Monday
+        3: Decimal("4.00"),  # Tuesday
+        4: Decimal("0.00"),  # Wednesday
+        5: Decimal("0.00"),  # Thursday
+        6: Decimal("0.00"),  # Friday
+        7: Decimal("0.00"),  # Saturday
+    }
+    anchor = datetime(2026, 1, 6, 9, 20, tzinfo=UTC)  # Tuesday
+
+    start = compute_start_at(anchor, 500, variable_hours)
+
+    assert start == datetime(2026, 1, 5, 8, 0, tzinfo=UTC)  # Monday
+    assert compute_finish_at(start, 500, variable_hours) == anchor
+
+
+def test_compute_start_at_variable_capacity_mono_day() -> None:
+    """Mono-day case under a variable-capacity calendar: a duration short
+    enough to fit within the anchor's own day's capacity resolves entirely
+    within that date, same as the uniform-calendar mono-day tests above --
+    pinning down that the variable-capacity fix does not regress the
+    single-day path."""
+    variable_hours = {
+        1: Decimal("0.00"),  # Sunday
+        2: Decimal("7.00"),  # Monday
+        3: Decimal("4.00"),  # Tuesday
+        4: Decimal("0.00"),  # Wednesday
+        5: Decimal("0.00"),  # Thursday
+        6: Decimal("0.00"),  # Friday
+        7: Decimal("0.00"),  # Saturday
+    }
+    anchor = datetime(2026, 1, 6, 9, 20, tzinfo=UTC)  # Tuesday, 4h/240min capacity
+
+    start = compute_start_at(anchor, 200, variable_hours)
+
+    assert start == datetime(2026, 1, 6, 6, 0, tzinfo=UTC)
+    assert compute_finish_at(start, 200, variable_hours) == anchor
+
+
+def test_compute_start_at_variable_capacity_crosses_weekend() -> None:
+    """A lead spanning several working days' worth of capacity, anchored on
+    a Monday, must retreat across the intervening weekend into a preceding
+    week whose working days have *different* capacities from Monday's own
+    (Monday=8h, Tuesday=0h/non-working, Wed-Fri=6h each) -- exercising both
+    the weekend skip and the variable-capacity fix together."""
+    variable_hours = {
+        1: Decimal("0.00"),  # Sunday
+        2: Decimal("8.00"),  # Monday
+        3: Decimal("0.00"),  # Tuesday
+        4: Decimal("6.00"),  # Wednesday
+        5: Decimal("6.00"),  # Thursday
+        6: Decimal("6.00"),  # Friday
+        7: Decimal("0.00"),  # Saturday
+    }
+    anchor = datetime(2026, 1, 12, 5, 0, tzinfo=UTC)  # Monday
+
+    start = compute_start_at(anchor, 900, variable_hours)
+
+    # Monday's own 480-minute capacity is consumed in full (non-terminal),
+    # leaving 420 minutes; Tuesday (0h) and the weekend are skipped; Friday's
+    # 360-minute capacity is consumed in full, leaving 60 minutes, which
+    # land as Thursday's truncated terminal chunk.
+    assert start == datetime(2026, 1, 8, 2, 0, tzinfo=UTC)  # Thursday
+    assert compute_finish_at(start, 900, variable_hours) == anchor
+
+
+def test_compute_start_at_is_the_exact_inverse_of_compute_finish_at_for_random_calendars() -> None:
+    """Property-based regression test (tightened-iteration permanent version
+    of the ad hoc fuzz verification run for this fix): for a broad sample of
+    randomly generated calendars -- including zero-capacity (non-working)
+    days and widely varying per-weekday capacities -- and randomly generated
+    (start_at, duration) pairs, ``compute_start_at`` must be an *exact*
+    inverse of ``compute_finish_at``:
+    ``compute_finish_at(compute_start_at(finish_at, duration, cal), duration,
+    cal) == finish_at`` for every combination, not merely the hand-picked
+    examples above.
+
+    ``finish_at`` is generated via ``compute_finish_at`` itself (rather than
+    a fully arbitrary datetime) so every case is guaranteed reachable: a
+    sufficiently sparse calendar (e.g. a single working weekday) can make an
+    arbitrary anchor date genuinely unreachable by any ``compute_finish_at``
+    call at all (``compute_start_at`` correctly raises ``ValueError`` for
+    those, which is exercised by
+    ``test_compute_start_at_rejects_an_anchor_unreachable_under_a_sparse_calendar``
+    below), which is not what this property test is checking."""
+    rng = random.Random(20260831)
+    verified = 0
+    for _ in range(200):
+        weekday_hours: dict[int, Decimal] = {}
+        for day_type in range(1, 8):
+            if rng.random() < 0.3:
+                weekday_hours[day_type] = Decimal("0.00")
+            else:
+                weekday_hours[day_type] = Decimal(
+                    str(rng.choice([1, 2, 4, 7, 8, 10, 15, 23, 24, 0.5, 0.25]))
+                )
+        if not _has_any_working_day(weekday_hours):
+            weekday_hours[rng.randint(1, 7)] = Decimal("6.00")
+
+        base_date = date(2020, 1, 1) + timedelta(days=rng.randint(0, 4000))
+        base_time = timedelta(minutes=rng.randint(0, 1439))
+        start_at = datetime.combine(base_date, datetime.min.time(), tzinfo=UTC) + base_time
+        duration_minutes = rng.randint(1, 20_000)
+
+        try:
+            finish_at = compute_finish_at(start_at, duration_minutes, weekday_hours)
+        except ValueError:
+            continue  # calendar walk exceeded the max-days-walked guard; not this test's concern.
+
+        recovered_start = compute_start_at(finish_at, duration_minutes, weekday_hours)
+
+        assert compute_finish_at(recovered_start, duration_minutes, weekday_hours) == finish_at, (
+            f"round trip failed for weekday_hours={weekday_hours}, "
+            f"start_at={start_at}, duration_minutes={duration_minutes}, "
+            f"finish_at={finish_at}, recovered_start={recovered_start}"
+        )
+        verified += 1
+
+    assert verified > 100  # sanity check that the guard-skip above didn't swallow the whole sample.
+
+
+def test_compute_start_at_rejects_an_anchor_unreachable_under_a_sparse_calendar() -> None:
+    """A calendar sparse enough that a given calendar date has no working
+    capacity anywhere near it (here: only Mondays are ever worked) can make
+    an arbitrary ``anchor`` genuinely unreachable by *any*
+    ``compute_finish_at`` call, for any ``start_at`` -- since
+    ``compute_finish_at`` only ever lands its result on the working
+    (terminal) day's own date or the calendar date right after it.
+    ``compute_start_at`` must raise ``ValueError`` in that case instead of
+    silently returning an incorrect ``start_at`` that does not actually
+    round-trip."""
+    monday_only_hours = {
+        day_type: Decimal("8.00") if day_type == 2 else Decimal("0.00") for day_type in range(1, 8)
+    }
+    anchor = datetime(2026, 1, 8, 12, 0, tzinfo=UTC)  # Thursday; neither it nor Wednesday works.
+
+    with pytest.raises(ValueError, match="not reachable"):
+        compute_start_at(anchor, 100, monday_only_hours)
 
 
 def test_compute_working_minutes_between_caps_finish_day_at_its_own_capacity() -> None:

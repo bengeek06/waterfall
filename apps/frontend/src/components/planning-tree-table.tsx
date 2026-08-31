@@ -165,11 +165,34 @@ function durationInvalidForAutomatic(task: Task): boolean {
   );
 }
 
+type PredecessorLink = NonNullable<Task["predecessor_links"]>[number];
+
+// A predecessor link only actually resolves to a start anchor server-side
+// (_resolve_predecessor_constraints) if the predecessor itself already carries the date the link
+// type depends on: FS/FF (link_type 1/0) derive from the predecessor's finish_at, SS/SF
+// (link_type 3/2) derive from the predecessor's start_at. Both columns are nullable (e.g. the
+// predecessor can itself be an unanchored automatic task), so "a link exists" alone is not
+// sufficient -- see LINK_TYPE_LABELS above for the code mapping.
+function predecessorResolvesStartAnchor(link: PredecessorLink, tasksByUid: Map<number, Task>): boolean {
+  const predecessor = tasksByUid.get(link.predecessor_uid);
+  if (!predecessor) {
+    return false;
+  }
+  if (link.link_type === 1 || link.link_type === 0) {
+    return Boolean(predecessor.finish_at);
+  }
+  return Boolean(predecessor.start_at);
+}
+
 // _apply_automatic_schedule/_apply_automatic_milestone_schedule both require either a stored
-// start_at or at least one predecessor link to derive a start anchor; without either, the server
-// rejects the automatic scheduling with a 400 regardless of the task being a milestone or not.
-function missingStartAnchorForAutomatic(task: Task): boolean {
-  return !task.start_at && !task.predecessor_links?.length;
+// start_at or at least one predecessor link that resolves to a start anchor (see
+// predecessorResolvesStartAnchor) to derive one; without either, the server rejects the automatic
+// scheduling with a 400 regardless of the task being a milestone or not.
+function missingStartAnchorForAutomatic(task: Task, tasksByUid: Map<number, Task>): boolean {
+  if (task.start_at) {
+    return false;
+  }
+  return !task.predecessor_links?.some((link) => predecessorResolvesStartAnchor(link, tasksByUid));
 }
 
 function predecessorsLabel(task: Task): string {
@@ -229,6 +252,9 @@ export function PlanningTreeTable({
 
   const rows = useMemo(() => buildVisibleRows(tasks, collapsedUids), [tasks, collapsedUids]);
   const rowIndexByUid = useMemo(() => new Map(rows.map((row, index) => [row.uid, index])), [rows]);
+  // Full-planning lookup (unlike rowIndexByUid, not limited to currently-visible rows): a
+  // predecessor referenced by a collapsed/off-screen task must still resolve correctly.
+  const tasksByUid = useMemo(() => new Map(tasks.map((task) => [task.uid, task])), [tasks]);
 
   useEffect(() => {
     if (focusedUid === null) {
@@ -564,7 +590,7 @@ export function PlanningTreeTable({
                   value="auto"
                   disabled={
                     (!row.is_milestone && durationInvalidForAutomatic(row)) ||
-                    missingStartAnchorForAutomatic(row)
+                    missingStartAnchorForAutomatic(row, tasksByUid)
                   }
                 >
                   Automatique

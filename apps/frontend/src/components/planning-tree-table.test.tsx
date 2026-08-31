@@ -794,7 +794,7 @@ describe("PlanningTreeTable", () => {
     );
   });
 
-  it("keeps the automatic option enabled when a task has no start_at but has a predecessor link", async () => {
+  it("keeps the automatic option enabled when a task has no start_at but has a predecessor link resolving a start anchor", async () => {
     const onScheduleUpdate = vi.fn().mockResolvedValue(true);
     const tasks: Task[] = [
       task({
@@ -806,12 +806,127 @@ describe("PlanningTreeTable", () => {
         start_at: null,
         finish_at: null,
         duration_minutes: 480,
+        // link_type 1 = FS: resolves only if the predecessor already has a finish_at.
         predecessor_links: [{ predecessor_uid: 2, link_type: 1, lag_tenth_minute: 0 }],
+      }),
+      task({
+        uid: 2,
+        name: "Prédécesseur daté",
+        parent_uid: null,
+        position: 2,
+        start_at: "2026-01-05T09:00:00Z",
+        finish_at: "2026-01-05T17:00:00Z",
       }),
     ];
     render(<PlanningTreeTable tasks={tasks} versionKey={1} onScheduleUpdate={onScheduleUpdate} />);
 
     fireEvent.click(screen.getByLabelText("Mode de Tâche avec prédécesseur"));
+
+    expect(await screen.findByRole("option", { name: "Automatique" })).not.toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  });
+
+  it("disables the automatic option when the sole predecessor link does not resolve a start anchor", async () => {
+    const onScheduleUpdate = vi.fn().mockResolvedValue(true);
+    const tasks: Task[] = [
+      task({
+        uid: 1,
+        name: "Tâche avec prédécesseur non daté",
+        parent_uid: null,
+        position: 1,
+        is_manual: true,
+        start_at: null,
+        finish_at: null,
+        duration_minutes: 480,
+        // link_type 1 = FS: requires the predecessor's finish_at, which is null below.
+        predecessor_links: [{ predecessor_uid: 2, link_type: 1, lag_tenth_minute: 0 }],
+      }),
+      task({
+        uid: 2,
+        name: "Prédécesseur sans ancre",
+        parent_uid: null,
+        position: 2,
+        is_manual: true,
+        start_at: null,
+        finish_at: null,
+      }),
+    ];
+    render(<PlanningTreeTable tasks={tasks} versionKey={1} onScheduleUpdate={onScheduleUpdate} />);
+
+    fireEvent.click(screen.getByLabelText("Mode de Tâche avec prédécesseur non daté"));
+
+    expect(await screen.findByRole("option", { name: "Automatique" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  });
+
+  it("disables the automatic option for a milestone whose sole SS predecessor link has no start_at", async () => {
+    const onScheduleUpdate = vi.fn().mockResolvedValue(true);
+    const tasks: Task[] = [
+      task({
+        uid: 1,
+        name: "Jalon avec prédécesseur SS non daté",
+        parent_uid: null,
+        position: 1,
+        is_milestone: true,
+        is_manual: true,
+        start_at: null,
+        finish_at: null,
+        duration_minutes: 0,
+        // link_type 3 = SS: requires the predecessor's start_at, which is null below.
+        predecessor_links: [{ predecessor_uid: 2, link_type: 3, lag_tenth_minute: 0 }],
+      }),
+      task({
+        uid: 2,
+        name: "Prédécesseur SS sans ancre",
+        parent_uid: null,
+        position: 2,
+        is_manual: true,
+        start_at: null,
+        finish_at: null,
+      }),
+    ];
+    render(<PlanningTreeTable tasks={tasks} versionKey={1} onScheduleUpdate={onScheduleUpdate} />);
+
+    fireEvent.click(screen.getByLabelText("Mode de Jalon avec prédécesseur SS non daté"));
+
+    expect(await screen.findByRole("option", { name: "Automatique" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  });
+
+  it("keeps the automatic option enabled for a milestone whose sole SS predecessor link has a start_at", async () => {
+    const onScheduleUpdate = vi.fn().mockResolvedValue(true);
+    const tasks: Task[] = [
+      task({
+        uid: 1,
+        name: "Jalon avec prédécesseur SS daté",
+        parent_uid: null,
+        position: 1,
+        is_milestone: true,
+        is_manual: true,
+        start_at: null,
+        finish_at: null,
+        duration_minutes: 0,
+        // link_type 3 = SS: resolves only if the predecessor already has a start_at.
+        predecessor_links: [{ predecessor_uid: 2, link_type: 3, lag_tenth_minute: 0 }],
+      }),
+      task({
+        uid: 2,
+        name: "Prédécesseur SS daté",
+        parent_uid: null,
+        position: 2,
+        start_at: "2026-01-05T09:00:00Z",
+        finish_at: null,
+      }),
+    ];
+    render(<PlanningTreeTable tasks={tasks} versionKey={1} onScheduleUpdate={onScheduleUpdate} />);
+
+    fireEvent.click(screen.getByLabelText("Mode de Jalon avec prédécesseur SS daté"));
 
     expect(await screen.findByRole("option", { name: "Automatique" })).not.toHaveAttribute(
       "aria-disabled",
