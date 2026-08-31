@@ -1,0 +1,5 @@
+description: La mise a jour des liens entre en conflit avec le planning
+content:
+  application/json:
+    schema:
+      $ref: ../schemas/FastAPIErrorResponse.yaml

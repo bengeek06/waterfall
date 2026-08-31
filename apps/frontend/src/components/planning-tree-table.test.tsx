@@ -994,4 +994,251 @@ describe("PlanningTreeTable", () => {
       "true",
     );
   });
+
+  describe("predecessor links dialog", () => {
+    const linkedTasks: Task[] = [
+      task({ uid: 1, name: "Poste", parent_uid: null, position: 1 }),
+      task({
+        uid: 2,
+        name: "Lot",
+        parent_uid: null,
+        position: 2,
+        predecessor_links: [{ predecessor_uid: 1, link_type: 1, lag_tenth_minute: 50, lag_format: 7 }],
+      }),
+    ];
+
+    it("does not render the edit affordance when read-only or without onEditLinks", () => {
+      const { rerender } = render(<PlanningTreeTable tasks={linkedTasks} versionKey={1} />);
+      expect(screen.queryByRole("button", { name: /Éditer les prédécesseurs/ })).not.toBeInTheDocument();
+
+      rerender(<PlanningTreeTable tasks={linkedTasks} versionKey={1} readOnly onEditLinks={vi.fn()} />);
+      expect(screen.queryByRole("button", { name: /Éditer les prédécesseurs/ })).not.toBeInTheDocument();
+    });
+
+    it("opens the dialog pre-filled with the task's existing predecessor links", () => {
+      render(<PlanningTreeTable tasks={linkedTasks} versionKey={1} onEditLinks={vi.fn()} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Éditer les prédécesseurs de Lot" }));
+
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+      expect(screen.getByText("Prédécesseurs de Lot")).toBeInTheDocument();
+      expect(screen.getByLabelText("Tâche prédécesseure")).toHaveValue("1");
+      expect(screen.getByLabelText("Type de lien")).toHaveValue("1");
+      expect(screen.getByLabelText("Décalage en minutes")).toHaveValue(5);
+    });
+
+    it("adds and removes link rows", () => {
+      render(<PlanningTreeTable tasks={linkedTasks} versionKey={1} onEditLinks={vi.fn()} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Éditer les prédécesseurs de Lot" }));
+      expect(screen.getAllByLabelText("Tâche prédécesseure")).toHaveLength(1);
+
+      fireEvent.click(screen.getByRole("button", { name: "Ajouter une ligne" }));
+      expect(screen.getAllByLabelText("Tâche prédécesseure")).toHaveLength(2);
+
+      fireEvent.click(screen.getByRole("button", { name: "Supprimer la ligne de prédécesseur 1" }));
+      expect(screen.getAllByLabelText("Tâche prédécesseure")).toHaveLength(1);
+    });
+
+    it("gives each row's delete button a distinct accessible name", () => {
+      render(<PlanningTreeTable tasks={linkedTasks} versionKey={1} onEditLinks={vi.fn()} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Éditer les prédécesseurs de Lot" }));
+      fireEvent.click(screen.getByRole("button", { name: "Ajouter une ligne" }));
+
+      expect(screen.getByRole("button", { name: "Supprimer la ligne de prédécesseur 1" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Supprimer la ligne de prédécesseur 2" })).toBeInTheDocument();
+    });
+
+    it("submits onEditLinks with the payload converted to tenths of a minute and closes on success", async () => {
+      const onEditLinks = vi.fn().mockResolvedValue(undefined);
+      render(<PlanningTreeTable tasks={linkedTasks} versionKey={1} onEditLinks={onEditLinks} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Éditer les prédécesseurs de Lot" }));
+      fireEvent.change(screen.getByLabelText("Décalage en minutes"), { target: { value: "10" } });
+      fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+
+      expect(onEditLinks).toHaveBeenCalledWith({
+        taskUid: 2,
+        links: [{ predecessor_uid: 1, link_type: 1, lag_tenth_minute: 100, lag_format: 7 }],
+      });
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    });
+
+    it("shows the rejected error message inline instead of closing the dialog", async () => {
+      const onEditLinks = vi.fn().mockRejectedValue(new Error("Cette combinaison de prédécesseurs créerait un cycle dans le planning."));
+      render(<PlanningTreeTable tasks={linkedTasks} versionKey={1} onEditLinks={onEditLinks} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Éditer les prédécesseurs de Lot" }));
+      fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+
+      expect(
+        await screen.findByText("Cette combinaison de prédécesseurs créerait un cycle dans le planning."),
+      ).toBeInTheDocument();
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+    });
+
+    it("requires a predecessor task to be selected before submitting", () => {
+      const onEditLinks = vi.fn();
+      const tasksWithoutLinks: Task[] = [
+        task({ uid: 1, name: "Poste", parent_uid: null, position: 1 }),
+        task({ uid: 2, name: "Lot", parent_uid: null, position: 2 }),
+      ];
+      render(<PlanningTreeTable tasks={tasksWithoutLinks} versionKey={1} onEditLinks={onEditLinks} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Éditer les prédécesseurs de Lot" }));
+      fireEvent.click(screen.getByRole("button", { name: "Ajouter une ligne" }));
+      fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+
+      expect(onEditLinks).not.toHaveBeenCalled();
+      expect(
+        screen.getByText("Sélectionnez une tâche prédécesseure pour chaque ligne."),
+      ).toBeInTheDocument();
+    });
+
+    it("rejects a lag so large it would overflow to Infinity once scaled to tenths of a minute", () => {
+      const onEditLinks = vi.fn();
+      const tasksWithoutLinks: Task[] = [
+        task({ uid: 1, name: "Poste", parent_uid: null, position: 1 }),
+        task({ uid: 2, name: "Lot", parent_uid: null, position: 2 }),
+      ];
+      render(<PlanningTreeTable tasks={tasksWithoutLinks} versionKey={1} onEditLinks={onEditLinks} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Éditer les prédécesseurs de Lot" }));
+      fireEvent.click(screen.getByRole("button", { name: "Ajouter une ligne" }));
+      fireEvent.change(screen.getByLabelText("Tâche prédécesseure"), { target: { value: "1" } });
+      fireEvent.change(screen.getByLabelText("Décalage en minutes"), { target: { value: "1e308" } });
+      fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+
+      expect(onEditLinks).not.toHaveBeenCalled();
+      expect(screen.getByText("Le décalage doit être un nombre de minutes valide.")).toBeInTheDocument();
+    });
+
+    it("rejects a lag outside the backend's signed-int32 range before sending the request", () => {
+      const onEditLinks = vi.fn();
+      const tasksWithoutLinks: Task[] = [
+        task({ uid: 1, name: "Poste", parent_uid: null, position: 1 }),
+        task({ uid: 2, name: "Lot", parent_uid: null, position: 2 }),
+      ];
+      render(<PlanningTreeTable tasks={tasksWithoutLinks} versionKey={1} onEditLinks={onEditLinks} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Éditer les prédécesseurs de Lot" }));
+      fireEvent.click(screen.getByRole("button", { name: "Ajouter une ligne" }));
+      fireEvent.change(screen.getByLabelText("Tâche prédécesseure"), { target: { value: "1" } });
+      // 3e8 minutes * 10 = 3e9 tenths of a minute, past the int32 max of ~2.147e9.
+      fireEvent.change(screen.getByLabelText("Décalage en minutes"), { target: { value: "300000000" } });
+      fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+
+      expect(onEditLinks).not.toHaveBeenCalled();
+      expect(screen.getByText("Le décalage doit être un nombre de minutes valide.")).toBeInTheDocument();
+    });
+
+    it("submits every row together with the full computed links payload", () => {
+      const tasksWithCandidates: Task[] = [
+        task({ uid: 1, name: "Poste", parent_uid: null, position: 1 }),
+        task({ uid: 2, name: "Autre", parent_uid: null, position: 2 }),
+        task({ uid: 3, name: "Lot", parent_uid: null, position: 3 }),
+      ];
+      const onEditLinks = vi.fn().mockResolvedValue(undefined);
+      render(<PlanningTreeTable tasks={tasksWithCandidates} versionKey={1} onEditLinks={onEditLinks} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Éditer les prédécesseurs de Lot" }));
+      fireEvent.click(screen.getByRole("button", { name: "Ajouter une ligne" }));
+      fireEvent.click(screen.getByRole("button", { name: "Ajouter une ligne" }));
+
+      const predecessorSelects = screen.getAllByLabelText("Tâche prédécesseure");
+      const linkTypeSelects = screen.getAllByLabelText("Type de lien");
+      const lagInputs = screen.getAllByLabelText("Décalage en minutes");
+
+      fireEvent.change(predecessorSelects[0], { target: { value: "1" } });
+      fireEvent.change(linkTypeSelects[0], { target: { value: "1" } });
+      fireEvent.change(lagInputs[0], { target: { value: "5" } });
+
+      fireEvent.change(predecessorSelects[1], { target: { value: "2" } });
+      fireEvent.change(linkTypeSelects[1], { target: { value: "3" } });
+      fireEvent.change(lagInputs[1], { target: { value: "-2" } });
+
+      fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+
+      expect(onEditLinks).toHaveBeenCalledWith({
+        taskUid: 3,
+        links: [
+          { predecessor_uid: 1, link_type: 1, lag_tenth_minute: 50, lag_format: 7 },
+          { predecessor_uid: 2, link_type: 3, lag_tenth_minute: -20, lag_format: 7 },
+        ],
+      });
+    });
+
+    it("defaults a newly added row's lag_format to 7, even when the lag is left at its default of 0", () => {
+      const onEditLinks = vi.fn().mockResolvedValue(undefined);
+      const tasksWithoutLinks: Task[] = [
+        task({ uid: 1, name: "Poste", parent_uid: null, position: 1 }),
+        task({ uid: 2, name: "Lot", parent_uid: null, position: 2 }),
+      ];
+      render(<PlanningTreeTable tasks={tasksWithoutLinks} versionKey={1} onEditLinks={onEditLinks} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Éditer les prédécesseurs de Lot" }));
+      fireEvent.click(screen.getByRole("button", { name: "Ajouter une ligne" }));
+      fireEvent.change(screen.getByLabelText("Tâche prédécesseure"), { target: { value: "1" } });
+      fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+
+      expect(onEditLinks).toHaveBeenCalledWith({
+        taskUid: 2,
+        links: [{ predecessor_uid: 1, link_type: 1, lag_tenth_minute: 0, lag_format: 7 }],
+      });
+    });
+
+    it("preserves an existing elapsed-time lag_format instead of rewriting it to working-time", () => {
+      const elapsedLagTasks: Task[] = [
+        task({ uid: 1, name: "Poste", parent_uid: null, position: 1 }),
+        task({
+          uid: 2,
+          name: "Lot",
+          parent_uid: null,
+          position: 2,
+          predecessor_links: [{ predecessor_uid: 1, link_type: 1, lag_tenth_minute: 50, lag_format: 8 }],
+        }),
+      ];
+      const onEditLinks = vi.fn().mockResolvedValue(undefined);
+      render(<PlanningTreeTable tasks={elapsedLagTasks} versionKey={1} onEditLinks={onEditLinks} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Éditer les prédécesseurs de Lot" }));
+      fireEvent.change(screen.getByLabelText("Décalage en minutes"), { target: { value: "10" } });
+      fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+
+      expect(onEditLinks).toHaveBeenCalledWith({
+        taskUid: 2,
+        links: [{ predecessor_uid: 1, link_type: 1, lag_tenth_minute: 100, lag_format: 8 }],
+      });
+    });
+
+    it("disables every dialog control while a submission is in flight", async () => {
+      let resolveSubmit!: () => void;
+      const onEditLinks = vi.fn().mockImplementation(
+        () => new Promise<void>((resolve) => { resolveSubmit = resolve; }),
+      );
+      render(<PlanningTreeTable tasks={linkedTasks} versionKey={1} onEditLinks={onEditLinks} />);
+
+      // linkedTasks' "Lot" task already has one valid predecessor link pre-filled, so submitting
+      // without further edits passes validation and reaches the (still-pending) onEditLinks call.
+      fireEvent.click(screen.getByRole("button", { name: "Éditer les prédécesseurs de Lot" }));
+      fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+
+      expect(screen.getByRole("button", { name: "Annuler" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Ajouter une ligne" })).toBeDisabled();
+      for (const select of screen.getAllByLabelText("Tâche prédécesseure")) {
+        expect(select).toBeDisabled();
+      }
+      for (const select of screen.getAllByLabelText("Type de lien")) {
+        expect(select).toBeDisabled();
+      }
+      for (const input of screen.getAllByLabelText("Décalage en minutes")) {
+        expect(input).toBeDisabled();
+      }
+      expect(screen.getByRole("button", { name: "Supprimer la ligne de prédécesseur 1" })).toBeDisabled();
+
+      resolveSubmit();
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    });
+  });
 });

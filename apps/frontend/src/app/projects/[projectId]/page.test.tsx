@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Planning, PlanningDetail, Project } from "@/lib/backend";
+import { ApiError, type Planning, type PlanningDetail, type Project } from "@/lib/backend";
 
 const mocks = vi.hoisted(() => ({
   getProject: vi.fn(),
@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   setPlanningReference: vi.fn(),
   movePlanningTasks: vi.fn(),
   updatePlanningTaskSchedule: vi.fn(),
+  replaceTaskPredecessorLinks: vi.fn(),
   savePlanningStructureDraft: vi.fn(),
   getPlanningStructureDraft: vi.fn(),
   createPlanningStructure: vi.fn(),
@@ -52,6 +53,7 @@ vi.mock("@/lib/backend", async () => {
     setPlanningReference: mocks.setPlanningReference,
     movePlanningTasks: mocks.movePlanningTasks,
     updatePlanningTaskSchedule: mocks.updatePlanningTaskSchedule,
+    replaceTaskPredecessorLinks: mocks.replaceTaskPredecessorLinks,
     savePlanningStructureDraft: mocks.savePlanningStructureDraft,
     getPlanningStructureDraft: mocks.getPlanningStructureDraft,
     createPlanningStructure: mocks.createPlanningStructure,
@@ -136,6 +138,7 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     mocks.setPlanningReference.mockReset();
     mocks.movePlanningTasks.mockReset();
     mocks.updatePlanningTaskSchedule.mockReset();
+    mocks.replaceTaskPredecessorLinks.mockReset();
     mocks.savePlanningStructureDraft.mockReset();
     mocks.getPlanningStructureDraft.mockReset();
     mocks.createPlanningStructure.mockReset();
@@ -705,6 +708,59 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     expect(await screen.findByText("Tâche mise à jour")).toBeInTheDocument();
   });
 
+  it("sends a predecessor links replace and replaces the planning detail with the full server response", async () => {
+    const draft = planning({ id: 2, status: "draft" });
+    const siblingsDetail: PlanningDetail = {
+      ...draft,
+      tasks: [
+        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second", position: 2, parent_uid: null },
+      ],
+      links: [],
+    };
+    const updatedDetail: PlanningDetail = {
+      ...draft,
+      tasks: [
+        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
+        {
+          ...detail(draft).tasks[0],
+          uid: 11,
+          id_display: 11,
+          name: "Second",
+          position: 2,
+          parent_uid: null,
+          predecessor_links: [{ predecessor_uid: 10, link_type: 1, lag_tenth_minute: 0, lag_format: 7 }],
+        },
+      ],
+      links: [],
+    };
+    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draft.id }));
+    mocks.listPlannings.mockResolvedValue([draft]);
+    mocks.getPlanning.mockResolvedValue(siblingsDetail);
+    mocks.replaceTaskPredecessorLinks.mockResolvedValue(updatedDetail);
+
+    render(<ProjectDetailsPage />);
+
+    await screen.findByText("Second");
+    fireEvent.click(screen.getByRole("button", { name: "Éditer les prédécesseurs de Second" }));
+    fireEvent.click(screen.getByRole("button", { name: "Ajouter une ligne" }));
+    fireEvent.change(screen.getByLabelText("Tâche prédécesseure"), { target: { value: "10" } });
+    fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+
+    await waitFor(() =>
+      expect(mocks.replaceTaskPredecessorLinks).toHaveBeenCalledWith(
+        1,
+        draft.id,
+        11,
+        { links: [{ predecessor_uid: 10, link_type: 1, lag_tenth_minute: 0, lag_format: 7 }] },
+        expect.anything(),
+        expect.anything(),
+      ),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByText("10 (FS)")).toBeInTheDocument();
+  });
+
   it("ignores a schedule update response for a planning that is no longer selected", async () => {
     const draftA = planning({ id: 2, status: "draft" });
     const draftB = planning({ id: 6, status: "draft", version_number: 2 });
@@ -748,6 +804,95 @@ describe("ProjectDetailsPage planning lifecycle", () => {
 
     resolveScheduleUpdate(staleDetail);
     await waitFor(() => expect(mocks.updatePlanningTaskSchedule).toHaveResolved());
+
+    expect(screen.queryByText("Réponse obsolète")).not.toBeInTheDocument();
+    expect(screen.getByText("Tâche 2")).toBeInTheDocument();
+  });
+
+  it("reports a project-read-only conflict distinctly from a cycle conflict", async () => {
+    const draft = planning({ id: 2, status: "draft" });
+    const siblingsDetail: PlanningDetail = {
+      ...draft,
+      tasks: [
+        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second", position: 2, parent_uid: null },
+      ],
+      links: [],
+    };
+    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draft.id }));
+    mocks.listPlannings.mockResolvedValue([draft]);
+    mocks.getPlanning.mockResolvedValue(siblingsDetail);
+    mocks.replaceTaskPredecessorLinks.mockRejectedValue(
+      new ApiError(409, "Project is read-only in its current status"),
+    );
+
+    render(<ProjectDetailsPage />);
+
+    await screen.findByText("Second");
+    fireEvent.click(screen.getByRole("button", { name: "Éditer les prédécesseurs de Second" }));
+    fireEvent.click(screen.getByRole("button", { name: "Ajouter une ligne" }));
+    fireEvent.change(screen.getByLabelText("Tâche prédécesseure"), { target: { value: "10" } });
+    fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+
+    // Rendered both by the page-level error banner and by the dialog's own inline error
+    // (editTaskPredecessorLinksSelection sets both from the same message).
+    await waitFor(() =>
+      expect(
+        screen.getAllByText("Le projet est passé en lecture seule et ne peut plus être modifié."),
+      ).not.toHaveLength(0),
+    );
+    expect(screen.queryByText("Cette combinaison de prédécesseurs créerait un cycle dans le planning.")).not.toBeInTheDocument();
+  });
+
+  it("ignores a predecessor links response for a planning that is no longer selected", async () => {
+    const draftA = planning({ id: 2, status: "draft" });
+    const draftB = planning({ id: 6, status: "draft", version_number: 2 });
+    const detailA: PlanningDetail = {
+      ...draftA,
+      tasks: [
+        { ...detail(draftA).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draftA).tasks[0], uid: 11, id_display: 11, name: "Second", position: 2, parent_uid: null },
+      ],
+      links: [],
+    };
+    const detailB = detail(draftB);
+    const staleDetail: PlanningDetail = {
+      ...draftA,
+      tasks: [{ ...detailA.tasks[0], name: "Réponse obsolète" }],
+      links: [],
+    };
+    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draftA.id }));
+    mocks.listPlannings.mockResolvedValue([draftA, draftB]);
+    mocks.getPlanning.mockImplementation(async (_projectId, planningId) =>
+      planningId === draftA.id ? detailA : detailB,
+    );
+    mocks.setDisplayedPlanning.mockImplementation(async (_projectId, planningId) =>
+      project({ status: "initialise", displayed_planning_id: planningId }),
+    );
+    let resolveLinks!: (value: PlanningDetail) => void;
+    mocks.replaceTaskPredecessorLinks.mockImplementation(() => new Promise<PlanningDetail>((resolve) => {
+      resolveLinks = resolve;
+    }));
+
+    render(<ProjectDetailsPage />);
+
+    await screen.findByText("Second");
+    fireEvent.click(screen.getByRole("button", { name: "Éditer les prédécesseurs de Second" }));
+    fireEvent.click(screen.getByRole("button", { name: "Ajouter une ligne" }));
+    fireEvent.change(screen.getByLabelText("Tâche prédécesseure"), { target: { value: "10" } });
+    fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+    await waitFor(() => expect(mocks.replaceTaskPredecessorLinks).toHaveBeenCalledTimes(1));
+
+    // The predecessor links dialog is a modal (unlike the move toolbar), so the version selector
+    // is marked aria-hidden while it stays open pending the in-flight request; `hidden: true`
+    // reaches through that to exercise the same stale-response guard the move test covers.
+    fireEvent.change(await screen.findByRole("combobox", { name: "Version affichée", hidden: true }), {
+      target: { value: String(draftB.id) },
+    });
+    await waitFor(() => expect(screen.getByText("Tâche 2")).toBeInTheDocument());
+
+    resolveLinks(staleDetail);
+    await waitFor(() => expect(mocks.replaceTaskPredecessorLinks).toHaveResolved());
 
     expect(screen.queryByText("Réponse obsolète")).not.toBeInTheDocument();
     expect(screen.getByText("Tâche 2")).toBeInTheDocument();

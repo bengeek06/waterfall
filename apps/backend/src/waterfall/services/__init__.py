@@ -14,6 +14,12 @@ from waterfall.services.estimate_calculation import (
     calculate_estimate_lines,
 )
 from waterfall.services.estimate_export import build_estimate_workbook
+from waterfall.services.planning_links import (
+    PlanningLinkError,
+    PlanningLinkInvariantError,
+    PlanningLinkNotFoundError,
+    replace_task_predecessor_links,
+)
 from waterfall.services.planning_structure import (
     generate_planning_snapshot,
     generate_planning_structure,
@@ -50,4 +56,8 @@ __all__ = [
     "PlanningTaskScheduleError",
     "move_planning_tasks",
     "update_planning_task_schedule",
+    "PlanningLinkError",
+    "PlanningLinkInvariantError",
+    "PlanningLinkNotFoundError",
+    "replace_task_predecessor_links",
 ]

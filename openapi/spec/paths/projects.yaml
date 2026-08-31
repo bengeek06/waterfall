@@ -310,6 +310,39 @@
         $ref: ../components/responses/UpdatePlanningTaskScheduleNotFound.yaml
       '409':
         $ref: ../components/responses/UpdatePlanningTaskScheduleConflict.yaml
+/projects/{projectId}/plannings/{planningId}/tasks/{taskUid}/links:
+  put:
+    tags:
+    - projects
+    summary: Remplacer les liens de predecesseurs d'une tache d'un brouillon de planning
+    operationId: replaceTaskPredecessorLinks
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/PlanningId.yaml
+    - $ref: ../components/parameters/TaskUid.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/TaskLinksReplace.yaml
+    responses:
+      '200':
+        description: Arbre complet du brouillon mis a jour
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/PlanningDetailRead.yaml
+      '400':
+        $ref: ../components/responses/ReplaceTaskLinksBadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ReplaceTaskLinksNotFound.yaml
+      '409':
+        $ref: ../components/responses/ReplaceTaskLinksConflict.yaml
 /projects/{projectId}/plannings/{planningId}/validate:
   post:
     tags:

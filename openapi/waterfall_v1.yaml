@@ -825,6 +825,39 @@ paths:
           $ref: '#/components/responses/UpdatePlanningTaskScheduleNotFound'
         '409':
           $ref: '#/components/responses/UpdatePlanningTaskScheduleConflict'
+  /projects/{projectId}/plannings/{planningId}/tasks/{taskUid}/links:
+    put:
+      tags:
+        - projects
+      summary: Remplacer les liens de predecesseurs d'une tache d'un brouillon de planning
+      operationId: replaceTaskPredecessorLinks
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/PlanningId'
+        - $ref: '#/components/parameters/TaskUid'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskLinksReplace'
+      responses:
+        '200':
+          description: Arbre complet du brouillon mis a jour
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanningDetailRead'
+        '400':
+          $ref: '#/components/responses/ReplaceTaskLinksBadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ReplaceTaskLinksNotFound'
+        '409':
+          $ref: '#/components/responses/ReplaceTaskLinksConflict'
   /projects/{projectId}/plannings/{planningId}/validate:
     post:
       tags:
@@ -4002,6 +4035,61 @@ components:
           minimum: 0
           maximum: 7884000
           nullable: true
+    TaskLinkWrite:
+      type: object
+      required:
+        - predecessor_uid
+        - link_type
+      properties:
+        predecessor_uid:
+          type: integer
+          minimum: 1
+        link_type:
+          type: integer
+          minimum: 0
+          maximum: 3
+        lag_tenth_minute:
+          type: integer
+          format: int32
+          nullable: true
+        lag_format:
+          type: integer
+          nullable: true
+          description: MSPDI LagFormat code. See the "e" prefix convention documented in waterfall.services.planning_tree for which values denote elapsed (raw wall-clock) vs. working-time lag.
+          enum:
+            - 3
+            - 4
+            - 5
+            - 6
+            - 7
+            - 8
+            - 9
+            - 10
+            - 11
+            - 12
+            - 19
+            - 20
+            - 35
+            - 36
+            - 37
+            - 38
+            - 39
+            - 40
+            - 41
+            - 42
+            - 43
+            - 44
+            - 51
+            - 52
+    TaskLinksReplace:
+      type: object
+      required:
+        - links
+      properties:
+        links:
+          type: array
+          items:
+            $ref: '#/components/schemas/TaskLinkWrite'
   parameters:
     BatchId:
       name: batchId
@@ -4237,6 +4325,24 @@ components:
             $ref: '#/components/schemas/FastAPIErrorResponse'
     UpdatePlanningTaskScheduleConflict:
       description: La mise a jour du planning entre en conflit avec les donnees
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/FastAPIErrorResponse'
+    ReplaceTaskLinksBadRequest:
+      description: Requete de mise a jour des liens invalide
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/FastAPIErrorResponse'
+    ReplaceTaskLinksNotFound:
+      description: Projet, planning ou tache introuvable pendant la mise a jour des liens
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/FastAPIErrorResponse'
+    ReplaceTaskLinksConflict:
+      description: La mise a jour des liens entre en conflit avec le planning
       content:
         application/json:
           schema:

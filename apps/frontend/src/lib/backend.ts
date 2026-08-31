@@ -25,6 +25,8 @@ export type Planning = components["schemas"]["PlanningRead"];
 export type PlanningDetail = components["schemas"]["PlanningDetailRead"];
 export type PlanningTaskMove = components["schemas"]["PlanningTaskMove"];
 export type PlanningTaskScheduleUpdate = components["schemas"]["PlanningTaskScheduleUpdate"];
+export type TaskLinkWrite = components["schemas"]["TaskLinkWrite"];
+export type TaskLinksReplace = components["schemas"]["TaskLinksReplace"];
 export type TaskRoleAssignment = components["schemas"]["TaskRoleAssignmentRead"];
 export type ImportBatch = components["schemas"]["ImportBatchResponse"];
 export type ImportBatchStatus = components["schemas"]["ImportBatchStatusResponse"];
@@ -1120,6 +1122,26 @@ export function updatePlanningTaskSchedule(
     tokens,
     {
       method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    onSessionRefresh,
+  );
+}
+
+export function replaceTaskPredecessorLinks(
+  projectId: number,
+  planningId: number,
+  taskUid: number,
+  payload: TaskLinksReplace,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<PlanningDetail>(
+    `/projects/${projectId}/plannings/${planningId}/tasks/${taskUid}/links`,
+    tokens,
+    {
+      method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     },

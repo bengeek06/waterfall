@@ -1,0 +1,5 @@
+description: Projet, planning ou tache introuvable pendant la mise a jour des liens
+content:
+  application/json:
+    schema:
+      $ref: ../schemas/FastAPIErrorResponse.yaml
