@@ -1,0 +1,19 @@
+type: object
+required:
+- is_manual
+properties:
+  is_manual:
+    type: boolean
+  start_at:
+    type: string
+    format: date-time
+    nullable: true
+  finish_at:
+    type: string
+    format: date-time
+    nullable: true
+  duration_minutes:
+    type: integer
+    minimum: 0
+    maximum: 7884000
+    nullable: true

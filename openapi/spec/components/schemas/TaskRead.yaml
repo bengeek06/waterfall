@@ -53,6 +53,9 @@ properties:
     type: string
     format: date-time
     nullable: true
+  duration_minutes:
+    type: integer
+    nullable: true
   percent_complete:
     type: integer
     nullable: true

@@ -434,6 +434,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{projectId}/plannings/{planningId}/tasks/{taskUid}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Modifier le mode et la planification d'une tache de brouillon */
+        patch: operations["updatePlanningTaskSchedule"];
+        trace?: never;
+    };
     "/projects/{projectId}/plannings/{planningId}/validate": {
         parameters: {
             query?: never;
@@ -1345,6 +1362,7 @@ export interface components {
             start_at?: string | null;
             /** Format: date-time */
             finish_at?: string | null;
+            duration_minutes?: number | null;
             percent_complete?: number | null;
             is_summary: boolean;
             is_milestone: boolean;
@@ -1673,6 +1691,14 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
         };
+        PlanningTaskScheduleUpdate: {
+            is_manual: boolean;
+            /** Format: date-time */
+            start_at?: string | null;
+            /** Format: date-time */
+            finish_at?: string | null;
+            duration_minutes?: number | null;
+        };
     };
     responses: {
         /** @description Requete invalide */
@@ -1808,6 +1834,33 @@ export interface components {
             };
             content: {
                 "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description Combinaison mode/dates/duree invalide pour la tache */
+        UpdatePlanningTaskScheduleBadRequest: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
+            };
+        };
+        /** @description Projet, planning ou tache introuvable */
+        UpdatePlanningTaskScheduleNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
+            };
+        };
+        /** @description La mise a jour du planning entre en conflit avec les donnees */
+        UpdatePlanningTaskScheduleConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
     };
@@ -2681,6 +2734,41 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["MovePlanningTasksNotFound"];
             409: components["responses"]["MovePlanningTasksConflict"];
+        };
+    };
+    updatePlanningTaskSchedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de planning */
+                planningId: components["parameters"]["PlanningId"];
+                /** @description UID fonctionnel de la tache dans un projet */
+                taskUid: components["parameters"]["TaskUid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlanningTaskScheduleUpdate"];
+            };
+        };
+        responses: {
+            /** @description Arbre complet du brouillon mis a jour */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanningDetailRead"];
+                };
+            };
+            400: components["responses"]["UpdatePlanningTaskScheduleBadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["UpdatePlanningTaskScheduleNotFound"];
+            409: components["responses"]["UpdatePlanningTaskScheduleConflict"];
         };
     };
     validatePlanning: {

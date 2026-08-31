@@ -45,6 +45,7 @@ from waterfall.schemas.projects import (
     PlanningStructureDraftRead,
     PlanningStructureRead,
     PlanningTaskMove,
+    PlanningTaskScheduleUpdate,
     PlanningTaskTreeRead,
     PlanningTreeRead,
     ProjectCreate,
@@ -66,6 +67,7 @@ from waterfall.schemas.projects import (
 )
 from waterfall.schemas.resources import CostTypeKind
 from waterfall.services import (
+    PlanningTaskScheduleError,
     PlanningTreeInvariantError,
     PlanningTreeMoveError,
     PlanningTreeMoveNotFoundError,
@@ -79,6 +81,7 @@ from waterfall.services import (
     resolve_default_calendar_id,
     resolve_task_calendar_ids,
     save_planning_structure_draft,
+    update_planning_task_schedule,
 )
 from waterfall.services.msproject_xml import (
     MsProjectValidationError,
@@ -95,11 +98,19 @@ router = APIRouter(prefix="/projects", tags=["projects"])
 MSP_NS = "http://schemas.microsoft.com/project/2007"
 
 
-class _MovePlanningTasksRoute(APIRoute):
+class _PlanningTaskBodyValidationRoute(APIRoute):
+    """Route class that converts a request-body Pydantic validation error (422) into a 400.
+
+    Shared by the planning task mutation endpoints (move, and the E3-03
+    manual/automatic schedule update) so a malformed request body is reported
+    the same way as a business-rule violation on the same resource, instead
+    of FastAPI's default 422.
+    """
+
     def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
         original_route_handler = super().get_route_handler()
 
-        async def move_route_handler(request: Request) -> Response:
+        async def body_validation_route_handler(request: Request) -> Response:
             try:
                 return await original_route_handler(request)
             except RequestValidationError as exc:
@@ -110,7 +121,7 @@ class _MovePlanningTasksRoute(APIRoute):
                     ) from exc
                 raise
 
-        return move_route_handler
+        return body_validation_route_handler
 
 
 def _bool_to_msp_flag(value: bool) -> str:
@@ -337,6 +348,7 @@ def _to_snapshot_task_read(
         outline_level=task.outline_level,
         start_at=task.start_at,
         finish_at=task.finish_at,
+        duration_minutes=task.duration_minutes,
         percent_complete=task.percent_complete,
         is_summary=task.is_summary,
         is_milestone=task.is_milestone,
@@ -578,6 +590,7 @@ def _to_task_read(
         outline_level=task.outline_level,
         start_at=task.start_at,
         finish_at=task.finish_at,
+        duration_minutes=task.duration_minutes,
         percent_complete=task.percent_complete,
         is_summary=task.is_summary,
         is_milestone=task.is_milestone,
@@ -929,7 +942,62 @@ router.add_api_route(
             "description": "Le deplacement entre en conflit avec le planning",
         },
     },
-    route_class_override=_MovePlanningTasksRoute,
+    route_class_override=_PlanningTaskBodyValidationRoute,
+)
+
+
+def update_planning_task_schedule_route(
+    project_id: int,
+    planning_id: int,
+    task_uid: int,
+    payload: PlanningTaskScheduleUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> PlanningDetailRead:
+    _, planning = get_mutable_draft_planning_with_locks(
+        db, project_id, planning_id, current_user.id
+    )
+    try:
+        update_planning_task_schedule(db, planning, task_uid, payload)
+        # Capture the response while the row locks are still held so a concurrent
+        # writer cannot make us return a later transaction's state.
+        detail = _planning_detail(db, planning)
+        db.commit()
+    except PlanningTreeMoveNotFoundError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except PlanningTaskScheduleError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Task schedule conflicts with existing planning data",
+        ) from exc
+    return detail
+
+
+router.add_api_route(
+    "/{project_id}/plannings/{planning_id}/tasks/{task_uid}",
+    update_planning_task_schedule_route,
+    methods=["PATCH"],
+    response_model=PlanningDetailRead,
+    responses={
+        status.HTTP_400_BAD_REQUEST: {
+            "model": FastAPIErrorResponse,
+            "description": "Combinaison mode/dates/duree invalide",
+        },
+        status.HTTP_404_NOT_FOUND: {
+            "model": FastAPIErrorResponse,
+            "description": "Projet, planning ou tache introuvable",
+        },
+        status.HTTP_409_CONFLICT: {
+            "model": FastAPIErrorResponse,
+            "description": "La mise a jour du planning entre en conflit avec les donnees",
+        },
+    },
+    route_class_override=_PlanningTaskBodyValidationRoute,
 )
 
 

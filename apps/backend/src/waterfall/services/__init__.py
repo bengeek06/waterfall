@@ -21,10 +21,12 @@ from waterfall.services.planning_structure import (
     save_planning_structure_draft,
 )
 from waterfall.services.planning_tree import (
+    PlanningTaskScheduleError,
     PlanningTreeInvariantError,
     PlanningTreeMoveError,
     PlanningTreeMoveNotFoundError,
     move_planning_tasks,
+    update_planning_task_schedule,
 )
 
 __all__ = [
@@ -45,5 +47,7 @@ __all__ = [
     "PlanningTreeMoveError",
     "PlanningTreeInvariantError",
     "PlanningTreeMoveNotFoundError",
+    "PlanningTaskScheduleError",
     "move_planning_tasks",
+    "update_planning_task_schedule",
 ]

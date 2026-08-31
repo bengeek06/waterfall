@@ -792,6 +792,39 @@ paths:
           $ref: '#/components/responses/MovePlanningTasksNotFound'
         '409':
           $ref: '#/components/responses/MovePlanningTasksConflict'
+  /projects/{projectId}/plannings/{planningId}/tasks/{taskUid}:
+    patch:
+      tags:
+        - projects
+      summary: Modifier le mode et la planification d'une tache de brouillon
+      operationId: updatePlanningTaskSchedule
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/PlanningId'
+        - $ref: '#/components/parameters/TaskUid'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlanningTaskScheduleUpdate'
+      responses:
+        '200':
+          description: Arbre complet du brouillon mis a jour
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanningDetailRead'
+        '400':
+          $ref: '#/components/responses/UpdatePlanningTaskScheduleBadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/UpdatePlanningTaskScheduleNotFound'
+        '409':
+          $ref: '#/components/responses/UpdatePlanningTaskScheduleConflict'
   /projects/{projectId}/plannings/{planningId}/validate:
     post:
       tags:
@@ -2947,6 +2980,9 @@ components:
           type: string
           format: date-time
           nullable: true
+        duration_minutes:
+          type: integer
+          nullable: true
         percent_complete:
           type: integer
           nullable: true
@@ -3946,6 +3982,26 @@ components:
             updated_at:
               type: string
               format: date-time
+    PlanningTaskScheduleUpdate:
+      type: object
+      required:
+        - is_manual
+      properties:
+        is_manual:
+          type: boolean
+        start_at:
+          type: string
+          format: date-time
+          nullable: true
+        finish_at:
+          type: string
+          format: date-time
+          nullable: true
+        duration_minutes:
+          type: integer
+          minimum: 0
+          maximum: 7884000
+          nullable: true
   parameters:
     BatchId:
       name: batchId
@@ -4167,3 +4223,21 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
+    UpdatePlanningTaskScheduleBadRequest:
+      description: Combinaison mode/dates/duree invalide pour la tache
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/FastAPIErrorResponse'
+    UpdatePlanningTaskScheduleNotFound:
+      description: Projet, planning ou tache introuvable
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/FastAPIErrorResponse'
+    UpdatePlanningTaskScheduleConflict:
+      description: La mise a jour du planning entre en conflit avec les donnees
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/FastAPIErrorResponse'

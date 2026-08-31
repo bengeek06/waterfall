@@ -1,0 +1,5 @@
+description: La mise a jour du planning entre en conflit avec les donnees
+content:
+  application/json:
+    schema:
+      $ref: ../schemas/FastAPIErrorResponse.yaml

@@ -20,7 +20,7 @@ and is expected to be revisited by E3-03's broader scheduling rework.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Literal
 
@@ -168,6 +168,44 @@ def _has_any_working_day(weekday_hours: WeekdayHours) -> bool:
     return any(_day_capacity_minutes(hours) > 0 for hours in weekday_hours.values())
 
 
+# Hard ceiling on the number of calendar days :func:`compute_finish_at` and
+# :func:`compute_start_at` will walk one day at a time before giving up.
+#
+# ``duration_minutes`` is bounded at the schema level (see
+# ``PlanningTaskScheduleUpdate.duration_minutes``'s ``le=7_884_000``, ~15
+# calendar years of minutes) but that bound alone does not cap how many
+# *iterations* of the day-stepping loop below actually run: duration is
+# working minutes, not calendar minutes, and a legally configured calendar
+# can have an arbitrarily small non-zero capacity on as little as a single
+# weekday per week (``hours_per_day`` down to ``0.01``, i.e. 1 minute/day
+# once rounded -- see :func:`_day_capacity_minutes`). Walking off such a
+# calendar to absorb even a modest duration would need millions of loop
+# iterations, long before either function's own date arithmetic would ever
+# overflow -- a real latency/DoS risk independent of the duration bound.
+#
+# ~100 years of calendar days is generous for any legitimate planning
+# horizon this system supports, while still bounding the loop to a small,
+# constant number of iterations regardless of how sparse the calendar is.
+_MAX_CALENDAR_DAYS_WALKED = 366 * 100
+
+
+def _guard_max_days_walked(days_walked: int) -> None:
+    """Abort a :func:`compute_finish_at`/:func:`compute_start_at` walk that
+    has stepped through an unreasonable number of calendar days.
+
+    Raises ``ValueError`` (not a raw loop that spins forever, or an
+    unbounded-latency success) so callers -- which already translate a
+    ``ValueError`` from these functions into a 400 -- surface this as an
+    actionable client error instead of a slow request or a 500.
+    """
+    if days_walked >= _MAX_CALENDAR_DAYS_WALKED:
+        raise ValueError(
+            "scheduling would require walking too many calendar days "
+            f"(exceeded {_MAX_CALENDAR_DAYS_WALKED} calendar days); "
+            "check the calendar has enough working capacity for this duration"
+        )
+
+
 def resolve_calendars_for_tasks(
     db: Session, project_id: int, task_uids: set[int]
 ) -> dict[int, ResolvedCalendar]:
@@ -269,7 +307,9 @@ def compute_finish_at(
     current_date = start_at.date()
     last_worked_date = current_date
     last_day_minutes_used = 0
+    days_walked = 0
     while remaining > 0:
+        _guard_max_days_walked(days_walked)
         day_capacity = _day_capacity_minutes(weekday_hours.get(_day_type(current_date), Decimal(0)))
         if day_capacity > 0:
             used = min(remaining, day_capacity)
@@ -277,10 +317,240 @@ def compute_finish_at(
             last_worked_date = current_date
             last_day_minutes_used = used
         current_date += timedelta(days=1)
+        days_walked += 1
 
     return datetime.combine(last_worked_date, start_at.time(), tzinfo=start_at.tzinfo) + timedelta(
         minutes=last_day_minutes_used
     )
+
+
+def _resolve_backward_terminal_day(
+    last_worked_date: date,
+    duration_minutes: int,
+    weekday_hours: WeekdayHours,
+    max_terminal_minutes: int,
+) -> tuple[date, int] | None:
+    """For a *fixed* candidate ``last_worked_date`` (the calendar date on
+    which :func:`compute_finish_at`'s forward walk would have landed its
+    truncated terminal chunk), find the ``(start_date, terminal_minutes_used)``
+    pair that a genuine forward walk from ``start_date`` would produce: every
+    calendar date from ``start_date`` up to (but excluding) ``last_worked_date``
+    contributes its FULL capacity, and ``last_worked_date`` itself contributes
+    exactly ``terminal_minutes_used`` -- capped by ``max_terminal_minutes``
+    (how many minutes of ``last_worked_date`` are even available before
+    reaching the anchor's own clock position; see :func:`compute_start_at`).
+
+    Returns ``None`` when ``last_worked_date`` cannot possibly be the
+    terminal day for this ``duration_minutes``/calendar combination -- either
+    because it has no capacity (or none within ``max_terminal_minutes``) at
+    all, or because the very next working day walked backward already has
+    more capacity on its own than ``duration_minutes`` could ever leave for
+    a non-terminal day: a single day's FULL capacity can only ever be
+    absorbed by a *forward* walk that does not terminate on that day first,
+    so a candidate whose own capacity alone would already meet or exceed
+    ``duration_minutes`` can never be a non-terminal day preceding
+    ``last_worked_date`` -- see the regression tests guarding this in
+    ``test_calendar_schedule.py``.
+    """
+    terminal_capacity = _day_capacity_minutes(
+        weekday_hours.get(_day_type(last_worked_date), Decimal(0))
+    )
+    cap_bound = min(terminal_capacity, max_terminal_minutes)
+    if cap_bound <= 0:
+        return None
+    if duration_minutes <= cap_bound:
+        return last_worked_date, duration_minutes
+
+    threshold = duration_minutes - cap_bound
+    running_full_capacity = 0
+    current_date = last_worked_date - timedelta(days=1)
+    start_date: date | None = None
+    days_walked = 0
+    while running_full_capacity < threshold:
+        _guard_max_days_walked(days_walked)
+        day_capacity = _day_capacity_minutes(weekday_hours.get(_day_type(current_date), Decimal(0)))
+        if day_capacity > 0:
+            candidate_running = running_full_capacity + day_capacity
+            if candidate_running >= duration_minutes:
+                # This day's own full capacity alone would already meet or
+                # exceed the entire duration, so last_worked_date can never
+                # be the terminal day of a forward walk that passes through
+                # this date at full capacity -- the true terminal day would
+                # be this earlier date instead.
+                return None
+            running_full_capacity = candidate_running
+            start_date = current_date
+        current_date -= timedelta(days=1)
+        days_walked += 1
+
+    assert start_date is not None  # a loop iteration always runs since threshold > 0 here
+    return start_date, duration_minutes - running_full_capacity
+
+
+def compute_start_at(
+    anchor: datetime, duration_minutes: int, weekday_hours: WeekdayHours
+) -> datetime:
+    """Schedule ``duration_minutes`` of working time backward from ``anchor``.
+
+    The true reverse of :func:`compute_finish_at` -- added for E3-03's PR
+    review finding on negative (lead/advance) predecessor link lag (see
+    ``_resolve_lag_offset`` in ``waterfall.services.planning_tree``) and
+    later reused for FF/SF's "target finish -> start" conversion (see
+    ``_resolve_predecessor_constraints``) -- meaning
+    ``compute_finish_at(compute_start_at(anchor, duration, cal), duration,
+    cal) == anchor`` exactly, including for a calendar whose working days
+    have different capacities from one another (e.g. a Wednesday half-day).
+
+    An earlier version of this function computed ``anchor.time() -
+    last_day_minutes_used`` directly, mixing ``anchor``'s own clock time
+    (which belongs to the *finish* day) with a quantity of minutes consumed
+    on a *different* day (the earliest day reached walking backward, i.e.
+    the resulting ``start_date``), which can have a different capacity under
+    a non-uniform calendar. That produced the wrong ``start_at`` -- correct
+    only by coincidence when every working day happens to share the same
+    capacity -- and, worse, is not actually invertible that way in general:
+    a fixed ``anchor`` can be consistent with several different terminal-day
+    candidates, only one of which corresponds to a genuinely self-consistent
+    clock time.
+
+    :func:`compute_finish_at`'s own return value is always
+    ``combine(last_worked_date, start_at.time()) + last_day_minutes_used``,
+    where every calendar date walked *before* ``last_worked_date`` (the
+    terminal day the walk's ``remaining`` duration is exhausted on)
+    contributes its full capacity, and only ``last_worked_date`` itself is
+    truncated to whatever ``remaining`` duration is left. This function
+    inverts that relationship directly instead of mirroring the forward
+    walk's day-stepping structure verbatim:
+
+    1. ``last_worked_date`` (the terminal day of the *forward* walk that
+       would have produced ``anchor``) can only be ``anchor.date()`` itself
+       or the calendar date immediately before it: :func:`compute_finish_at`
+       adds at most one working day's capacity (<= 1440 minutes) to a clock
+       time already within ``[00:00, 24:00)``, so its result's own date is
+       always within one calendar day of ``last_worked_date``. Both
+       candidates are tried, in that order.
+    2. For a candidate ``last_worked_date``, the number of minutes it can
+       possibly have contributed as the terminal (truncated) chunk is capped
+       not only by that date's own capacity, but also by how many minutes
+       separate ``anchor`` from that candidate date's own midnight -- a
+       terminal chunk any larger would require a *negative* ``start_at``
+       time-of-day on that same date, which is impossible. See
+       :func:`_resolve_backward_terminal_day`, which also locates the
+       resulting ``start_date`` by walking further back, one calendar day at
+       a time, accumulating each work day's FULL capacity, until enough of
+       ``duration_minutes`` is accounted for that what is left fits within
+       the capped terminal-chunk bound.
+    3. ``start_at``'s time-of-day is then derived directly from that
+       relationship -- ``anchor`` minus the resolved terminal chunk's
+       minutes -- rather than from ``anchor.time()`` combined with a
+       reliquat consumed on a different day; a final self-consistency check
+       (the result must still fall on the same candidate
+       ``last_worked_date``) rejects a candidate that turns out
+       inconsistent, falling through to the other one.
+
+    Raises ``ValueError`` if neither candidate ``last_worked_date`` is
+    workable -- i.e. ``anchor`` is not a value :func:`compute_finish_at`
+    could ever have produced for this ``duration_minutes``/calendar
+    combination (only possible with a sufficiently sparse calendar, e.g. one
+    with a single working weekday, and an ``anchor`` far from any of its
+    working days) -- the same way an unschedulable input is already reported
+    elsewhere in this module.
+    """
+    if duration_minutes < 0:
+        raise ValueError("duration_minutes must not be negative")
+    if duration_minutes == 0:
+        return anchor
+    if not _has_any_working_day(weekday_hours):
+        raise ValueError("calendar has no working day; scheduling would never terminate")
+
+    for candidate_last_worked_date in (anchor.date(), anchor.date() - timedelta(days=1)):
+        candidate_midnight = datetime.combine(
+            candidate_last_worked_date, time.min, tzinfo=anchor.tzinfo
+        )
+        max_terminal_minutes = int((anchor - candidate_midnight).total_seconds() // 60)
+        if max_terminal_minutes <= 0:
+            continue
+        result = _resolve_backward_terminal_day(
+            candidate_last_worked_date, duration_minutes, weekday_hours, max_terminal_minutes
+        )
+        if result is None:
+            continue
+        start_date, terminal_minutes_used = result
+        candidate_start = anchor - timedelta(minutes=terminal_minutes_used)
+        if candidate_start.date() != candidate_last_worked_date:
+            continue
+        return datetime.combine(start_date, candidate_start.time(), tzinfo=anchor.tzinfo)
+
+    raise ValueError(
+        "anchor is not reachable as a working-time finish under this calendar for this "
+        "duration; check the calendar has enough working capacity near this date"
+    )
+
+
+def compute_start_at_for_finish_at_or_after(
+    target_finish: datetime, duration_minutes: int, weekday_hours: WeekdayHours
+) -> datetime:
+    """Resolve the ``start_at`` whose resulting finish is the earliest one
+    reachable at or after ``target_finish`` -- the correct CPM semantics for
+    an FF/SF predecessor-link constraint (10th E3-03 PR review round; see
+    ``_resolve_predecessor_constraints`` in ``waterfall.services.planning_tree``).
+
+    An FF/SF link only ever bounds the successor's finish *from below*: "the
+    successor finishes no earlier than target_finish", exactly mirroring how
+    an FS/SS link bounds the successor's *start* from below (see
+    ``_apply_automatic_schedule``, which takes ``max(constraints)`` over
+    every link). :func:`compute_start_at` alone only solves the strictly
+    narrower "finishes at *exactly* target_finish" case: when
+    ``target_finish`` is not itself a value :func:`compute_finish_at` could
+    ever produce for this calendar/duration -- most commonly because it
+    falls on a day with zero working capacity, e.g. a Saturday under a
+    Mon-Fri calendar, which a raw wall-clock (elapsed-format) lag can land
+    on freely since it is never calendar-snapped -- it raises ``ValueError``
+    even though a perfectly valid, later (but still minimal) finish exists
+    and should be used instead of rejecting an otherwise valid schedule.
+
+    Algorithm: try :func:`compute_start_at` against ``target_finish`` as-is
+    first. If it is exactly reachable (the common case, and the only case
+    before this fix), its result is returned verbatim -- no behaviour change
+    for it. Otherwise, walk ``target_finish`` forward one calendar day at a
+    time (same time-of-day at each step) and retry, until a day is found on
+    which :func:`compute_start_at` succeeds; that day's result is both
+    reachable and, by construction of the walk, the earliest such date
+    tried, hence "at or after" rather than an arbitrary later fallback.
+
+    This calendar model only ever expresses a *weekly repeating* pattern
+    (``CalendarWeekday.day_type`` 1-7 with no per-date holiday overrides --
+    see ``models.resources.CalendarWeekday``), so any calendar that has at
+    least one working day at all (already required to reach this point, see
+    the ``_has_any_working_day`` guard below) is guaranteed to repeat that
+    working day at least once every 7 calendar days; in practice this
+    forward walk converges within a handful of iterations for every
+    realistic calendar. It is still bounded by
+    :func:`_guard_max_days_walked`/``_MAX_CALENDAR_DAYS_WALKED`` regardless,
+    as defense-in-depth against a pathological input, matching every other
+    unbounded calendar walk in this module, and raises the same ``ValueError``
+    they do when that ceiling is hit.
+
+    Each retried day is still resolved through the exact same, unmodified
+    :func:`compute_start_at` -- exact and calendar-aware -- so the only new
+    behaviour this function introduces is *which* date is offered to it as
+    ``target_finish``; no naive/aware handling or sub-minute precision logic
+    already solved there is duplicated or reimplemented here.
+    """
+    if duration_minutes < 0:
+        raise ValueError("duration_minutes must not be negative")
+    if not _has_any_working_day(weekday_hours):
+        raise ValueError("calendar has no working day; scheduling would never terminate")
+
+    candidate_finish = target_finish
+    days_walked = 0
+    while True:
+        try:
+            return compute_start_at(candidate_finish, duration_minutes, weekday_hours)
+        except ValueError:
+            _guard_max_days_walked(days_walked)
+            days_walked += 1
+            candidate_finish += timedelta(days=1)
 
 
 def compute_working_minutes_between(
@@ -303,6 +573,15 @@ def compute_working_minutes_between(
     every day it walks. Round-tripping ``duration -> compute_finish_at ->
     compute_working_minutes_between`` must return the original duration; this
     is required by the future E3-03 automatic scheduler.
+
+    Guarded by the same :func:`_guard_max_days_walked` ceiling as
+    :func:`compute_finish_at`/:func:`compute_start_at`: unlike those two
+    functions, ``start_at``/``finish_at`` here are not derived from a bounded
+    ``duration_minutes`` walk -- they can be an arbitrary pair of dates (e.g.
+    a manually scheduled task's verbatim, unbounded ``start_at``/``finish_at``,
+    see ``PlanningTaskScheduleUpdate`` / ``_apply_manual_schedule`` in
+    ``waterfall.services.planning_tree``), so this loop needs its own
+    unbounded-iteration guard rather than inheriting one transitively.
     """
     if finish_at <= start_at:
         return 0
@@ -310,7 +589,9 @@ def compute_working_minutes_between(
     total_minutes = 0
     current_date = start_at.date()
     finish_date = finish_at.date()
+    days_walked = 0
     while current_date <= finish_date:
+        _guard_max_days_walked(days_walked)
         day_capacity = _day_capacity_minutes(weekday_hours.get(_day_type(current_date), Decimal(0)))
         if day_capacity > 0:
             shift_start = datetime.combine(current_date, start_at.time(), tzinfo=start_at.tzinfo)
@@ -321,4 +602,5 @@ def compute_working_minutes_between(
                 overlap_minutes = int((overlap_end - overlap_start).total_seconds() // 60)
                 total_minutes += min(overlap_minutes, day_capacity)
         current_date += timedelta(days=1)
+        days_walked += 1
     return total_minutes
