@@ -240,7 +240,7 @@ describe("ResourcesPage calendar mutations", () => {
     mocks.updateResourceRole.mockResolvedValue(updatedRole);
     await renderResourcesTab([activeCalendar, otherCalendar], [roleFixture], [nodeFixture]);
 
-    const select = screen.getByLabelText(`Calendrier de ${roleFixture.name} — ${nodeFixture.code}`);
+    const select = screen.getByLabelText(`Calendrier de ${roleFixture.name} — ${nodeFixture.code} (#${roleFixture.id})`);
     fireEvent.change(select, { target: { value: String(otherCalendar.id) } });
 
     const roleRow = select.closest("tr");

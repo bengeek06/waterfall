@@ -31,12 +31,13 @@ export function RoleCalendarsTable(props: RoleCalendarsTableProps) {
                 ? props.calendars.find((calendar) => calendar.id === role.calendar_id)
                 : undefined;
               const nodeCode = props.nodeCodeById.get(role.node_id) ?? "?";
+              const roleLabel = `${role.name} — ${nodeCode} (#${role.id})`;
               return (
                 <TableRow key={role.id}>
-                  <TableCell>{role.name} — {nodeCode}</TableCell>
+                  <TableCell>{roleLabel}</TableCell>
                   <TableCell>
                     <select
-                      aria-label={`Calendrier de ${role.name} — ${nodeCode}`}
+                      aria-label={`Calendrier de ${roleLabel}`}
                       className="h-8 rounded-md border border-input bg-background px-2 text-sm"
                       value={draft}
                       disabled={props.actionBusy}

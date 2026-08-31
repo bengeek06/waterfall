@@ -48,7 +48,28 @@ describe("CapacityTable", () => {
       />,
     );
 
-    expect(screen.getByText("Développeur — IT")).toBeInTheDocument();
-    expect(screen.getByText("Développeur — DTSI")).toBeInTheDocument();
+    expect(screen.getByText("Développeur — IT (#1)")).toBeInTheDocument();
+    expect(screen.getByText("Développeur — DTSI (#2)")).toBeInTheDocument();
+  });
+
+  it("disambiguates two roles that share the same name within the same node using role id", () => {
+    render(
+      <CapacityTable
+        roles={[
+          { id: 5, name: "Développeur", node_id: 1 } as never,
+          { id: 6, name: "Développeur", node_id: 1 } as never,
+        ]}
+        drafts={{}}
+        actionBusy={false}
+        nodeCodeById={nodeCodeById}
+        onDraftChange={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+
+    // Same name AND same node code ("IT") — only "(#<role.id>)" can tell them apart.
+    // Without that suffix both cells would render identical text "Développeur — IT".
+    expect(screen.getByText("Développeur — IT (#5)")).toBeInTheDocument();
+    expect(screen.getByText("Développeur — IT (#6)")).toBeInTheDocument();
   });
 });

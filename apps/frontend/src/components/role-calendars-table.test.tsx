@@ -25,7 +25,7 @@ describe("RoleCalendarsTable", () => {
 
     expect(screen.getByRole("option", { name: "PARTTIME - Temps partiel" })).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText("Calendrier de Développeur — IT"), { target: { value: "2" } });
+    fireEvent.change(screen.getByLabelText("Calendrier de Développeur — IT (#1)"), { target: { value: "2" } });
     expect(onDraftChange).toHaveBeenCalledWith(1, "2");
 
     fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
@@ -46,7 +46,7 @@ describe("RoleCalendarsTable", () => {
     );
 
     expect(screen.getByRole("option", { name: "REDUIT - Calendrier réduit (inactif)" })).toBeInTheDocument();
-    expect(screen.getByLabelText("Calendrier de Développeur — IT")).toHaveValue("2");
+    expect(screen.getByLabelText("Calendrier de Développeur — IT (#1)")).toHaveValue("2");
   });
 
   it("disables the calendar select while an action is in flight", () => {
@@ -62,7 +62,7 @@ describe("RoleCalendarsTable", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Calendrier de Développeur — IT")).toBeDisabled();
+    expect(screen.getByLabelText("Calendrier de Développeur — IT (#1)")).toBeDisabled();
     expect(screen.getByRole("button", { name: "Enregistrer" })).toBeDisabled();
   });
 
@@ -86,7 +86,31 @@ describe("RoleCalendarsTable", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Calendrier de Développeur — IT")).toBeInTheDocument();
-    expect(screen.getByLabelText("Calendrier de Développeur — DTSI")).toBeInTheDocument();
+    expect(screen.getByLabelText("Calendrier de Développeur — IT (#1)")).toBeInTheDocument();
+    expect(screen.getByLabelText("Calendrier de Développeur — DTSI (#2)")).toBeInTheDocument();
+  });
+
+  it("disambiguates two roles that share the same name within the same node using role id", () => {
+    render(
+      <RoleCalendarsTable
+        roles={[
+          { id: 5, name: "Développeur", node_id: 1, calendar_id: null } as never,
+          { id: 6, name: "Développeur", node_id: 1, calendar_id: null } as never,
+        ]}
+        calendars={[{ id: 3, code: "PARTTIME", name: "Temps partiel", is_active: true } as never]}
+        drafts={{}}
+        actionBusy={false}
+        nodeCodeById={nodeCodeById}
+        onDraftChange={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+
+    // Both roles share the same name AND the same node code ("IT"), so only the
+    // trailing "(#<role.id>)" discriminant can tell them apart. If that suffix were
+    // dropped, both labels would collapse to "Calendrier de Développeur — IT" and
+    // getByLabelText would throw "multiple elements found".
+    expect(screen.getByLabelText("Calendrier de Développeur — IT (#5)")).toBeInTheDocument();
+    expect(screen.getByLabelText("Calendrier de Développeur — IT (#6)")).toBeInTheDocument();
   });
 });
