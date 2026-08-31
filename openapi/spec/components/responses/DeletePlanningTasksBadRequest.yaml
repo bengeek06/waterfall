@@ -1,0 +1,5 @@
+description: Requete de suppression invalide
+content:
+  application/json:
+    schema:
+      $ref: ../schemas/FastAPIErrorResponse.yaml

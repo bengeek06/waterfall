@@ -77,6 +77,10 @@ paths:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1plannings~1{planningId}
   /projects/{projectId}/plannings/{planningId}/tasks/move:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1plannings~1{planningId}~1tasks~1move
+  /projects/{projectId}/plannings/{planningId}/tasks:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1plannings~1{planningId}~1tasks
+  /projects/{projectId}/plannings/{planningId}/tasks/delete:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1plannings~1{planningId}~1tasks~1delete
   /projects/{projectId}/plannings/{planningId}/tasks/{taskUid}:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1plannings~1{planningId}~1tasks~1{taskUid}
   /projects/{projectId}/plannings/{planningId}/tasks/{taskUid}/links:
@@ -228,6 +232,10 @@ components:
       $ref: ./components/schemas/PlanningCreate.yaml
     PlanningTaskMove:
       $ref: ./components/schemas/PlanningTaskMove.yaml
+    PlanningTaskCreate:
+      $ref: ./components/schemas/PlanningTaskCreate.yaml
+    PlanningTaskDelete:
+      $ref: ./components/schemas/PlanningTaskDelete.yaml
     PlanningDetailRead:
       $ref: ./components/schemas/PlanningDetailRead.yaml
     TaskRead:
@@ -254,8 +262,6 @@ components:
       $ref: ./components/schemas/PlanningTaskTreeRead.yaml
     TaskDescriptionUpdate:
       $ref: ./components/schemas/TaskDescriptionUpdate.yaml
-    TaskCreate:
-      $ref: ./components/schemas/TaskCreate.yaml
     TaskRoleAssignmentCreate:
       $ref: ./components/schemas/TaskRoleAssignmentCreate.yaml
     TaskRoleAssignmentUpdate:
@@ -386,6 +392,18 @@ components:
       $ref: ./components/responses/MovePlanningTasksNotFound.yaml
     MovePlanningTasksConflict:
       $ref: ./components/responses/MovePlanningTasksConflict.yaml
+    CreatePlanningTaskBadRequest:
+      $ref: ./components/responses/CreatePlanningTaskBadRequest.yaml
+    CreatePlanningTaskNotFound:
+      $ref: ./components/responses/CreatePlanningTaskNotFound.yaml
+    CreatePlanningTaskConflict:
+      $ref: ./components/responses/CreatePlanningTaskConflict.yaml
+    DeletePlanningTasksBadRequest:
+      $ref: ./components/responses/DeletePlanningTasksBadRequest.yaml
+    DeletePlanningTasksNotFound:
+      $ref: ./components/responses/DeletePlanningTasksNotFound.yaml
+    DeletePlanningTasksConflict:
+      $ref: ./components/responses/DeletePlanningTasksConflict.yaml
     EstimateNotFound:
       $ref: ./components/responses/EstimateNotFound.yaml
     TaskNotFound:

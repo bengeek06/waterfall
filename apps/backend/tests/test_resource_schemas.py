@@ -6,10 +6,10 @@ from pydantic import ValidationError
 from waterfall.schemas.projects import (
     EstimateCostLineCreate,
     EstimateCostLineUpdate,
+    PlanningTaskCreate,
     ProjectCreate,
     ProjectEstimateCreate,
     ProjectUpdate,
-    TaskCreate,
     TaskDescriptionUpdate,
 )
 from waterfall.schemas.resources import (
@@ -154,7 +154,7 @@ def test_project_schema_normalizes_and_rejects_blank_input() -> None:
         name="  Développement  ",
     )
     category_update = CostCategoryUpdate(category_code="  MAJ  ")
-    task = TaskCreate(name="  Nouvelle tâche  ", is_milestone=True)
+    task = PlanningTaskCreate(name="  Nouvelle tâche  ", is_milestone=True)
     task_assignment = TaskRoleAssignmentCreate(
         task_id=1,
         role_id=2,

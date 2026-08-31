@@ -145,14 +145,6 @@ class TaskDescriptionUpdate(BaseModel):
         return normalized or None
 
 
-class TaskCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=512)
-    parent_task_id: int | None = Field(default=None, gt=0)
-    is_milestone: bool = False
-
-    _normalize_name = field_validator("name")(_required_text)
-
-
 class PlanningDeliverableCreate(BaseModel):
     key: str = Field(min_length=1, max_length=40, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
     name: str = Field(min_length=1, max_length=512)
@@ -243,6 +235,49 @@ class PlanningTaskMove(BaseModel):
     task_uids: list[Annotated[int, Field(ge=1)]] = Field(min_length=1)
     target_parent_uid: int | None = Field(default=None, gt=0)
     position: int = Field(ge=1)
+
+
+class PlanningTaskCreate(BaseModel):
+    """Create a single task at an explicit position within a draft planning (E3-05).
+
+    Absence of both ``target_parent_uid`` and ``insert_after_uid`` places the
+    new task as the first child of the targeted parent, or -- when
+    ``target_parent_uid`` is also absent -- the first root task.
+    """
+
+    name: str = Field(min_length=1, max_length=512)
+    is_milestone: bool = False
+    target_parent_uid: int | None = Field(default=None, gt=0)
+    insert_after_uid: int | None = Field(default=None, gt=0)
+
+    _normalize_name = field_validator("name")(_required_text)
+
+
+class PlanningTaskDelete(BaseModel):
+    task_uids: list[Annotated[int, Field(ge=1)]] = Field(min_length=1)
+    confirm_cascade: bool = False
+
+
+class PlanningTaskDeleteConflictDetail(BaseModel):
+    """Structured 409 body for ``delete_planning_tasks_route`` (E3-05).
+
+    ``code`` discriminates the two conflict causes raised by
+    ``delete_planning_tasks``: ``CASCADE_CONFIRMATION_REQUIRED`` populates
+    ``descendant_uids`` (every descendant that would be removed alongside the
+    selection), ``TASK_REFERENCED`` populates ``task_uids`` (every uid in the
+    selection, or its to-be-cascaded descendants, still referenced by an
+    estimate, an assignment, or a charge). The two fields are mutually
+    exclusive in practice but both declared optional since the shared schema
+    covers either cause.
+    """
+
+    code: Literal["CASCADE_CONFIRMATION_REQUIRED", "TASK_REFERENCED"]
+    descendant_uids: list[int] | None = None
+    task_uids: list[int] | None = None
+
+
+class PlanningTaskDeleteConflict(BaseModel):
+    detail: PlanningTaskDeleteConflictDetail
 
 
 class PlanningTaskScheduleUpdate(BaseModel):

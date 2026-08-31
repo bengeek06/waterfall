@@ -1,0 +1,5 @@
+description: Projet, planning ou tache parent introuvable
+content:
+  application/json:
+    schema:
+      $ref: ../schemas/FastAPIErrorResponse.yaml

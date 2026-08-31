@@ -1,7 +1,7 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { Task } from "@/lib/backend";
+import { ApiError, type Task } from "@/lib/backend";
 import { PlanningTreeTable } from "./planning-tree-table";
 
 function task(overrides: Partial<Task>): Task {
@@ -1239,6 +1239,317 @@ describe("PlanningTreeTable", () => {
 
       resolveSubmit();
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    });
+  });
+
+  describe("add task dialog", () => {
+    it("does not render the add-task button when read-only or without onCreateTask", () => {
+      const { rerender } = render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+      expect(screen.queryByRole("button", { name: "Ajouter une tâche" })).not.toBeInTheDocument();
+
+      rerender(
+        <PlanningTreeTable tasks={threeLevelTasks} versionKey={1} readOnly onCreateTask={vi.fn()} />,
+      );
+      expect(screen.queryByRole("button", { name: "Ajouter une tâche" })).not.toBeInTheDocument();
+    });
+
+    it("creates a root-level task at the head of the planning when nothing is selected", () => {
+      const onCreateTask = vi.fn();
+      render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} onCreateTask={onCreateTask} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Ajouter une tâche" }));
+      expect(screen.getByLabelText("Position de la nouvelle tâche")).toHaveValue("root");
+      // With nothing selected there is no single unambiguous relative position to offer.
+      expect(screen.queryByRole("option", { name: /Ajouter après/ })).not.toBeInTheDocument();
+
+      fireEvent.change(screen.getByLabelText("Nom de la nouvelle tâche"), {
+        target: { value: "Nouvelle tâche" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Ajouter" }));
+
+      expect(onCreateTask).toHaveBeenCalledWith({
+        name: "Nouvelle tâche",
+        isMilestone: false,
+        targetParentUid: undefined,
+        insertAfterUid: undefined,
+      });
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("defaults to inserting after the selected task at the same level", () => {
+      const onCreateTask = vi.fn();
+      render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} onCreateTask={onCreateTask} />);
+
+      fireEvent.click(screen.getByText("Lot"));
+      fireEvent.click(screen.getByRole("button", { name: "Ajouter une tâche" }));
+      expect(screen.getByLabelText("Position de la nouvelle tâche")).toHaveValue("after");
+
+      fireEvent.change(screen.getByLabelText("Nom de la nouvelle tâche"), { target: { value: "Suite" } });
+      fireEvent.click(screen.getByRole("button", { name: "Ajouter" }));
+
+      // "Lot" (uid 2) is a child of "Poste" (uid 1); inserting after it keeps the new task a
+      // sibling of "Lot", not a child of it.
+      expect(onCreateTask).toHaveBeenCalledWith({
+        name: "Suite",
+        isMilestone: false,
+        targetParentUid: 1,
+        insertAfterUid: 2,
+      });
+    });
+
+    it("creates a child task under the selected non-milestone task and marks it as a milestone", () => {
+      const onCreateTask = vi.fn();
+      render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} onCreateTask={onCreateTask} />);
+
+      fireEvent.click(screen.getByText("Lot"));
+      fireEvent.click(screen.getByRole("button", { name: "Ajouter une tâche" }));
+      fireEvent.change(screen.getByLabelText("Position de la nouvelle tâche"), {
+        target: { value: "child" },
+      });
+      fireEvent.click(screen.getByRole("checkbox", { name: "Jalon" }));
+      fireEvent.change(screen.getByLabelText("Nom de la nouvelle tâche"), { target: { value: "Étape" } });
+      fireEvent.click(screen.getByRole("button", { name: "Ajouter" }));
+
+      expect(onCreateTask).toHaveBeenCalledWith({
+        name: "Étape",
+        isMilestone: true,
+        targetParentUid: 2,
+        insertAfterUid: undefined,
+      });
+    });
+
+    it("does not offer the child-of-selection position for a selected milestone", () => {
+      const tasksWithMilestone: Task[] = [
+        task({ uid: 1, name: "Jalon", parent_uid: null, position: 1, is_milestone: true }),
+      ];
+      render(
+        <PlanningTreeTable tasks={tasksWithMilestone} versionKey={1} onCreateTask={vi.fn()} />,
+      );
+
+      fireEvent.click(screen.getByText("Jalon"));
+      fireEvent.click(screen.getByRole("button", { name: "Ajouter une tâche" }));
+
+      expect(screen.queryByRole("option", { name: /enfant/ })).not.toBeInTheDocument();
+    });
+
+    it("requires a name before creating a task", () => {
+      const onCreateTask = vi.fn();
+      render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} onCreateTask={onCreateTask} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Ajouter une tâche" }));
+      fireEvent.click(screen.getByRole("button", { name: "Ajouter" }));
+
+      expect(onCreateTask).not.toHaveBeenCalled();
+      expect(screen.getByText("Le nom de la tâche est obligatoire.")).toBeInTheDocument();
+    });
+
+    it("closes the dialog without creating a task on cancel", () => {
+      const onCreateTask = vi.fn();
+      render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} onCreateTask={onCreateTask} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Ajouter une tâche" }));
+      fireEvent.change(screen.getByLabelText("Nom de la nouvelle tâche"), { target: { value: "Abandonnée" } });
+      fireEvent.click(screen.getByRole("button", { name: "Annuler" }));
+
+      expect(onCreateTask).not.toHaveBeenCalled();
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("still offers a working add-task button on an empty planning (e.g. after deleting every task)", () => {
+      const onCreateTask = vi.fn();
+      render(<PlanningTreeTable tasks={[]} versionKey={1} onCreateTask={onCreateTask} />);
+
+      expect(screen.getByText("Le planning ne contient aucune tâche.")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Ajouter une tâche" }));
+      fireEvent.change(screen.getByLabelText("Nom de la nouvelle tâche"), { target: { value: "Première tâche" } });
+      fireEvent.click(screen.getByRole("button", { name: "Ajouter" }));
+
+      expect(onCreateTask).toHaveBeenCalledWith({
+        name: "Première tâche",
+        isMilestone: false,
+        targetParentUid: undefined,
+        insertAfterUid: undefined,
+      });
+    });
+  });
+
+  describe("delete selection", () => {
+    it("does not render the delete button when read-only or without onDeleteTasks", () => {
+      const { rerender } = render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+      expect(screen.queryByRole("button", { name: "Supprimer la sélection" })).not.toBeInTheDocument();
+
+      rerender(
+        <PlanningTreeTable tasks={threeLevelTasks} versionKey={1} readOnly onDeleteTasks={vi.fn()} />,
+      );
+      expect(screen.queryByRole("button", { name: "Supprimer la sélection" })).not.toBeInTheDocument();
+    });
+
+    it("disables the delete button when nothing is selected", () => {
+      render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} onDeleteTasks={vi.fn()} />);
+
+      expect(screen.getByRole("button", { name: "Supprimer la sélection" })).toBeDisabled();
+    });
+
+    it("does not open the cascade dialog for a conflict resolved after the planning version already switched", async () => {
+      // The probe request is left pending until the test resolves it explicitly, so the planning
+      // version can be switched (via rerender with a new versionKey, mirroring what page.tsx does
+      // when the user picks another version from the "Version affichée" select) while it is still
+      // in flight.
+      let rejectProbe!: (error: unknown) => void;
+      const onDeleteTasks = vi.fn().mockImplementation(
+        () => new Promise((_resolve, reject) => {
+          rejectProbe = reject;
+        }),
+      );
+      const { rerender } = render(
+        <PlanningTreeTable tasks={threeLevelTasks} versionKey={1} onDeleteTasks={onDeleteTasks} />,
+      );
+
+      fireEvent.click(screen.getByText("Poste"));
+      fireEvent.click(screen.getByRole("button", { name: "Supprimer la sélection" }));
+      await waitFor(() => expect(onDeleteTasks).toHaveBeenCalledTimes(1));
+
+      // Switch to another planning version (a different versionKey) while the probe is still in
+      // flight; the component's own state -- including any cascade dialog that would otherwise
+      // open -- must never be attributed to the version the request was actually sent for.
+      const otherVersionTasks = [
+        { ...threeLevelTasks[0], uid: 21, name: "Autre planning" },
+      ];
+      rerender(
+        <PlanningTreeTable tasks={otherVersionTasks} versionKey={2} onDeleteTasks={onDeleteTasks} />,
+      );
+      await screen.findByText("Autre planning");
+
+      const conflict = new ApiError(409, "Cette tâche a des tâches enfants et nécessite une confirmation.", {
+        code: "CASCADE_CONFIRMATION_REQUIRED",
+        descendant_uids: [2, 3],
+      });
+      await act(async () => {
+        rejectProbe(conflict);
+        // Let the rejected promise's .catch handler run to completion.
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    });
+
+    it("deletes the selection outright when the backend reports no conflict", async () => {
+      const onDeleteTasks = vi.fn().mockResolvedValue(undefined);
+      render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} onDeleteTasks={onDeleteTasks} />);
+
+      fireEvent.click(screen.getByText("Livrable"));
+      fireEvent.click(screen.getByRole("button", { name: "Supprimer la sélection" }));
+
+      // The third argument is the planning version identity (this component's own `versionKey`
+      // prop) captured at request time, so the caller can detect a version switch on retry.
+      await waitFor(() => expect(onDeleteTasks).toHaveBeenCalledWith([3], false, 1));
+      // The now-deleted task's selection state is cleared, instead of staying stuck on a uid the
+      // caller no longer knows about.
+      await waitFor(() =>
+        expect(screen.getByText("Livrable").closest("tr")).not.toHaveAttribute("data-state", "selected"),
+      );
+    });
+
+    it("opens a cascade confirmation dialog listing the descendants and does not confirm on cancel", async () => {
+      const onDeleteTasks = vi.fn().mockImplementation(async (_taskUids: number[], confirmCascade: boolean) => {
+        if (!confirmCascade) {
+          throw new ApiError(409, "Cette tâche a des tâches enfants et nécessite une confirmation.", {
+            code: "CASCADE_CONFIRMATION_REQUIRED",
+            descendant_uids: [2, 3],
+          });
+        }
+      });
+      render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} onDeleteTasks={onDeleteTasks} />);
+
+      fireEvent.click(screen.getByText("Poste"));
+      fireEvent.click(screen.getByRole("button", { name: "Supprimer la sélection" }));
+
+      const alertDialog = await screen.findByRole("alertdialog");
+      expect(within(alertDialog).getByText(/Lot/)).toBeInTheDocument();
+      expect(within(alertDialog).getByText(/Livrable/)).toBeInTheDocument();
+
+      fireEvent.click(within(alertDialog).getByRole("button", { name: "Annuler" }));
+
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+      expect(onDeleteTasks).toHaveBeenCalledTimes(1);
+      expect(onDeleteTasks).not.toHaveBeenCalledWith([1], true, 1);
+    });
+
+    it("confirms the cascade and retries the delete with the same captured planning version", async () => {
+      const onDeleteTasks = vi.fn().mockImplementation(async (_taskUids: number[], confirmCascade: boolean) => {
+        if (!confirmCascade) {
+          throw new ApiError(409, "Cette tâche a des tâches enfants et nécessite une confirmation.", {
+            code: "CASCADE_CONFIRMATION_REQUIRED",
+            descendant_uids: [2, 3],
+          });
+        }
+      });
+      render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} onDeleteTasks={onDeleteTasks} />);
+
+      fireEvent.click(screen.getByText("Poste"));
+      fireEvent.click(screen.getByRole("button", { name: "Supprimer la sélection" }));
+
+      const alertDialog = await screen.findByRole("alertdialog");
+      fireEvent.click(within(alertDialog).getByRole("button", { name: "Supprimer" }));
+
+      await waitFor(() => expect(onDeleteTasks).toHaveBeenCalledTimes(2));
+      expect(onDeleteTasks).toHaveBeenNthCalledWith(1, [1], false, 1);
+      // The retry re-sends the *same* versionKey captured on the initial probe, not whatever the
+      // component's current `versionKey` prop happens to be at confirmation time -- this is what
+      // lets the caller (page.tsx) detect a planning switch that happened while the dialog was
+      // open instead of trusting a freshly re-read value.
+      expect(onDeleteTasks).toHaveBeenNthCalledWith(2, [1], true, 1);
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    });
+
+    it("closes the cascade dialog without a local error banner when the retry is rejected", async () => {
+      // Simulates the caller (page.tsx) rejecting a stale cascade confirmation -- e.g. because the
+      // displayed planning version changed while the dialog was open -- with a plain Error rather
+      // than a CASCADE_CONFIRMATION_REQUIRED conflict.
+      const onDeleteTasks = vi.fn().mockImplementation(async (_taskUids: number[], confirmCascade: boolean) => {
+        if (!confirmCascade) {
+          throw new ApiError(409, "Cette tâche a des tâches enfants et nécessite une confirmation.", {
+            code: "CASCADE_CONFIRMATION_REQUIRED",
+            descendant_uids: [2, 3],
+          });
+        }
+        throw new Error("Le planning affiché a changé : relance la suppression.");
+      });
+      render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} onDeleteTasks={onDeleteTasks} />);
+
+      fireEvent.click(screen.getByText("Poste"));
+      fireEvent.click(screen.getByRole("button", { name: "Supprimer la sélection" }));
+
+      const alertDialog = await screen.findByRole("alertdialog");
+      fireEvent.click(within(alertDialog).getByRole("button", { name: "Supprimer" }));
+
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+      // No local, technical error text leaks from this component: the failure is reported solely
+      // through the parent's own error state (see the onDeleteTasks prop contract).
+      expect(
+        screen.queryByText("Le planning affiché a changé : relance la suppression."),
+      ).not.toBeInTheDocument();
+    });
+
+    it("does not render a local error banner for a TASK_REFERENCED conflict; only closes the cascade path", async () => {
+      const onDeleteTasks = vi.fn().mockRejectedValue(
+        new ApiError(409, "Cette tâche est référencée par un devis, une affectation ou une charge.", {
+          code: "TASK_REFERENCED",
+          task_uids: [3],
+        }),
+      );
+      render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} onDeleteTasks={onDeleteTasks} />);
+
+      fireEvent.click(screen.getByText("Livrable"));
+      fireEvent.click(screen.getByRole("button", { name: "Supprimer la sélection" }));
+
+      await waitFor(() => expect(onDeleteTasks).toHaveBeenCalledTimes(1));
+      // Errors (including a non-confirmable conflict) are reported solely through the parent's
+      // own error state now, mirroring onCreateTask; this component no longer re-derives and
+      // displays its own copy of the raw error message.
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     });
   });
 });

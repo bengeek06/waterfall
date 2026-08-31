@@ -4,9 +4,11 @@ from typing import Any, cast
 
 from fastapi.testclient import TestClient
 from httpx import Response
+from sqlalchemy import func
 
 from waterfall.db.session import get_session_factory
 from waterfall.main import app
+from waterfall.models.ms_core import MsTask
 from waterfall.models.user import User
 from waterfall.services.msproject_xml import parse_msproject_xml
 
@@ -38,6 +40,46 @@ def _admin_headers(client: TestClient, email: str) -> dict[str, str]:
         session.commit()
 
     return {"Authorization": f"Bearer {token}"}
+
+
+def _create_legacy_task(project_id: int, name: str) -> int:
+    """Insert a root-level ms_task row directly, mirroring the shape the
+    removed generic ``POST /projects/{id}/tasks`` endpoint used to produce
+    for a project's first task (E3-05 replaced it with the planning-scoped
+    create/delete contract; a bare ms_task row with no planning at all has no
+    API-level replacement, so tests that only need a legacy task to hang a
+    role assignment or a calendar export off of seed it directly).
+    """
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        max_uid = (
+            session.query(func.max(MsTask.uid)).filter(MsTask.project_id == project_id).scalar()
+        )
+        max_id_display = (
+            session.query(func.max(MsTask.id_display))
+            .filter(MsTask.project_id == project_id)
+            .scalar()
+        )
+        root_count = (
+            session.query(MsTask)
+            .filter(MsTask.project_id == project_id)
+            .filter(MsTask.outline_level == 1)
+            .count()
+        )
+        task = MsTask(
+            project_id=project_id,
+            uid=(max_uid or 0) + 1,
+            id_display=(max_id_display or 0) + 1,
+            name=name,
+            outline_number=str(root_count + 1),
+            outline_level=1,
+            position=root_count + 1,
+            is_summary=False,
+            is_milestone=False,
+        )
+        session.add(task)
+        session.commit()
+        return task.uid
 
 
 def _create_calendar(
@@ -258,15 +300,9 @@ def test_export_includes_task_calendar_and_reference_minutes() -> None:
             headers=headers,
         )
         assert project_response.status_code == 201
-        project_id = project_response.json()["id"]
+        project_id = cast(int, project_response.json()["id"])
 
-        task_response: Response = client.post(
-            f"/projects/{project_id}/tasks",
-            json={"name": "Task with role"},
-            headers=headers,
-        )
-        assert task_response.status_code == 201
-        task_uid = cast(int, task_response.json()["uid"])
+        task_uid = _create_legacy_task(project_id, "Task with role")
 
         # Monday(2)..Friday(6) at 7h/day, weekend at 0h -- same shape as the
         # STANDARD calendar seeded by the E5-01 migration, but a distinct code
@@ -352,15 +388,9 @@ def test_export_task_calendar_uses_lowest_role_id_among_multiple_assignments() -
             headers=headers,
         )
         assert project_response.status_code == 201
-        project_id = project_response.json()["id"]
+        project_id = cast(int, project_response.json()["id"])
 
-        task_response: Response = client.post(
-            f"/projects/{project_id}/tasks",
-            json={"name": "Task with two roles"},
-            headers=headers,
-        )
-        assert task_response.status_code == 201
-        task_uid = cast(int, task_response.json()["uid"])
+        task_uid = _create_legacy_task(project_id, "Task with two roles")
 
         calendar_a_id = _create_calendar(
             client, headers, code="CALA", weeks_per_year=47, weekday_hours="7.00"
@@ -428,15 +458,9 @@ def test_export_falls_back_to_task_calendar_when_standard_has_no_working_day() -
             headers=headers,
         )
         assert project_response.status_code == 201
-        project_id = project_response.json()["id"]
+        project_id = cast(int, project_response.json()["id"])
 
-        task_response: Response = client.post(
-            f"/projects/{project_id}/tasks",
-            json={"name": "Task with usable role calendar"},
-            headers=headers,
-        )
-        assert task_response.status_code == 201
-        task_uid = cast(int, task_response.json()["uid"])
+        task_uid = _create_legacy_task(project_id, "Task with usable role calendar")
 
         calendar_id = _create_calendar(
             client, headers, code="CAL-USABLE", weeks_per_year=47, weekday_hours="7.00"
@@ -712,19 +736,13 @@ def test_export_then_reimport_round_trip_preserves_tasks_and_links() -> None:
         # wf_planning_task_snapshot row (see calendar_schedule.py), and
         # create_task_role_assignment rejects assignments on tasks that only
         # exist as a planning snapshot (see its "Snapshot-only tasks..." 409
-        # guard). Creating this legacy "shadow" ms_task *before* the XML
-        # import below -- while the project still has no displayed planning,
-        # so POST /tasks takes the legacy-task code path instead of creating
-        # another snapshot -- gives task uid 1 a matching row in both tables,
-        # which is what lets it receive a role assignment further down
-        # without touching the snapshot's own name/dates used by the export.
-        shadow_task_response: Response = client.post(
-            f"/projects/{source_project_id}/tasks",
-            json={"name": "shadow-task-for-role-assignment"},
-            headers=headers,
-        )
-        assert shadow_task_response.status_code == 201
-        shadow_task_uid = cast(int, shadow_task_response.json()["uid"])
+        # guard). Inserting this legacy "shadow" ms_task row directly --
+        # E3-05 removed the generic POST /projects/{id}/tasks endpoint that
+        # used to do this -- *before* the XML import below gives task uid 1 a
+        # matching row in both tables, which is what lets it receive a role
+        # assignment further down without touching the snapshot's own
+        # name/dates used by the export.
+        shadow_task_uid = _create_legacy_task(source_project_id, "shadow-task-for-role-assignment")
 
         _import_xml_into_project(
             client,

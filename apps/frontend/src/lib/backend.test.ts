@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, getPlanning, updateResourceRole } from "./backend";
+import {
+  ApiError,
+  deletePlanningTasks,
+  getPlanning,
+  getPlanningTaskDeleteConflict,
+  updateResourceRole,
+} from "./backend";
 
 describe("planning detail pagination", () => {
   afterEach(() => {
@@ -86,5 +92,82 @@ describe("parseError", () => {
     await expect(
       updateResourceRole(1, { name: "Dev" }, { accessToken: "token" }, vi.fn()),
     ).rejects.toMatchObject({ status: 404, message: "Role not found" } as Partial<ApiError>);
+  });
+});
+
+describe("getPlanningTaskDeleteConflict", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("turns a CASCADE_CONFIRMATION_REQUIRED conflict into a readable message and exposes the descendant uids", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({ detail: { code: "CASCADE_CONFIRMATION_REQUIRED", descendant_uids: [2, 3] } }),
+        { status: 409, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    let thrown: unknown;
+    try {
+      await deletePlanningTasks(
+        1,
+        7,
+        { task_uids: [1], confirm_cascade: false },
+        { accessToken: "token" },
+        vi.fn(),
+      );
+    } catch (cause) {
+      thrown = cause;
+    }
+
+    expect(thrown).toBeInstanceOf(ApiError);
+    expect((thrown as ApiError).message).toBe(
+      "Cette tâche a des tâches enfants et nécessite une confirmation.",
+    );
+    expect(getPlanningTaskDeleteConflict(thrown)).toEqual({
+      code: "CASCADE_CONFIRMATION_REQUIRED",
+      descendantUids: [2, 3],
+      taskUids: undefined,
+    });
+  });
+
+  it("turns a TASK_REFERENCED conflict into a readable message and exposes the referenced task uids", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ detail: { code: "TASK_REFERENCED", task_uids: [4] } }), {
+        status: 409,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    let thrown: unknown;
+    try {
+      await deletePlanningTasks(
+        1,
+        7,
+        { task_uids: [4], confirm_cascade: true },
+        { accessToken: "token" },
+        vi.fn(),
+      );
+    } catch (cause) {
+      thrown = cause;
+    }
+
+    expect((thrown as ApiError).message).toBe(
+      "Cette tâche est référencée par un devis, une affectation ou une charge.",
+    );
+    expect(getPlanningTaskDeleteConflict(thrown)).toEqual({
+      code: "TASK_REFERENCED",
+      descendantUids: undefined,
+      taskUids: [4],
+    });
+  });
+
+  it("returns null for a non-409 error, a 409 without a structured detail, or an unrelated error", () => {
+    expect(getPlanningTaskDeleteConflict(new ApiError(404, "Not found"))).toBeNull();
+    expect(getPlanningTaskDeleteConflict(new ApiError(409, "Conflict"))).toBeNull();
+    expect(getPlanningTaskDeleteConflict(new Error("boom"))).toBeNull();
   });
 });

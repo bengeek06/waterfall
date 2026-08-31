@@ -1,0 +1,10 @@
+description: >-
+  Suppression en cascade non confirmee (detail.code=CASCADE_CONFIRMATION_REQUIRED,
+  avec la liste des uid descendants dans detail.descendant_uids), ou tache
+  referencee par un devis, une affectation ou une charge
+  (detail.code=TASK_REFERENCED, avec la liste des uid references dans
+  detail.task_uids)
+content:
+  application/json:
+    schema:
+      $ref: ../schemas/PlanningTaskDeleteConflict.yaml

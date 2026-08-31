@@ -7,8 +7,14 @@ from typing import overload
 
 from sqlalchemy.orm import Session
 
+from waterfall.models.ms_core import MsTask
 from waterfall.models.planning import WfPlanning, WfPlanningLinkSnapshot, WfPlanningTaskSnapshot
-from waterfall.schemas.projects import PlanningTaskMove, PlanningTaskScheduleUpdate
+from waterfall.schemas.projects import (
+    PlanningTaskCreate,
+    PlanningTaskDelete,
+    PlanningTaskMove,
+    PlanningTaskScheduleUpdate,
+)
 from waterfall.services.calendar_schedule import (
     ResolvedCalendar,
     compute_finish_at,
@@ -17,6 +23,7 @@ from waterfall.services.calendar_schedule import (
     compute_working_minutes_between,
     resolve_calendars_for_tasks,
 )
+from waterfall.services.task_references import find_referenced_task_uids
 
 
 class PlanningTreeMoveError(ValueError):
@@ -29,6 +36,38 @@ class PlanningTreeInvariantError(PlanningTreeMoveError):
 
 class PlanningTreeMoveNotFoundError(PlanningTreeMoveError):
     """A task addressed by a hierarchy move command does not exist."""
+
+
+class PlanningTreeCascadeConfirmationRequiredError(PlanningTreeMoveError):
+    """A deletion selection has descendants that ``confirm_cascade`` did not confirm.
+
+    ``descendant_uids`` lists every descendant (of every selected root) that
+    would be deleted alongside the selection -- surfaced by the route as a
+    structured 409 body so the caller can present the exact subtree to the
+    user before resubmitting with ``confirm_cascade: true``.
+    """
+
+    def __init__(self, descendant_uids: list[int]) -> None:
+        self.descendant_uids = descendant_uids
+        super().__init__(
+            "Deleting the selection would remove descendant tasks; "
+            "resubmit with confirm_cascade=true to proceed"
+        )
+
+
+class PlanningTreeTaskReferencedError(PlanningTreeMoveError):
+    """A task addressed for deletion is referenced by an estimate, assignment, or charge.
+
+    ``task_uids`` lists every referenced task uid found among the selection
+    and its (to-be-cascaded) descendants -- surfaced by the route as a
+    structured 409 body, mirroring :class:`PlanningTreeCascadeConfirmationRequiredError`.
+    """
+
+    def __init__(self, task_uids: list[int]) -> None:
+        self.task_uids = task_uids
+        super().__init__(
+            "Task is referenced by estimates, assignments, or charges and cannot be deleted"
+        )
 
 
 class PlanningTaskScheduleError(PlanningTreeMoveError):
@@ -325,6 +364,192 @@ def move_planning_tasks(
     # other PlanningTreeMoveError.
     try:
         _recalculate_outline(tasks_by_uid, resolved_calendars)
+    except (ValueError, OverflowError) as exc:
+        raise PlanningTreeMoveError(str(exc)) from exc
+
+
+def create_planning_task(
+    db: Session,
+    planning: WfPlanning,
+    command: PlanningTaskCreate,
+) -> None:
+    """Insert a single new task into a draft planning at an explicit position (E3-05).
+
+    ``command.target_parent_uid`` -- when provided -- must reference an
+    existing, non-milestone task (a milestone cannot contain children, same
+    invariant as :func:`_validate_target_parent` enforces for a move).
+    ``command.insert_after_uid`` -- when provided -- must be an existing
+    sibling of the resolved parent; its absence places the new task as the
+    first child of that parent (or the first root task when
+    ``target_parent_uid`` is also absent).
+    """
+    tasks = (
+        db.query(WfPlanningTaskSnapshot)
+        .filter(WfPlanningTaskSnapshot.planning_id == planning.id)
+        .all()
+    )
+    tasks_by_uid = {task.uid: task for task in tasks}
+    _validate_tree(tasks_by_uid)
+
+    target_parent_uid = command.target_parent_uid
+    if target_parent_uid is not None:
+        if target_parent_uid not in tasks_by_uid:
+            raise PlanningTreeMoveNotFoundError(f"Task not found: {target_parent_uid}")
+        if tasks_by_uid[target_parent_uid].is_milestone:
+            raise PlanningTreeInvariantError("A milestone cannot contain children")
+
+    siblings = sorted(
+        (task for task in tasks if task.parent_uid == target_parent_uid), key=_task_order
+    )
+
+    insert_after_uid = command.insert_after_uid
+    if insert_after_uid is None:
+        insert_index = 0
+    else:
+        if insert_after_uid not in tasks_by_uid:
+            raise PlanningTreeMoveNotFoundError(f"Task not found: {insert_after_uid}")
+        sibling_uids = [task.uid for task in siblings]
+        if insert_after_uid not in sibling_uids:
+            raise PlanningTreeMoveError(
+                f"Task {insert_after_uid} is not a sibling of the target parent"
+            )
+        insert_index = sibling_uids.index(insert_after_uid) + 1
+
+    max_uid = max((task.uid for task in tasks), default=0)
+    max_id_display = max((task.id_display or 0 for task in tasks), default=0)
+
+    new_task = WfPlanningTaskSnapshot(
+        planning_id=planning.id,
+        uid=max_uid + 1,
+        id_display=max_id_display + 1,
+        parent_uid=target_parent_uid,
+        position=insert_index + 1,
+        name=command.name,
+        task_type=0,
+        is_summary=False,
+        is_milestone=command.is_milestone,
+    )
+    db.add(new_task)
+    # The session is autoflush=False (see db.session.get_session_factory), so
+    # without an explicit flush the new row would not exist in the database
+    # yet when the route's _planning_detail query re-reads every task by a
+    # fresh SELECT afterwards, silently dropping the new task from the
+    # response even though _recalculate_outline below correctly numbers it
+    # in memory.
+    db.flush()
+    tasks_by_uid[new_task.uid] = new_task
+
+    siblings.insert(insert_index, new_task)
+    for position, task in enumerate(siblings, start=1):
+        task.position = position
+
+    resolved_calendars = resolve_calendars_for_tasks(
+        db, planning.project_id, set(tasks_by_uid.keys())
+    )
+    # See the equivalent try/except in move_planning_tasks: _recalculate_outline
+    # walks every summary task's affected calendar day by day and can raise
+    # ValueError/OverflowError for an unreasonably far manually-scheduled date
+    # elsewhere in the tree -- a genuinely-invalid-input case, not an internal
+    # error, surfaced as the same 400 as any other PlanningTreeMoveError.
+    try:
+        _recalculate_outline(tasks_by_uid, resolved_calendars)
+    except (ValueError, OverflowError) as exc:
+        raise PlanningTreeMoveError(str(exc)) from exc
+
+
+def _subtree_uids(
+    root_uid: int, children_by_parent: dict[int | None, list[WfPlanningTaskSnapshot]]
+) -> list[int]:
+    collected = [root_uid]
+    for child in children_by_parent.get(root_uid, []):
+        collected.extend(_subtree_uids(child.uid, children_by_parent))
+    return collected
+
+
+def delete_planning_tasks(
+    db: Session,
+    planning: WfPlanning,
+    command: PlanningTaskDelete,
+) -> None:
+    """Delete a multi-uid selection of tasks from a draft planning, with cascade control (E3-05).
+
+    A selection mixing a parent and one of its own descendants is normalized
+    through :func:`_selected_roots`, exactly like :func:`move_planning_tasks`.
+    Every check -- cascade confirmation, then task-reference -- is run for the
+    *entire* selection before any mutation happens, so a violation on one
+    root never leaves an earlier root partially deleted.
+    """
+    tasks = (
+        db.query(WfPlanningTaskSnapshot)
+        .filter(WfPlanningTaskSnapshot.planning_id == planning.id)
+        .all()
+    )
+    tasks_by_uid = {task.uid: task for task in tasks}
+    _validate_tree(tasks_by_uid)
+    selected_roots = _selected_roots(command.task_uids, tasks_by_uid)
+
+    children_by_parent: dict[int | None, list[WfPlanningTaskSnapshot]] = defaultdict(list)
+    for task in tasks:
+        children_by_parent[task.parent_uid].append(task)
+
+    to_delete: set[int] = set()
+    descendant_uids: set[int] = set()
+    for root_uid in selected_roots:
+        subtree = _subtree_uids(root_uid, children_by_parent)
+        to_delete.update(subtree)
+        descendant_uids.update(uid for uid in subtree if uid != root_uid)
+
+    if descendant_uids and not command.confirm_cascade:
+        raise PlanningTreeCascadeConfirmationRequiredError(sorted(descendant_uids))
+
+    # Bridges each snapshot uid to its legacy MsTask row (if any) so
+    # find_referenced_task_uids -- which keys estimate/assignment references
+    # off ms_task.id, not the planning snapshot -- can resolve a task_id,
+    # exactly like the legacy delete_project_task endpoint did before E3-05.
+    legacy_tasks_by_uid = {
+        task.uid: task
+        for task in db.query(MsTask)
+        .filter(MsTask.project_id == planning.project_id)
+        .filter(MsTask.uid.in_(to_delete))
+        .all()
+    }
+    # Batched into a handful of IN (...) queries rather than one
+    # is_task_referenced call per task uid: this cascade can select an
+    # arbitrarily large subtree while the caller still holds a row lock on
+    # ms_project/wf_planning, so an N+1 loop here would block every other
+    # concurrent writer for the duration.
+    task_id_by_uid = {
+        task_uid: (legacy_tasks_by_uid[task_uid].id if task_uid in legacy_tasks_by_uid else None)
+        for task_uid in to_delete
+    }
+    referenced_uids = sorted(
+        find_referenced_task_uids(
+            db,
+            project_id=planning.project_id,
+            task_id_by_uid=task_id_by_uid,
+        )
+    )
+    if referenced_uids:
+        raise PlanningTreeTaskReferencedError(referenced_uids)
+
+    db.query(WfPlanningLinkSnapshot).filter(
+        WfPlanningLinkSnapshot.planning_id == planning.id,
+        (WfPlanningLinkSnapshot.task_uid.in_(to_delete))
+        | (WfPlanningLinkSnapshot.predecessor_uid.in_(to_delete)),
+    ).delete(synchronize_session=False)
+    db.query(WfPlanningTaskSnapshot).filter(
+        WfPlanningTaskSnapshot.planning_id == planning.id,
+        WfPlanningTaskSnapshot.uid.in_(to_delete),
+    ).delete(synchronize_session=False)
+
+    remaining_tasks_by_uid = {
+        uid: task for uid, task in tasks_by_uid.items() if uid not in to_delete
+    }
+    resolved_calendars = resolve_calendars_for_tasks(
+        db, planning.project_id, set(remaining_tasks_by_uid.keys())
+    )
+    try:
+        _recalculate_outline(remaining_tasks_by_uid, resolved_calendars)
     except (ValueError, OverflowError) as exc:
         raise PlanningTreeMoveError(str(exc)) from exc
 

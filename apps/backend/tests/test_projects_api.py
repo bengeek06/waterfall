@@ -229,207 +229,6 @@ def test_patch_task_description_not_found() -> None:
         assert response.status_code == 404
 
 
-def test_create_root_task_appends_outline_number() -> None:
-    with TestClient(app) as client:
-        headers = _auth_headers(client)
-        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
-
-        response: Response = client.post(
-            f"/projects/{project_id}/tasks",
-            json={"name": "Lot additionnel", "is_milestone": True},
-            headers=headers,
-        )
-        assert response.status_code == 201
-        payload = cast(dict[str, Any], response.json())
-        assert payload["name"] == "Lot additionnel"
-        assert payload["outline_level"] == 1
-        assert payload["outline_number"] == "3"
-        assert payload["is_milestone"] is True
-        assert payload["is_summary"] is False
-
-
-def test_create_child_task_uses_parent_outline_number() -> None:
-    with TestClient(app) as client:
-        headers = _auth_headers(client)
-        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
-
-        tasks_response: Response = client.get(f"/projects/{project_id}/tasks", headers=headers)
-        tasks_payload = cast(list[dict[str, Any]], tasks_response.json())
-        parent_task_id = next(task["id"] for task in tasks_payload if task["uid"] == 1001)
-
-        first_child: Response = client.post(
-            f"/projects/{project_id}/tasks",
-            json={"name": "Sous-tache A", "parent_task_id": parent_task_id},
-            headers=headers,
-        )
-        assert first_child.status_code == 201
-        first_payload = cast(dict[str, Any], first_child.json())
-        assert first_payload["outline_level"] == 2
-        assert first_payload["outline_number"] == "1.1"
-
-        second_child: Response = client.post(
-            f"/projects/{project_id}/tasks",
-            json={"name": "Sous-tache B", "parent_task_id": parent_task_id},
-            headers=headers,
-        )
-        assert second_child.status_code == 201
-        second_payload = cast(dict[str, Any], second_child.json())
-        assert second_payload["outline_number"] == "1.2"
-
-
-def test_create_task_uses_displayed_draft_snapshot() -> None:
-    with TestClient(app) as client:
-        headers = _auth_headers(client)
-        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
-        planning_response = client.post(
-            f"/projects/{project_id}/plannings", json={}, headers=headers
-        )
-        assert planning_response.status_code == 201
-        planning_id = planning_response.json()["id"]
-        parent = planning_response.json()["tasks"][0]
-        assert (
-            client.post(
-                f"/projects/{project_id}/plannings/{planning_id}/display", headers=headers
-            ).status_code
-            == 200
-        )
-
-        response = client.post(
-            f"/projects/{project_id}/tasks",
-            json={"name": "Snapshot task", "parent_task_id": parent["id"]},
-            headers=headers,
-        )
-
-        assert response.status_code == 201
-        payload = cast(dict[str, Any], response.json())
-        assert payload["project_id"] == project_id
-        assert payload["parent_uid"] == parent["uid"]
-        assert payload["outline_number"] == f"{parent['outline_number']}.1"
-        listed = client.get(f"/projects/{project_id}/tasks", headers=headers).json()
-        assert payload["uid"] in [task["uid"] for task in listed]
-        with get_session_factory()() as session:
-            assert session.query(MsTask).filter(MsTask.project_id == project_id).count() == 2
-
-
-def test_create_and_delete_visible_draft_snapshot_preserves_legacy_tasks() -> None:
-    with TestClient(app) as client:
-        headers = _auth_headers(client)
-        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
-        planning_response = client.post(
-            f"/projects/{project_id}/plannings", json={}, headers=headers
-        )
-        assert planning_response.status_code == 201
-        planning_id = planning_response.json()["id"]
-        assert (
-            client.post(
-                f"/projects/{project_id}/plannings/{planning_id}/display", headers=headers
-            ).status_code
-            == 200
-        )
-        created = client.post(
-            f"/projects/{project_id}/tasks", json={"name": "Visible draft task"}, headers=headers
-        )
-        assert created.status_code == 201
-        task_uid = cast(int, created.json()["uid"])
-
-        deleted = client.delete(f"/projects/{project_id}/tasks/{task_uid}", headers=headers)
-
-        assert deleted.status_code == 204
-        remaining = cast(
-            list[dict[str, Any]],
-            client.get(f"/projects/{project_id}/tasks", headers=headers).json(),
-        )
-        assert all(task["uid"] != task_uid for task in remaining)
-        with get_session_factory()() as session:
-            assert session.query(MsTask).filter(MsTask.uid == task_uid).count() == 0
-
-
-def test_snapshot_task_creation_after_deletion_keeps_unique_numbering() -> None:
-    with TestClient(app) as client:
-        headers = _auth_headers(client)
-        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
-        planning_response = client.post(
-            f"/projects/{project_id}/plannings", json={}, headers=headers
-        )
-        assert planning_response.status_code == 201
-        planning_id = cast(int, planning_response.json()["id"])
-        parent = planning_response.json()["tasks"][0]
-        parent_uid = cast(int, parent["uid"])
-        assert (
-            client.post(
-                f"/projects/{project_id}/plannings/{planning_id}/display", headers=headers
-            ).status_code
-            == 200
-        )
-
-        created_uids: list[int] = []
-        for name in ("Child A", "Child B", "Child C"):
-            response = client.post(
-                f"/projects/{project_id}/tasks",
-                json={"name": name, "parent_task_id": parent["id"]},
-                headers=headers,
-            )
-            assert response.status_code == 201
-            created_uids.append(cast(int, response.json()["uid"]))
-
-        # Deleting the middle child does not renumber siblings.
-        middle_uid = created_uids[1]
-        assert (
-            client.delete(f"/projects/{project_id}/tasks/{middle_uid}", headers=headers).status_code
-            == 204
-        )
-
-        recreated = client.post(
-            f"/projects/{project_id}/tasks",
-            json={"name": "Child D", "parent_task_id": parent["id"]},
-            headers=headers,
-        )
-        assert recreated.status_code == 201
-
-        with get_session_factory()() as session:
-            children = (
-                session.query(WfPlanningTaskSnapshot)
-                .filter(WfPlanningTaskSnapshot.planning_id == planning_id)
-                .filter(WfPlanningTaskSnapshot.parent_uid == parent_uid)
-                .all()
-            )
-        outline_numbers = [child.outline_number for child in children]
-        positions = [child.position for child in children]
-        assert len(outline_numbers) == len(set(outline_numbers))
-        assert len(positions) == len(set(positions))
-
-
-def test_snapshot_task_mutation_rejects_validated_display() -> None:
-    with TestClient(app) as client:
-        headers = _auth_headers(client)
-        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
-        planning_response = client.post(
-            f"/projects/{project_id}/plannings", json={}, headers=headers
-        )
-        planning_id = planning_response.json()["id"]
-        task_uid = planning_response.json()["tasks"][0]["uid"]
-        assert (
-            client.post(
-                f"/projects/{project_id}/plannings/{planning_id}/validate", headers=headers
-            ).status_code
-            == 200
-        )
-        assert (
-            client.post(
-                f"/projects/{project_id}/plannings/{planning_id}/display", headers=headers
-            ).status_code
-            == 200
-        )
-
-        create = client.post(
-            f"/projects/{project_id}/tasks", json={"name": "Refused"}, headers=headers
-        )
-        delete = client.delete(f"/projects/{project_id}/tasks/{task_uid}", headers=headers)
-
-        assert create.status_code == 409
-        assert delete.status_code == 409
-
-
 def test_snapshot_only_task_rejects_legacy_assignment() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client, "projects.snapshot-assignment@example.com")
@@ -469,63 +268,7 @@ def test_snapshot_only_task_rejects_legacy_assignment() -> None:
         assert "snapshot-only" in response.json()["detail"].lower()
 
 
-def test_create_task_rejects_foreign_parent() -> None:
-    with TestClient(app) as client:
-        headers = _auth_headers(client)
-        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
-        other_project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
-
-        tasks_response: Response = client.get(
-            f"/projects/{other_project_id}/tasks", headers=headers
-        )
-        foreign_task_id = cast(list[dict[str, Any]], tasks_response.json())[0]["id"]
-
-        response: Response = client.post(
-            f"/projects/{project_id}/tasks",
-            json={"name": "Invalide", "parent_task_id": foreign_task_id},
-            headers=headers,
-        )
-        assert response.status_code == 400
-
-
-def test_delete_task_without_children_succeeds() -> None:
-    with TestClient(app) as client:
-        headers = _auth_headers(client)
-        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
-
-        response: Response = client.delete(f"/projects/{project_id}/tasks/1002", headers=headers)
-        assert response.status_code == 204
-
-        tasks_response: Response = client.get(f"/projects/{project_id}/tasks", headers=headers)
-        tasks_payload = cast(list[dict[str, Any]], tasks_response.json())
-        assert all(task["uid"] != 1002 for task in tasks_payload)
-
-
-def test_delete_task_with_children_conflicts() -> None:
-    with TestClient(app) as client:
-        headers = _auth_headers(client)
-        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
-
-        tasks_response: Response = client.get(f"/projects/{project_id}/tasks", headers=headers)
-        parent_task_id = next(
-            task["id"]
-            for task in cast(list[dict[str, Any]], tasks_response.json())
-            if task["uid"] == 1001
-        )
-        create_response: Response = client.post(
-            f"/projects/{project_id}/tasks",
-            json={"name": "Sous-tache", "parent_task_id": parent_task_id},
-            headers=headers,
-        )
-        assert create_response.status_code == 201
-
-        delete_response: Response = client.delete(
-            f"/projects/{project_id}/tasks/1001", headers=headers
-        )
-        assert delete_response.status_code == 409
-
-
-def test_delete_task_referenced_by_cost_line_conflicts() -> None:
+def test_delete_planning_task_referenced_by_cost_line_conflicts_without_mutation() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)
         project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
@@ -551,6 +294,17 @@ def test_delete_task_referenced_by_cost_line_conflicts() -> None:
             if task["uid"] == 1001
         )
 
+        # Creating a draft planning without a source copies the legacy MsTask
+        # rows into snapshots with the same uid (see create_planning), so the
+        # cost line above -- keyed off the legacy task_id -- also references
+        # the new planning's task uid=1001 through is_task_referenced's
+        # legacy-task bridge.
+        planning_response: Response = client.post(
+            f"/projects/{project_id}/plannings", json={}, headers=headers
+        )
+        assert planning_response.status_code == 201
+        planning_id = cast(int, planning_response.json()["id"])
+
         estimate_response: Response = client.post(
             f"/projects/{project_id}/estimates",
             json={"kind": "initial", "currency_code": "EUR"},
@@ -571,17 +325,27 @@ def test_delete_task_referenced_by_cost_line_conflicts() -> None:
         )
         assert cost_line_response.status_code == 201
 
-        delete_response: Response = client.delete(
-            f"/projects/{project_id}/tasks/1001", headers=headers
+        delete_response: Response = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/tasks/delete",
+            json={"task_uids": [1001]},
+            headers=headers,
         )
         assert delete_response.status_code == 409
-        assert (
-            delete_response.json()["detail"]
-            == "Task is referenced by estimates, assignments, or charges and cannot be deleted"
-        )
+        detail = cast(dict[str, Any], delete_response.json())["detail"]
+        assert detail["code"] == "TASK_REFERENCED"
+        assert detail["task_uids"] == [1001]
+
+        with session_factory() as session:
+            remaining = (
+                session.query(WfPlanningTaskSnapshot)
+                .filter(WfPlanningTaskSnapshot.planning_id == planning_id)
+                .filter(WfPlanningTaskSnapshot.uid == 1001)
+                .first()
+            )
+        assert remaining is not None
 
 
-def test_delete_task_referenced_by_parent_task_row_conflicts() -> None:
+def test_delete_planning_task_referenced_by_parent_task_row_conflicts_without_mutation() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)
         project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
@@ -590,6 +354,12 @@ def test_delete_task_referenced_by_parent_task_row_conflicts() -> None:
         task_rows = cast(list[dict[str, Any]], tasks_response.json())
         parent_task_id = cast(int, next(task["id"] for task in task_rows if task["uid"] == 1001))
         child_task_id = cast(int, next(task["id"] for task in task_rows if task["uid"] == 1002))
+
+        planning_response: Response = client.post(
+            f"/projects/{project_id}/plannings", json={}, headers=headers
+        )
+        assert planning_response.status_code == 201
+        planning_id = cast(int, planning_response.json()["id"])
 
         estimate_response: Response = client.post(
             f"/projects/{project_id}/estimates",
@@ -611,23 +381,15 @@ def test_delete_task_referenced_by_parent_task_row_conflicts() -> None:
             row.parent_task_id = parent_task_id
             session.commit()
 
-        delete_response: Response = client.delete(
-            f"/projects/{project_id}/tasks/1001", headers=headers
+        delete_response: Response = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/tasks/delete",
+            json={"task_uids": [1001]},
+            headers=headers,
         )
         assert delete_response.status_code == 409
-        assert (
-            delete_response.json()["detail"]
-            == "Task is referenced by estimates, assignments, or charges and cannot be deleted"
-        )
-
-
-def test_delete_task_not_found() -> None:
-    with TestClient(app) as client:
-        headers = _auth_headers(client)
-        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
-
-        response: Response = client.delete(f"/projects/{project_id}/tasks/999999", headers=headers)
-        assert response.status_code == 404
+        detail = cast(dict[str, Any], delete_response.json())["detail"]
+        assert detail["code"] == "TASK_REFERENCED"
+        assert detail["task_uids"] == [1001]
 
 
 def test_estimate_aggregates_on_draft_are_zero() -> None:

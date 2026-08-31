@@ -44,6 +44,9 @@ from waterfall.schemas.projects import (
     PlanningStructureCreate,
     PlanningStructureDraftRead,
     PlanningStructureRead,
+    PlanningTaskCreate,
+    PlanningTaskDelete,
+    PlanningTaskDeleteConflict,
     PlanningTaskMove,
     PlanningTaskScheduleUpdate,
     PlanningTaskTreeRead,
@@ -57,7 +60,6 @@ from waterfall.schemas.projects import (
     ProjectUpdate,
     StructureKind,
     SupplyStatus,
-    TaskCreate,
     TaskDescriptionUpdate,
     TaskLinkRead,
     TaskLinksReplace,
@@ -72,12 +74,16 @@ from waterfall.services import (
     PlanningLinkInvariantError,
     PlanningLinkNotFoundError,
     PlanningTaskScheduleError,
+    PlanningTreeCascadeConfirmationRequiredError,
     PlanningTreeInvariantError,
     PlanningTreeMoveError,
     PlanningTreeMoveNotFoundError,
+    PlanningTreeTaskReferencedError,
     build_estimate_workbook,
     calculate_estimate_aggregates,
     calculate_estimate_lines,
+    create_planning_task,
+    delete_planning_tasks,
     generate_planning_snapshot,
     generate_planning_structure,
     load_planning_structure_draft,
@@ -97,7 +103,6 @@ from waterfall.services.project_lifecycle import (
     ensure_project_mutable,
     validate_project_status_transition,
 )
-from waterfall.services.task_references import is_task_referenced
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 MSP_NS = "http://schemas.microsoft.com/project/2007"
@@ -945,6 +950,140 @@ router.add_api_route(
         status.HTTP_409_CONFLICT: {
             "model": FastAPIErrorResponse,
             "description": "Le deplacement entre en conflit avec le planning",
+        },
+    },
+    route_class_override=_PlanningTaskBodyValidationRoute,
+)
+
+
+def create_planning_task_route(
+    project_id: int,
+    planning_id: int,
+    payload: PlanningTaskCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> PlanningDetailRead:
+    _, planning = get_mutable_draft_planning_with_locks(
+        db, project_id, planning_id, current_user.id
+    )
+    try:
+        create_planning_task(db, planning, payload)
+        # Capture the response while the row locks are still held so a concurrent
+        # writer cannot make us return a later transaction's state.
+        detail = _planning_detail(db, planning)
+        db.commit()
+    except PlanningTreeMoveNotFoundError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except PlanningTreeInvariantError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except PlanningTreeMoveError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Planning hierarchy conflicts with existing planning data",
+        ) from exc
+    return detail
+
+
+router.add_api_route(
+    "/{project_id}/plannings/{planning_id}/tasks",
+    create_planning_task_route,
+    methods=["POST"],
+    response_model=PlanningDetailRead,
+    responses={
+        status.HTTP_400_BAD_REQUEST: {
+            "model": FastAPIErrorResponse,
+            "description": "Requete de creation invalide",
+        },
+        status.HTTP_404_NOT_FOUND: {
+            "model": FastAPIErrorResponse,
+            "description": "Projet, planning ou tache parent introuvable",
+        },
+        status.HTTP_409_CONFLICT: {
+            "model": FastAPIErrorResponse,
+            "description": "La creation entre en conflit avec le planning",
+        },
+    },
+    route_class_override=_PlanningTaskBodyValidationRoute,
+)
+
+
+def delete_planning_tasks_route(
+    project_id: int,
+    planning_id: int,
+    payload: PlanningTaskDelete,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> PlanningDetailRead:
+    _, planning = get_mutable_draft_planning_with_locks(
+        db, project_id, planning_id, current_user.id
+    )
+    try:
+        delete_planning_tasks(db, planning, payload)
+        # Capture the response while the row locks are still held so a concurrent
+        # writer cannot make us return a later transaction's state.
+        detail = _planning_detail(db, planning)
+        db.commit()
+    except PlanningTreeCascadeConfirmationRequiredError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "CASCADE_CONFIRMATION_REQUIRED",
+                "descendant_uids": exc.descendant_uids,
+            },
+        ) from exc
+    except PlanningTreeTaskReferencedError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "TASK_REFERENCED", "task_uids": exc.task_uids},
+        ) from exc
+    except PlanningTreeMoveNotFoundError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except PlanningTreeInvariantError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except PlanningTreeMoveError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Planning hierarchy conflicts with existing planning data",
+        ) from exc
+    return detail
+
+
+router.add_api_route(
+    "/{project_id}/plannings/{planning_id}/tasks/delete",
+    delete_planning_tasks_route,
+    methods=["POST"],
+    response_model=PlanningDetailRead,
+    responses={
+        status.HTTP_400_BAD_REQUEST: {
+            "model": FastAPIErrorResponse,
+            "description": "Requete de suppression invalide",
+        },
+        status.HTTP_404_NOT_FOUND: {
+            "model": FastAPIErrorResponse,
+            "description": "Projet, planning ou tache introuvable pendant la suppression",
+        },
+        status.HTTP_409_CONFLICT: {
+            "model": PlanningTaskDeleteConflict,
+            "description": (
+                "Suppression en cascade non confirmee (detail.code="
+                "CASCADE_CONFIRMATION_REQUIRED, avec detail.descendant_uids), "
+                "ou tache referencee par un devis, une affectation ou une "
+                "charge (detail.code=TASK_REFERENCED, avec detail.task_uids)"
+            ),
         },
     },
     route_class_override=_PlanningTaskBodyValidationRoute,
@@ -1975,161 +2114,6 @@ def get_planning_structure_draft_route(
     return PlanningStructureDraftRead(planning_id=planning.id, structure=payload)
 
 
-@router.post("/{project_id}/tasks", response_model=TaskRead, status_code=status.HTTP_201_CREATED)
-def create_project_task(
-    project_id: int,
-    payload: TaskCreate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-) -> TaskRead:
-    """Add a planning task for devis purposes; dates stay driven by MS Project."""
-    project, planning = get_mutable_project_with_displayed_planning_lock(
-        db, project_id, current_user.id
-    )
-
-    if planning is not None:
-        parent_snapshot: WfPlanningTaskSnapshot | None = None
-        if payload.parent_task_id is not None:
-            parent_snapshot = (
-                db.query(WfPlanningTaskSnapshot)
-                .filter(WfPlanningTaskSnapshot.id == payload.parent_task_id)
-                .filter(WfPlanningTaskSnapshot.planning_id == planning.id)
-                .first()
-            )
-            if parent_snapshot is None:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Parent task does not belong to displayed planning",
-                )
-
-        max_uid = (
-            db.query(func.max(WfPlanningTaskSnapshot.uid))
-            .filter(WfPlanningTaskSnapshot.planning_id == planning.id)
-            .scalar()
-        )
-        max_id_display = (
-            db.query(func.max(WfPlanningTaskSnapshot.id_display))
-            .filter(WfPlanningTaskSnapshot.planning_id == planning.id)
-            .scalar()
-        )
-        if parent_snapshot is not None:
-            outline_level = (parent_snapshot.outline_level or 0) + 1
-            max_position = (
-                db.query(func.max(WfPlanningTaskSnapshot.position))
-                .filter(WfPlanningTaskSnapshot.planning_id == planning.id)
-                .filter(WfPlanningTaskSnapshot.parent_uid == parent_snapshot.uid)
-                .scalar()
-            )
-            next_index = (max_position or 0) + 1
-            outline_number = f"{parent_snapshot.outline_number}.{next_index}"
-            position = next_index
-            parent_uid = parent_snapshot.uid
-        else:
-            outline_level = 1
-            max_position = (
-                db.query(func.max(WfPlanningTaskSnapshot.position))
-                .filter(WfPlanningTaskSnapshot.planning_id == planning.id)
-                .filter(WfPlanningTaskSnapshot.parent_uid.is_(None))
-                .scalar()
-            )
-            next_index = (max_position or 0) + 1
-            outline_number = str(next_index)
-            position = next_index
-            parent_uid = None
-
-        snapshot = WfPlanningTaskSnapshot(
-            planning_id=planning.id,
-            uid=(max_uid or 0) + 1,
-            id_display=(max_id_display or 0) + 1,
-            parent_uid=parent_uid,
-            position=position,
-            name=payload.name.strip(),
-            task_type=0,
-            outline_number=outline_number,
-            outline_level=outline_level,
-            is_summary=False,
-            is_milestone=payload.is_milestone,
-        )
-        db.add(snapshot)
-        try:
-            db.commit()
-        except IntegrityError as exc:
-            db.rollback()
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Displayed planning task conflicts with existing planning data",
-            ) from exc
-        db.refresh(snapshot)
-        return _to_snapshot_task_read(snapshot, [], project_id)
-
-    ensure_project_mutable(project)
-    parent_task: MsTask | None = None
-    if payload.parent_task_id is not None:
-        parent_task = (
-            db.query(MsTask)
-            .filter(MsTask.id == payload.parent_task_id)
-            .filter(MsTask.project_id == project_id)
-            .first()
-        )
-        if parent_task is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Parent task does not belong to project",
-            )
-
-    max_uid = db.query(func.max(MsTask.uid)).filter(MsTask.project_id == project_id).scalar()
-    max_id_display = (
-        db.query(func.max(MsTask.id_display)).filter(MsTask.project_id == project_id).scalar()
-    )
-
-    if parent_task is not None:
-        outline_level = (parent_task.outline_level or 0) + 1
-        sibling_prefix = f"{parent_task.outline_number}."
-        sibling_count = (
-            db.query(MsTask)
-            .filter(MsTask.project_id == project_id)
-            .filter(MsTask.outline_number.like(f"{sibling_prefix}%"))
-            .filter(MsTask.outline_level == outline_level)
-            .count()
-        )
-        outline_number = f"{parent_task.outline_number}.{sibling_count + 1}"
-        position = sibling_count + 1
-    else:
-        outline_level = 1
-        root_count = (
-            db.query(MsTask)
-            .filter(MsTask.project_id == project_id)
-            .filter(MsTask.outline_level == 1)
-            .count()
-        )
-        outline_number = str(root_count + 1)
-        position = root_count + 1
-
-    task = MsTask(
-        project_id=project_id,
-        uid=(max_uid or 0) + 1,
-        id_display=(max_id_display or 0) + 1,
-        parent_uid=parent_task.uid if parent_task is not None else None,
-        position=position,
-        name=payload.name.strip(),
-        outline_number=outline_number,
-        outline_level=outline_level,
-        is_summary=False,
-        is_milestone=payload.is_milestone,
-    )
-    db.add(task)
-    try:
-        db.commit()
-    except IntegrityError as exc:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Task conflicts with existing project data",
-        ) from exc
-    db.refresh(task)
-    return _to_task_read(task, description=None)
-
-
 @router.patch("/{project_id}/tasks/{task_uid}", response_model=TaskRead)
 def update_task_description(
     project_id: int,
@@ -2187,100 +2171,6 @@ def update_task_description(
     db.commit()
 
     return _to_task_read(task, description=payload.description)
-
-
-@router.delete("/{project_id}/tasks/{task_uid}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_project_task(
-    project_id: int,
-    task_uid: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-) -> None:
-    project, planning = get_mutable_project_with_displayed_planning_lock(
-        db, project_id, current_user.id
-    )
-    if planning is not None:
-        task = (
-            db.query(WfPlanningTaskSnapshot)
-            .filter(WfPlanningTaskSnapshot.planning_id == planning.id)
-            .filter(WfPlanningTaskSnapshot.uid == task_uid)
-            .first()
-        )
-        if task is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
-        if (
-            db.query(WfPlanningTaskSnapshot.id)
-            .filter(WfPlanningTaskSnapshot.planning_id == planning.id)
-            .filter(WfPlanningTaskSnapshot.parent_uid == task.uid)
-            .first()
-            is not None
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Task has child tasks and cannot be deleted",
-            )
-
-        legacy_task = (
-            db.query(MsTask).filter(MsTask.project_id == project_id, MsTask.uid == task_uid).first()
-        )
-        if is_task_referenced(
-            db,
-            project_id=project_id,
-            task_uid=task_uid,
-            task_id=legacy_task.id if legacy_task is not None else None,
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Planning task is referenced by estimates, assignments, or charges",
-            )
-
-        db.query(WfPlanningLinkSnapshot).filter(
-            WfPlanningLinkSnapshot.planning_id == planning.id,
-            (WfPlanningLinkSnapshot.task_uid == task_uid)
-            | (WfPlanningLinkSnapshot.predecessor_uid == task_uid),
-        ).delete(synchronize_session=False)
-        db.delete(task)
-        try:
-            db.commit()
-        except IntegrityError as exc:
-            db.rollback()
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Planning task is still referenced and cannot be deleted",
-            ) from exc
-        return
-    ensure_project_mutable(project)
-    task = _get_task_or_404(db, project_id, task_uid)
-
-    has_children = (
-        db.query(MsTask)
-        .filter(MsTask.project_id == project_id)
-        .filter(MsTask.outline_number.like(f"{task.outline_number}.%"))
-        .filter(MsTask.id != task.id)
-        .first()
-        is not None
-    )
-    if has_children:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Task has child tasks and cannot be deleted",
-        )
-
-    in_use = is_task_referenced(db, project_id=project_id, task_uid=task_uid, task_id=task.id)
-    if in_use:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Task is referenced by estimates, assignments, or charges and cannot be deleted",
-        )
-
-    db.query(MsTaskLink).filter(MsTaskLink.project_id == project_id).filter(
-        (MsTaskLink.task_uid == task_uid) | (MsTaskLink.predecessor_uid == task_uid)
-    ).delete(synchronize_session=False)
-    db.query(WfTaskEnrichment).filter(WfTaskEnrichment.project_id == project_id).filter(
-        WfTaskEnrichment.task_uid == task_uid
-    ).delete(synchronize_session=False)
-    db.delete(task)
-    db.commit()
 
 
 @router.get(

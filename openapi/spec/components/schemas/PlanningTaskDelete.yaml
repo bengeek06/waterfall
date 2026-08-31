@@ -1,0 +1,13 @@
+type: object
+required:
+- task_uids
+properties:
+  task_uids:
+    type: array
+    minItems: 1
+    items:
+      type: integer
+      minimum: 1
+  confirm_cascade:
+    type: boolean
+    default: false
