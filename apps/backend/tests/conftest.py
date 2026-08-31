@@ -73,20 +73,33 @@ def reset_database() -> None:
             # DELETE starts a real one, so toggling it back on would otherwise never
             # actually take effect once this fixture is done.
             connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
-        # Delete rows (children before parents) instead of dropping and recreating the
-        # schema: DDL churn on every one of ~280 tests was the dominant cost of the
-        # suite (~1.3s/test just in fixture setup). SQLite reassigns a table's
-        # INTEGER PRIMARY KEY rowid starting at 1 once it is empty (these models don't
-        # use the AUTOINCREMENT keyword), so this is behaviorally equivalent to a full
-        # recreate for anything the test suite asserts on.
-        for table in reversed(Base.metadata.sorted_tables):
-            connection.execute(table.delete())
-        # Commit before re-enabling the pragma: the deletes above autobegan this
-        # connection's SQLAlchemy transaction, and the pragma is a no-op while one is
-        # still open (see the comment above).
-        connection.commit()
-        if is_sqlite:
+            # Delete rows (children before parents) instead of dropping and recreating
+            # the schema: DDL churn on every one of ~280 tests was the dominant cost of
+            # the suite (~1.3s/test just in fixture setup). SQLite reassigns a table's
+            # INTEGER PRIMARY KEY rowid starting at 1 once it is empty (these models
+            # don't use the AUTOINCREMENT keyword), so this is behaviorally equivalent
+            # to a full recreate for anything the test suite asserts on.
+            for table in reversed(Base.metadata.sorted_tables):
+                connection.execute(table.delete())
+            # Commit before re-enabling the pragma: the deletes above autobegan this
+            # connection's SQLAlchemy transaction, and the pragma is a no-op while one
+            # is still open (see the comment above).
+            connection.commit()
             connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+            connection.commit()
+        else:
+            # On PostgreSQL, unlike SQLite, the ms_project <-> wf_planning <->
+            # wf_estimate cycle's FK constraints stay immediate (checked per-statement)
+            # regardless of use_alter -- that flag only affects DDL ordering. No
+            # `reversed(sorted_tables)` order can satisfy a DELETE across both
+            # directions of a real cycle, so this would intermittently fail once a
+            # test populates rows across it. TRUNCATE ... CASCADE lets Postgres itself
+            # resolve the cycle instead of relying on a fixed statement order.
+            table_names = ", ".join(
+                connection.dialect.identifier_preparer.format_table(table)
+                for table in Base.metadata.sorted_tables
+            )
+            connection.exec_driver_sql(f"TRUNCATE TABLE {table_names} RESTART IDENTITY CASCADE")
             connection.commit()
 
 
