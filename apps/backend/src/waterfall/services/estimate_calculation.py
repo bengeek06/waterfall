@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from waterfall.models.ms_core import MsProject, MsTask
 from waterfall.models.planning import WfPlanningTaskSnapshot
 from waterfall.models.resources import (
+    CostCategory,
     CostRate,
     CostType,
     EstimateCostLine,
@@ -29,6 +30,9 @@ def calculate_estimate_lines(db: Session, estimate_id: int) -> list[EstimateLine
     - Hours are distributed uniformly across task years when task spans multiple years.
     - Purchase cost for non-labor items is pre-calculated (quantity × unit_cost).
     - All snapshots (rate, inflation, codes) are frozen at validation.
+    - `accounting_code` on labor lines is always derived from
+      `role.cost_category.accounting_code` (the single source of truth), never from the
+      role itself.
 
     Returns list of EstimateLine records to persist.
     """
@@ -41,9 +45,10 @@ def calculate_estimate_lines(db: Session, estimate_id: int) -> list[EstimateLine
 
     # 1. Process labor (MO) lines from task role assignments
     assignments = (
-        db.query(TaskRoleAssignment, MsTask, ResourceRole)
+        db.query(TaskRoleAssignment, MsTask, ResourceRole, CostCategory)
         .join(MsTask, TaskRoleAssignment.task_id == MsTask.id)
         .join(ResourceRole, TaskRoleAssignment.role_id == ResourceRole.id)
+        .join(CostCategory, ResourceRole.cost_category_id == CostCategory.id)
         .filter(MsTask.project_id == project.id)
         .all()
     )
@@ -56,16 +61,16 @@ def calculate_estimate_lines(db: Session, estimate_id: int) -> list[EstimateLine
             .filter(WfPlanningTaskSnapshot.planning_id == estimate.planning_id)
             .all()
         }
-        outside_source = [task.uid for _, task, _ in assignments if task.uid not in source_tasks]
+        outside_source = [task.uid for _, task, _, _ in assignments if task.uid not in source_tasks]
         if outside_source:
             raise ValueError(
                 "Estimate has role assignments outside its planning snapshot: "
                 + ", ".join(str(uid) for uid in sorted(outside_source))
             )
 
-    for assignment, task, role in assignments:
+    for assignment, task, role, category in assignments:
         labor_lines = _generate_labor_lines(
-            db, estimate_id, assignment, task, role, source_tasks.get(task.uid)
+            db, estimate_id, assignment, task, role, category, source_tasks.get(task.uid)
         )
         lines.extend(labor_lines)
 
@@ -111,6 +116,7 @@ def _generate_labor_lines(
     assignment: TaskRoleAssignment,
     task: MsTask,
     role: ResourceRole,
+    category: CostCategory,
     source_task: WfPlanningTaskSnapshot | None = None,
 ) -> list[EstimateLine]:
     """
@@ -157,9 +163,9 @@ def _generate_labor_lines(
             task_id=task.id,
             role_id=role.id,
             task_name=schedule_task.name,
-            role_code=role.code,
+            role_code=role.name,
             role_name=role.name,
-            accounting_code=role.code,  # Use role code as proxy for category
+            accounting_code=category.accounting_code,
             year=year,
             quantity=assignment.quantity,
             hours=hours_per_year,

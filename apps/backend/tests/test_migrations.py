@@ -5,6 +5,8 @@ import subprocess
 import sys
 from collections.abc import Generator
 from contextlib import contextmanager
+from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -60,6 +62,84 @@ def _downgrade_alembic(database_url: str, revision: str) -> None:
     )
 
 
+def _seed_estimate_line(database_url: str, role_code: str, role_name: str | None = None) -> None:
+    """Seed a minimal but FK-complete `wf_estimate_line` row on a database already
+    migrated to head, via the ORM.
+
+    `role_name` defaults to `role_code` to mirror how
+    `waterfall.services.estimate_calculation._generate_labor_lines` derives
+    `EstimateLine.role_code` from `ResourceRole.name` in production. Kept as a separate
+    module-scoped helper (rather than inlined per test) because both the SQLite downgrade
+    guard tests and the PostgreSQL empirical test below need the exact same FK chain:
+    CostType -> CostCategory -> ResourceNode -> ResourceRole, MsProject -> Estimate ->
+    EstimateLine.
+    """
+    from sqlalchemy.orm import Session
+
+    from waterfall.models.ms_core import MsProject
+    from waterfall.models.resources import (
+        CostCategory,
+        CostType,
+        Estimate,
+        EstimateLine,
+        ResourceNode,
+        ResourceRole,
+    )
+
+    with _disposable_engine(database_url) as engine, Session(engine) as session:
+        cost_type = CostType(code="MO", name="Main d'oeuvre", kind="labor")
+        session.add(cost_type)
+        session.flush()
+
+        cost_category = CostCategory(
+            cost_type_id=cost_type.id, accounting_code="DEV", name="Developpement"
+        )
+        session.add(cost_category)
+        session.flush()
+
+        node = ResourceNode(code="IT", name="Informatique")
+        session.add(node)
+        session.flush()
+
+        role = ResourceRole(
+            node_id=node.id, cost_category_id=cost_category.id, name=role_name or role_code
+        )
+        session.add(role)
+        session.flush()
+
+        project = MsProject(
+            source_version=2016,
+            name="Projet Test",
+            schedule_from_start=True,
+            start_date=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        session.add(project)
+        session.flush()
+
+        estimate = Estimate(
+            project_id=project.id, version_number=1, kind="initial", currency_code="EUR"
+        )
+        session.add(estimate)
+        session.flush()
+
+        line = EstimateLine(
+            estimate_id=estimate.id,
+            role_id=role.id,
+            task_name="Tache",
+            role_code=role_code,
+            role_name=role.name,
+            accounting_code=cost_category.accounting_code,
+            year=2026,
+            quantity=Decimal("1"),
+            hours=Decimal("10"),
+            hourly_rate=Decimal("50"),
+            inflation_coefficient=Decimal("1"),
+            budget_cost=Decimal("500"),
+        )
+        session.add(line)
+        session.commit()
+
+
 @pytest.fixture
 def postgres_database_url() -> Generator[str]:
     admin_url = postgres_admin_url()
@@ -100,9 +180,12 @@ def test_migration_upgrade_creates_expected_schema() -> None:
             planning_columns = {column["name"] for column in inspector.get_columns("wf_planning")}
             assert "structure_draft_json" in planning_columns
 
+            role_columns = {column["name"] for column in inspector.get_columns("wf_resource_role")}
+            assert "code" not in role_columns
+
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260829_0002"
+                == "20260831_0003"
             )
 
 
@@ -191,7 +274,7 @@ def test_calendar_migration_is_reversible() -> None:
         database_path = Path(temporary_directory) / "migration.db"
         database_url = f"sqlite+pysqlite:///{database_path}"
         _run_alembic(database_url, "head")
-        _downgrade_alembic(database_url, "-1")
+        _downgrade_alembic(database_url, "20260823_0001")
 
         with _disposable_engine(database_url) as engine, engine.connect() as connection:
             inspector = inspect(connection)
@@ -212,6 +295,128 @@ def test_calendar_migration_is_reversible() -> None:
             assert "wf_calendar" in inspector.get_table_names()
             role_columns = {column["name"] for column in inspector.get_columns("wf_resource_role")}
             assert "calendar_id" in role_columns
+
+
+def test_resource_role_code_removal_migration_is_reversible() -> None:
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "migration.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        _run_alembic(database_url, "head")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            inspector = inspect(connection)
+            role_columns = {column["name"] for column in inspector.get_columns("wf_resource_role")}
+            assert "code" not in role_columns
+
+        # Seed two roles (past the point "code" was dropped) so the downgrade below is
+        # exercised against a table with more than one row: a static server_default for
+        # the resurrected "code" column would give every row the same value and blow up
+        # the unique constraint the downgrade re-creates.
+        with _disposable_engine(database_url) as engine, engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO wf_cost_type "
+                    "(id, code, name, kind, is_active, created_at, updated_at) "
+                    "VALUES (1, 'MO', 'Main d''oeuvre', 'labor', 1, "
+                    "'2026-01-01 00:00:00', '2026-01-01 00:00:00')"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO wf_cost_category (id, cost_type_id, accounting_code, name, "
+                    "is_active, created_at, updated_at) VALUES (1, 1, 'DEV', 'Developpement', 1, "
+                    "'2026-01-01 00:00:00', '2026-01-01 00:00:00')"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO wf_resource_node (id, code, name, is_active, "
+                    "created_at, updated_at) VALUES (1, 'IT', 'Informatique', 1, "
+                    "'2026-01-01 00:00:00', '2026-01-01 00:00:00')"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO wf_resource_role "
+                    "(id, node_id, cost_category_id, name, is_active, created_at, updated_at) "
+                    "VALUES "
+                    "(1, 1, 1, 'Developpeur', 1, '2026-01-01 00:00:00', '2026-01-01 00:00:00'), "
+                    "(2, 1, 1, 'Architecte', 1, '2026-01-01 00:00:00', '2026-01-01 00:00:00')"
+                )
+            )
+
+        _downgrade_alembic(database_url, "20260829_0002")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            inspector = inspect(connection)
+            role_columns = {column["name"] for column in inspector.get_columns("wf_resource_role")}
+            assert "code" in role_columns
+            unique_constraints = inspector.get_unique_constraints("wf_resource_role")
+            assert any(constraint["column_names"] == ["code"] for constraint in unique_constraints)
+            assert (
+                connection.scalar(text("SELECT version_num FROM alembic_version"))
+                == "20260829_0002"
+            )
+
+            codes = connection.execute(
+                text("SELECT id, code FROM wf_resource_role ORDER BY id")
+            ).all()
+            assert [row[0] for row in codes] == [1, 2]
+            role_codes = [row[1] for row in codes]
+            assert all(role_codes), "downgraded roles must keep a non-empty code"
+            assert len(set(role_codes)) == len(role_codes), "downgraded role codes must be unique"
+
+        _run_alembic(database_url, "head")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            inspector = inspect(connection)
+            role_columns = {column["name"] for column in inspector.get_columns("wf_resource_role")}
+            assert "code" not in role_columns
+
+
+def test_resource_role_code_removal_downgrade_rejects_long_role_code() -> None:
+    """Regression guard for the truncation risk flagged on #46's downgrade path: since
+    role_code is now derived from ResourceRole.name (up to 255 chars) instead of the
+    removed ResourceRole.code (64 chars), an existing wf_estimate_line row can hold a
+    role_code longer than 64 characters. Downgrading must refuse rather than silently
+    truncate it."""
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "migration.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        _run_alembic(database_url, "head")
+
+        _seed_estimate_line(database_url, role_code="R" * 100)
+
+        with pytest.raises(subprocess.CalledProcessError):
+            _downgrade_alembic(database_url, "-1")
+
+        # The rejected downgrade must not have applied: schema and data untouched.
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            assert (
+                connection.scalar(text("SELECT version_num FROM alembic_version"))
+                == "20260831_0003"
+            )
+            assert connection.scalar(text("SELECT role_code FROM wf_estimate_line")) == "R" * 100
+
+
+def test_resource_role_code_removal_downgrade_succeeds_with_short_role_code() -> None:
+    """Nominal counterpart to the rejection test above: a role_code within the old
+    64-character limit must still downgrade successfully, with the value preserved."""
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "migration.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        _run_alembic(database_url, "head")
+
+        _seed_estimate_line(database_url, role_code="R" * 50)
+
+        _downgrade_alembic(database_url, "-1")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            assert (
+                connection.scalar(text("SELECT version_num FROM alembic_version"))
+                == "20260829_0002"
+            )
+            assert connection.scalar(text("SELECT role_code FROM wf_estimate_line")) == "R" * 50
 
 
 def test_migration_downgrade_drops_all_tables() -> None:
@@ -292,7 +497,7 @@ def test_postgres_migration_upgrade_head_succeeds(postgres_database_url: str) ->
             "wf_estimate",
             "wf_estimate_task_row",
         }.issubset(table_names)
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260829_0002"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260831_0003"
 
 
 def test_postgres_migration_is_reversible(postgres_database_url: str) -> None:
@@ -312,3 +517,29 @@ def test_postgres_migration_is_reversible(postgres_database_url: str) -> None:
         assert "ms_project" in table_names
         assert "wf_planning" in table_names
         assert "wf_estimate" in table_names
+
+
+def test_postgres_estimate_line_role_code_accepts_long_role_name(
+    postgres_database_url: str,
+) -> None:
+    """Empirical regression test for #46's original bug: validating an estimate whose
+    role name exceeds 64 characters used to raise an uncaught DataError, because
+    wf_estimate_line.role_code was String(64) while it is derived from
+    ResourceRole.name (String(255)) in
+    waterfall.services.estimate_calculation._generate_labor_lines.
+
+    SQLite does not enforce VARCHAR length, so only a real PostgreSQL run can prove the
+    widened column (String(255), see the 20260831_0003 migration) actually accepts and
+    stores a long role name without truncation or error."""
+    _run_alembic(postgres_database_url, "head")
+
+    long_role_name = "R" * 200  # well past the pre-fix 64-char limit, within the new 255
+    assert len(long_role_name) == 200
+
+    # Must not raise psycopg.errors.DataError / sqlalchemy.exc.DataError.
+    _seed_estimate_line(postgres_database_url, role_code=long_role_name, role_name=long_role_name)
+
+    with _disposable_engine(postgres_database_url) as engine, engine.connect() as connection:
+        stored_role_code = connection.scalar(text("SELECT role_code FROM wf_estimate_line"))
+        assert stored_role_code == long_role_name
+        assert len(stored_role_code) == 200

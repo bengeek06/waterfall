@@ -394,7 +394,7 @@ def list_roles(
             query = query.filter(ResourceRole.node_id.in_(_descendant_node_ids(db, node_id)))
         else:
             query = query.filter(ResourceRole.node_id == node_id)
-    return query.order_by(ResourceRole.code).all()
+    return query.order_by(ResourceRole.name).all()
 
 
 @router.post("/roles", response_model=ResourceRoleRead, status_code=status.HTTP_201_CREATED)
@@ -409,7 +409,7 @@ def create_role(
         _get_active_calendar_or_400(db, payload.calendar_id)
     role = ResourceRole(**payload.model_dump())
     db.add(role)
-    _commit(db, "Resource role code already exists")
+    _commit(db, "Resource role creation conflicts with existing data")
     db.refresh(role)
     return role
 

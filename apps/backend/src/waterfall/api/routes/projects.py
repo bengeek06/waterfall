@@ -627,7 +627,7 @@ def _to_task_role_assignment_read(
         id=assignment.id,
         task_id=assignment.task_id,
         role_id=role.id,
-        role_code=role.code,
+        role_code=role.name,
         role_name=role.name,
         cost_category_id=category.id,
         accounting_code=category.accounting_code,
@@ -2190,7 +2190,7 @@ def list_task_role_assignments(
         .join(ResourceRole, TaskRoleAssignment.role_id == ResourceRole.id)
         .join(CostCategory, ResourceRole.cost_category_id == CostCategory.id)
         .filter(TaskRoleAssignment.task_id == task.id)
-        .order_by(ResourceRole.code)
+        .order_by(ResourceRole.name)
         .all()
     )
     return [

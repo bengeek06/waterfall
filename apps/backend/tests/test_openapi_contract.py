@@ -261,6 +261,12 @@ def test_resource_calendar_contract_matches_runtime_shapes() -> None:
             _schema_property_names(runtime_schemas[schema_name], runtime_schemas)
         )
 
+    # ResourceRole no longer has a `code` field (issue #46): accounting_code is derived
+    # from cost_category.accounting_code instead, never from a role-owned code proxy.
+    for schema_name in ("ResourceRoleCreate", "ResourceRoleRead"):
+        assert "code" not in _schema_property_names(static_schemas[schema_name], static_schemas)
+        assert "code" not in _schema_property_names(runtime_schemas[schema_name], runtime_schemas)
+
 
 def test_move_planning_tasks_documents_all_not_found_resources() -> None:
     raw_document: object = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))

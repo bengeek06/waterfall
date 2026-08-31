@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, type Calendar, type ResourceRole } from "@/lib/backend";
+import { ApiError, type Calendar, type ResourceNode, type ResourceRole } from "@/lib/backend";
 import { defaultWeekdays } from "@/components/calendars-table";
 
 const mocks = vi.hoisted(() => ({
@@ -75,9 +75,15 @@ const inactiveCalendar: Calendar = {
   weekdays: [],
 };
 
+const nodeFixture: ResourceNode = {
+  id: 1,
+  code: "IT",
+  name: "Informatique",
+  parent_id: null,
+} as never;
+
 const roleFixture: ResourceRole = {
   id: 10,
-  code: "DEV",
   name: "Développeur",
   node_id: 1,
   cost_category_id: 1,
@@ -85,8 +91,8 @@ const roleFixture: ResourceRole = {
   is_active: true,
 } as never;
 
-async function renderResourcesTab(calendars: Calendar[], roles: ResourceRole[] = []) {
-  mocks.getResourceNodes.mockResolvedValue([]);
+async function renderResourcesTab(calendars: Calendar[], roles: ResourceRole[] = [], nodes: ResourceNode[] = []) {
+  mocks.getResourceNodes.mockResolvedValue(nodes);
   mocks.getResourceRoles.mockResolvedValue(roles);
   mocks.getCalendars.mockResolvedValue(calendars);
   mocks.getCostTypes.mockResolvedValue([]);
@@ -232,9 +238,9 @@ describe("ResourcesPage calendar mutations", () => {
     };
     const updatedRole: ResourceRole = { ...roleFixture, calendar_id: otherCalendar.id } as never;
     mocks.updateResourceRole.mockResolvedValue(updatedRole);
-    await renderResourcesTab([activeCalendar, otherCalendar], [roleFixture]);
+    await renderResourcesTab([activeCalendar, otherCalendar], [roleFixture], [nodeFixture]);
 
-    const select = screen.getByLabelText(`Calendrier de ${roleFixture.code}`);
+    const select = screen.getByLabelText(`Calendrier de ${roleFixture.name} — ${nodeFixture.code} (#${roleFixture.id})`);
     fireEvent.change(select, { target: { value: String(otherCalendar.id) } });
 
     const roleRow = select.closest("tr");

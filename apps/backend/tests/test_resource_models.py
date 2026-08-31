@@ -44,7 +44,6 @@ def _seed_resource_graph() -> tuple[int, int, int]:
         role = ResourceRole(
             node_id=node.id,
             cost_category_id=category.id,
-            code="DEV-SW",
             name="Developpeur",
         )
         project = MsProject(

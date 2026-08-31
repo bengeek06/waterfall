@@ -142,7 +142,6 @@ def _create_role_with_calendar(
     role_response: Response = client.post(
         "/resources/roles",
         json={
-            "code": f"DEV-{suffix}",
             "name": "Developpeur",
             "node_id": node_id,
             "cost_category_id": category_id,

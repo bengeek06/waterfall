@@ -134,10 +134,8 @@ class ResourceNodeRead(ResourceNodeBase):
 
 
 class ResourceRoleBase(BaseModel):
-    code: str = Field(min_length=1, max_length=64)
     name: str = Field(min_length=1, max_length=255)
 
-    _normalize_code = field_validator("code")(_required_text)
     _normalize_name = field_validator("name")(_required_text)
 
 

@@ -490,7 +490,6 @@ def test_delete_task_referenced_by_role_assignment_in_cascade_conflicts_without_
             role = ResourceRole(
                 node_id=node.id,
                 cost_category_id=category.id,
-                code=f"DEV-{uuid4().hex[:8]}",
                 name="Developpeur",
             )
             session.add(role)

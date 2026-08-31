@@ -453,7 +453,6 @@ def test_move_recalculates_summary_duration_from_assigned_resource_role_calendar
                 node_id=node.id,
                 cost_category_id=category.id,
                 calendar_id=calendar.id,
-                code="DEV-PARTTIME",
                 name="Developpeur temps partiel",
             )
             session.add(role)

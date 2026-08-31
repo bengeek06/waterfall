@@ -1133,7 +1133,6 @@ def test_automatic_task_uses_assigned_role_calendar_for_duration() -> None:
                 node_id=node.id,
                 cost_category_id=category.id,
                 calendar_id=calendar.id,
-                code="DEV-PARTTIME",
                 name="Developpeur temps partiel",
             )
             session.add(role)

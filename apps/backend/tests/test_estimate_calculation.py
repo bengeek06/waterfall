@@ -72,7 +72,6 @@ def _seed_resources_with_rates() -> tuple[int, dict[int, dict[int, Decimal]]]:
         labor_role = ResourceRole(
             node_id=root.id,
             cost_category_id=labor_category.id,
-            code="DEV",
             name="Développeur",
         )
         session.add(labor_role)
@@ -271,6 +270,14 @@ def test_calculate_labor_lines_spanning_years() -> None:
             assert line.hourly_rate == Decimal("100.00")
             # cost = 1 * 1000 * 100.00 * 1.0 = 100000
             assert line.budget_cost == Decimal("100000.00")
+            # accounting_code must come from cost_category.accounting_code ("MO-DEV"),
+            # never from the role itself (role.name "Développeur" looks nothing like it) -
+            # this is the acceptance criterion for issue #46. role_code is derived from
+            # role.name (not the removed ResourceRole.code column), so it must equal
+            # role.name here too.
+            assert line.role_name == "Développeur"
+            assert line.role_code == "Développeur"
+            assert line.accounting_code == "MO-DEV"
 
 
 def test_calculate_labor_lines_across_two_years() -> None:

@@ -1642,7 +1642,6 @@ export interface components {
             node_id: number;
             cost_category_id: number;
             calendar_id?: number | null;
-            code: string;
             name: string;
         };
         ResourceRoleUpdate: {

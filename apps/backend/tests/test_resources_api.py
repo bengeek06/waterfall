@@ -75,7 +75,6 @@ def test_admin_can_manage_resource_reference_data() -> None:
         role_response = client.post(
             "/resources/roles",
             json={
-                "code": "DEV-SW",
                 "name": "Developpeur",
                 "node_id": node_id,
                 "cost_category_id": category_id,
@@ -120,7 +119,29 @@ def test_admin_can_manage_resource_reference_data() -> None:
         roles_response = client.get("/resources/roles?node_id=" + str(node_id), headers=headers)
         assert roles_response.status_code == 200
         roles = cast(list[dict[str, Any]], roles_response.json())
-        assert [role["code"] for role in roles] == ["DEV-SW"]
+        assert [role["name"] for role in roles] == ["Developpeur"]
+
+
+def test_role_creation_succeeds_without_code() -> None:
+    """ResourceRole no longer has a `code` field (issue #46): creating a role
+    with a payload that omits `code` entirely must succeed."""
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        context = _create_role_context(client, headers, "NOCODE")
+
+        response: Response = client.post(
+            "/resources/roles",
+            json={
+                "name": "Developpeur",
+                "node_id": context["node_id"],
+                "cost_category_id": context["cost_category_id"],
+            },
+            headers=headers,
+        )
+        assert response.status_code == 201
+        payload = cast(dict[str, Any], response.json())
+        assert "code" not in payload
+        assert payload["name"] == "Developpeur"
 
 
 def test_resource_writes_require_admin() -> None:
@@ -218,7 +239,6 @@ def test_role_creation_rejects_inactive_category() -> None:
         response: Response = client.post(
             "/resources/roles",
             json={
-                "code": "DEV-INACTIVE",
                 "name": "Developpeur",
                 "node_id": node_id,
                 "cost_category_id": category_id,
@@ -269,7 +289,6 @@ def test_category_type_change_blocked_when_in_use() -> None:
         client.post(
             "/resources/roles",
             json={
-                "code": "DEV-U",
                 "name": "Developpeur",
                 "node_id": node_id,
                 "cost_category_id": category_id,
@@ -526,7 +545,6 @@ def test_calendar_delete_deactivates_and_blocks_when_assigned() -> None:
         role_response: Response = client.post(
             "/resources/roles",
             json={
-                "code": "DEV-CAL",
                 "name": "Developpeur",
                 "node_id": context["node_id"],
                 "cost_category_id": context["cost_category_id"],
@@ -581,7 +599,6 @@ def test_calendar_patch_deactivate_blocks_when_assigned() -> None:
         role_response: Response = client.post(
             "/resources/roles",
             json={
-                "code": "DEV-CAL-PATCH",
                 "name": "Developpeur",
                 "node_id": context["node_id"],
                 "cost_category_id": context["cost_category_id"],
@@ -628,7 +645,6 @@ def test_role_rejects_unknown_or_inactive_calendar() -> None:
         unknown: Response = client.post(
             "/resources/roles",
             json={
-                "code": "DEV-UNKNOWN-CAL",
                 "name": "Developpeur",
                 "node_id": context["node_id"],
                 "cost_category_id": context["cost_category_id"],
@@ -655,7 +671,6 @@ def test_role_rejects_unknown_or_inactive_calendar() -> None:
         inactive: Response = client.post(
             "/resources/roles",
             json={
-                "code": "DEV-INACTIVE-CAL",
                 "name": "Developpeur",
                 "node_id": context["node_id"],
                 "cost_category_id": context["cost_category_id"],
@@ -671,7 +686,6 @@ def test_role_rejects_unknown_or_inactive_calendar() -> None:
             client.post(
                 "/resources/roles",
                 json={
-                    "code": "DEV-OK-CAL",
                     "name": "Developpeur",
                     "node_id": context["node_id"],
                     "cost_category_id": context["cost_category_id"],
@@ -714,7 +728,6 @@ def test_role_reactivation_revalidates_effective_calendar() -> None:
             client.post(
                 "/resources/roles",
                 json={
-                    "code": "DEV-REACT",
                     "name": "Developpeur",
                     "node_id": context["node_id"],
                     "cost_category_id": context["cost_category_id"],

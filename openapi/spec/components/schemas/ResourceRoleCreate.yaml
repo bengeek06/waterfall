@@ -2,7 +2,6 @@ type: object
 required:
 - node_id
 - cost_category_id
-- code
 - name
 properties:
   node_id:
@@ -15,10 +14,6 @@ properties:
     type: integer
     minimum: 1
     nullable: true
-  code:
-    type: string
-    minLength: 1
-    maxLength: 64
   name:
     type: string
     minLength: 1
