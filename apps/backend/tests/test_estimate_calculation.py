@@ -272,8 +272,11 @@ def test_calculate_labor_lines_spanning_years() -> None:
             assert line.budget_cost == Decimal("100000.00")
             # accounting_code must come from cost_category.accounting_code ("MO-DEV"),
             # never from the role itself (role.name "Développeur" looks nothing like it) -
-            # this is the acceptance criterion for issue #46.
+            # this is the acceptance criterion for issue #46. role_code is derived from
+            # role.name (not the removed ResourceRole.code column), so it must equal
+            # role.name here too.
             assert line.role_name == "Développeur"
+            assert line.role_code == "Développeur"
             assert line.accounting_code == "MO-DEV"
 
 
