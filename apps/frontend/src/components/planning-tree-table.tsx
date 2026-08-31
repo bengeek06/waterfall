@@ -732,11 +732,20 @@ export function PlanningTreeTable({
     for (const row of linkRows) {
       const trimmedLag = row.lagMinutes.trim();
       const lagMinutesValue = trimmedLag === "" ? 0 : Number(trimmedLag);
-      if (!Number.isFinite(lagMinutesValue)) {
+      // Checked after scaling, not on lagMinutesValue alone: a finite input large enough
+      // (e.g. 1e308) overflows to Infinity once multiplied by 10, which JSON.stringify
+      // would then silently turn into null instead of the entered value. The upper/lower
+      // bounds mirror the backend's lag_tenth_minute range (a PostgreSQL Integer column),
+      // so an out-of-range value is rejected here instead of via an avoidable failed request.
+      const lagTenthMinute = Math.round(lagMinutesValue * 10);
+      if (
+        !Number.isFinite(lagTenthMinute) ||
+        lagTenthMinute < -2_147_483_648 ||
+        lagTenthMinute > 2_147_483_647
+      ) {
         setLinkFormError("Le décalage doit être un nombre de minutes valide.");
         return;
       }
-      const lagTenthMinute = Math.round(lagMinutesValue * 10);
       links.push({
         predecessor_uid: row.predecessorUid as number,
         link_type: row.linkType,

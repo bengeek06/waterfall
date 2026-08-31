@@ -1096,6 +1096,43 @@ describe("PlanningTreeTable", () => {
       ).toBeInTheDocument();
     });
 
+    it("rejects a lag so large it would overflow to Infinity once scaled to tenths of a minute", () => {
+      const onEditLinks = vi.fn();
+      const tasksWithoutLinks: Task[] = [
+        task({ uid: 1, name: "Poste", parent_uid: null, position: 1 }),
+        task({ uid: 2, name: "Lot", parent_uid: null, position: 2 }),
+      ];
+      render(<PlanningTreeTable tasks={tasksWithoutLinks} versionKey={1} onEditLinks={onEditLinks} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Éditer les prédécesseurs de Lot" }));
+      fireEvent.click(screen.getByRole("button", { name: "Ajouter une ligne" }));
+      fireEvent.change(screen.getByLabelText("Tâche prédécesseure"), { target: { value: "1" } });
+      fireEvent.change(screen.getByLabelText("Décalage en minutes"), { target: { value: "1e308" } });
+      fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+
+      expect(onEditLinks).not.toHaveBeenCalled();
+      expect(screen.getByText("Le décalage doit être un nombre de minutes valide.")).toBeInTheDocument();
+    });
+
+    it("rejects a lag outside the backend's signed-int32 range before sending the request", () => {
+      const onEditLinks = vi.fn();
+      const tasksWithoutLinks: Task[] = [
+        task({ uid: 1, name: "Poste", parent_uid: null, position: 1 }),
+        task({ uid: 2, name: "Lot", parent_uid: null, position: 2 }),
+      ];
+      render(<PlanningTreeTable tasks={tasksWithoutLinks} versionKey={1} onEditLinks={onEditLinks} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Éditer les prédécesseurs de Lot" }));
+      fireEvent.click(screen.getByRole("button", { name: "Ajouter une ligne" }));
+      fireEvent.change(screen.getByLabelText("Tâche prédécesseure"), { target: { value: "1" } });
+      // 3e8 minutes * 10 = 3e9 tenths of a minute, past the int32 max of ~2.147e9.
+      fireEvent.change(screen.getByLabelText("Décalage en minutes"), { target: { value: "300000000" } });
+      fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+
+      expect(onEditLinks).not.toHaveBeenCalled();
+      expect(screen.getByText("Le décalage doit être un nombre de minutes valide.")).toBeInTheDocument();
+    });
+
     it("submits every row together with the full computed links payload", () => {
       const tasksWithCandidates: Task[] = [
         task({ uid: 1, name: "Poste", parent_uid: null, position: 1 }),
@@ -1132,7 +1169,7 @@ describe("PlanningTreeTable", () => {
       });
     });
 
-    it("always sends lag_format 7, even when the lag is left at its default of 0", () => {
+    it("defaults a newly added row's lag_format to 7, even when the lag is left at its default of 0", () => {
       const onEditLinks = vi.fn().mockResolvedValue(undefined);
       const tasksWithoutLinks: Task[] = [
         task({ uid: 1, name: "Poste", parent_uid: null, position: 1 }),
