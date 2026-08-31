@@ -337,7 +337,10 @@ def test_replace_links_rejects_missing_links_key() -> None:
             headers=headers,
         )
 
-        assert response.status_code == 422
+        # Registered with _PlanningTaskBodyValidationRoute, like the sibling move
+        # and schedule-update mutations, so a malformed body reports 400 -- matching
+        # this endpoint's documented OpenAPI contract -- instead of FastAPI's default 422.
+        assert response.status_code == 400
         assert _existing_links(planning_id) == []
 
 
@@ -405,3 +408,45 @@ def test_replace_links_rejects_validated_planning_and_read_only_project() -> Non
             _links_url(project_id, second_planning_id, 1), json=payload, headers=headers
         )
         assert read_only.status_code == 409
+
+
+def test_replace_links_detects_deep_cycle_without_recursion_error() -> None:
+    """A cycle detected via a long dependency chain must return 409, not crash.
+
+    The old cycle check was a recursive DFS: closing a cycle across a chain
+    longer than Python's default recursion limit (~1000) raised an uncaught
+    RecursionError -- a 500 -- instead of the documented 409. A long linear
+    predecessor chain is a realistic shape for a planning imported from a
+    large MS Project file.
+    """
+    task_count = 2000
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_planning(project_id, task_count=task_count)
+
+        # Chain: task i's predecessor is i-1, for i in 2..task_count.
+        with get_session_factory()() as session:
+            session.add_all(
+                WfPlanningLinkSnapshot(
+                    planning_id=planning_id,
+                    task_uid=uid,
+                    predecessor_uid=uid - 1,
+                    link_type=1,
+                )
+                for uid in range(2, task_count + 1)
+            )
+            session.commit()
+
+        # Close the loop: task 1's predecessor becomes task_count, so the DFS from
+        # task 1 must walk the entire chain before finding the cycle back to itself.
+        response = client.put(
+            _links_url(project_id, planning_id, 1),
+            json={"links": [{"predecessor_uid": task_count, "link_type": 1}]},
+            headers=headers,
+        )
+
+        assert response.status_code == 409
+        assert _existing_links(planning_id) == [
+            (uid, uid - 1, 1) for uid in range(2, task_count + 1)
+        ]

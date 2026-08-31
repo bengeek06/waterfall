@@ -1151,6 +1151,30 @@ describe("PlanningTreeTable", () => {
       });
     });
 
+    it("preserves an existing elapsed-time lag_format instead of rewriting it to working-time", () => {
+      const elapsedLagTasks: Task[] = [
+        task({ uid: 1, name: "Poste", parent_uid: null, position: 1 }),
+        task({
+          uid: 2,
+          name: "Lot",
+          parent_uid: null,
+          position: 2,
+          predecessor_links: [{ predecessor_uid: 1, link_type: 1, lag_tenth_minute: 50, lag_format: 8 }],
+        }),
+      ];
+      const onEditLinks = vi.fn().mockResolvedValue(undefined);
+      render(<PlanningTreeTable tasks={elapsedLagTasks} versionKey={1} onEditLinks={onEditLinks} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Éditer les prédécesseurs de Lot" }));
+      fireEvent.change(screen.getByLabelText("Décalage en minutes"), { target: { value: "10" } });
+      fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+
+      expect(onEditLinks).toHaveBeenCalledWith({
+        taskUid: 2,
+        links: [{ predecessor_uid: 1, link_type: 1, lag_tenth_minute: 100, lag_format: 8 }],
+      });
+    });
+
     it("disables every dialog control while a submission is in flight", async () => {
       let resolveSubmit!: () => void;
       const onEditLinks = vi.fn().mockImplementation(

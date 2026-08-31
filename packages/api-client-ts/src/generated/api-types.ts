@@ -1719,8 +1719,13 @@ export interface components {
         TaskLinkWrite: {
             predecessor_uid: number;
             link_type: number;
+            /** Format: int32 */
             lag_tenth_minute?: number | null;
-            lag_format?: number | null;
+            /**
+             * @description MSPDI LagFormat code. See the "e" prefix convention documented in waterfall.services.planning_tree for which values denote elapsed (raw wall-clock) vs. working-time lag.
+             * @enum {integer|null}
+             */
+            lag_format?: 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 19 | 20 | 35 | 36 | 37 | 38 | 39 | 40 | 41 | 42 | 43 | 44 | 51 | 52 | null;
         };
         TaskLinksReplace: {
             links: components["schemas"]["TaskLinkWrite"][];

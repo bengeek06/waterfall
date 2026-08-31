@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Planning, PlanningDetail, Project } from "@/lib/backend";
+import { ApiError, type Planning, type PlanningDetail, type Project } from "@/lib/backend";
 
 const mocks = vi.hoisted(() => ({
   getProject: vi.fn(),
@@ -807,6 +807,41 @@ describe("ProjectDetailsPage planning lifecycle", () => {
 
     expect(screen.queryByText("Réponse obsolète")).not.toBeInTheDocument();
     expect(screen.getByText("Tâche 2")).toBeInTheDocument();
+  });
+
+  it("reports a project-read-only conflict distinctly from a cycle conflict", async () => {
+    const draft = planning({ id: 2, status: "draft" });
+    const siblingsDetail: PlanningDetail = {
+      ...draft,
+      tasks: [
+        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second", position: 2, parent_uid: null },
+      ],
+      links: [],
+    };
+    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draft.id }));
+    mocks.listPlannings.mockResolvedValue([draft]);
+    mocks.getPlanning.mockResolvedValue(siblingsDetail);
+    mocks.replaceTaskPredecessorLinks.mockRejectedValue(
+      new ApiError(409, "Project is read-only in its current status"),
+    );
+
+    render(<ProjectDetailsPage />);
+
+    await screen.findByText("Second");
+    fireEvent.click(screen.getByRole("button", { name: "Éditer les prédécesseurs de Second" }));
+    fireEvent.click(screen.getByRole("button", { name: "Ajouter une ligne" }));
+    fireEvent.change(screen.getByLabelText("Tâche prédécesseure"), { target: { value: "10" } });
+    fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+
+    // Rendered both by the page-level error banner and by the dialog's own inline error
+    // (editTaskPredecessorLinksSelection sets both from the same message).
+    await waitFor(() =>
+      expect(
+        screen.getAllByText("Le projet est passé en lecture seule et ne peut plus être modifié."),
+      ).not.toHaveLength(0),
+    );
+    expect(screen.queryByText("Cette combinaison de prédécesseurs créerait un cycle dans le planning.")).not.toBeInTheDocument();
   });
 
   it("ignores a predecessor links response for a planning that is no longer selected", async () => {

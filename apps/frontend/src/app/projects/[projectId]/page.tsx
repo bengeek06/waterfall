@@ -98,7 +98,13 @@ function describePredecessorLinksError(cause: unknown): string {
     if (cause.message.includes("is not a draft")) {
       return "Le planning n'est plus modifiable (il a été validé entre-temps).";
     }
-    return "Cette combinaison de prédécesseurs créerait un cycle dans le planning.";
+    if (cause.message.includes("read-only")) {
+      return "Le projet est passé en lecture seule et ne peut plus être modifié.";
+    }
+    if (cause.message.includes("cycle")) {
+      return "Cette combinaison de prédécesseurs créerait un cycle dans le planning.";
+    }
+    return "Cette modification entre en conflit avec l'état actuel du planning.";
   }
   if (cause.status === 400) {
     if (cause.message.includes("own predecessor")) {

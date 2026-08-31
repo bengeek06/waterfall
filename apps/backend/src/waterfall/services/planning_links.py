@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Iterator
 
 from sqlalchemy.orm import Session
 
@@ -21,22 +22,33 @@ class PlanningLinkInvariantError(PlanningLinkError):
 
 
 def _validate_no_cycles(edges: dict[int, list[int]]) -> None:
+    # Iterative DFS with an explicit stack: a recursive version would raise
+    # RecursionError -- an uncaught 500 -- on a long but valid dependency
+    # chain near Python's recursion limit, which a large imported planning
+    # can plausibly reach.
     visited: set[int] = set()
-    visiting: set[int] = set()
 
-    def visit(task_uid: int) -> None:
-        if task_uid in visiting:
-            raise PlanningLinkInvariantError("Planning predecessor links contain a cycle")
-        if task_uid in visited:
-            return
-        visiting.add(task_uid)
-        for predecessor_uid in edges.get(task_uid, []):
-            visit(predecessor_uid)
-        visiting.remove(task_uid)
-        visited.add(task_uid)
-
-    for task_uid in edges:
-        visit(task_uid)
+    for start_uid in edges:
+        if start_uid in visited:
+            continue
+        visiting: set[int] = set()
+        # Each stack frame is (task_uid, iterator over its remaining predecessors).
+        stack: list[tuple[int, Iterator[int]]] = [(start_uid, iter(edges.get(start_uid, [])))]
+        visiting.add(start_uid)
+        while stack:
+            task_uid, predecessors = stack[-1]
+            predecessor_uid = next(predecessors, None)
+            if predecessor_uid is None:
+                visiting.discard(task_uid)
+                visited.add(task_uid)
+                stack.pop()
+                continue
+            if predecessor_uid in visiting:
+                raise PlanningLinkInvariantError("Planning predecessor links contain a cycle")
+            if predecessor_uid in visited:
+                continue
+            visiting.add(predecessor_uid)
+            stack.append((predecessor_uid, iter(edges.get(predecessor_uid, []))))
 
 
 def replace_task_predecessor_links(

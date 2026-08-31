@@ -1006,24 +1006,6 @@ router.add_api_route(
 )
 
 
-@router.put(
-    "/{project_id}/plannings/{planning_id}/tasks/{task_uid}/links",
-    response_model=PlanningDetailRead,
-    responses={
-        status.HTTP_400_BAD_REQUEST: {
-            "model": FastAPIErrorResponse,
-            "description": "Requete de mise a jour des liens invalide",
-        },
-        status.HTTP_404_NOT_FOUND: {
-            "model": FastAPIErrorResponse,
-            "description": "Projet, planning ou tache introuvable pendant la mise a jour des liens",
-        },
-        status.HTTP_409_CONFLICT: {
-            "model": FastAPIErrorResponse,
-            "description": "La mise a jour des liens entre en conflit avec le planning",
-        },
-    },
-)
 def replace_task_predecessor_links_route(
     project_id: int,
     planning_id: int,
@@ -1057,6 +1039,29 @@ def replace_task_predecessor_links_route(
             detail="Planning links conflict with existing planning data",
         ) from exc
     return detail
+
+
+router.add_api_route(
+    "/{project_id}/plannings/{planning_id}/tasks/{task_uid}/links",
+    replace_task_predecessor_links_route,
+    methods=["PUT"],
+    response_model=PlanningDetailRead,
+    responses={
+        status.HTTP_400_BAD_REQUEST: {
+            "model": FastAPIErrorResponse,
+            "description": "Requete de mise a jour des liens invalide",
+        },
+        status.HTTP_404_NOT_FOUND: {
+            "model": FastAPIErrorResponse,
+            "description": "Projet, planning ou tache introuvable pendant la mise a jour des liens",
+        },
+        status.HTTP_409_CONFLICT: {
+            "model": FastAPIErrorResponse,
+            "description": "La mise a jour des liens entre en conflit avec le planning",
+        },
+    },
+    route_class_override=_PlanningTaskBodyValidationRoute,
+)
 
 
 @router.post("/{project_id}/plannings/{planning_id}/validate", response_model=PlanningRead)

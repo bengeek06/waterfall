@@ -4050,10 +4050,37 @@ components:
           maximum: 3
         lag_tenth_minute:
           type: integer
+          format: int32
           nullable: true
         lag_format:
           type: integer
           nullable: true
+          description: MSPDI LagFormat code. See the "e" prefix convention documented in waterfall.services.planning_tree for which values denote elapsed (raw wall-clock) vs. working-time lag.
+          enum:
+            - 3
+            - 4
+            - 5
+            - 6
+            - 7
+            - 8
+            - 9
+            - 10
+            - 11
+            - 12
+            - 19
+            - 20
+            - 35
+            - 36
+            - 37
+            - 38
+            - 39
+            - 40
+            - 41
+            - 42
+            - 43
+            - 44
+            - 51
+            - 52
     TaskLinksReplace:
       type: object
       required:

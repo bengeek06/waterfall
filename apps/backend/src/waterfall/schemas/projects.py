@@ -109,11 +109,24 @@ class PlanningLinkRead(TaskLinkRead):
     task_uid: int
 
 
+# MSPDI LagFormat legal values (see waterfall.services.planning_tree's own
+# documentation of this same enumeration, sourced from the bundled MS Project
+# schema). Constrained here -- not just range-bound to the SmallInteger
+# storage column -- so an out-of-domain value is rejected as a 400 instead of
+# reaching the database as a syntactically valid but meaningless code.
+MspdiLagFormat = Literal[
+    3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 19, 20, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 51, 52
+]
+
+
 class TaskLinkWrite(BaseModel):
     predecessor_uid: int = Field(ge=1)
     link_type: int = Field(ge=0, le=3)
-    lag_tenth_minute: int | None = None
-    lag_format: int | None = None
+    # Bounded to fit wf_planning_link_snapshot.lag_tenth_minute (PostgreSQL Integer),
+    # so an out-of-range value is rejected as a 400 instead of reaching the database
+    # as an uncaught DataError (see models/planning.py).
+    lag_tenth_minute: int | None = Field(default=None, ge=-2_147_483_648, le=2_147_483_647)
+    lag_format: MspdiLagFormat | None = None
 
 
 class TaskLinksReplace(BaseModel):
