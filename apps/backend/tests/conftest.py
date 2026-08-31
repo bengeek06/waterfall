@@ -25,9 +25,25 @@ def prepare_test_environment():
     get_engine.cache_clear()
     get_session_factory.cache_clear()
 
-    # Schema is created once for the whole session; reset_database (below) empties
-    # rows between tests instead of paying a fresh DROP+CREATE DDL cycle per test.
-    Base.metadata.create_all(bind=get_engine())
+    # Schema is dropped and recreated once for the whole session -- not per test, as
+    # before -- so switching branches or pulling in a model change still gets a schema
+    # that actually matches the current models. test.db is a real, gitignored file that
+    # survives between separate local pytest invocations; create_all() alone only adds
+    # tables that don't exist yet, it never migrates an existing table for a column or
+    # constraint change, so a stale file could otherwise silently run tests against an
+    # outdated schema. reset_database (below) then just empties rows between tests.
+    engine = get_engine()
+    is_sqlite = engine.dialect.name == "sqlite"
+    with engine.connect() as connection:
+        if is_sqlite:
+            # See reset_database's comment on this cycle and the pragma/transaction gotcha.
+            connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        Base.metadata.drop_all(bind=connection)
+        connection.commit()
+        if is_sqlite:
+            connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+            connection.commit()
+    Base.metadata.create_all(bind=engine)
 
     yield
 
