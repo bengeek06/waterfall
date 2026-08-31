@@ -35,11 +35,23 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # role_code is now derived from ResourceRole.name (up to 255 chars), so an existing
+    # wf_estimate_line row may already hold a value longer than the pre-fix String(64)
+    # limit. Refuse the downgrade rather than silently truncating that data; the caller
+    # must shorten/clear the offending rows manually before downgrading.
+    connection = op.get_bind()
+    long_role_code_count = connection.execute(
+        sa.text("SELECT COUNT(*) FROM wf_estimate_line WHERE LENGTH(role_code) > 64")
+    ).scalar()
+    if long_role_code_count:
+        raise RuntimeError(
+            f"Cannot downgrade: {long_role_code_count} wf_estimate_line row(s) have a "
+            "role_code longer than 64 characters. Downgrading would silently truncate "
+            "this data. Manually shorten or clear the affected role_code values before "
+            "downgrading."
+        )
+
     with op.batch_alter_table("wf_estimate_line") as batch_op:
-        # NOTE: if any role_code value exceeds 64 characters (possible now that it is
-        # derived from ResourceRole.name, up to 255 chars), this downgrade will truncate
-        # or fail depending on the backend. Not worse than the pre-fix state, where the
-        # column was already String(64) and silently truncating was the status quo.
         batch_op.alter_column(
             "role_code",
             existing_type=sa.String(255),
