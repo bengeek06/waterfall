@@ -828,15 +828,24 @@ def test_automatic_task_missing_lag_format_keeps_raw_wall_clock_arithmetic() -> 
         assert leaf["finish_at"] == "2026-01-05T14:30:00"
 
 
-def test_automatic_task_finish_finish_predecessor_uses_documented_raw_minute_approximation() -> (
-    None
-):
-    """FF (link_type=0) known v1 limitation: the successor's start is derived
-    from the predecessor's finish date using raw wall-clock minute
-    arithmetic (predecessor.finish_at + lag - duration_minutes), not a true
-    calendar-aware backward walk. This test freezes that documented
-    behaviour, see ``_resolve_predecessor_constraints`` in
-    ``waterfall.services.planning_tree``."""
+def test_automatic_task_finish_finish_predecessor_resolves_exact_calendar_aware_start() -> None:
+    """6th/7th E3-03 PR review rounds: FF (link_type=0) is no longer
+    approximated with raw wall-clock arithmetic. The successor's start is
+    derived exactly: the predecessor's finish_at is offset by the (here
+    zero, elapsed-format) lag via ``_resolve_lag_offset`` to get the
+    successor's target finish date, which ``compute_start_at`` then converts
+    into a start constraint given the successor's own duration -- see
+    ``_resolve_predecessor_constraints`` in ``waterfall.services.planning_tree``.
+
+    No ``Calendar`` rows exist in this test's fresh schema, so the task's
+    calendar resolves to the wall-clock fallback (24h/day, every day
+    working, see ``calendar_schedule.ResolvedCalendar``), which makes the new
+    exact calendar-aware computation numerically coincide with the old raw
+    wall-clock approximation it replaces -- this test's values are unchanged
+    from before the fix, but for a different, now-exact, reason; the
+    weekend-crossing test below is what actually exercises the fix's
+    calendar-awareness.
+    """
     with TestClient(app) as client:
         headers = _auth_headers(client)
         project_id = _create_project(client, headers)
@@ -851,14 +860,17 @@ def test_automatic_task_finish_finish_predecessor_uses_documented_raw_minute_app
 
         assert response.status_code == 200
         leaf = _tasks_by_uid(cast(dict[str, Any], response.json()))[3]
-        # Predecessor A finishes at 10:00; 10:00 + 0 lag - 240 min = 06:00.
+        # Predecessor A finishes at 10:00; target finish = 10:00 + 0 lag =
+        # 10:00; compute_start_at(10:00, 240 min) = 06:00 under the 24h/day
+        # wall-clock fallback calendar.
         assert leaf["start_at"] == "2026-01-05T06:00:00"
         assert leaf["finish_at"] == "2026-01-05T10:00:00"
 
 
-def test_automatic_task_start_finish_predecessor_uses_documented_raw_minute_approximation() -> None:
-    """SF (link_type=2) known v1 limitation, mirroring the FF test above but
-    anchored on the predecessor's start_at instead of its finish_at."""
+def test_automatic_task_start_finish_predecessor_resolves_exact_calendar_aware_start() -> None:
+    """SF (link_type=2) counterpart of the FF test above, anchored on the
+    predecessor's start_at instead of its finish_at -- also now exact and
+    calendar-aware rather than a raw wall-clock approximation."""
     with TestClient(app) as client:
         headers = _auth_headers(client)
         project_id = _create_project(client, headers)
@@ -873,9 +885,127 @@ def test_automatic_task_start_finish_predecessor_uses_documented_raw_minute_appr
 
         assert response.status_code == 200
         leaf = _tasks_by_uid(cast(dict[str, Any], response.json()))[3]
-        # Predecessor B starts at 12:00; 12:00 + 30 min lag - 240 min = 08:30.
+        # Predecessor B starts at 12:00; target finish = 12:00 + 30 min lag =
+        # 12:30; compute_start_at(12:30, 240 min) = 08:30 under the 24h/day
+        # wall-clock fallback calendar.
         assert leaf["start_at"] == "2026-01-05T08:30:00"
         assert leaf["finish_at"] == "2026-01-05T12:30:00"
+
+
+def test_automatic_task_finish_finish_predecessor_resolves_through_calendar_skipping_weekend() -> (
+    None
+):
+    """FF working-time lag now resolves through the applicable calendar,
+    exactly mirroring
+    ``test_automatic_task_working_day_lag_format_resolves_through_calendar_skipping_weekend``
+    for FS: predecessor A is moved to finish on a Friday, and a 2-working-day
+    lag (exceeding a single day's capacity) skips the weekend when computing
+    the successor's target finish date.
+
+    Manually verified: target finish = ``_resolve_lag_offset(Friday 08:00,
+    840 min, lag_format=7)`` = Friday's 420 min capacity consumed first,
+    Sat/Sun contribute nothing, the remaining 420 min consumed on Monday ->
+    Monday 15:00:00 (identical to the FS test's predecessor-finish-derived
+    constraint, since it is the exact same offset operation). The successor's
+    60-minute duration is then walked *backward* from that target finish via
+    ``compute_start_at`` -- entirely within Monday's own capacity -> start_at
+    = Monday 14:00:00, finish_at = Monday 15:00:00 (round-trips back to the
+    target finish, confirming ``compute_start_at`` is ``compute_finish_at``'s
+    exact inverse here). The old raw wall-clock approximation
+    (``predecessor.finish_at + lag - duration_minutes`` = Friday 08:00 + 840
+    min - 60 min = Friday 21:00:00) would have landed on the same Friday,
+    never touching the weekend at all -- demonstrating the fix.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_hierarchy(project_id)
+        _create_standard_calendar()
+        with get_session_factory()() as session:
+            predecessor = (
+                session.query(WfPlanningTaskSnapshot)
+                .filter(WfPlanningTaskSnapshot.planning_id == planning_id)
+                .filter(WfPlanningTaskSnapshot.uid == 6)
+                .one()
+            )
+            predecessor.finish_at = datetime(2026, 1, 9, 8, 0, tzinfo=UTC)  # Friday
+            session.commit()
+        # 2 working days = 2 * 7h * 60 min = 840 min = 8400 tenths of a minute.
+        _add_link(
+            planning_id,
+            task_uid=3,
+            predecessor_uid=6,
+            link_type=0,
+            lag_tenth_minute=8400,
+            lag_format=7,
+        )
+
+        response = client.patch(
+            _schedule_path(project_id, planning_id, 3),
+            json={"is_manual": False, "duration_minutes": 60},
+            headers=headers,
+        )
+
+        assert response.status_code == 200
+        leaf = _tasks_by_uid(cast(dict[str, Any], response.json()))[3]
+        assert leaf["start_at"] == "2026-01-12T14:00:00"
+        assert leaf["finish_at"] == "2026-01-12T15:00:00"
+
+
+def test_automatic_task_start_finish_predecessor_resolves_through_calendar_skipping_weekend() -> (
+    None
+):
+    """SF working-time lead (negative lag) counterpart of the FF weekend test
+    above: predecessor B is moved to start on a Monday, and a -2-working-day
+    lag retreats the target finish date backward across the weekend to the
+    preceding Friday.
+
+    Manually verified: target finish = ``_resolve_lag_offset(Monday 08:00,
+    -840 min, lag_format=7)`` = Monday's own 420 min capacity consumed first
+    retreating backward, Sat/Sun contribute nothing, the remaining 420 min
+    consumed on the preceding Friday -> Friday 01:00:00 (identical to the
+    negative-lag FS test's constraint, same offset operation). The
+    successor's 60-minute duration is then walked backward from that target
+    finish via ``compute_start_at`` -- entirely within Friday's own capacity
+    -> start_at = Friday 00:00:00, finish_at = Friday 01:00:00. The old raw
+    wall-clock approximation (``predecessor.start_at + lag -
+    duration_minutes`` = Monday 08:00 - 840 min - 60 min = Sunday 17:00:00)
+    would have landed on the weekend itself -- demonstrating the fix.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_hierarchy(project_id)
+        _create_standard_calendar()
+        with get_session_factory()() as session:
+            predecessor = (
+                session.query(WfPlanningTaskSnapshot)
+                .filter(WfPlanningTaskSnapshot.planning_id == planning_id)
+                .filter(WfPlanningTaskSnapshot.uid == 7)
+                .one()
+            )
+            predecessor.start_at = datetime(2026, 1, 12, 8, 0, tzinfo=UTC)  # Monday
+            session.commit()
+        # -2 working days = -840 min = -8400 tenths of a minute.
+        _add_link(
+            planning_id,
+            task_uid=3,
+            predecessor_uid=7,
+            link_type=2,
+            lag_tenth_minute=-8400,
+            lag_format=7,
+        )
+
+        response = client.patch(
+            _schedule_path(project_id, planning_id, 3),
+            json={"is_manual": False, "duration_minutes": 60},
+            headers=headers,
+        )
+
+        assert response.status_code == 200
+        leaf = _tasks_by_uid(cast(dict[str, Any], response.json()))[3]
+        assert leaf["start_at"] == "2026-01-09T00:00:00"
+        assert leaf["finish_at"] == "2026-01-09T01:00:00"
 
 
 def test_automatic_task_uses_assigned_role_calendar_for_duration() -> None:

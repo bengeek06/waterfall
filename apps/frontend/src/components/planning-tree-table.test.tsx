@@ -394,7 +394,13 @@ describe("PlanningTreeTable", () => {
       expect(onScheduleUpdate).toHaveBeenCalledTimes(1);
       expect(onScheduleUpdate.mock.calls[0][1].start_at).toBe("2026-01-09T08:05:00.000Z");
     } finally {
-      process.env.TZ = originalTz;
+      // `process.env.TZ = undefined` would coerce to the literal string "undefined" instead of
+      // clearing the variable, leaking a bogus timezone into subsequent tests in this worker.
+      if (originalTz === undefined) {
+        delete process.env.TZ;
+      } else {
+        process.env.TZ = originalTz;
+      }
     }
   });
 
@@ -732,6 +738,82 @@ describe("PlanningTreeTable", () => {
     fireEvent.click(screen.getByLabelText("Mode de Tâche durée nulle"));
 
     expect(await screen.findByRole("option", { name: "Automatique" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  });
+
+  it("disables the automatic option for a non-milestone task with no start_at and no predecessors", async () => {
+    const onScheduleUpdate = vi.fn().mockResolvedValue(true);
+    const tasks: Task[] = [
+      task({
+        uid: 1,
+        name: "Tâche sans ancre",
+        parent_uid: null,
+        position: 1,
+        is_manual: true,
+        start_at: null,
+        finish_at: null,
+        duration_minutes: 480,
+        predecessor_links: [],
+      }),
+    ];
+    render(<PlanningTreeTable tasks={tasks} versionKey={1} onScheduleUpdate={onScheduleUpdate} />);
+
+    fireEvent.click(screen.getByLabelText("Mode de Tâche sans ancre"));
+
+    expect(await screen.findByRole("option", { name: "Automatique" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  });
+
+  it("disables the automatic option for a milestone with no start_at and no predecessors", async () => {
+    const onScheduleUpdate = vi.fn().mockResolvedValue(true);
+    const tasks: Task[] = [
+      task({
+        uid: 1,
+        name: "Jalon sans ancre",
+        parent_uid: null,
+        position: 1,
+        is_milestone: true,
+        is_manual: true,
+        start_at: null,
+        finish_at: null,
+        duration_minutes: 0,
+        predecessor_links: [],
+      }),
+    ];
+    render(<PlanningTreeTable tasks={tasks} versionKey={1} onScheduleUpdate={onScheduleUpdate} />);
+
+    fireEvent.click(screen.getByLabelText("Mode de Jalon sans ancre"));
+
+    expect(await screen.findByRole("option", { name: "Automatique" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  });
+
+  it("keeps the automatic option enabled when a task has no start_at but has a predecessor link", async () => {
+    const onScheduleUpdate = vi.fn().mockResolvedValue(true);
+    const tasks: Task[] = [
+      task({
+        uid: 1,
+        name: "Tâche avec prédécesseur",
+        parent_uid: null,
+        position: 1,
+        is_manual: true,
+        start_at: null,
+        finish_at: null,
+        duration_minutes: 480,
+        predecessor_links: [{ predecessor_uid: 2, link_type: 1, lag_tenth_minute: 0 }],
+      }),
+    ];
+    render(<PlanningTreeTable tasks={tasks} versionKey={1} onScheduleUpdate={onScheduleUpdate} />);
+
+    fireEvent.click(screen.getByLabelText("Mode de Tâche avec prédécesseur"));
+
+    expect(await screen.findByRole("option", { name: "Automatique" })).not.toHaveAttribute(
       "aria-disabled",
       "true",
     );

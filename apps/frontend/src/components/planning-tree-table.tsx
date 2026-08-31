@@ -165,6 +165,13 @@ function durationInvalidForAutomatic(task: Task): boolean {
   );
 }
 
+// _apply_automatic_schedule/_apply_automatic_milestone_schedule both require either a stored
+// start_at or at least one predecessor link to derive a start anchor; without either, the server
+// rejects the automatic scheduling with a 400 regardless of the task being a milestone or not.
+function missingStartAnchorForAutomatic(task: Task): boolean {
+  return !task.start_at && !task.predecessor_links?.length;
+}
+
 function predecessorsLabel(task: Task): string {
   if (!task.predecessor_links?.length) {
     return "-";
@@ -549,8 +556,17 @@ export function PlanningTreeTable({
                     to automatic. A non-milestone task with no duration, or a zero/negative one
                     (a valid state for a manual task), would be rejected by the server
                     (_apply_automatic_schedule requires a strictly positive duration), so disable
-                    the option rather than let the user hit a guaranteed 400. */}
-                <SelectItem value="auto" disabled={!row.is_milestone && durationInvalidForAutomatic(row)}>
+                    the option rather than let the user hit a guaranteed 400. Separately, both
+                    _apply_automatic_schedule and _apply_automatic_milestone_schedule need either a
+                    stored start_at or at least one predecessor link to derive a start anchor
+                    (milestone or not) — without either, disable the option too. */}
+                <SelectItem
+                  value="auto"
+                  disabled={
+                    (!row.is_milestone && durationInvalidForAutomatic(row)) ||
+                    missingStartAnchorForAutomatic(row)
+                  }
+                >
                   Automatique
                 </SelectItem>
               </SelectContent>

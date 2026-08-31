@@ -331,7 +331,7 @@ def compute_start_at(
 
     The reverse-direction counterpart of :func:`compute_finish_at`, added for
     E3-03's PR review finding on negative (lead/advance) predecessor link lag
-    (see ``_resolve_fs_ss_lag`` in ``waterfall.services.planning_tree``):
+    (see ``_resolve_lag_offset`` in ``waterfall.services.planning_tree``):
     "N working minutes before ``anchor``".
 
     A literal mirror of :func:`compute_finish_at`'s own-day-inclusive walk:

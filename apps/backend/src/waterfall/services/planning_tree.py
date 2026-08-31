@@ -386,13 +386,15 @@ def _apply_automatic_milestone_schedule(
     Since a milestone's duration is always 0, its finish_at always equals its
     start_at -- no calendar-aware forward computation is needed for the
     milestone's own duration, but its predecessor links' lag still is (see
-    :func:`_resolve_fs_ss_lag`), hence resolving the task's own calendar here.
+    :func:`_resolve_lag_offset`), hence resolving the task's own calendar
+    here.
     """
     resolved_calendar = resolve_calendars_for_tasks(db, planning.project_id, {task.uid})[task.uid]
     # See the equivalent try/except in _apply_automatic_schedule: a
-    # working-time FS/SS lag resolved through _resolve_fs_ss_lag can raise
-    # OverflowError (not just ValueError) when walked past
-    # datetime.max/date.max.
+    # working-time FS/SS/FF/SF lag resolved through _resolve_lag_offset (and,
+    # for FF/SF, the subsequent compute_start_at call in
+    # _resolve_predecessor_constraints) can raise OverflowError (not just
+    # ValueError) when walked past datetime.max/date.max.
     try:
         constraints = _resolve_predecessor_constraints(
             links, tasks_by_uid, duration_minutes=0, resolved_calendar=resolved_calendar
@@ -432,13 +434,23 @@ def _apply_manual_schedule(
     task.duration_minutes = payload.duration_minutes
 
 
-def _resolve_fs_ss_lag(
+def _resolve_lag_offset(
     anchor: datetime,
     lag_minutes: float,
     lag_format: int | None,
     resolved_calendar: ResolvedCalendar,
 ) -> datetime:
-    """Advance (or retreat) an FS/SS predecessor ``anchor`` date by its link's lag.
+    """Offset a predecessor-link ``anchor`` date by its link's lag.
+
+    Shared by all four MS Project link types (FS, SS, FF, SF; see
+    :func:`_resolve_predecessor_constraints`): for FS/SS, ``anchor`` is the
+    predecessor's own ``finish_at``/``start_at`` and the result is used
+    directly as the successor's start constraint. For FF/SF, ``anchor`` is
+    likewise the predecessor's ``finish_at``/``start_at``, but the result is
+    the successor's *target finish* date -- :func:`_resolve_predecessor_constraints`
+    then converts that into a start constraint via :func:`compute_start_at`.
+    Either way, this function only ever does one thing: "the date ``lag``
+    working (or elapsed) minutes after/before ``anchor``".
 
     An elapsed ``lag_format`` (or an absent one, see
     :func:`_is_elapsed_lag_format`), or a zero lag, keeps the pre-existing raw
@@ -534,25 +546,19 @@ def _resolve_predecessor_constraints(
     FS and SS constraints are resolved directly from the predecessor's own
     stored ``finish_at``/``start_at`` -- exact, no approximation -- and,
     since E3-03's lag_format fix, calendar-aware for a working-time
-    ``lag_format`` (see :func:`_resolve_fs_ss_lag`).
+    ``lag_format`` (see :func:`_resolve_lag_offset`).
 
-    Known v1 limitation: FF and SF constraints logically bound the
-    *successor's finish* date, not its start. Resolving them exactly would
-    require a calendar-aware backward walk from a target finish date back to
-    a start date, which ``calendar_schedule.py`` does not expose today
-    (``compute_finish_at`` only schedules forward). This is approximated here
-    with raw wall-clock minute arithmetic: the implied finish constraint
-    (``predecessor date + lag``) is converted to a start constraint by
-    subtracting the task's own ``duration_minutes`` directly, ignoring the
-    successor's calendar's non-working days in that subtraction. This can
-    under- or over-constrain ``start_at`` by up to the calendar's non-working
-    time within the task's own duration window, compared to a true
-    calendar-aware backward computation. Accepted for v1 per the E3-03 issue;
-    a regression test freezes this documented behaviour rather than silently
-    tolerating it. Revisit if FF/SF links turn out to be common in practice.
-    lag_format is deliberately not applied here either, to avoid partially
-    "fixing" an already-documented approximation with an inconsistent mix of
-    exact and approximate handling within the same formula.
+    FF and SF constraints logically bound the *successor's finish* date, not
+    its start: the predecessor's ``finish_at`` (FF) or ``start_at`` (SF) is
+    first offset by the link's lag through :func:`_resolve_lag_offset` --
+    the same calendar-aware primitive FS/SS use -- to get the successor's
+    target *finish* date, which is then converted into a start constraint via
+    :func:`compute_start_at`, the exact "N working minutes before this date"
+    primitive (see ``calendar_schedule.py``). This makes FF and SF exact and
+    calendar-aware too, on the same footing as FS/SS -- no raw wall-clock
+    approximation remains for any of the four link types (6th/7th E3-03 PR
+    review rounds: ``compute_start_at``, added for the FS/SS negative-lag
+    fix, turned out to be exactly the backward primitive FF/SF needed too).
     """
     constraints: list[datetime] = []
     for link in links:
@@ -564,23 +570,29 @@ def _resolve_predecessor_constraints(
         predecessor_start = _to_naive_utc(predecessor.start_at)
         if link.link_type == 1 and predecessor_finish is not None:  # FS
             constraints.append(
-                _resolve_fs_ss_lag(
+                _resolve_lag_offset(
                     predecessor_finish, lag_minutes, link.lag_format, resolved_calendar
                 )
             )
         elif link.link_type == 3 and predecessor_start is not None:  # SS
             constraints.append(
-                _resolve_fs_ss_lag(
+                _resolve_lag_offset(
                     predecessor_start, lag_minutes, link.lag_format, resolved_calendar
                 )
             )
-        elif link.link_type == 0 and predecessor_finish is not None:  # FF (approximated)
-            constraints.append(
-                predecessor_finish + timedelta(minutes=lag_minutes - duration_minutes)
+        elif link.link_type == 0 and predecessor_finish is not None:  # FF
+            target_finish = _resolve_lag_offset(
+                predecessor_finish, lag_minutes, link.lag_format, resolved_calendar
             )
-        elif link.link_type == 2 and predecessor_start is not None:  # SF (approximated)
             constraints.append(
-                predecessor_start + timedelta(minutes=lag_minutes - duration_minutes)
+                compute_start_at(target_finish, duration_minutes, resolved_calendar.weekday_hours)
+            )
+        elif link.link_type == 2 and predecessor_start is not None:  # SF
+            target_finish = _resolve_lag_offset(
+                predecessor_start, lag_minutes, link.lag_format, resolved_calendar
+            )
+            constraints.append(
+                compute_start_at(target_finish, duration_minutes, resolved_calendar.weekday_hours)
             )
     return constraints
 
@@ -615,14 +627,16 @@ def _apply_automatic_schedule(
     resolved_calendars = resolve_calendars_for_tasks(db, planning.project_id, {task.uid})
     resolved = resolved_calendars[task.uid]
 
-    # _resolve_predecessor_constraints (via _resolve_fs_ss_lag's own
-    # compute_finish_at/compute_start_at calls for a working-time FS/SS lag)
-    # walks the calendar day by day and can raise OverflowError -- not just
-    # ValueError -- when the walk is pushed past datetime.max/date.max (e.g.
-    # a predecessor date close to datetime.max combined with a positive
-    # lag). This is a genuinely-invalid-input case from the caller's
-    # perspective, so it is caught here and surfaced as the same 400 as any
-    # other schedule validation failure.
+    # _resolve_predecessor_constraints (via _resolve_lag_offset's own
+    # compute_finish_at/compute_start_at calls for a working-time lag, and,
+    # for FF/SF, its own additional compute_start_at call deriving the start
+    # constraint from the target finish date) walks the calendar day by day
+    # and can raise OverflowError -- not just ValueError -- when the walk is
+    # pushed past datetime.max/date.max (e.g. a predecessor date close to
+    # datetime.max combined with a positive lag). This is a
+    # genuinely-invalid-input case from the caller's perspective, so it is
+    # caught here and surfaced as the same 400 as any other schedule
+    # validation failure.
     try:
         constraints = _resolve_predecessor_constraints(
             links, tasks_by_uid, duration_minutes, resolved_calendar=resolved
@@ -710,12 +724,15 @@ def update_planning_task_schedule(
     references ``task_uid`` as ``predecessor_uid`` -- are never revisited,
     even when they are in automatic mode. Editing ``task``'s dates can
     therefore leave an automatic successor with dates that violate its own
-    FS/SS/FF/SF constraint until that successor is itself edited separately.
-    This mirrors the FF/SF approximation already documented in
-    :func:`_resolve_predecessor_constraints`: accepted for v1, tracked by
-    issue #73 ("Automatic-mode successors are not rescheduled when their
-    predecessor's dates change"), with a regression test freezing the
-    current (non-cascading) behaviour rather than leaving the gap untested.
+    FS/SS/FF/SF constraint until that successor is itself edited separately
+    -- even though that constraint is now resolved exactly and
+    calendar-aware for all four link types (see
+    :func:`_resolve_predecessor_constraints`), it is simply never
+    re-evaluated for a successor as a side effect of editing its
+    predecessor. Accepted for v1, tracked by issue #73 ("Automatic-mode
+    successors are not rescheduled when their predecessor's dates change"),
+    with a regression test freezing the current (non-cascading) behaviour
+    rather than leaving the gap untested.
     """
     tasks = (
         db.query(WfPlanningTaskSnapshot)
