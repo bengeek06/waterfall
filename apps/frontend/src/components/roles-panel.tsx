@@ -39,7 +39,7 @@ export function RolesPanel(props: RolesPanelProps) {
           <div className="grid gap-2"><Label htmlFor="role-category">Code comptable</Label><select id="role-category" className="h-8 rounded-md border border-input bg-background px-2 text-sm" value={props.roleCategoryId} onChange={(event) => props.onCategoryChange(event.target.value)} required><option value="">Sélectionner</option>{laborCategories.map((category) => <option key={category.id} value={category.id}>{category.accounting_code} - {category.name}</option>)}</select></div>
           <Button className="sm:col-span-2 sm:w-fit" disabled={props.actionBusy} type="submit">Ajouter</Button>
         </form>
-        {props.selectedRoles.length ? <ul className="grid divide-y rounded-md border">{props.selectedRoles.map((role) => <li key={role.id} className="flex flex-wrap items-center gap-2 px-3 py-2"><span>{role.name}</span><Badge variant="outline">{props.categoryNames.get(role.cost_category_id) ?? "?"}</Badge></li>)}</ul> : null}
+        {props.selectedRoles.length ? <ul className="grid divide-y rounded-md border">{props.selectedRoles.map((role) => <li key={role.id} className="flex flex-wrap items-center gap-2 px-3 py-2"><span>{role.name} (#{role.id})</span><Badge variant="outline">{props.categoryNames.get(role.cost_category_id) ?? "?"}</Badge></li>)}</ul> : null}
       </CardContent>
     </Card>
   );
