@@ -1261,6 +1261,9 @@ describe("PlanningTreeTable", () => {
       expect(screen.getByLabelText("Position de la nouvelle tâche")).toHaveValue("root");
       // With nothing selected there is no single unambiguous relative position to offer.
       expect(screen.queryByRole("option", { name: /Ajouter après/ })).not.toBeInTheDocument();
+      // Mirrors PlanningTaskCreate.name's max_length=512 so an over-long name is rejected
+      // by the browser instead of round-tripping through a 400 after the dialog has closed.
+      expect(screen.getByLabelText("Nom de la nouvelle tâche")).toHaveAttribute("maxLength", "512");
 
       fireEvent.change(screen.getByLabelText("Nom de la nouvelle tâche"), {
         target: { value: "Nouvelle tâche" },

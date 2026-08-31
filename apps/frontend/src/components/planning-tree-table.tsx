@@ -1239,6 +1239,7 @@ export function PlanningTreeTable({
                 aria-label="Nom de la nouvelle tâche"
                 value={createTaskName}
                 onChange={(event) => setCreateTaskName(event.target.value)}
+                maxLength={512}
               />
             </div>
             <label className="flex items-center gap-2 text-sm">

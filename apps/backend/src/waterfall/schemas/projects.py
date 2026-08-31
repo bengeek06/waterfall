@@ -240,9 +240,9 @@ class PlanningTaskMove(BaseModel):
 class PlanningTaskCreate(BaseModel):
     """Create a single task at an explicit position within a draft planning (E3-05).
 
-    Absence of both ``target_parent_uid`` and ``insert_after_uid`` places the
-    new task as the first child of the targeted parent, or -- when
-    ``target_parent_uid`` is also absent -- the first root task.
+    Absence of ``insert_after_uid`` places the new task as the first child of
+    ``target_parent_uid`` -- or, when ``target_parent_uid`` is itself absent,
+    as the first root task.
     """
 
     name: str = Field(min_length=1, max_length=512)
