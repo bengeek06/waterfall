@@ -18,6 +18,8 @@ const mocks = vi.hoisted(() => ({
   movePlanningTasks: vi.fn(),
   updatePlanningTaskSchedule: vi.fn(),
   replaceTaskPredecessorLinks: vi.fn(),
+  createPlanningTask: vi.fn(),
+  deletePlanningTasks: vi.fn(),
   savePlanningStructureDraft: vi.fn(),
   getPlanningStructureDraft: vi.fn(),
   createPlanningStructure: vi.fn(),
@@ -54,6 +56,8 @@ vi.mock("@/lib/backend", async () => {
     movePlanningTasks: mocks.movePlanningTasks,
     updatePlanningTaskSchedule: mocks.updatePlanningTaskSchedule,
     replaceTaskPredecessorLinks: mocks.replaceTaskPredecessorLinks,
+    createPlanningTask: mocks.createPlanningTask,
+    deletePlanningTasks: mocks.deletePlanningTasks,
     savePlanningStructureDraft: mocks.savePlanningStructureDraft,
     getPlanningStructureDraft: mocks.getPlanningStructureDraft,
     createPlanningStructure: mocks.createPlanningStructure,
@@ -139,6 +143,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     mocks.movePlanningTasks.mockReset();
     mocks.updatePlanningTaskSchedule.mockReset();
     mocks.replaceTaskPredecessorLinks.mockReset();
+    mocks.createPlanningTask.mockReset();
+    mocks.deletePlanningTasks.mockReset();
     mocks.savePlanningStructureDraft.mockReset();
     mocks.getPlanningStructureDraft.mockReset();
     mocks.createPlanningStructure.mockReset();
@@ -896,5 +902,192 @@ describe("ProjectDetailsPage planning lifecycle", () => {
 
     expect(screen.queryByText("Réponse obsolète")).not.toBeInTheDocument();
     expect(screen.getByText("Tâche 2")).toBeInTheDocument();
+  });
+
+  it("sends a create-task request and replaces the planning detail with the full server response", async () => {
+    const draft = planning({ id: 2, status: "draft" });
+    const initialDetail: PlanningDetail = {
+      ...draft,
+      tasks: [{ ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Tâche existante" }],
+      links: [],
+    };
+    const updatedDetail: PlanningDetail = {
+      ...draft,
+      tasks: [
+        ...initialDetail.tasks,
+        { ...initialDetail.tasks[0], uid: 11, id_display: 11, name: "Nouvelle tâche", position: 2 },
+      ],
+      links: [],
+    };
+    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draft.id }));
+    mocks.listPlannings.mockResolvedValue([draft]);
+    mocks.getPlanning.mockResolvedValue(initialDetail);
+    mocks.createPlanningTask.mockResolvedValue(updatedDetail);
+
+    render(<ProjectDetailsPage />);
+
+    await screen.findByText("Tâche existante");
+    fireEvent.click(screen.getByRole("button", { name: "Ajouter une tâche" }));
+    fireEvent.change(screen.getByLabelText("Nom de la nouvelle tâche"), { target: { value: "Nouvelle tâche" } });
+    fireEvent.click(screen.getByRole("button", { name: "Ajouter" }));
+
+    await waitFor(() =>
+      expect(mocks.createPlanningTask).toHaveBeenCalledWith(
+        1,
+        draft.id,
+        { name: "Nouvelle tâche", is_milestone: false, target_parent_uid: undefined, insert_after_uid: undefined },
+        expect.anything(),
+        expect.anything(),
+      ),
+    );
+    expect(await screen.findByText("Nouvelle tâche")).toBeInTheDocument();
+  });
+
+  it("sends a delete-tasks request and replaces the planning detail with the full server response", async () => {
+    const draft = planning({ id: 2, status: "draft" });
+    const initialDetail: PlanningDetail = {
+      ...draft,
+      tasks: [
+        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "À conserver", position: 1 },
+        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "À supprimer", position: 2 },
+      ],
+      links: [],
+    };
+    const updatedDetail: PlanningDetail = {
+      ...draft,
+      tasks: [initialDetail.tasks[0]],
+      links: [],
+    };
+    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draft.id }));
+    mocks.listPlannings.mockResolvedValue([draft]);
+    mocks.getPlanning.mockResolvedValue(initialDetail);
+    mocks.deletePlanningTasks.mockResolvedValue(updatedDetail);
+
+    render(<ProjectDetailsPage />);
+
+    await screen.findByText("À supprimer");
+    fireEvent.click(screen.getByText("À supprimer"));
+    fireEvent.click(screen.getByRole("button", { name: "Supprimer la sélection" }));
+
+    await waitFor(() =>
+      expect(mocks.deletePlanningTasks).toHaveBeenCalledWith(
+        1,
+        draft.id,
+        { task_uids: [11], confirm_cascade: false },
+        expect.anything(),
+        expect.anything(),
+      ),
+    );
+    await waitFor(() => expect(screen.queryByText("À supprimer")).not.toBeInTheDocument());
+    expect(screen.getByText("À conserver")).toBeInTheDocument();
+  });
+
+  it("ignores a delete-tasks response for a planning that is no longer selected", async () => {
+    const draftA = planning({ id: 2, status: "draft" });
+    const draftB = planning({ id: 6, status: "draft", version_number: 2 });
+    const detailA: PlanningDetail = {
+      ...draftA,
+      tasks: [{ ...detail(draftA).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null }],
+      links: [],
+    };
+    const detailB = detail(draftB);
+    const staleDetail: PlanningDetail = { ...draftA, tasks: [], links: [] };
+    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draftA.id }));
+    mocks.listPlannings.mockResolvedValue([draftA, draftB]);
+    mocks.getPlanning.mockImplementation(async (_projectId, planningId) =>
+      planningId === draftA.id ? detailA : detailB,
+    );
+    mocks.setDisplayedPlanning.mockImplementation(async (_projectId, planningId) =>
+      project({ status: "initialise", displayed_planning_id: planningId }),
+    );
+    let resolveDelete!: (value: PlanningDetail) => void;
+    mocks.deletePlanningTasks.mockImplementation(() => new Promise<PlanningDetail>((resolve) => {
+      resolveDelete = resolve;
+    }));
+
+    render(<ProjectDetailsPage />);
+
+    await screen.findByText("Premier");
+    fireEvent.click(screen.getByText("Premier"));
+    fireEvent.click(screen.getByRole("button", { name: "Supprimer la sélection" }));
+    await waitFor(() => expect(mocks.deletePlanningTasks).toHaveBeenCalledTimes(1));
+
+    fireEvent.change(await screen.findByRole("combobox", { name: "Version affichée" }), {
+      target: { value: String(draftB.id) },
+    });
+    await waitFor(() => expect(screen.getByText("Tâche 2")).toBeInTheDocument());
+
+    resolveDelete(staleDetail);
+    await waitFor(() => expect(mocks.deletePlanningTasks).toHaveResolved());
+
+    // The stale response (an empty task list for A) must never be applied on top of B's tasks.
+    expect(screen.getByText("Tâche 2")).toBeInTheDocument();
+  });
+
+  it("never sends a cascade delete confirmation to a planning version that is no longer displayed", async () => {
+    // Reproduces the race from the E3-05 review: requestDeleteSelection's probe (confirm_cascade
+    // false) is answered with CASCADE_CONFIRMATION_REQUIRED while planning A is displayed, opening
+    // PlanningTreeTable's own cascade AlertDialog; the user then switches the displayed planning
+    // to B before ever confirming it. Task uids are reused across a planning's versions, so
+    // blindly confirming here could delete the wrong version's tasks (see
+    // waterfall.services.planning_structure) -- deletePlanningTasks must never be called a second
+    // time (confirm_cascade: true) against B with A's task uids.
+    const draftA = planning({ id: 2, status: "draft" });
+    const draftB = planning({ id: 6, status: "draft", version_number: 2 });
+    const detailA: PlanningDetail = {
+      ...draftA,
+      tasks: [
+        { ...detail(draftA).tasks[0], uid: 10, id_display: 10, name: "Poste", position: 1, parent_uid: null, is_summary: true },
+        { ...detail(draftA).tasks[0], uid: 11, id_display: 11, name: "Lot", position: 1, parent_uid: 10 },
+      ],
+      links: [],
+    };
+    const detailB = detail(draftB);
+    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draftA.id }));
+    mocks.listPlannings.mockResolvedValue([draftA, draftB]);
+    mocks.getPlanning.mockImplementation(async (_projectId, planningId) =>
+      planningId === draftA.id ? detailA : detailB,
+    );
+    mocks.setDisplayedPlanning.mockImplementation(async (_projectId, planningId) =>
+      project({ status: "initialise", displayed_planning_id: planningId }),
+    );
+    mocks.deletePlanningTasks.mockImplementation(async (_projectId, _planningId, payload) => {
+      if (!payload.confirm_cascade) {
+        throw new ApiError(409, "Cette tâche a des tâches enfants et nécessite une confirmation.", {
+          code: "CASCADE_CONFIRMATION_REQUIRED",
+          descendant_uids: [11],
+        });
+      }
+      throw new Error("deletePlanningTasks must never be retried with confirm_cascade after a version switch");
+    });
+
+    render(<ProjectDetailsPage />);
+
+    await screen.findByText("Poste");
+    fireEvent.click(screen.getByText("Poste"));
+    fireEvent.click(screen.getByRole("button", { name: "Supprimer la sélection" }));
+
+    await screen.findByRole("alertdialog");
+    expect(mocks.deletePlanningTasks).toHaveBeenCalledTimes(1);
+
+    // The cascade AlertDialog is modal, so the version selector is marked aria-hidden while it
+    // stays open; `hidden: true` reaches through that (see the analogous predecessor-links test
+    // above for the same pattern).
+    fireEvent.change(await screen.findByRole("combobox", { name: "Version affichée", hidden: true }), {
+      target: { value: String(draftB.id) },
+    });
+    await waitFor(() => expect(screen.getByText("Tâche 2")).toBeInTheDocument());
+
+    // Switching the displayed planning must close (or otherwise invalidate) the stale cascade
+    // dialog rather than leave it confirmable against the wrong version.
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(mocks.deletePlanningTasks).toHaveBeenCalledTimes(1);
+    expect(mocks.deletePlanningTasks).not.toHaveBeenCalledWith(
+      1,
+      draftB.id,
+      expect.objectContaining({ confirm_cascade: true }),
+      expect.anything(),
+      expect.anything(),
+    );
   });
 });

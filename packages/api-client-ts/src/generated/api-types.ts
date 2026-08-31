@@ -434,6 +434,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{projectId}/plannings/{planningId}/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ajouter une tache a un brouillon de planning a une position explicite */
+        post: operations["createPlanningTask"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{projectId}/plannings/{planningId}/tasks/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Supprimer une selection de taches d'un brouillon de planning */
+        post: operations["deletePlanningTasks"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/projects/{projectId}/plannings/{planningId}/tasks/{taskUid}": {
         parameters: {
             query?: never;
@@ -546,8 +580,7 @@ export interface paths {
         /** Lister les taches d'un projet */
         get: operations["listProjectTasks"];
         put?: never;
-        /** Ajouter une tache de planning au projet */
-        post: operations["createProjectTask"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -633,8 +666,7 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Supprimer une tache de planning sans enfant ni usage dans un devis */
-        delete: operations["deleteProjectTask"];
+        delete?: never;
         options?: never;
         head?: never;
         /** Mettre a jour la description d'une tache */
@@ -1358,6 +1390,18 @@ export interface components {
             target_parent_uid?: number | null;
             position: number;
         };
+        PlanningTaskCreate: {
+            name: string;
+            /** @default false */
+            is_milestone: boolean;
+            target_parent_uid?: number | null;
+            insert_after_uid?: number | null;
+        };
+        PlanningTaskDelete: {
+            task_uids: number[];
+            /** @default false */
+            confirm_cascade: boolean;
+        };
         PlanningDetailRead: components["schemas"]["PlanningRead"] & {
             tasks: components["schemas"]["TaskRead"][];
             links: components["schemas"]["PlanningLinkRead"][];
@@ -1432,12 +1476,6 @@ export interface components {
         };
         TaskDescriptionUpdate: {
             description?: string | null;
-        };
-        TaskCreate: {
-            name: string;
-            parent_task_id?: number | null;
-            /** @default false */
-            is_milestone: boolean;
         };
         TaskRoleAssignmentCreate: {
             role_id: number;
@@ -1708,6 +1746,16 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
         };
+        PlanningTaskDeleteConflict: {
+            detail: {
+                /** @enum {string} */
+                code: "CASCADE_CONFIRMATION_REQUIRED" | "TASK_REFERENCED";
+                /** @description Present when code=CASCADE_CONFIRMATION_REQUIRED: every descendant uid (of every selected root) that would be removed alongside the selection. */
+                descendant_uids?: number[];
+                /** @description Present when code=TASK_REFERENCED: every uid in the selection (and its to-be-cascaded descendants) that is referenced by an estimate, an assignment, or a charge. */
+                task_uids?: number[];
+            };
+        };
         PlanningTaskScheduleUpdate: {
             is_manual: boolean;
             /** Format: date-time */
@@ -1829,6 +1877,60 @@ export interface components {
             };
             content: {
                 "application/json": components["schemas"]["FastAPIErrorResponse"];
+            };
+        };
+        /** @description Requete de creation invalide */
+        CreatePlanningTaskBadRequest: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
+            };
+        };
+        /** @description Projet, planning ou tache parent introuvable */
+        CreatePlanningTaskNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
+            };
+        };
+        /** @description La creation entre en conflit avec le planning */
+        CreatePlanningTaskConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
+            };
+        };
+        /** @description Requete de suppression invalide */
+        DeletePlanningTasksBadRequest: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
+            };
+        };
+        /** @description Projet, planning ou tache introuvable pendant la suppression */
+        DeletePlanningTasksNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
+            };
+        };
+        /** @description Suppression en cascade non confirmee (detail.code=CASCADE_CONFIRMATION_REQUIRED, avec la liste des uid descendants dans detail.descendant_uids), ou tache referencee par un devis, une affectation ou une charge (detail.code=TASK_REFERENCED, avec la liste des uid references dans detail.task_uids). D'autres conflits (planning non brouillon, conflit d'integrite sur la hierarchie) renvoient le detail texte brut generique FastAPI plutot que ce detail structure. */
+        DeletePlanningTasksConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["PlanningTaskDeleteConflict"] | components["schemas"]["FastAPIErrorResponse"];
             };
         };
         /** @description Devis introuvable */
@@ -2794,6 +2896,72 @@ export interface operations {
             409: components["responses"]["MovePlanningTasksConflict"];
         };
     };
+    createPlanningTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de planning */
+                planningId: components["parameters"]["PlanningId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlanningTaskCreate"];
+            };
+        };
+        responses: {
+            /** @description Arbre complet du brouillon mis a jour */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanningDetailRead"];
+                };
+            };
+            400: components["responses"]["CreatePlanningTaskBadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["CreatePlanningTaskNotFound"];
+            409: components["responses"]["CreatePlanningTaskConflict"];
+        };
+    };
+    deletePlanningTasks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de planning */
+                planningId: components["parameters"]["PlanningId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlanningTaskDelete"];
+            };
+        };
+        responses: {
+            /** @description Arbre complet du brouillon mis a jour */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanningDetailRead"];
+                };
+            };
+            400: components["responses"]["DeletePlanningTasksBadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["DeletePlanningTasksNotFound"];
+            409: components["responses"]["DeletePlanningTasksConflict"];
+        };
+    };
     updatePlanningTaskSchedule: {
         parameters: {
             query?: never;
@@ -3004,36 +3172,6 @@ export interface operations {
             404: components["responses"]["ProjectNotFound"];
         };
     };
-    createProjectTask: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Identifiant technique ms_project.id */
-                projectId: components["parameters"]["ProjectId"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TaskCreate"];
-            };
-        };
-        responses: {
-            /** @description Tache creee */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TaskRead"];
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            404: components["responses"]["ProjectNotFound"];
-        };
-    };
     createPlanningStructure: {
         parameters: {
             query?: never;
@@ -3170,32 +3308,6 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["ProjectNotFound"];
-        };
-    };
-    deleteProjectTask: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Identifiant technique ms_project.id */
-                projectId: components["parameters"]["ProjectId"];
-                /** @description UID fonctionnel de la tache dans un projet */
-                taskUid: components["parameters"]["TaskUid"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Tache supprimee */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            401: components["responses"]["Unauthorized"];
-            404: components["responses"]["TaskNotFound"];
-            409: components["responses"]["Conflict"];
         };
     };
     updateTaskDescription: {

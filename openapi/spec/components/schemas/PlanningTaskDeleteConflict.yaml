@@ -1,0 +1,30 @@
+type: object
+required:
+- detail
+properties:
+  detail:
+    type: object
+    required:
+    - code
+    properties:
+      code:
+        type: string
+        enum:
+        - CASCADE_CONFIRMATION_REQUIRED
+        - TASK_REFERENCED
+      descendant_uids:
+        description: >-
+          Present when code=CASCADE_CONFIRMATION_REQUIRED: every descendant
+          uid (of every selected root) that would be removed alongside the
+          selection.
+        type: array
+        items:
+          type: integer
+      task_uids:
+        description: >-
+          Present when code=TASK_REFERENCED: every uid in the selection (and
+          its to-be-cascaded descendants) that is referenced by an estimate,
+          an assignment, or a charge.
+        type: array
+        items:
+          type: integer

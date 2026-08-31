@@ -28,9 +28,13 @@ from waterfall.services.planning_structure import (
 )
 from waterfall.services.planning_tree import (
     PlanningTaskScheduleError,
+    PlanningTreeCascadeConfirmationRequiredError,
     PlanningTreeInvariantError,
     PlanningTreeMoveError,
     PlanningTreeMoveNotFoundError,
+    PlanningTreeTaskReferencedError,
+    create_planning_task,
+    delete_planning_tasks,
     move_planning_tasks,
     update_planning_task_schedule,
 )
@@ -53,8 +57,12 @@ __all__ = [
     "PlanningTreeMoveError",
     "PlanningTreeInvariantError",
     "PlanningTreeMoveNotFoundError",
+    "PlanningTreeCascadeConfirmationRequiredError",
+    "PlanningTreeTaskReferencedError",
     "PlanningTaskScheduleError",
     "move_planning_tasks",
+    "create_planning_task",
+    "delete_planning_tasks",
     "update_planning_task_schedule",
     "PlanningLinkError",
     "PlanningLinkInvariantError",

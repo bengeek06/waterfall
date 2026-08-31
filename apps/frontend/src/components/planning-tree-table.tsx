@@ -1,10 +1,29 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent,
+} from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -16,7 +35,12 @@ import {
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import type { PlanningTaskScheduleUpdate, Task, TaskLinkWrite } from "@/lib/backend";
+import {
+  getPlanningTaskDeleteConflict,
+  type PlanningTaskScheduleUpdate,
+  type Task,
+  type TaskLinkWrite,
+} from "@/lib/backend";
 import {
   computeIndentCommand,
   computeOutdentCommand,
@@ -274,8 +298,36 @@ type PlanningTreeTableProps = Readonly<{
   onScheduleUpdate?: (taskUid: number, payload: PlanningTaskScheduleUpdate) => Promise<boolean>;
   /** Replaces the full predecessor link list of one task; rejects with a user-facing message on failure. */
   onEditLinks?: (payload: { taskUid: number; links: TaskLinkWrite[] }) => Promise<void>;
+  /** Creates a single new task at an explicit position; errors are reported by the parent's own error state. */
+  onCreateTask?: (command: {
+    name: string;
+    isMilestone: boolean;
+    targetParentUid?: number;
+    insertAfterUid?: number;
+  }) => void;
+  /**
+   * Deletes the given task uids. Must reject on failure -- including the
+   * CASCADE_CONFIRMATION_REQUIRED conflict, which this component itself turns into a follow-up
+   * confirmation dialog (see requestDeleteSelection/confirmCascadeDelete below) -- so it can tell
+   * "needs confirmation" apart from "resolved".
+   *
+   * `versionKey` is the identity of the planning version the deletion was requested against
+   * (captured from this component's own `versionKey` prop at the moment the request was made,
+   * not re-read at call time). The caller must re-check it against whatever planning version is
+   * currently displayed before sending any request: task uids are reused across a planning's
+   * versions, so a cascade confirmation retried after the displayed version changed could
+   * otherwise delete the wrong version's tasks. Errors are reported by the parent's own error
+   * state, mirroring onCreateTask.
+   */
+  onDeleteTasks?: (
+    taskUids: number[],
+    confirmCascade: boolean,
+    versionKey: number | string | null,
+  ) => Promise<void>;
   mutationBusy?: boolean;
 }>;
+
+type CreateTaskPositionMode = "root" | "after" | "child";
 
 export function PlanningTreeTable({
   tasks,
@@ -284,6 +336,8 @@ export function PlanningTreeTable({
   onMove,
   onScheduleUpdate,
   onEditLinks,
+  onCreateTask,
+  onDeleteTasks,
   mutationBusy = false,
 }: PlanningTreeTableProps) {
   const [collapsedUids, setCollapsedUids] = useState<Set<number>>(new Set());
@@ -295,7 +349,35 @@ export function PlanningTreeTable({
   const [linkRows, setLinkRows] = useState<LinkRowDraft[]>([]);
   const [linkFormError, setLinkFormError] = useState<string | null>(null);
   const [linkFormBusy, setLinkFormBusy] = useState(false);
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [createTaskName, setCreateTaskName] = useState("");
+  const [createTaskIsMilestone, setCreateTaskIsMilestone] = useState(false);
+  const [createPositionMode, setCreatePositionMode] = useState<CreateTaskPositionMode>("root");
+  const [createTaskError, setCreateTaskError] = useState<string | null>(null);
+  const [cascadeConflict, setCascadeConflict] = useState<{
+    taskUids: number[];
+    descendantUids: number[];
+    // The planning version the initial (non-cascade) delete request was made against; re-sent
+    // unchanged on confirmation so the caller can detect a version switch that happened while
+    // this dialog was open (see the onDeleteTasks prop contract above).
+    versionKey: number | string | null;
+  } | null>(null);
+  const [cascadeBusy, setCascadeBusy] = useState(false);
   const rowRefs = useRef(new Map<number, HTMLTableRowElement>());
+  // Tracks the *current* versionKey prop, unlike the `requestedVersionKey` a delete-flow function
+  // captures in its own closure at request time: that closure keeps referencing whatever value
+  // was current when the request started, for the lifetime of that async call, so it cannot be
+  // used to detect a version switch that happened later while the request was still in flight.
+  // React forbids writing to a ref during render (see the `react-hooks/refs` lint rule), so this
+  // cannot be a synchronous body write like the `renderedVersionKey` state sync just below; it is
+  // instead kept fresh via useLayoutEffect rather than useEffect, so the write happens
+  // synchronously in the commit phase, before the browser can paint or run any other queued task
+  // (including a pending fetch's resolution) — closing the staleness window a passive useEffect
+  // would otherwise leave open between commit and its own (deferred) flush.
+  const versionKeyRef = useRef(versionKey);
+  useLayoutEffect(() => {
+    versionKeyRef.current = versionKey;
+  }, [versionKey]);
 
   // A different planning version must never reuse another version's expand/selection state.
   if (versionKey !== renderedVersionKey) {
@@ -308,6 +390,13 @@ export function PlanningTreeTable({
     setSelectedUids(new Set());
     setFocusedUid(null);
     setScheduleDrafts({});
+    setCreateDialogOpen(false);
+    setCreateTaskName("");
+    setCreateTaskIsMilestone(false);
+    setCreatePositionMode("root");
+    setCreateTaskError(null);
+    setCascadeConflict(null);
+    setCascadeBusy(false);
   }
 
   const rows = useMemo(() => buildVisibleRows(tasks, collapsedUids), [tasks, collapsedUids]);
@@ -330,15 +419,6 @@ export function PlanningTreeTable({
   const readOnlyNotice = readOnly ? (
     <p className="mt-2 text-xs text-muted-foreground">Version validée ou projet en lecture seule : édition désactivée.</p>
   ) : null;
-
-  if (!tasks.length) {
-    return (
-      <>
-        <p className="py-6 text-sm text-muted-foreground">Le planning ne contient aucune tâche.</p>
-        {readOnlyNotice}
-      </>
-    );
-  }
 
   function toggleCollapsed(uid: number) {
     setCollapsedUids((current) => {
@@ -684,6 +764,113 @@ export function PlanningTreeTable({
     }
   }
 
+  // Only meaningful when exactly one row is selected: with zero or several rows selected there is
+  // no single unambiguous "relative to this task" position, so the create dialog only offers the
+  // root-level default in that case (see the position <select> below).
+  const singleSelectedUid = selectedUids.size === 1 ? [...selectedUids][0] : null;
+  const singleSelectedTask =
+    singleSelectedUid !== null ? (tasksByUid.get(singleSelectedUid) ?? null) : null;
+
+  function openCreateTaskDialog() {
+    setCreateTaskName("");
+    setCreateTaskIsMilestone(false);
+    setCreatePositionMode(singleSelectedTask ? "after" : "root");
+    setCreateTaskError(null);
+    setCreateDialogOpen(true);
+  }
+
+  function closeCreateTaskDialog() {
+    setCreateDialogOpen(false);
+    setCreateTaskName("");
+    setCreateTaskIsMilestone(false);
+    setCreatePositionMode("root");
+    setCreateTaskError(null);
+  }
+
+  function submitCreateTask() {
+    if (!onCreateTask) {
+      return;
+    }
+    const trimmedName = createTaskName.trim();
+    if (!trimmedName) {
+      setCreateTaskError("Le nom de la tâche est obligatoire.");
+      return;
+    }
+    let targetParentUid: number | undefined;
+    let insertAfterUid: number | undefined;
+    if (createPositionMode === "after" && singleSelectedTask) {
+      targetParentUid = singleSelectedTask.parent_uid ?? undefined;
+      insertAfterUid = singleSelectedTask.uid;
+    } else if (createPositionMode === "child" && singleSelectedTask) {
+      targetParentUid = singleSelectedTask.uid;
+    }
+    onCreateTask({ name: trimmedName, isMilestone: createTaskIsMilestone, targetParentUid, insertAfterUid });
+    closeCreateTaskDialog();
+  }
+
+  async function requestDeleteSelection() {
+    if (!onDeleteTasks || selectedUids.size === 0 || mutationBusy) {
+      return;
+    }
+    const taskUids = [...selectedUids];
+    // Captured now, not re-read later: this is what identifies "the planning version this
+    // deletion was requested against" for the caller's own freshness check on a cascade retry
+    // (see the onDeleteTasks prop contract above).
+    const requestedVersionKey = versionKey;
+    try {
+      await onDeleteTasks(taskUids, false, requestedVersionKey);
+      setSelectedUids(new Set());
+    } catch (cause) {
+      const conflict = getPlanningTaskDeleteConflict(cause);
+      // The version-mismatch reset above (see the top of the component) only fires *while*
+      // versionKey is changing; if the displayed planning version already changed and settled on
+      // a different one by the time this late 409 response arrives, versionKey (current) and
+      // renderedVersionKey (also already updated) match again, so that reset alone would not
+      // catch this. Re-check explicitly against what was captured when *this* request started:
+      // opening a cascade dialog for task uids from a version that is no longer displayed would
+      // show a confirmation the user has no way to correctly interpret.
+      if (conflict?.code === "CASCADE_CONFIRMATION_REQUIRED" && versionKeyRef.current === requestedVersionKey) {
+        // Not an error yet: ask the user to confirm the cascade instead of showing a failure.
+        setCascadeConflict({
+          taskUids,
+          descendantUids: conflict.descendantUids ?? [],
+          versionKey: requestedVersionKey,
+        });
+      }
+      // Covers both a TASK_REFERENCED conflict (never confirmable, regardless of confirm_cascade)
+      // and any other failure (including the caller rejecting a stale planning version). Nothing
+      // to do locally: errors are reported through the parent's own error state, mirroring
+      // onCreateTask.
+    }
+  }
+
+  async function confirmCascadeDelete() {
+    if (!onDeleteTasks || !cascadeConflict) {
+      return;
+    }
+    setCascadeBusy(true);
+    try {
+      await onDeleteTasks(cascadeConflict.taskUids, true, cascadeConflict.versionKey);
+      setSelectedUids(new Set());
+    } catch {
+      // Reported through the parent's own error state; just close the dialog below.
+    } finally {
+      setCascadeConflict(null);
+      setCascadeBusy(false);
+    }
+  }
+
+  function describeCascadeDescendants(descendantUids: number[]): string {
+    if (descendantUids.length === 0) {
+      return "Les tâches sélectionnées et leurs éventuelles sous-tâches seront supprimées définitivement.";
+    }
+    const names = descendantUids.map((uid) => {
+      const descendant = tasksByUid.get(uid);
+      return descendant ? `${descendant.id_display ?? descendant.uid} - ${descendant.name}` : String(uid);
+    });
+    return `Cette suppression entraînera aussi celle de ${descendantUids.length} tâche(s) enfant(s) : ${names.join(", ")}.`;
+  }
+
   function openLinksDialog(row: PlanningTreeRow) {
     setEditingTaskUid(row.uid);
     setLinkRows((row.predecessor_links ?? []).map((link) => createLinkRowDraft(link)));
@@ -770,44 +957,65 @@ export function PlanningTreeTable({
   const editingTask = editingTaskUid !== null ? tasks.find((task) => task.uid === editingTaskUid) ?? null : null;
   const linkCandidateTasks = tasks.filter((task) => task.uid !== editingTaskUid);
 
-  const actionsToolbar = !readOnly && onMove ? (
-    <div className="mb-3 flex flex-wrap gap-2">
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        disabled={!indentCommand || mutationBusy}
-        onClick={() => dispatchMove(indentCommand)}
-      >
-        Indenter
-      </Button>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        disabled={!outdentCommand || mutationBusy}
-        onClick={() => dispatchMove(outdentCommand)}
-      >
-        Désindenter
-      </Button>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        disabled={!moveUpCommand || mutationBusy}
-        onClick={() => dispatchMove(moveUpCommand)}
-      >
-        Monter
-      </Button>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        disabled={!moveDownCommand || mutationBusy}
-        onClick={() => dispatchMove(moveDownCommand)}
-      >
-        Descendre
-      </Button>
+  const showActionsToolbar = !readOnly && Boolean(onMove || onCreateTask || onDeleteTasks);
+  const actionsToolbar = showActionsToolbar ? (
+    <div className="mb-3 flex flex-wrap items-center gap-2">
+      {onMove ? (
+        <>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={!indentCommand || mutationBusy}
+            onClick={() => dispatchMove(indentCommand)}
+          >
+            Indenter
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={!outdentCommand || mutationBusy}
+            onClick={() => dispatchMove(outdentCommand)}
+          >
+            Désindenter
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={!moveUpCommand || mutationBusy}
+            onClick={() => dispatchMove(moveUpCommand)}
+          >
+            Monter
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={!moveDownCommand || mutationBusy}
+            onClick={() => dispatchMove(moveDownCommand)}
+          >
+            Descendre
+          </Button>
+        </>
+      ) : null}
+      {onCreateTask ? (
+        <Button type="button" variant="outline" size="sm" disabled={mutationBusy} onClick={openCreateTaskDialog}>
+          Ajouter une tâche
+        </Button>
+      ) : null}
+      {onDeleteTasks ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={selectedUids.size === 0 || mutationBusy}
+          onClick={() => void requestDeleteSelection()}
+        >
+          Supprimer la sélection
+        </Button>
+      ) : null}
     </div>
   ) : null;
 
@@ -818,6 +1026,9 @@ export function PlanningTreeTable({
       </CardHeader>
       <CardContent>
         {actionsToolbar}
+        {rows.length === 0 ? (
+          <p className="py-6 text-sm text-muted-foreground">Le planning ne contient aucune tâche.</p>
+        ) : (
         <Table>
           <TableHeader>
             <TableRow>
@@ -903,6 +1114,7 @@ export function PlanningTreeTable({
             })}
           </TableBody>
         </Table>
+        )}
         {readOnlyNotice}
       </CardContent>
       <Dialog
@@ -1006,6 +1218,98 @@ export function PlanningTreeTable({
           ) : null}
         </DialogContent>
       </Dialog>
+      <Dialog
+        open={createDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) closeCreateTaskDialog();
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Ajouter une tâche</DialogTitle>
+            <DialogDescription>Créez une nouvelle tâche dans le planning.</DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-1">
+              <label htmlFor="new-task-name" className="text-sm font-medium">
+                Nom
+              </label>
+              <Input
+                id="new-task-name"
+                aria-label="Nom de la nouvelle tâche"
+                value={createTaskName}
+                onChange={(event) => setCreateTaskName(event.target.value)}
+                maxLength={512}
+              />
+            </div>
+            <label className="flex items-center gap-2 text-sm">
+              <Checkbox
+                checked={createTaskIsMilestone}
+                onCheckedChange={(checked) => setCreateTaskIsMilestone(Boolean(checked))}
+              />
+              Jalon
+            </label>
+            <div className="flex flex-col gap-1">
+              <label htmlFor="new-task-position" className="text-sm font-medium">
+                Position
+              </label>
+              <select
+                id="new-task-position"
+                aria-label="Position de la nouvelle tâche"
+                className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+                value={createPositionMode}
+                onChange={(event) => setCreatePositionMode(event.target.value as CreateTaskPositionMode)}
+              >
+                <option value="root">Ajouter en tête du planning</option>
+                {singleSelectedTask ? (
+                  <option value="after">Ajouter après « {singleSelectedTask.name} » (même niveau)</option>
+                ) : null}
+                {singleSelectedTask && !singleSelectedTask.is_milestone ? (
+                  <option value="child">Ajouter comme enfant de « {singleSelectedTask.name} »</option>
+                ) : null}
+              </select>
+            </div>
+            {createTaskError ? (
+              <p role="alert" className="text-sm text-destructive">
+                {createTaskError}
+              </p>
+            ) : null}
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={closeCreateTaskDialog}>
+              Annuler
+            </Button>
+            <Button type="button" disabled={mutationBusy} onClick={submitCreateTask}>
+              Ajouter
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <AlertDialog
+        open={cascadeConflict !== null}
+        onOpenChange={(open) => {
+          if (!open && !cascadeBusy) setCascadeConflict(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirmer la suppression en cascade ?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {cascadeConflict ? describeCascadeDescendants(cascadeConflict.descendantUids) : null}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={cascadeBusy}>Annuler</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={cascadeBusy}
+              onClick={() => void confirmCascadeDelete()}
+            >
+              {cascadeBusy ? "Suppression..." : "Supprimer"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   );
 }

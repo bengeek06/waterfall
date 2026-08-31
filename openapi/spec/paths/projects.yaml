@@ -277,6 +277,70 @@
         $ref: ../components/responses/MovePlanningTasksNotFound.yaml
       '409':
         $ref: ../components/responses/MovePlanningTasksConflict.yaml
+/projects/{projectId}/plannings/{planningId}/tasks:
+  post:
+    tags:
+    - projects
+    summary: Ajouter une tache a un brouillon de planning a une position explicite
+    operationId: createPlanningTask
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/PlanningId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/PlanningTaskCreate.yaml
+    responses:
+      '200':
+        description: Arbre complet du brouillon mis a jour
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/PlanningDetailRead.yaml
+      '400':
+        $ref: ../components/responses/CreatePlanningTaskBadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/CreatePlanningTaskNotFound.yaml
+      '409':
+        $ref: ../components/responses/CreatePlanningTaskConflict.yaml
+/projects/{projectId}/plannings/{planningId}/tasks/delete:
+  post:
+    tags:
+    - projects
+    summary: Supprimer une selection de taches d'un brouillon de planning
+    operationId: deletePlanningTasks
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/PlanningId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/PlanningTaskDelete.yaml
+    responses:
+      '200':
+        description: Arbre complet du brouillon mis a jour
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/PlanningDetailRead.yaml
+      '400':
+        $ref: ../components/responses/DeletePlanningTasksBadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/DeletePlanningTasksNotFound.yaml
+      '409':
+        $ref: ../components/responses/DeletePlanningTasksConflict.yaml
 /projects/{projectId}/plannings/{planningId}/tasks/{taskUid}:
   patch:
     tags:
@@ -482,34 +546,6 @@
         $ref: ../components/responses/Unauthorized.yaml
       '404':
         $ref: ../components/responses/ProjectNotFound.yaml
-  post:
-    tags:
-    - projects
-    summary: Ajouter une tache de planning au projet
-    operationId: createProjectTask
-    security:
-    - bearerAuth: []
-    parameters:
-    - $ref: ../components/parameters/ProjectId.yaml
-    requestBody:
-      required: true
-      content:
-        application/json:
-          schema:
-            $ref: ../components/schemas/TaskCreate.yaml
-    responses:
-      '201':
-        description: Tache creee
-        content:
-          application/json:
-            schema:
-              $ref: ../components/schemas/TaskRead.yaml
-      '400':
-        $ref: ../components/responses/BadRequest.yaml
-      '401':
-        $ref: ../components/responses/Unauthorized.yaml
-      '404':
-        $ref: ../components/responses/ProjectNotFound.yaml
 /projects/{projectId}/planning-structure:
   post:
     tags:
@@ -669,25 +705,6 @@
         $ref: ../components/responses/Unauthorized.yaml
       '404':
         $ref: ../components/responses/TaskNotFound.yaml
-  delete:
-    tags:
-    - projects
-    summary: Supprimer une tache de planning sans enfant ni usage dans un devis
-    operationId: deleteProjectTask
-    security:
-    - bearerAuth: []
-    parameters:
-    - $ref: ../components/parameters/ProjectId.yaml
-    - $ref: ../components/parameters/TaskUid.yaml
-    responses:
-      '204':
-        description: Tache supprimee
-      '401':
-        $ref: ../components/responses/Unauthorized.yaml
-      '404':
-        $ref: ../components/responses/TaskNotFound.yaml
-      '409':
-        $ref: ../components/responses/Conflict.yaml
 /projects/{projectId}/tasks/{taskUid}/role-assignments:
   get:
     tags:

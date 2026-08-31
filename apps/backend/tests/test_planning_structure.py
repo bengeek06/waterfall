@@ -301,23 +301,43 @@ def test_task_mutations_target_displayed_draft_snapshot() -> None:
         assert generated.status_code == 201
         summary_uid = generated.json()["tasks"][0]["uid"]
 
+        # create_planning_structure sets the generated draft as the project's
+        # displayed planning; the E3-05 create/delete contract is scoped by
+        # planning id, so it is resolved from there.
+        planning_id = client.get(f"/projects/{project_id}", headers=headers).json()[
+            "displayed_planning_id"
+        ]
+
         create = client.post(
-            f"/projects/{project_id}/tasks",
+            f"/projects/{project_id}/plannings/{planning_id}/tasks",
             json={"name": "Draft task"},
             headers=headers,
         )
-        assert create.status_code == 201
-        new_uid = create.json()["uid"]
+        assert create.status_code == 200
+        create_payload = cast(dict[str, Any], create.json())
+        new_uid = next(
+            task["uid"]
+            for task in cast(list[dict[str, Any]], create_payload["tasks"])
+            if task["name"] == "Draft task"
+        )
 
-        # A summary task that still has children cannot be removed.
-        summary_delete = client.delete(
-            f"/projects/{project_id}/tasks/{summary_uid}", headers=headers
+        # A summary task that still has children cannot be removed without
+        # confirming the cascade.
+        summary_delete = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/tasks/delete",
+            json={"task_uids": [summary_uid]},
+            headers=headers,
         )
         assert summary_delete.status_code == 409
+        assert summary_delete.json()["detail"]["code"] == "CASCADE_CONFIRMATION_REQUIRED"
 
         # A leaf task added to the displayed draft snapshot can be removed.
-        leaf_delete = client.delete(f"/projects/{project_id}/tasks/{new_uid}", headers=headers)
-        assert leaf_delete.status_code == 204
+        leaf_delete = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/tasks/delete",
+            json={"task_uids": [new_uid]},
+            headers=headers,
+        )
+        assert leaf_delete.status_code == 200
         remaining = client.get(f"/projects/{project_id}/tasks", headers=headers).json()
         assert new_uid not in [task["uid"] for task in remaining]
 
@@ -374,14 +394,23 @@ def test_regenerate_structure_preserves_manual_tasks() -> None:
             if task["structure_key"] is not None
         }
 
+        planning_id = client.get(f"/projects/{project_id}", headers=headers).json()[
+            "displayed_planning_id"
+        ]
         created = client.post(
-            f"/projects/{project_id}/tasks",
+            f"/projects/{project_id}/plannings/{planning_id}/tasks",
             json={"name": "Manual task"},
             headers=headers,
         )
-        assert created.status_code == 201
-        manual_uid = created.json()["uid"]
-        assert created.json()["structure_key"] is None
+        assert created.status_code == 200
+        created_payload = cast(dict[str, Any], created.json())
+        manual_task = next(
+            task
+            for task in cast(list[dict[str, Any]], created_payload["tasks"])
+            if task["name"] == "Manual task"
+        )
+        manual_uid = manual_task["uid"]
+        assert manual_task["structure_key"] is None
 
         assert client.post(path, json=_payload(), headers=headers).status_code == 201
 

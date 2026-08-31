@@ -24,6 +24,9 @@ export type PlanningStructureDraftRead = components["schemas"]["PlanningStructur
 export type Planning = components["schemas"]["PlanningRead"];
 export type PlanningDetail = components["schemas"]["PlanningDetailRead"];
 export type PlanningTaskMove = components["schemas"]["PlanningTaskMove"];
+export type PlanningTaskCreate = components["schemas"]["PlanningTaskCreate"];
+export type PlanningTaskDelete = components["schemas"]["PlanningTaskDelete"];
+type PlanningTaskDeleteConflictDetail = components["schemas"]["PlanningTaskDeleteConflict"]["detail"];
 export type PlanningTaskScheduleUpdate = components["schemas"]["PlanningTaskScheduleUpdate"];
 export type TaskLinkWrite = components["schemas"]["TaskLinkWrite"];
 export type TaskLinksReplace = components["schemas"]["TaskLinksReplace"];
@@ -38,6 +41,11 @@ export class ApiError extends Error {
   constructor(
     public readonly status: number,
     message: string,
+    // Raw, still-structured `detail` from the response body (e.g. PlanningTaskDeleteConflict's
+    // `{code, descendant_uids, task_uids}`), when the backend sent one -- kept alongside the
+    // already-formatted `message` so a caller that needs more than a display string (see
+    // getPlanningTaskDeleteConflict below) does not have to re-parse the response itself.
+    public readonly detail?: unknown,
   ) {
     super(message);
     this.name = "ApiError";
@@ -65,24 +73,47 @@ function formatValidationErrors(details: PydanticValidationErrorItem[]): string 
     .join("; ");
 }
 
-async function parseError(response: Response): Promise<string> {
+type ParsedError = { message: string; detail?: unknown };
+
+// Readable French copy for the two structured PlanningTaskDeleteConflict codes (see
+// PlanningTaskDeleteConflict in the generated schema); anything else falls back to the raw
+// response body via the caller in parseError.
+function describeStructuredDetailCode(code: unknown): string | null {
+  if (code === "CASCADE_CONFIRMATION_REQUIRED") {
+    return "Cette tâche a des tâches enfants et nécessite une confirmation.";
+  }
+  if (code === "TASK_REFERENCED") {
+    return "Cette tâche est référencée par un devis, une affectation ou une charge.";
+  }
+  return null;
+}
+
+async function parseError(response: Response): Promise<ParsedError> {
   const text = await response.text();
   if (!text) {
-    return `HTTP ${response.status}`;
+    return { message: `HTTP ${response.status}` };
   }
 
   try {
     const payload = JSON.parse(text) as {
-      detail?: string | PydanticValidationErrorItem[];
+      detail?: string | PydanticValidationErrorItem[] | { code?: string };
       message?: string;
       error?: string;
     };
     if (Array.isArray(payload.detail)) {
-      return formatValidationErrors(payload.detail) || text;
+      return { message: formatValidationErrors(payload.detail) || text, detail: payload.detail };
     }
-    return payload.detail ?? payload.message ?? payload.error ?? text;
+    // A structured (object) `detail`, e.g. PlanningTaskDeleteConflict's
+    // `{code, descendant_uids, task_uids}`, must never be handed to callers as the `message`
+    // string as-is (it would stringify to something like "[object Object]"): translate it to
+    // readable copy here, but also keep the raw object on ApiError.detail so a caller that needs
+    // the structured fields (see getPlanningTaskDeleteConflict) does not have to re-parse it.
+    if (payload.detail && typeof payload.detail === "object") {
+      return { message: describeStructuredDetailCode(payload.detail.code) ?? text, detail: payload.detail };
+    }
+    return { message: payload.detail ?? payload.message ?? payload.error ?? text };
   } catch {
-    return text;
+    return { message: text };
   }
 }
 
@@ -92,7 +123,8 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
     credentials: "include",
   });
   if (!response.ok) {
-    throw new ApiError(response.status, await parseError(response));
+    const parsed = await parseError(response);
+    throw new ApiError(response.status, parsed.message, parsed.detail);
   }
 
   if (response.status === 204) {
@@ -119,7 +151,8 @@ async function authFetch(
 
   if (firstResponse.status !== 401) {
     if (!firstResponse.ok) {
-      throw new ApiError(firstResponse.status, await parseError(firstResponse));
+      const parsed = await parseError(firstResponse);
+      throw new ApiError(firstResponse.status, parsed.message, parsed.detail);
     }
     return firstResponse;
   }
@@ -148,9 +181,35 @@ async function authFetch(
   });
 
   if (!secondResponse.ok) {
-    throw new ApiError(secondResponse.status, await parseError(secondResponse));
+    const parsed = await parseError(secondResponse);
+    throw new ApiError(secondResponse.status, parsed.message, parsed.detail);
   }
   return secondResponse;
+}
+
+// Inspects an error thrown by deletePlanningTasks for the structured 409 conflict body
+// (PlanningTaskDeleteConflict): CASCADE_CONFIRMATION_REQUIRED means the deletion needs the user's
+// confirmation to also remove the listed descendants; TASK_REFERENCED means the deletion cannot
+// proceed at all (referenced by an estimate/assignment/charge), regardless of confirm_cascade.
+// Returns null for anything else (a different status, no structured detail, or an unrelated
+// error), so callers can fall back to a generic error message.
+export function getPlanningTaskDeleteConflict(cause: unknown): {
+  code: "CASCADE_CONFIRMATION_REQUIRED" | "TASK_REFERENCED";
+  descendantUids?: number[];
+  taskUids?: number[];
+} | null {
+  if (!(cause instanceof ApiError) || cause.status !== 409) {
+    return null;
+  }
+  const detail = cause.detail as PlanningTaskDeleteConflictDetail | undefined;
+  if (!detail || (detail.code !== "CASCADE_CONFIRMATION_REQUIRED" && detail.code !== "TASK_REFERENCED")) {
+    return null;
+  }
+  return {
+    code: detail.code,
+    descendantUids: detail.descendant_uids,
+    taskUids: detail.task_uids,
+  };
 }
 
 export async function login(email: string, password: string): Promise<TokenResponse> {
@@ -1109,6 +1168,44 @@ export function movePlanningTasks(
   );
 }
 
+export function createPlanningTask(
+  projectId: number,
+  planningId: number,
+  payload: PlanningTaskCreate,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<PlanningDetail>(
+    `/projects/${projectId}/plannings/${planningId}/tasks`,
+    tokens,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    onSessionRefresh,
+  );
+}
+
+export function deletePlanningTasks(
+  projectId: number,
+  planningId: number,
+  payload: PlanningTaskDelete,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<PlanningDetail>(
+    `/projects/${projectId}/plannings/${planningId}/tasks/delete`,
+    tokens,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    onSessionRefresh,
+  );
+}
+
 export function updatePlanningTaskSchedule(
   projectId: number,
   planningId: number,
@@ -1207,40 +1304,6 @@ export function updateTaskDescription(
       },
       body: JSON.stringify({ description }),
     },
-    onSessionRefresh,
-  );
-}
-
-export type TaskCreate = components["schemas"]["TaskCreate"];
-
-export function createProjectTask(
-  projectId: number,
-  payload: TaskCreate,
-  tokens: SessionTokens,
-  onSessionRefresh: (next: SessionTokens) => void,
-) {
-  return authRequest<Task>(
-    `/projects/${projectId}/tasks`,
-    tokens,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    },
-    onSessionRefresh,
-  );
-}
-
-export function deleteProjectTask(
-  projectId: number,
-  taskUid: number,
-  tokens: SessionTokens,
-  onSessionRefresh: (next: SessionTokens) => void,
-) {
-  return authRequest<void>(
-    `/projects/${projectId}/tasks/${taskUid}`,
-    tokens,
-    { method: "DELETE" },
     onSessionRefresh,
   );
 }

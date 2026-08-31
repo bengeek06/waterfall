@@ -2,10 +2,16 @@ import re
 from collections.abc import Set
 from pathlib import Path
 from typing import Any, cast
+from uuid import uuid4
 
 import yaml
+from fastapi.testclient import TestClient
 
+from waterfall.db.session import get_session_factory
 from waterfall.main import app
+from waterfall.models.ms_core import MsTask
+from waterfall.models.planning import WfPlanning, WfPlanningTaskSnapshot
+from waterfall.models.wf_core import WfChargeLine
 
 OPENAPI_PATH = Path(__file__).resolve().parents[3] / "openapi" / "waterfall_v1.yaml"
 GENERATED_CLIENT_PATH = (
@@ -327,3 +333,174 @@ def test_import_and_estimate_contracts_match_runtime_nullability_and_aliases() -
         {"type": "integer"},
         {"type": "null"},
     ]
+
+
+def _auth_headers(client: TestClient) -> dict[str, str]:
+    email = f"openapi.contract.{uuid4().hex}@example.com"
+    password = "SuperSecret123!"
+    assert (
+        client.post("/auth/register", json={"email": email, "password": password}).status_code
+        == 201
+    )
+    token = client.post("/auth/token", data={"username": email, "password": password})
+    assert token.status_code == 200
+    return {"Authorization": f"Bearer {token.json()['access_token']}"}
+
+
+def _create_project(client: TestClient, headers: dict[str, str]) -> int:
+    response = client.post("/projects", json={"name": "OpenAPI contract fixture"}, headers=headers)
+    assert response.status_code == 201
+    return cast(int, response.json()["id"])
+
+
+def _seed_planning_with_parent_and_child(project_id: int) -> int:
+    """A minimal draft planning tree: a summary root (uid=1) with one child
+    (uid=2) -- just enough to trigger a CASCADE_CONFIRMATION_REQUIRED 409 on
+    deleting uid=1, or a TASK_REFERENCED 409 once uid=2 is referenced.
+    """
+    with get_session_factory()() as session:
+        planning = WfPlanning(project_id=project_id, version_number=1, status="draft")
+        session.add(planning)
+        session.flush()
+        session.add_all(
+            [
+                WfPlanningTaskSnapshot(
+                    planning_id=planning.id,
+                    uid=1,
+                    name="Root",
+                    position=1,
+                    is_summary=True,
+                    is_milestone=False,
+                ),
+                WfPlanningTaskSnapshot(
+                    planning_id=planning.id,
+                    uid=2,
+                    name="Child",
+                    parent_uid=1,
+                    position=1,
+                    is_summary=False,
+                    is_milestone=False,
+                ),
+            ]
+        )
+        session.commit()
+        return planning.id
+
+
+def test_delete_planning_tasks_conflict_response_declares_dedicated_schema() -> None:
+    """Guards the finding this response used to trigger: a bare ``dict``
+    ``HTTPException`` ``detail`` documented as the generic
+    ``FastAPIErrorResponse`` (``str | array``), which cannot express
+    ``{code, descendant_uids}``/``{code, task_uids}`` and would make a
+    TS-generated client type ``error.detail`` incorrectly. Checking the two
+    ``$ref``s equal (as ``test_move_planning_tasks_documents_all_not_found_resources``
+    does for ``move``) is not enough on its own -- it would pass even if both
+    still pointed at the same generic schema -- so this also asserts the
+    dedicated schema's actual shape.
+
+    The 409 is documented as a ``oneOf`` of ``PlanningTaskDeleteConflict``
+    (the structured cascade/reference conflicts) and ``FastAPIErrorResponse``
+    (the plain-string conflicts that ``delete_planning_tasks_route`` also
+    raises -- e.g. "Planning is not a draft", or an ``IntegrityError`` on the
+    hierarchy) -- see PR #78's Copilot review finding #2: those code paths
+    never actually return the structured shape, so documenting it exclusively
+    was inaccurate.
+    """
+    raw_document: object = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
+    static_document = cast(dict[str, Any], raw_document)
+    static_components = cast(dict[str, Any], static_document["components"])
+    delete_operation = static_document["paths"][
+        "/projects/{projectId}/plannings/{planningId}/tasks/delete"
+    ]["post"]
+    conflict_response = static_components["responses"]["DeletePlanningTasksConflict"]
+    conflict_schema_refs = {
+        member["$ref"]
+        for member in conflict_response["content"]["application/json"]["schema"]["oneOf"]
+    }
+    assert conflict_schema_refs == {
+        "#/components/schemas/PlanningTaskDeleteConflict",
+        "#/components/schemas/FastAPIErrorResponse",
+    }
+    assert delete_operation["responses"]["409"]["$ref"] == (
+        "#/components/responses/DeletePlanningTasksConflict"
+    )
+
+    conflict_schema = static_components["schemas"]["PlanningTaskDeleteConflict"]
+    detail_schema = conflict_schema["properties"]["detail"]
+    assert detail_schema["type"] == "object"
+    assert detail_schema["required"] == ["code"]
+    assert detail_schema["properties"]["code"]["enum"] == [
+        "CASCADE_CONFIRMATION_REQUIRED",
+        "TASK_REFERENCED",
+    ]
+    assert detail_schema["properties"]["descendant_uids"]["items"]["type"] == "integer"
+    assert detail_schema["properties"]["task_uids"]["items"]["type"] == "integer"
+
+    runtime_schemas = cast(dict[str, Any], app.openapi()["components"])["schemas"]
+    runtime_detail_ref = runtime_schemas["PlanningTaskDeleteConflict"]["properties"]["detail"]
+    runtime_detail_schema = runtime_schemas[runtime_detail_ref["$ref"].rsplit("/", 1)[-1]]
+    assert set(runtime_detail_schema["properties"]) == set(detail_schema["properties"])
+    assert (
+        runtime_detail_schema["properties"]["code"]["enum"]
+        == detail_schema["properties"]["code"]["enum"]
+    )
+
+
+def test_delete_planning_tasks_cascade_confirmation_conflict_matches_declared_schema() -> None:
+    raw_document: object = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
+    static_document = cast(dict[str, Any], raw_document)
+    detail_properties = static_document["components"]["schemas"]["PlanningTaskDeleteConflict"][
+        "properties"
+    ]["detail"]["properties"]
+
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_planning_with_parent_and_child(project_id)
+
+        response = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/tasks/delete",
+            json={"task_uids": [1]},
+            headers=headers,
+        )
+
+    assert response.status_code == 409
+    detail = cast(dict[str, Any], response.json())["detail"]
+    assert set(detail) <= set(detail_properties)
+    assert detail["code"] == "CASCADE_CONFIRMATION_REQUIRED"
+    assert isinstance(detail["descendant_uids"], list)
+    assert all(isinstance(uid, int) for uid in detail["descendant_uids"])
+    assert detail["descendant_uids"] == [2]
+
+
+def test_delete_planning_tasks_task_referenced_conflict_matches_declared_schema() -> None:
+    raw_document: object = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
+    static_document = cast(dict[str, Any], raw_document)
+    detail_properties = static_document["components"]["schemas"]["PlanningTaskDeleteConflict"][
+        "properties"
+    ]["detail"]["properties"]
+
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_planning_with_parent_and_child(project_id)
+
+        with get_session_factory()() as session:
+            session.add(MsTask(project_id=project_id, uid=2, name="Legacy bridge"))
+            session.flush()
+            session.add(WfChargeLine(project_id=project_id, task_uid=2, load_minutes=60))
+            session.commit()
+
+        response = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/tasks/delete",
+            json={"task_uids": [2]},
+            headers=headers,
+        )
+
+    assert response.status_code == 409
+    detail = cast(dict[str, Any], response.json())["detail"]
+    assert set(detail) <= set(detail_properties)
+    assert detail["code"] == "TASK_REFERENCED"
+    assert isinstance(detail["task_uids"], list)
+    assert all(isinstance(uid, int) for uid in detail["task_uids"])
+    assert detail["task_uids"] == [2]

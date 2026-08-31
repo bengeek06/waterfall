@@ -792,6 +792,70 @@ paths:
           $ref: '#/components/responses/MovePlanningTasksNotFound'
         '409':
           $ref: '#/components/responses/MovePlanningTasksConflict'
+  /projects/{projectId}/plannings/{planningId}/tasks:
+    post:
+      tags:
+        - projects
+      summary: Ajouter une tache a un brouillon de planning a une position explicite
+      operationId: createPlanningTask
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/PlanningId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlanningTaskCreate'
+      responses:
+        '200':
+          description: Arbre complet du brouillon mis a jour
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanningDetailRead'
+        '400':
+          $ref: '#/components/responses/CreatePlanningTaskBadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/CreatePlanningTaskNotFound'
+        '409':
+          $ref: '#/components/responses/CreatePlanningTaskConflict'
+  /projects/{projectId}/plannings/{planningId}/tasks/delete:
+    post:
+      tags:
+        - projects
+      summary: Supprimer une selection de taches d'un brouillon de planning
+      operationId: deletePlanningTasks
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/PlanningId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlanningTaskDelete'
+      responses:
+        '200':
+          description: Arbre complet du brouillon mis a jour
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanningDetailRead'
+        '400':
+          $ref: '#/components/responses/DeletePlanningTasksBadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/DeletePlanningTasksNotFound'
+        '409':
+          $ref: '#/components/responses/DeletePlanningTasksConflict'
   /projects/{projectId}/plannings/{planningId}/tasks/{taskUid}:
     patch:
       tags:
@@ -997,34 +1061,6 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/ProjectNotFound'
-    post:
-      tags:
-        - projects
-      summary: Ajouter une tache de planning au projet
-      operationId: createProjectTask
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: '#/components/parameters/ProjectId'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/TaskCreate'
-      responses:
-        '201':
-          description: Tache creee
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/TaskRead'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/ProjectNotFound'
   /projects/{projectId}/planning-structure:
     post:
       tags:
@@ -1184,25 +1220,6 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/TaskNotFound'
-    delete:
-      tags:
-        - projects
-      summary: Supprimer une tache de planning sans enfant ni usage dans un devis
-      operationId: deleteProjectTask
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: '#/components/parameters/ProjectId'
-        - $ref: '#/components/parameters/TaskUid'
-      responses:
-        '204':
-          description: Tache supprimee
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/TaskNotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
   /projects/{projectId}/tasks/{taskUid}/role-assignments:
     get:
       tags:
@@ -2941,6 +2958,42 @@ components:
         position:
           type: integer
           minimum: 1
+    PlanningTaskCreate:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 512
+        is_milestone:
+          type: boolean
+          default: false
+        target_parent_uid:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
+        insert_after_uid:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
+    PlanningTaskDelete:
+      type: object
+      required:
+        - task_uids
+      properties:
+        task_uids:
+          type: array
+          minItems: 1
+          items:
+            type: integer
+            minimum: 1
+        confirm_cascade:
+          type: boolean
+          default: false
     PlanningDetailRead:
       allOf:
         - $ref: '#/components/schemas/PlanningRead'
@@ -3188,22 +3241,6 @@ components:
           type: string
           nullable: true
           maxLength: 10000
-    TaskCreate:
-      type: object
-      required:
-        - name
-      properties:
-        name:
-          type: string
-          minLength: 1
-          maxLength: 512
-        parent_task_id:
-          type: integer
-          minimum: 1
-          nullable: true
-        is_milestone:
-          type: boolean
-          default: false
     TaskRoleAssignmentCreate:
       type: object
       required:
@@ -4015,6 +4052,31 @@ components:
             updated_at:
               type: string
               format: date-time
+    PlanningTaskDeleteConflict:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: object
+          required:
+            - code
+          properties:
+            code:
+              type: string
+              enum:
+                - CASCADE_CONFIRMATION_REQUIRED
+                - TASK_REFERENCED
+            descendant_uids:
+              description: 'Present when code=CASCADE_CONFIRMATION_REQUIRED: every descendant uid (of every selected root) that would be removed alongside the selection.'
+              type: array
+              items:
+                type: integer
+            task_uids:
+              description: 'Present when code=TASK_REFERENCED: every uid in the selection (and its to-be-cascaded descendants) that is referenced by an estimate, an assignment, or a charge.'
+              type: array
+              items:
+                type: integer
     PlanningTaskScheduleUpdate:
       type: object
       required:
@@ -4287,6 +4349,44 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/FastAPIErrorResponse'
+    CreatePlanningTaskBadRequest:
+      description: Requete de creation invalide
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/FastAPIErrorResponse'
+    CreatePlanningTaskNotFound:
+      description: Projet, planning ou tache parent introuvable
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/FastAPIErrorResponse'
+    CreatePlanningTaskConflict:
+      description: La creation entre en conflit avec le planning
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/FastAPIErrorResponse'
+    DeletePlanningTasksBadRequest:
+      description: Requete de suppression invalide
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/FastAPIErrorResponse'
+    DeletePlanningTasksNotFound:
+      description: Projet, planning ou tache introuvable pendant la suppression
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/FastAPIErrorResponse'
+    DeletePlanningTasksConflict:
+      description: Suppression en cascade non confirmee (detail.code=CASCADE_CONFIRMATION_REQUIRED, avec la liste des uid descendants dans detail.descendant_uids), ou tache referencee par un devis, une affectation ou une charge (detail.code=TASK_REFERENCED, avec la liste des uid references dans detail.task_uids). D'autres conflits (planning non brouillon, conflit d'integrite sur la hierarchie) renvoient le detail texte brut generique FastAPI plutot que ce detail structure.
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/PlanningTaskDeleteConflict'
+              - $ref: '#/components/schemas/FastAPIErrorResponse'
     EstimateNotFound:
       description: Devis introuvable
       content:

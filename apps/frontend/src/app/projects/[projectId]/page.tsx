@@ -28,8 +28,10 @@ import {
   createPlanningStructure,
   createEstimateCostLine,
   createImportBatch,
+  createPlanningTask,
   createProjectEstimate,
   deleteEstimateCostLine,
+  deletePlanningTasks,
   EstimateAggregates,
   EstimateCostLine,
   exportEstimateExcel,
@@ -41,6 +43,7 @@ import {
   getImportBatchDiff,
   getPlanning,
   getPlanningStructureDraft,
+  getPlanningTaskDeleteConflict,
   getProject,
   listPlannings,
   listEstimateCostLines,
@@ -116,6 +119,27 @@ function describePredecessorLinksError(cause: unknown): string {
     return "Requête de prédécesseurs invalide.";
   }
   return cause.message || "Impossible de mettre à jour les prédécesseurs.";
+}
+
+// A CASCADE_CONFIRMATION_REQUIRED 409 is deliberately excluded here: it is not a failure, it is
+// the expected first response of a cascading delete, and PlanningTreeTable's own confirmation
+// dialog reacts to it directly (see getPlanningTaskDeleteConflict) instead of this page-level
+// error banner.
+function describeDeleteTasksError(cause: unknown): string {
+  if (!(cause instanceof ApiError)) {
+    return "Impossible de supprimer les tâches sélectionnées.";
+  }
+  if (cause.status === 404) {
+    return "Une des tâches sélectionnées est introuvable dans ce planning.";
+  }
+  if (cause.status === 409) {
+    const conflict = getPlanningTaskDeleteConflict(cause);
+    if (conflict?.code === "TASK_REFERENCED") {
+      return "Une des tâches sélectionnées est référencée par un devis, une affectation ou une charge et ne peut pas être supprimée.";
+    }
+    return cause.message || "Cette suppression entre en conflit avec l'état actuel du planning.";
+  }
+  return cause.message || "Impossible de supprimer les tâches sélectionnées.";
 }
 export default function ProjectDetailsPage() {
   const router = useRouter();
@@ -572,6 +596,117 @@ export default function ProjectDetailsPage() {
       }
       // Rethrown so the dialog itself can also surface a targeted, actionable error message.
       throw new Error(message);
+    } finally {
+      setPlanningMutationBusy(false);
+    }
+  }
+
+  async function createPlanningTaskSelection(command: {
+    name: string;
+    isMilestone: boolean;
+    targetParentUid?: number;
+    insertAfterUid?: number;
+  }) {
+    if (!session || !selectedPlanning || selectedPlanning.status !== "draft" || isReadOnlyProject) {
+      return;
+    }
+    const requestedPlanningId = selectedPlanning.id;
+    setPlanningMutationBusy(true);
+    setError(null);
+    try {
+      const updated = await createPlanningTask(
+        projectId,
+        requestedPlanningId,
+        {
+          name: command.name,
+          is_milestone: command.isMilestone,
+          target_parent_uid: command.targetParentUid,
+          insert_after_uid: command.insertAfterUid,
+        },
+        session,
+        onSessionRefresh,
+      );
+      // The user may have switched to another planning version while this request was in flight;
+      // applying it now would silently replace that version's tree with a stale one.
+      if (selectedPlanningIdRef.current === requestedPlanningId) {
+        setPlanningDetail(updated);
+      }
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      if (selectedPlanningIdRef.current === requestedPlanningId) {
+        setError(cause instanceof ApiError ? cause.message : "Impossible de créer la tâche.");
+      }
+    } finally {
+      setPlanningMutationBusy(false);
+    }
+  }
+
+  async function deletePlanningTasksSelection(
+    taskUids: number[],
+    confirmCascade: boolean,
+    requestedVersionKey: number | string | null,
+  ) {
+    // Unlike movePlanningTaskSelection/updateTaskScheduleSelection, this one is awaited by
+    // PlanningTreeTable itself (requestDeleteSelection/confirmCascadeDelete), which distinguishes
+    // "needs cascade confirmation" from "resolved" by whether the promise rejects. A silent
+    // `return` here would look like a success and clear the selection while nothing was deleted,
+    // so every guard branch must reject explicitly instead.
+    if (!session) {
+      throw new Error("Session expirée : reconnecte-toi puis réessaie.");
+    }
+    if (!selectedPlanning || selectedPlanning.status !== "draft" || isReadOnlyProject) {
+      throw new Error("Ce planning n'est plus modifiable : les tâches n'ont pas été supprimées.");
+    }
+    const requestedPlanningId = selectedPlanning.id;
+    // requestDeleteSelection/confirmCascadeDelete are two independent calls into this function
+    // (a probe with confirm_cascade=false, then -- if the backend answers with
+    // CASCADE_CONFIRMATION_REQUIRED -- a retry with confirm_cascade=true once the user confirms
+    // the AlertDialog). Between those two calls the user is free to switch the displayed planning
+    // version (the version <select> is only disabled by planningBusy, not planningMutationBusy).
+    // Task uids are reused across a planning's versions (see planning_structure.py), so a stale
+    // cascade confirmation retried against the now-displayed version could delete the wrong
+    // tasks there. requestedVersionKey is what PlanningTreeTable captured when the delete flow
+    // that led to this call began; bail out before any network call if it no longer matches the
+    // planning currently displayed, instead of trusting the (possibly stale) task uids.
+    if (requestedVersionKey !== requestedPlanningId) {
+      const message = "Le planning affiché a changé : relance la suppression.";
+      setError(message);
+      throw new Error(message);
+    }
+    setPlanningMutationBusy(true);
+    setError(null);
+    try {
+      const updated = await deletePlanningTasks(
+        projectId,
+        requestedPlanningId,
+        { task_uids: taskUids, confirm_cascade: confirmCascade },
+        session,
+        onSessionRefresh,
+      );
+      if (selectedPlanningIdRef.current === requestedPlanningId) {
+        setPlanningDetail(updated);
+      }
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        throw cause;
+      }
+      const conflict = getPlanningTaskDeleteConflict(cause);
+      if (
+        conflict?.code !== "CASCADE_CONFIRMATION_REQUIRED" &&
+        selectedPlanningIdRef.current === requestedPlanningId
+      ) {
+        setError(describeDeleteTasksError(cause));
+      }
+      // Rethrown so PlanningTreeTable can also react: open its cascade dialog on
+      // CASCADE_CONFIRMATION_REQUIRED, or otherwise just close it -- the failure message itself
+      // is only ever shown once, via the setError banner above.
+      throw cause;
     } finally {
       setPlanningMutationBusy(false);
     }
@@ -1504,6 +1639,10 @@ export default function ProjectDetailsPage() {
                 onMove={(command) => void movePlanningTaskSelection(command)}
                 onScheduleUpdate={(taskUid, payload) => updateTaskScheduleSelection(taskUid, payload)}
                 onEditLinks={(payload) => editTaskPredecessorLinksSelection(payload.taskUid, payload.links)}
+                onCreateTask={(command) => void createPlanningTaskSelection(command)}
+                onDeleteTasks={(taskUids, confirmCascade, requestedVersionKey) =>
+                  deletePlanningTasksSelection(taskUids, confirmCascade, requestedVersionKey)
+                }
                 mutationBusy={planningMutationBusy}
               />
             ) : null}

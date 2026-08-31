@@ -6,10 +6,16 @@ properties:
     type: string
     minLength: 1
     maxLength: 512
-  parent_task_id:
-    type: integer
-    minimum: 1
-    nullable: true
   is_milestone:
     type: boolean
     default: false
+  target_parent_uid:
+    type:
+    - integer
+    - 'null'
+    minimum: 1
+  insert_after_uid:
+    type:
+    - integer
+    - 'null'
+    minimum: 1
