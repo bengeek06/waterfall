@@ -315,6 +315,16 @@ def update_calendar(
             if previous_default is not None:
                 previous_default.is_default = False
                 db.add(previous_default)
+                # Force the demotion UPDATE to hit the database before the promotion
+                # below is applied. SQLAlchemy's unit of work batches same-table
+                # UPDATEs ordered by primary key, not by session-attach order, so
+                # without this explicit flush, promoting a calendar whose id is
+                # LOWER than previous_default.id would flush "calendar.is_default =
+                # true" first while previous_default.is_default is still true in
+                # the database -- an immediate, non-deferrable violation of the
+                # partial unique index uq_wf_calendar_is_default_true, surfacing as
+                # a spurious 409 for an otherwise valid promotion.
+                db.flush()
             calendar.is_default = True
         elif calendar.is_default:
             raise _conflict(

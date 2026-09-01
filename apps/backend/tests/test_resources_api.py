@@ -908,6 +908,34 @@ def test_calendar_patch_promotes_new_default_and_demotes_previous_one() -> None:
         assert deactivated.json()["is_active"] is False
 
 
+def test_calendar_patch_promotes_default_with_lower_id_than_current_default() -> None:
+    """Regression test for the flush-ordering bug in issue #51's follow-up review:
+    SQLAlchemy's unit of work batches same-table UPDATEs ordered by primary key, not
+    by session-attach order. The happy-path promotion test above always promotes a
+    calendar whose id is HIGHER than the current default's id, which happens to flush
+    in the safe order by accident. This test promotes a calendar whose id is LOWER
+    than the current default's id -- the exact case where, without an explicit flush
+    of the demotion before the promotion, the promoting UPDATE would be sent to the
+    database first and transiently violate the partial unique index, surfacing as a
+    spurious 409 instead of a successful 200."""
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        lower_id_calendar_id = _create_calendar_via_api(client, headers, "LOWER-ID")
+        higher_id_calendar_id = _create_calendar_via_api(client, headers, "HIGHER-ID")
+        assert lower_id_calendar_id < higher_id_calendar_id
+
+        assert _promote_default(client, headers, higher_id_calendar_id).status_code == 200
+
+        promote_response = _promote_default(client, headers, lower_id_calendar_id)
+        assert promote_response.status_code == 200
+        assert promote_response.json()["is_default"] is True
+
+        previous_default: Response = client.get(
+            f"/resources/calendars/{higher_id_calendar_id}", headers=headers
+        )
+        assert previous_default.json()["is_default"] is False
+
+
 def test_calendar_patch_promote_requires_active_calendar() -> None:
     with TestClient(app) as client:
         headers = _admin_headers(client)

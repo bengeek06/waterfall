@@ -36,10 +36,10 @@ def _disposable_engine(database_url: str) -> Generator[Engine]:
         engine.dispose()
 
 
-def _run_alembic(database_url: str, revision: str) -> None:
+def _run_alembic(database_url: str, revision: str) -> subprocess.CompletedProcess[str]:
     environment = os.environ.copy()
     environment["DATABASE_URL"] = database_url
-    subprocess.run(
+    return subprocess.run(
         [sys.executable, "-m", "alembic", "upgrade", revision],
         cwd=BACKEND_DIR,
         env=environment,
@@ -367,6 +367,41 @@ def test_calendar_default_flag_migration_is_reversible() -> None:
                 )
                 == 1
             )
+
+
+def test_calendar_default_flag_migration_does_not_backfill_inactive_standard() -> None:
+    """Follow-up to issue #51: if a deployment already deactivated the STANDARD
+    calendar before running the 20260901_0004 migration (the exact deactivation bug
+    issue #51 exists to repair), the backfill must NOT flag that inactive row
+    is_default=true. update_calendar's promotion logic requires the target to be
+    active, and resolve_default_calendar_id only considers active rows, so an
+    inactive is_default row is a state the API would never produce -- and would
+    silently degrade the system to the wall-clock fallback with no active default and
+    no operator-visible signal (see the migration's own comment for why a warning,
+    not an auto-reactivation, is the intervention here)."""
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "migration.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        _run_alembic(database_url, "20260831_0003")
+
+        with _disposable_engine(database_url) as engine, engine.begin() as connection:
+            connection.execute(text("UPDATE wf_calendar SET is_active = 0 WHERE code = 'STANDARD'"))
+
+        result = _run_alembic(database_url, "head")
+        assert "STANDARD" in result.stderr
+        assert "inactive" in result.stderr
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            standard_row = connection.execute(
+                text("SELECT is_active, is_default FROM wf_calendar WHERE code = 'STANDARD'")
+            ).one()
+            assert standard_row[0] == 0
+            assert standard_row[1] == 0
+
+            any_default_count = connection.scalar(
+                text("SELECT COUNT(*) FROM wf_calendar WHERE is_default = 1")
+            )
+            assert any_default_count == 0
 
 
 def test_postgres_calendar_default_flag_migration_upgrade_and_downgrade(

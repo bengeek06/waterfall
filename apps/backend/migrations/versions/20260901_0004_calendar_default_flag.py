@@ -38,27 +38,55 @@ def upgrade() -> None:
     # the column add itself; this backfill is what actually flips STANDARD's row to
     # true, matching the "STANDARD is always the seeded system default" invariant
     # (issue #51) instead of leaving every calendar without a default after upgrade.
+    #
+    # The backfill is deliberately scoped to `is_active = true`: an inactive STANDARD
+    # row means some deployment already hit issue #51's deactivation bug before this
+    # migration ran. Flagging an inactive row is_default=true would create a state the
+    # API's promotion logic (update_calendar) would never allow going forward -- it
+    # requires the target to be active -- and resolve_default_calendar_id only
+    # considers active rows, so an inactive is_default row is worse than no default at
+    # all (it looks "handled" in the data but is invisible to every runtime code path).
+    # We deliberately do NOT auto-reactivate the row here either: silently flipping
+    # is_active back on would override a state an admin explicitly set, which is a
+    # surprising side effect for a schema migration to make. A loud warning is the
+    # right level of intervention -- it leaves the decision (reactivate STANDARD, or
+    # promote a different active calendar) to an operator.
     calendar_table = sa.table(
         "wf_calendar",
         sa.column("code", sa.String),
+        sa.column("is_active", sa.Boolean),
         sa.column("is_default", sa.Boolean),
     )
     connection = op.get_bind()
     result = connection.execute(
-        sa.update(calendar_table).where(calendar_table.c.code == "STANDARD").values(is_default=True)
+        sa.update(calendar_table)
+        .where(calendar_table.c.code == "STANDARD")
+        .where(calendar_table.c.is_active.is_(True))
+        .values(is_default=True)
     )
-    # A rowcount of 0 means no row with code == 'STANDARD' existed at upgrade time (e.g.
-    # it was already renamed or deleted before running this migration). That is not
-    # fatal -- resolve_default_calendar_id's role calendar -> is_default calendar ->
-    # wall-clock fallback chain still degrades gracefully with no default calendar --
-    # but it silently leaves the system without any default, so warn loudly enough for
-    # an operator to notice and promote one explicitly (PATCH is_default=true).
+    # A rowcount of 0 means either no row with code == 'STANDARD' existed at upgrade
+    # time (e.g. it was already renamed or deleted before running this migration), or
+    # it existed but was inactive. Neither is fatal -- resolve_default_calendar_id's
+    # role calendar -> is_default calendar -> wall-clock fallback chain still degrades
+    # gracefully with no default calendar -- but both silently leave the system
+    # without any default, so warn loudly enough for an operator to notice and act.
     if result.rowcount == 0:
-        logger.warning(
-            "calendar default flag backfill: no calendar with code == 'STANDARD' was "
-            "found, so no calendar was flagged is_default. Promote one explicitly via "
-            "PATCH /resources/calendars/{id} with is_default=true."
-        )
+        standard_is_active = connection.execute(
+            sa.select(calendar_table.c.is_active).where(calendar_table.c.code == "STANDARD")
+        ).scalar_one_or_none()
+        if standard_is_active is None:
+            logger.warning(
+                "calendar default flag backfill: no calendar with code == 'STANDARD' was "
+                "found, so no calendar was flagged is_default. Promote one explicitly via "
+                "PATCH /resources/calendars/{id} with is_default=true."
+            )
+        else:
+            logger.warning(
+                "calendar default flag backfill: the 'STANDARD' calendar exists but is "
+                "inactive (is_active = false), so no calendar was flagged is_default. "
+                "Either reactivate it or promote a different active calendar explicitly "
+                "via PATCH /resources/calendars/{id} with is_default=true."
+            )
 
     with op.batch_alter_table("wf_calendar") as batch_op:
         batch_op.alter_column("is_default", existing_type=sa.Boolean(), server_default=None)
