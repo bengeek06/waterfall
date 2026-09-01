@@ -1125,12 +1125,15 @@ def _cascade_successor_schedules(
     deliberately left unset (not in ``model_fields_set``): ``_apply_automatic_schedule``
     ignores it entirely, and setting it could otherwise wrongly trip
     ``_check_milestone_duration_and_finish_consistency`` for a milestone
-    successor. For a milestone candidate, ``duration_minutes`` is likewise
-    left unset rather than populated from ``candidate.duration_minutes``:
+    successor. For a milestone candidate, ``duration_minutes`` is instead
+    explicitly passed as ``None`` (not populated from
+    ``candidate.duration_minutes``, and not omitted from the constructor
+    call either -- it still ends up in ``payload.model_fields_set``):
     ``_apply_automatic_milestone_schedule`` never reads it for anything
-    except that same consistency check, and a milestone's duration is always
-    definitionally 0 regardless of what a stale/drifted stored value happens
-    to be (e.g. leftover from imported data) -- populating it here would
+    except that same consistency check, which accepts an explicit ``None``
+    value, and a milestone's duration is always definitionally 0 regardless
+    of what a stale/drifted stored value happens to be (e.g. leftover from
+    imported data) -- populating it from the stored value here would
     spuriously fail an otherwise-unrelated cascade the moment that stored
     value isn't ``None``/``0``.
 
