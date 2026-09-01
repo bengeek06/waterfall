@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import Any, cast
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 
 from waterfall.db.session import get_session_factory
@@ -19,6 +20,10 @@ from waterfall.models.resources import (
     ResourceNode,
     ResourceRole,
     TaskRoleAssignment,
+)
+from waterfall.services.planning_tree import (
+    PlanningTaskScheduleError,
+    _topological_cascade_order,  # pyright: ignore[reportPrivateUsage]
 )
 
 
@@ -1341,21 +1346,19 @@ def test_automatic_milestone_without_predecessor_or_any_start_at_is_rejected() -
         assert isinstance(response.json()["detail"], str)
 
 
-def test_editing_predecessor_does_not_reschedule_automatic_successor() -> None:
-    """E3-03 PR review finding #3, documented "Known v1 limitation": editing a
-    task only recalculates its summary *ancestors* (see
-    ``_recalculate_ancestor_summaries``), never its *successors* -- other
-    tasks whose ``WfPlanningLinkSnapshot`` references it as
-    ``predecessor_uid`` -- even when a successor is in automatic mode.
+def test_editing_predecessor_reschedules_automatic_successor() -> None:
+    """Issue #73 ("Automatic-mode successors are not rescheduled when their
+    predecessor's dates change"): editing a task now cascades forward to
+    every automatic-mode successor transitively affected by it (see
+    ``_cascade_successor_schedules``), not just its summary *ancestors*.
 
-    This test freezes that current (non-cascading) behaviour: uid=3 (Leaf) is
-    first put in automatic mode with an FS link on uid=6 (Predecessor A),
-    landing on dates consistent with its constraint. Predecessor A is then
-    edited to finish much later. Per issue #73 ("Automatic-mode successors
-    are not rescheduled when their predecessor's dates change"), uid=3 is
-    *not* revisited and keeps its now-constraint-violating dates -- this test
-    must be replaced with a positive cascade assertion once #73 is
-    implemented, not just deleted.
+    uid=3 (Leaf) is first put in automatic mode with an FS link on uid=6
+    (Predecessor A), landing on dates consistent with its constraint.
+    Predecessor A is then edited (as a manual task) to finish much later, in
+    the same request/response uid=3 must be rescheduled to respect its own
+    FS constraint against the new date -- this replaces the previous
+    "Known v1 limitation" regression test that froze the non-cascading
+    behaviour.
     """
     with TestClient(app) as client:
         headers = _auth_headers(client)
@@ -1388,12 +1391,669 @@ def test_editing_predecessor_does_not_reschedule_automatic_successor() -> None:
         predecessor = _tasks_by_uid(cast(dict[str, Any], predecessor_response.json()))[6]
         assert predecessor["finish_at"] == "2026-02-01T09:00:00"
 
-        # uid=3 is untouched by this request: it keeps its pre-edit dates,
-        # which now violate its own FS constraint against uid=6 -- the
-        # documented v1 gap tracked by issue #73.
+        # uid=3 is rescheduled by the same request: it now respects its FS
+        # constraint against uid=6's new finish_at (09:00 + 30 min lag).
         leaf_after = _tasks_by_uid(cast(dict[str, Any], predecessor_response.json()))[3]
-        assert leaf_after["start_at"] == leaf_before["start_at"]
-        assert leaf_after["finish_at"] == leaf_before["finish_at"]
+        assert leaf_after["start_at"] == "2026-02-01T09:30:00"
+        assert leaf_after["finish_at"] == "2026-02-01T13:30:00"
+        assert leaf_after["is_manual"] is False
+
+
+def test_automatic_task_schedule_cascades_across_a_chain() -> None:
+    """A -> B -> C (uid=6 -> uid=8 -> uid=9), all automatic via FS: editing A
+    alone cascades across the whole chain in a single request, proving the
+    cascade is not limited to A's immediate successors.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_hierarchy(project_id)
+
+        with get_session_factory()() as session:
+            session.add_all(
+                [
+                    WfPlanningTaskSnapshot(
+                        planning_id=planning_id,
+                        uid=8,
+                        name="B",
+                        position=5,
+                        start_at=datetime(2026, 1, 5, 8, 0, tzinfo=UTC),
+                        finish_at=datetime(2026, 1, 5, 11, 0, tzinfo=UTC),
+                        duration_minutes=180,
+                        is_summary=False,
+                        is_milestone=False,
+                        is_manual=False,
+                    ),
+                    WfPlanningTaskSnapshot(
+                        planning_id=planning_id,
+                        uid=9,
+                        name="C",
+                        position=6,
+                        start_at=datetime(2026, 1, 5, 11, 0, tzinfo=UTC),
+                        finish_at=datetime(2026, 1, 5, 12, 0, tzinfo=UTC),
+                        duration_minutes=60,
+                        is_summary=False,
+                        is_milestone=False,
+                        is_manual=False,
+                    ),
+                ]
+            )
+            session.commit()
+        _add_link(planning_id, task_uid=8, predecessor_uid=6, link_type=1, lag_tenth_minute=0)
+        _add_link(planning_id, task_uid=9, predecessor_uid=8, link_type=1, lag_tenth_minute=0)
+
+        response = client.patch(
+            _schedule_path(project_id, planning_id, 6),
+            json={
+                "is_manual": True,
+                "start_at": "2026-03-02T08:00:00Z",
+                "finish_at": "2026-03-02T10:00:00Z",
+            },
+            headers=headers,
+        )
+
+        assert response.status_code == 200
+        tasks = _tasks_by_uid(cast(dict[str, Any], response.json()))
+        # B: FS from A, lag 0 => starts exactly when A finishes.
+        assert tasks[8]["is_manual"] is False
+        assert tasks[8]["start_at"] == "2026-03-02T10:00:00"
+        assert tasks[8]["finish_at"] == "2026-03-02T13:00:00"
+        # C: FS from B, lag 0 => starts exactly when B (already rescheduled) finishes.
+        assert tasks[9]["is_manual"] is False
+        assert tasks[9]["start_at"] == "2026-03-02T13:00:00"
+        assert tasks[9]["finish_at"] == "2026-03-02T14:00:00"
+
+
+def test_automatic_task_schedule_cascades_diamond_using_both_updated_predecessors() -> None:
+    """A -> {B, C}, {B, C} -> D (uid=6 -> {uid=8, uid=9} -> uid=10): a single
+    edit to A must recompute D exactly once, using both B's and C's already
+    -updated dates. B and C use different link types (FS/SS) so getting the
+    recompute order wrong (D recomputed against a stale B or C) produces a
+    detectably different result than getting it right.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_hierarchy(project_id)
+
+        with get_session_factory()() as session:
+            session.add_all(
+                [
+                    WfPlanningTaskSnapshot(
+                        planning_id=planning_id,
+                        uid=8,
+                        name="B",
+                        position=5,
+                        start_at=datetime(2026, 1, 5, 8, 0, tzinfo=UTC),
+                        finish_at=datetime(2026, 1, 5, 9, 0, tzinfo=UTC),
+                        duration_minutes=60,
+                        is_summary=False,
+                        is_milestone=False,
+                        is_manual=False,
+                    ),
+                    WfPlanningTaskSnapshot(
+                        planning_id=planning_id,
+                        uid=9,
+                        name="C",
+                        position=6,
+                        start_at=datetime(2026, 1, 5, 8, 0, tzinfo=UTC),
+                        finish_at=datetime(2026, 1, 5, 14, 0, tzinfo=UTC),
+                        duration_minutes=360,
+                        is_summary=False,
+                        is_milestone=False,
+                        is_manual=False,
+                    ),
+                    WfPlanningTaskSnapshot(
+                        planning_id=planning_id,
+                        uid=10,
+                        name="D",
+                        position=7,
+                        start_at=datetime(2026, 1, 5, 8, 0, tzinfo=UTC),
+                        finish_at=datetime(2026, 1, 5, 8, 30, tzinfo=UTC),
+                        duration_minutes=30,
+                        is_summary=False,
+                        is_milestone=False,
+                        is_manual=False,
+                    ),
+                ]
+            )
+            session.commit()
+        _add_link(planning_id, task_uid=8, predecessor_uid=6, link_type=1, lag_tenth_minute=0)
+        _add_link(planning_id, task_uid=9, predecessor_uid=6, link_type=3, lag_tenth_minute=0)
+        _add_link(planning_id, task_uid=10, predecessor_uid=8, link_type=1, lag_tenth_minute=0)
+        _add_link(planning_id, task_uid=10, predecessor_uid=9, link_type=1, lag_tenth_minute=0)
+
+        response = client.patch(
+            _schedule_path(project_id, planning_id, 6),
+            json={
+                "is_manual": True,
+                "start_at": "2026-03-02T08:00:00Z",
+                "finish_at": "2026-03-02T10:00:00Z",
+            },
+            headers=headers,
+        )
+
+        assert response.status_code == 200
+        tasks = _tasks_by_uid(cast(dict[str, Any], response.json()))
+        # B: FS from A, lag 0 => starts when A finishes (10:00), 60 min duration.
+        assert tasks[8]["is_manual"] is False
+        assert tasks[8]["start_at"] == "2026-03-02T10:00:00"
+        assert tasks[8]["finish_at"] == "2026-03-02T11:00:00"
+        # C: SS from A, lag 0 => starts when A starts (08:00), 360 min duration.
+        assert tasks[9]["is_manual"] is False
+        assert tasks[9]["start_at"] == "2026-03-02T08:00:00"
+        assert tasks[9]["finish_at"] == "2026-03-02T14:00:00"
+        # D: FS from both B (finishes 11:00) and C (finishes 14:00) -- the
+        # max of the two, which requires both to already carry their updated
+        # (not stale, pre-cascade) finish_at when D is recomputed.
+        assert tasks[10]["is_manual"] is False
+        assert tasks[10]["start_at"] == "2026-03-02T14:00:00"
+        assert tasks[10]["finish_at"] == "2026-03-02T14:30:00"
+
+
+def test_manual_successor_is_never_rescheduled_when_predecessor_changes() -> None:
+    """A manual task's dates are frozen: they must stay verbatim even when an
+    automatic predecessor it references moves as part of the same request.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_hierarchy(project_id)
+        _add_link(planning_id, task_uid=3, predecessor_uid=6, link_type=1, lag_tenth_minute=0)
+
+        manual_response = client.patch(
+            _schedule_path(project_id, planning_id, 3),
+            json={
+                "is_manual": True,
+                "start_at": "2026-01-10T08:00:00Z",
+                "finish_at": "2026-01-10T09:00:00Z",
+            },
+            headers=headers,
+        )
+        assert manual_response.status_code == 200
+
+        predecessor_response = client.patch(
+            _schedule_path(project_id, planning_id, 6),
+            json={
+                "is_manual": True,
+                "start_at": "2026-03-02T08:00:00Z",
+                "finish_at": "2026-03-02T10:00:00Z",
+            },
+            headers=headers,
+        )
+
+        assert predecessor_response.status_code == 200
+        leaf = _tasks_by_uid(cast(dict[str, Any], predecessor_response.json()))[3]
+        assert leaf["is_manual"] is True
+        assert leaf["start_at"] == "2026-01-10T08:00:00"
+        assert leaf["finish_at"] == "2026-01-10T09:00:00"
+
+
+def test_manual_successor_interrupts_cascade_but_a_second_live_predecessor_still_reschedules() -> (
+    None
+):
+    """A (automatic, uid=6) -> B (manual, uid=8) -> C (automatic, uid=9), all
+    FS links. Editing A must NOT recompute B (manual, frozen) and must NOT
+    recompute C *through* B (B never moved, nothing to propagate through
+    it). But C also has an independent, second automatic predecessor -- A
+    itself, uid=6 -- so C must still be recomputed, via that other live
+    edge, not via B.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_hierarchy(project_id)
+
+        with get_session_factory()() as session:
+            session.add_all(
+                [
+                    WfPlanningTaskSnapshot(
+                        planning_id=planning_id,
+                        uid=8,
+                        name="B",
+                        position=5,
+                        start_at=datetime(2026, 1, 10, 8, 0, tzinfo=UTC),
+                        finish_at=datetime(2026, 1, 10, 9, 0, tzinfo=UTC),
+                        duration_minutes=60,
+                        is_summary=False,
+                        is_milestone=False,
+                        is_manual=True,
+                    ),
+                    WfPlanningTaskSnapshot(
+                        planning_id=planning_id,
+                        uid=9,
+                        name="C",
+                        position=6,
+                        start_at=datetime(2026, 1, 5, 8, 0, tzinfo=UTC),
+                        finish_at=datetime(2026, 1, 5, 9, 30, tzinfo=UTC),
+                        duration_minutes=90,
+                        is_summary=False,
+                        is_milestone=False,
+                        is_manual=False,
+                    ),
+                ]
+            )
+            session.commit()
+        _add_link(planning_id, task_uid=8, predecessor_uid=6, link_type=1, lag_tenth_minute=0)
+        _add_link(planning_id, task_uid=9, predecessor_uid=8, link_type=1, lag_tenth_minute=0)
+        # C's second, independent predecessor: A itself, with a 180 min lag.
+        _add_link(planning_id, task_uid=9, predecessor_uid=6, link_type=1, lag_tenth_minute=1800)
+
+        response = client.patch(
+            _schedule_path(project_id, planning_id, 6),
+            json={
+                "is_manual": True,
+                "start_at": "2026-03-02T08:00:00Z",
+                "finish_at": "2026-03-02T10:00:00Z",
+            },
+            headers=headers,
+        )
+
+        assert response.status_code == 200
+        tasks = _tasks_by_uid(cast(dict[str, Any], response.json()))
+        # B (manual) is untouched.
+        assert tasks[8]["is_manual"] is True
+        assert tasks[8]["start_at"] == "2026-01-10T08:00:00"
+        assert tasks[8]["finish_at"] == "2026-01-10T09:00:00"
+        # C is rescheduled via its direct link to A (10:00 + 180 min lag =
+        # 13:00), not via B's stale constraint (09:00, via B's own FS lag 0)
+        # -- the max of the two is 13:00, which can only come from A.
+        assert tasks[9]["start_at"] == "2026-03-02T13:00:00"
+        assert tasks[9]["finish_at"] == "2026-03-02T14:30:00"
+
+
+def test_cascade_leaves_a_successor_with_unset_is_manual_untouched() -> None:
+    """Reviewer finding #1: ``is_manual`` is nullable (``WfPlanningTaskSnapshot.is_manual:
+    Mapped[bool | None]``) and genuinely ``NULL`` in real data (MS Project XML
+    import leaves it unset when the ``<Manual>`` element is absent -- see
+    ``_seed_hierarchy``'s own uid=4 fixture above, which never sets it
+    either). A falsy check (``successor.is_manual``) would wrongly treat
+    ``None`` the same as ``False`` (confirmed automatic) and pull an
+    undecided task into the cascade. uid=8 here is seeded exactly like
+    uid=4 -- ``is_manual`` simply never passed -- linked as an FS successor
+    of uid=6, which is then edited; uid=8 must stay a dead end: its stored
+    dates untouched and ``is_manual`` still ``None`` in the response.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_hierarchy(project_id)
+
+        with get_session_factory()() as session:
+            session.add(
+                WfPlanningTaskSnapshot(
+                    planning_id=planning_id,
+                    uid=8,
+                    name="Undecided successor",
+                    position=5,
+                    start_at=datetime(2026, 1, 10, 8, 0, tzinfo=UTC),
+                    finish_at=datetime(2026, 1, 10, 9, 0, tzinfo=UTC),
+                    duration_minutes=60,
+                    is_summary=False,
+                    is_milestone=False,
+                    # is_manual deliberately omitted -- stays NULL, matching
+                    # _seed_hierarchy's own uid=4 fixture pattern.
+                )
+            )
+            session.commit()
+        _add_link(planning_id, task_uid=8, predecessor_uid=6, link_type=1, lag_tenth_minute=0)
+
+        response = client.patch(
+            _schedule_path(project_id, planning_id, 6),
+            json={
+                "is_manual": True,
+                "start_at": "2026-03-02T08:00:00Z",
+                "finish_at": "2026-03-02T10:00:00Z",
+            },
+            headers=headers,
+        )
+
+        assert response.status_code == 200
+        tasks = _tasks_by_uid(cast(dict[str, Any], response.json()))
+        successor = tasks[8]
+        assert successor["is_manual"] is None
+        assert successor["start_at"] == "2026-01-10T08:00:00"
+        assert successor["finish_at"] == "2026-01-10T09:00:00"
+        # An unrelated fixture task not reachable by any added link stays
+        # completely untouched too.
+        assert tasks[4]["start_at"] == "2026-01-06T08:00:00"
+        assert tasks[4]["finish_at"] == "2026-01-08T08:00:00"
+
+
+def test_cascade_successor_with_out_of_range_stored_duration_returns_400_not_500() -> None:
+    """Reviewer finding #2: constructing the synthetic
+    ``PlanningTaskScheduleUpdate`` for a cascade successor reads
+    ``duration_minutes`` straight from the database, which has no
+    upper-bound CHECK constraint and can exceed the schema's
+    ``le=7_884_000`` bound (e.g. data imported before that bound existed, or
+    via ``msproject_xml.parse_duration``, which has no equivalent limit).
+    uid=8 here stores a duration far above that bound; linking it as an FS
+    successor of uid=6 and then editing uid=6 must surface the module's own
+    documented 400 (``PlanningTaskScheduleError``), never an uncaught
+    ``pydantic.ValidationError`` 500.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_hierarchy(project_id)
+
+        with get_session_factory()() as session:
+            session.add(
+                WfPlanningTaskSnapshot(
+                    planning_id=planning_id,
+                    uid=8,
+                    name="Out-of-range successor",
+                    position=5,
+                    start_at=datetime(2026, 1, 10, 8, 0, tzinfo=UTC),
+                    finish_at=datetime(2026, 1, 10, 9, 0, tzinfo=UTC),
+                    duration_minutes=8_000_000,
+                    is_summary=False,
+                    is_milestone=False,
+                    is_manual=False,
+                )
+            )
+            session.commit()
+        _add_link(planning_id, task_uid=8, predecessor_uid=6, link_type=1, lag_tenth_minute=0)
+
+        response = client.patch(
+            _schedule_path(project_id, planning_id, 6),
+            json={
+                "is_manual": True,
+                "start_at": "2026-03-02T08:00:00Z",
+                "finish_at": "2026-03-02T10:00:00Z",
+            },
+            headers=headers,
+        )
+
+        assert response.status_code == 400
+        body = response.json()
+        assert "detail" in body
+        assert "8" in body["detail"]
+
+
+def test_cascade_milestone_successor_ignores_stray_stored_duration() -> None:
+    """Reviewer finding #3: a milestone's synthetic payload used to always
+    include ``duration_minutes=candidate.duration_minutes``, which puts
+    ``"duration_minutes"`` in ``payload.model_fields_set`` and makes
+    ``_check_milestone_duration_and_finish_consistency`` reject the whole
+    cascade whenever a milestone successor happens to carry a stray non-zero
+    stored value (e.g. drifted import data) -- even though the caller never
+    touched that milestone and a milestone's duration is always
+    definitionally 0. uid=8 here is an automatic-mode milestone successor of
+    uid=6 with a stray ``duration_minutes=45`` left over from prior data;
+    editing uid=6 must still succeed and land the milestone at duration 0.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_hierarchy(project_id)
+
+        with get_session_factory()() as session:
+            session.add(
+                WfPlanningTaskSnapshot(
+                    planning_id=planning_id,
+                    uid=8,
+                    name="Drifted milestone successor",
+                    position=5,
+                    start_at=datetime(2026, 1, 10, 8, 0, tzinfo=UTC),
+                    finish_at=datetime(2026, 1, 10, 8, 0, tzinfo=UTC),
+                    duration_minutes=45,
+                    is_summary=False,
+                    is_milestone=True,
+                    is_manual=False,
+                )
+            )
+            session.commit()
+        _add_link(planning_id, task_uid=8, predecessor_uid=6, link_type=1, lag_tenth_minute=0)
+
+        response = client.patch(
+            _schedule_path(project_id, planning_id, 6),
+            json={
+                "is_manual": True,
+                "start_at": "2026-03-02T08:00:00Z",
+                "finish_at": "2026-03-02T10:00:00Z",
+            },
+            headers=headers,
+        )
+
+        assert response.status_code == 200
+        tasks = _tasks_by_uid(cast(dict[str, Any], response.json()))
+        milestone = tasks[8]
+        assert milestone["is_manual"] is False
+        assert milestone["duration_minutes"] == 0
+        assert milestone["start_at"] == milestone["finish_at"] == "2026-03-02T10:00:00"
+
+
+def test_cascade_successor_with_zero_stored_duration_returns_400_attributed_to_candidate() -> None:
+    """Cross-cutting review finding (Haute): a cascade candidate's own
+    pre-existing degenerate stored data must not surface as an unattributed
+    400 that looks like it is about the caller's own (perfectly valid)
+    request. uid=8 here is an automatic-mode FS successor of uid=6 with
+    ``duration_minutes=0`` -- realistic imported data, since MS Project XML
+    import writes ``duration_minutes=None`` (and, by the same mechanism, can
+    round-trip to 0) whenever the ``<Duration>`` element is absent, with
+    ``is_manual`` set independently and no cross-check. That value passes the
+    request schema's own ``Field(ge=0, ...)`` validation cleanly (0 is
+    in-range), so it is never caught by the ``ValidationError`` branch in
+    ``_cascade_successor_schedules`` -- it only trips
+    ``_apply_automatic_schedule``'s own internal
+    ``duration_minutes<=0`` check. Editing uid=6 (an otherwise-valid,
+    unrelated manual-mode edit) must surface a 400 whose message identifies
+    uid=8 as the source, not a bare, unattributed
+    "An automatically scheduled task requires a positive duration_minutes".
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_hierarchy(project_id)
+
+        with get_session_factory()() as session:
+            session.add(
+                WfPlanningTaskSnapshot(
+                    planning_id=planning_id,
+                    uid=8,
+                    name="Degenerate-duration successor",
+                    position=5,
+                    start_at=datetime(2026, 1, 10, 8, 0, tzinfo=UTC),
+                    finish_at=datetime(2026, 1, 10, 8, 0, tzinfo=UTC),
+                    duration_minutes=0,
+                    is_summary=False,
+                    is_milestone=False,
+                    is_manual=False,
+                )
+            )
+            session.commit()
+        _add_link(planning_id, task_uid=8, predecessor_uid=6, link_type=1, lag_tenth_minute=0)
+
+        response = client.patch(
+            _schedule_path(project_id, planning_id, 6),
+            json={
+                "is_manual": True,
+                "start_at": "2026-03-02T08:00:00Z",
+                "finish_at": "2026-03-02T10:00:00Z",
+            },
+            headers=headers,
+        )
+
+        assert response.status_code == 400
+        body = response.json()
+        assert "detail" in body
+        # Must identify uid=8 as the source of the failure, not a bare,
+        # unattributed message that looks like it is about the caller's own
+        # (valid) request against uid=6.
+        assert "8" in body["detail"]
+        assert "positive duration_minutes" in body["detail"]
+
+
+def test_cascade_does_not_propagate_through_a_summary_task_acting_as_a_predecessor() -> None:
+    """Cross-cutting review finding (Moyenne, documented known limitation,
+    NOT a defect fixed by this ticket): the issue #73 cascade only walks
+    forward from the edited task's own uid via direct
+    ``WfPlanningLinkSnapshot`` edges (see ``_discover_cascade_candidates``).
+    It does not reach a task whose ``predecessor_uid`` points at a
+    *summary* task, even when the edit changes that summary's own aggregate
+    ``start_at``/``finish_at`` via ``_recalculate_ancestor_summaries`` (which
+    runs after the cascade). Nothing in ``planning_links.py``'s validation
+    prevents a predecessor link from referencing a summary task.
+
+    uid=2 (Mid) is a summary task with children uid=3 (Leaf) and uid=4 (Leaf
+    sibling, fixed dates). uid=8 (Y) is a separate automatic-mode task with
+    an FS link whose ``predecessor_uid`` is uid=2 (Mid) directly. Editing
+    uid=3 (X) moves Mid's aggregate ``finish_at`` forward, but Y is NOT
+    rescheduled by this request -- this test freezes that known gap rather
+    than leaving it silently unverified, matching this repo's established
+    convention (e.g. the original
+    ``test_editing_predecessor_does_not_reschedule_automatic_successor``
+    before issue #73 closed the direct-predecessor case). Closing this gap
+    is a materially larger, separate change (cascading through
+    summary-derived date changes) and is left as a candidate follow-up.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_hierarchy(project_id)
+
+        with get_session_factory()() as session:
+            session.add(
+                WfPlanningTaskSnapshot(
+                    planning_id=planning_id,
+                    uid=8,
+                    name="Y",
+                    position=5,
+                    start_at=datetime(2026, 1, 10, 8, 0, tzinfo=UTC),
+                    finish_at=datetime(2026, 1, 10, 9, 0, tzinfo=UTC),
+                    duration_minutes=60,
+                    is_summary=False,
+                    is_milestone=False,
+                    is_manual=False,
+                )
+            )
+            session.commit()
+        # Y's predecessor link points directly at uid=2 (Mid), a summary
+        # task -- not at any of Mid's individual children.
+        _add_link(planning_id, task_uid=8, predecessor_uid=2, link_type=1, lag_tenth_minute=0)
+
+        response = client.patch(
+            _schedule_path(project_id, planning_id, 3),
+            json={
+                "is_manual": True,
+                "start_at": "2026-02-01T08:00:00Z",
+                "finish_at": "2026-02-01T09:00:00Z",
+            },
+            headers=headers,
+        )
+
+        assert response.status_code == 200
+        tasks = _tasks_by_uid(cast(dict[str, Any], response.json()))
+        # Mid's aggregate finish_at did move, past uid=4's own 2026-01-08
+        # finish_at, because uid=3 now finishes later.
+        assert tasks[2]["finish_at"] == "2026-02-01T09:00:00"
+        # But Y -- whose predecessor link points at Mid, not at uid=3
+        # directly -- is left completely untouched by this cascade.
+        assert tasks[8]["is_manual"] is False
+        assert tasks[8]["start_at"] == "2026-01-10T08:00:00"
+        assert tasks[8]["finish_at"] == "2026-01-10T09:00:00"
+
+
+def test_editing_a_milestone_cascades_to_its_own_automatic_successor() -> None:
+    """Basse-severity gap: every existing cascade test edits a plain task as
+    the predecessor that triggers the cascade; none edit a *milestone* as
+    the edited task itself. uid=5 (Milestone, seeded by ``_seed_hierarchy``
+    with no dates) is scheduled manually, then a separate automatic-mode FS
+    successor (uid=8) must cascade to respect the milestone's new date in
+    the same request.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_hierarchy(project_id)
+
+        with get_session_factory()() as session:
+            session.add(
+                WfPlanningTaskSnapshot(
+                    planning_id=planning_id,
+                    uid=8,
+                    name="Milestone successor",
+                    position=5,
+                    start_at=datetime(2026, 1, 5, 8, 0, tzinfo=UTC),
+                    finish_at=datetime(2026, 1, 5, 9, 0, tzinfo=UTC),
+                    duration_minutes=60,
+                    is_summary=False,
+                    is_milestone=False,
+                    is_manual=False,
+                )
+            )
+            session.commit()
+        _add_link(planning_id, task_uid=8, predecessor_uid=5, link_type=1, lag_tenth_minute=300)
+
+        response = client.patch(
+            _schedule_path(project_id, planning_id, 5),
+            json={"is_manual": True, "start_at": "2026-03-02T08:00:00Z"},
+            headers=headers,
+        )
+
+        assert response.status_code == 200
+        tasks = _tasks_by_uid(cast(dict[str, Any], response.json()))
+        milestone = tasks[5]
+        assert milestone["is_manual"] is True
+        assert milestone["start_at"] == milestone["finish_at"] == "2026-03-02T08:00:00"
+        # uid=8: FS from the milestone, +30 min lag => starts at 08:30,
+        # 60 min duration => finishes at 09:30, rescheduled in the same
+        # request as the milestone's own edit.
+        successor = tasks[8]
+        assert successor["is_manual"] is False
+        assert successor["start_at"] == "2026-03-02T08:30:00"
+        assert successor["finish_at"] == "2026-03-02T09:30:00"
+
+
+def test_topological_cascade_order_detects_residual_cycle_without_hanging() -> None:
+    """Focused unit test of the Kahn's-algorithm helper extracted for issue
+    #73's cascade (``_topological_cascade_order``), bypassing the public API
+    -- which can never itself produce a cyclic predecessor graph, since
+    ``planning_links._validate_no_cycles`` already rejects that at
+    link-write time. Feeds a synthetic 2-cycle directly to confirm the
+    helper terminates (rather than hanging) and raises a
+    ``PlanningTaskScheduleError`` naming the unresolved tasks, instead of
+    silently dropping them from the cascade.
+    """
+    link_100_from_101 = WfPlanningLinkSnapshot(
+        planning_id=1, task_uid=100, predecessor_uid=101, link_type=1, lag_tenth_minute=0
+    )
+    link_101_from_100 = WfPlanningLinkSnapshot(
+        planning_id=1, task_uid=101, predecessor_uid=100, link_type=1, lag_tenth_minute=0
+    )
+    links_by_task = {100: [link_100_from_101], 101: [link_101_from_100]}
+
+    with pytest.raises(PlanningTaskScheduleError, match="cycle"):
+        _topological_cascade_order(
+            edited_task_uid=1, candidates={100, 101}, links_by_task=links_by_task
+        )
+
+
+def test_topological_cascade_order_detects_residual_cycle_back_to_edited_task() -> None:
+    """PR #81 Copilot review finding: a residual cycle that loops back to
+    ``edited_task_uid`` itself (rather than being fully contained within
+    ``candidates``) must also be caught, not silently treated as resolved.
+
+    Reproduces ``edited -> B -> edited``: task ``B`` (uid 200) has a
+    predecessor link on the edited task (uid 1), and the edited task has its
+    own predecessor link on B. Before this fix, ``B``'s in-degree was 1
+    (from the edited task), got released unconditionally by
+    ``_release(edited_task_uid)``, and the function returned ``[200]``
+    successfully -- even though the edited task's own already-applied
+    schedule was computed against B's stale, pre-cascade dates, and B's edge
+    back to the edited task was never inspected at all.
+    """
+    link_200_from_edited = WfPlanningLinkSnapshot(
+        planning_id=1, task_uid=200, predecessor_uid=1, link_type=1, lag_tenth_minute=0
+    )
+    link_edited_from_200 = WfPlanningLinkSnapshot(
+        planning_id=1, task_uid=1, predecessor_uid=200, link_type=1, lag_tenth_minute=0
+    )
+    links_by_task = {200: [link_200_from_edited], 1: [link_edited_from_200]}
+
+    with pytest.raises(PlanningTaskScheduleError, match="cycle"):
+        _topological_cascade_order(edited_task_uid=1, candidates={200}, links_by_task=links_by_task)
 
 
 def test_automatic_task_start_at_near_datetime_max_returns_400_not_500() -> None:
