@@ -15,8 +15,7 @@ properties:
   is_active:
     type: boolean
   is_default:
-    type: boolean
-    nullable: true
+    type: [boolean, "null"]
     description: >-
       Promote this calendar as the system-wide default (must already be active,
       or be activated in the same request). Setting this to false on the
