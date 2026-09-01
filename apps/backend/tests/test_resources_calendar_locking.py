@@ -1,4 +1,4 @@
-"""Concurrency regression test for issue #50 (calendar deactivation TOCTOU race).
+"""PostgreSQL concurrency regressions for resource mutations (issues #50, #51, #59).
 
 This intentionally lives outside test_resources_api.py rather than alongside the
 other calendar tests there: everything in that module goes through the HTTP layer
@@ -421,5 +421,55 @@ def test_concurrent_default_promotions_serialize_to_one_default_and_a_409(
             calendar_c = verify_session.get(Calendar, calendar_c_id)
             assert calendar_c is not None
             assert calendar_c.is_default is False
+    finally:
+        engine.dispose()
+
+
+def test_resource_update_response_ignores_write_committed_after_its_transaction(
+    postgres_app_database_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #59: the response must describe this request's committed mutation."""
+    from waterfall.api.routes.resources import update_node
+    from waterfall.models.resources import ResourceNode
+    from waterfall.models.user import User
+    from waterfall.schemas.resources import ResourceNodeUpdate
+
+    engine = create_engine(postgres_app_database_url, future=True)
+    session_factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    try:
+        with session_factory() as seed_session:
+            node = ResourceNode(code="SNAPSHOT", name="Before")
+            seed_session.add(node)
+            seed_session.commit()
+            node_id = node.id
+
+        session_a = session_factory()
+        original_commit = session_a.commit
+
+        def commit_then_concurrent_update() -> None:
+            original_commit()
+            with session_factory() as session_b:
+                concurrent_node = session_b.get(ResourceNode, node_id)
+                assert concurrent_node is not None
+                concurrent_node.name = "Concurrent write"
+                session_b.commit()
+
+        monkeypatch.setattr(session_a, "commit", commit_then_concurrent_update)
+        try:
+            response = update_node(
+                node_id,
+                ResourceNodeUpdate(name="Request A"),
+                db=session_a,
+                _=cast(User, None),
+            )
+        finally:
+            session_a.close()
+
+        assert response.name == "Request A"
+        with session_factory() as verify_session:
+            persisted_node = verify_session.get(ResourceNode, node_id)
+            assert persisted_node is not None
+            assert persisted_node.name == "Concurrent write"
     finally:
         engine.dispose()
