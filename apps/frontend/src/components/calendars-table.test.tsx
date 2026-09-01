@@ -278,6 +278,41 @@ describe("CalendarsTable", () => {
     expect(screen.getByText("Par défaut")).toBeInTheDocument();
   });
 
+  it("keeps the reactivate button enabled and shows an inactive-specific hint for an inactive calendar still flagged as default", () => {
+    const onToggle = vi.fn();
+    const calendar = { id: 1, code: "STANDARD", name: "Calendrier standard", weeks_per_year: 47, is_active: false, is_default: true, weekdays: [] } as never;
+    render(
+      <CalendarsTable
+        items={[calendar]}
+        code=""
+        name=""
+        weeksPerYear="47"
+        weekdays={defaultWeekdays()}
+        draft={{ code: "", name: "", weeksPerYear: "47", weekdays: defaultWeekdays() }}
+        editingId={null}
+        busy={false}
+        calendarIdsInUseByActiveRoles={new Set()}
+        onSubmit={(event) => event.preventDefault()}
+        onCodeChange={vi.fn()}
+        onNameChange={vi.fn()}
+        onWeeksPerYearChange={vi.fn()}
+        onWeekdayChange={vi.fn()}
+        onStartEdit={vi.fn()}
+        onDraftChange={vi.fn()}
+        onDraftWeekdayChange={vi.fn()}
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+        onToggle={onToggle}
+      />,
+    );
+
+    const button = screen.getByRole("button", { name: "Réactiver" });
+    expect(button).not.toBeDisabled();
+    expect(screen.getByText("Calendrier par défaut (inactif)")).toBeInTheDocument();
+    fireEvent.click(button);
+    expect(onToggle).toHaveBeenCalledWith(calendar);
+  });
+
   it("does not show the default calendar badge or hint for a non-default calendar", () => {
     const calendar = { id: 1, code: "STANDARD", name: "Calendrier standard", weeks_per_year: 47, is_active: true, is_default: false, weekdays: [] } as never;
     render(
