@@ -2,8 +2,9 @@
 
 Resolves the working calendar that applies to a planning task from its
 assigned resource role (falling back to the org-wide calendar flagged
-``is_default``, and -- only when no calendar exists in the system at all --
-to an implicit 24h/day calendar), and exposes pure duration<->dates
+``is_default``, and -- only when no *usable* calendar remains, i.e. none
+exists or the ones that do exist have zero working capacity -- to an
+implicit 24h/day calendar), and exposes pure duration<->dates
 scheduling functions. These are used today by the summary-task duration
 recalculation in :mod:`waterfall.services.planning_tree`, and are designed
 to be reused by a future "automatic mode" task scheduler (E3-03, out of
@@ -49,10 +50,11 @@ class ResolvedCalendar:
       :func:`resolve_task_calendar_ids`).
     - ``"default"``: no role calendar was found, but the org-wide calendar
       flagged ``is_default`` exists and was used instead.
-    - ``"wall_clock_fallback"``: no calendar exists in the system at all
-      (neither a role-assigned one nor one flagged ``is_default``); every day
-      is treated as a 24h/day working day, which is the only way to keep this
-      tier from inventing non-working days nobody configured.
+    - ``"wall_clock_fallback"``: no *usable* calendar remains -- neither a
+      role-assigned one nor one flagged ``is_default`` exists with at least
+      one working day (see :func:`_has_any_working_day` and the note below);
+      every day is treated as a 24h/day working day, which is the only way
+      to keep this tier from inventing non-working days nobody configured.
 
     A calendar that resolves but has no configured working day at all (no
     ``CalendarWeekday`` rows, or every row's ``hours_per_day`` is ``0``) is
