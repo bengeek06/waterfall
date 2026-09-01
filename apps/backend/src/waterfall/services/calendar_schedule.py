@@ -1,12 +1,13 @@
 """Calendar-aware duration/date scheduling (E5-04).
 
 Resolves the working calendar that applies to a planning task from its
-assigned resource role (falling back to the org-wide default ``STANDARD``
-calendar, and -- only when no calendar exists in the system at all -- to an
-implicit 24h/day calendar), and exposes pure duration<->dates scheduling
-functions. These are used today by the summary-task duration recalculation
-in :mod:`waterfall.services.planning_tree`, and are designed to be reused by
-a future "automatic mode" task scheduler (E3-03, out of scope here).
+assigned resource role (falling back to the org-wide calendar flagged
+``is_default``, and -- only when no calendar exists in the system at all --
+to an implicit 24h/day calendar), and exposes pure duration<->dates
+scheduling functions. These are used today by the summary-task duration
+recalculation in :mod:`waterfall.services.planning_tree`, and are designed
+to be reused by a future "automatic mode" task scheduler (E3-03, out of
+scope here).
 
 Known v1 limitation: durations resolved through this module are only ever
 recomputed as a side effect of a planning-tree move (``move_planning_tasks``).
@@ -29,8 +30,6 @@ from sqlalchemy.orm import Session
 from waterfall.models.ms_core import MsTask
 from waterfall.models.resources import Calendar, CalendarWeekday, ResourceRole, TaskRoleAssignment
 
-DEFAULT_CALENDAR_CODE = "STANDARD"
-
 WeekdayHours = dict[int, Decimal]
 """MS Project DayType (1=Sunday .. 7=Saturday) -> working hours per day."""
 
@@ -48,12 +47,12 @@ class ResolvedCalendar:
     - ``"role"``: the calendar assigned to the resource role staffed on the
       task (lowest ``role_id`` wins when several roles are assigned, see
       :func:`resolve_task_calendar_ids`).
-    - ``"default"``: no role calendar was found, but the org-wide default
-      ``STANDARD`` calendar exists and was used instead.
+    - ``"default"``: no role calendar was found, but the org-wide calendar
+      flagged ``is_default`` exists and was used instead.
     - ``"wall_clock_fallback"``: no calendar exists in the system at all
-      (neither a role-assigned one nor ``STANDARD``); every day is treated
-      as a 24h/day working day, which is the only way to keep this tier from
-      inventing non-working days nobody configured.
+      (neither a role-assigned one nor one flagged ``is_default``); every day
+      is treated as a 24h/day working day, which is the only way to keep this
+      tier from inventing non-working days nobody configured.
 
     A calendar that resolves but has no configured working day at all (no
     ``CalendarWeekday`` rows, or every row's ``hours_per_day`` is ``0``) is
@@ -127,10 +126,18 @@ def resolve_task_calendar_ids(db: Session, project_id: int, task_uids: set[int])
 
 
 def resolve_default_calendar_id(db: Session) -> int | None:
-    """Return the id of the active org-wide default (``STANDARD``) calendar, if any."""
+    """Return the id of the active calendar flagged ``is_default``, if any.
+
+    The system default calendar is identified purely by the ``is_default``
+    flag (issue #51), never by a well-known ``code`` value: ``code`` is a
+    freely editable, non-protected field, so resolving the default by name
+    would silently break if that calendar's code were ever renamed. The API
+    layer (see ``api/routes/resources.py``) enforces that at most one active
+    calendar carries this flag at any time.
+    """
     calendar = (
         db.query(Calendar)
-        .filter(Calendar.code == DEFAULT_CALENDAR_CODE)
+        .filter(Calendar.is_default.is_(True))
         .filter(Calendar.is_active.is_(True))
         .first()
     )
@@ -218,8 +225,8 @@ def resolve_calendars_for_tasks(
     A calendar with no configured working day at all (no ``CalendarWeekday``
     rows, or all of them at ``hours_per_day == 0``) is treated as if it had
     not been resolved: a role calendar with no working day falls through to
-    the default ``STANDARD`` calendar, and a default calendar with no working
-    day falls through to ``"wall_clock_fallback"``. This prevents an
+    the calendar flagged ``is_default``, and a default calendar with no
+    working day falls through to ``"wall_clock_fallback"``. This prevents an
     under-configured calendar from silently zeroing out a task's computed
     duration (see :func:`_has_any_working_day`).
     """

@@ -1719,6 +1719,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CalendarRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -3639,6 +3641,9 @@ components:
           maximum: 53
         is_active:
           type: boolean
+        is_default:
+          type: boolean
+          description: Promote this calendar as the system-wide default (must already be active, or be activated in the same request). Setting this to false on the current default is rejected -- promote another calendar instead.
         weekdays:
           type: array
           maxItems: 7
@@ -3653,6 +3658,7 @@ components:
         - name
         - weeks_per_year
         - is_active
+        - is_default
         - created_at
         - updated_at
       properties:
@@ -3672,6 +3678,8 @@ components:
           minimum: 1
           maximum: 53
         is_active:
+          type: boolean
+        is_default:
           type: boolean
         created_at:
           type: string

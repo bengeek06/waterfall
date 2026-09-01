@@ -168,7 +168,7 @@ def _create_standard_calendar() -> None:
     test_calendar_schedule.py, used by the lag_format regression tests below
     to demonstrate a working-time lag skipping a weekend."""
     with get_session_factory()() as session:
-        calendar = Calendar(code="STANDARD", name="Standard", weeks_per_year=47)
+        calendar = Calendar(code="STANDARD", name="Standard", weeks_per_year=47, is_default=True)
         session.add(calendar)
         session.flush()
         session.add_all(
@@ -2105,7 +2105,7 @@ def test_automatic_task_sparse_calendar_duration_rejected_without_hanging() -> N
         project_id = _create_project(client, headers)
         planning_id = _seed_hierarchy(project_id)
         with get_session_factory()() as session:
-            calendar = Calendar(code="STANDARD", name="Standard", weeks_per_year=1)
+            calendar = Calendar(code="STANDARD", name="Standard", weeks_per_year=1, is_default=True)
             session.add(calendar)
             session.flush()
             # Every day has 0 capacity except Monday, which has the DB's

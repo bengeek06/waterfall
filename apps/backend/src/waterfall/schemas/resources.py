@@ -79,6 +79,7 @@ class CalendarUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     weeks_per_year: int | None = Field(default=None, ge=1, le=53)
     is_active: bool | None = None
+    is_default: bool | None = None
     weekdays: list[CalendarWeekdayCreate] | None = Field(default=None, max_length=7)
 
     _normalize_code = field_validator("code")(_optional_text)
@@ -96,6 +97,7 @@ class CalendarRead(CalendarBase):
 
     id: int
     is_active: bool
+    is_default: bool
     created_at: datetime
     updated_at: datetime
     weekdays: list[CalendarWeekdayRead] = Field(default_factory=list)

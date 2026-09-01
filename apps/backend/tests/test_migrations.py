@@ -185,7 +185,7 @@ def test_migration_upgrade_creates_expected_schema() -> None:
 
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260831_0003"
+                == "20260901_0004"
             )
 
 
@@ -297,6 +297,128 @@ def test_calendar_migration_is_reversible() -> None:
             assert "calendar_id" in role_columns
 
 
+def test_calendar_default_flag_migration_backfills_standard_and_enforces_uniqueness() -> None:
+    """Issue #51: the 20260901_0004 migration adds wf_calendar.is_default, backfills
+    the seeded STANDARD calendar's row to True, and creates a partial unique index
+    enforcing at most one True row system-wide."""
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "migration.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        _run_alembic(database_url, "head")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            calendar_columns = {
+                column["name"] for column in inspect(connection).get_columns("wf_calendar")
+            }
+            assert "is_default" in calendar_columns
+
+            row = connection.execute(
+                text("SELECT code, is_default FROM wf_calendar WHERE code = 'STANDARD'")
+            ).one()
+            assert row[1] == 1
+
+            assert (
+                connection.scalar(text("SELECT version_num FROM alembic_version"))
+                == "20260901_0004"
+            )
+
+        # STANDARD is already backfilled to is_default=1 above, so a second row
+        # inserted with is_default=1 must be rejected by the partial unique index
+        # immediately -- no need to promote a second row first.
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            with pytest.raises(Exception, match="UNIQUE constraint failed"):
+                connection.execute(
+                    text(
+                        "INSERT INTO wf_calendar (code, name, weeks_per_year, is_active, "
+                        "is_default, created_at, updated_at) VALUES ('OTHER', 'Other', 47, 1, "
+                        "1, '2026-01-01 00:00:00', '2026-01-01 00:00:00')"
+                    )
+                )
+            connection.rollback()
+
+
+def test_calendar_default_flag_migration_is_reversible() -> None:
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "migration.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        _run_alembic(database_url, "head")
+        _downgrade_alembic(database_url, "20260831_0003")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            calendar_columns = {
+                column["name"] for column in inspect(connection).get_columns("wf_calendar")
+            }
+            assert "is_default" not in calendar_columns
+            assert (
+                connection.scalar(text("SELECT version_num FROM alembic_version"))
+                == "20260831_0003"
+            )
+
+        _run_alembic(database_url, "head")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            calendar_columns = {
+                column["name"] for column in inspect(connection).get_columns("wf_calendar")
+            }
+            assert "is_default" in calendar_columns
+            assert (
+                connection.scalar(
+                    text("SELECT is_default FROM wf_calendar WHERE code = 'STANDARD'")
+                )
+                == 1
+            )
+
+
+def test_postgres_calendar_default_flag_migration_upgrade_and_downgrade(
+    postgres_database_url: str,
+) -> None:
+    """PostgreSQL variant of the calendar default-flag migration round trip, covering
+    the partial-index syntax difference (postgresql_where vs sqlite_where) and the
+    server_default drop-after-backfill step on a real PostgreSQL dialect."""
+    _run_alembic(postgres_database_url, "head")
+
+    with _disposable_engine(postgres_database_url) as engine, engine.connect() as connection:
+        calendar_columns = {
+            column["name"] for column in inspect(connection).get_columns("wf_calendar")
+        }
+        assert "is_default" in calendar_columns
+
+        row = connection.execute(
+            text("SELECT code, is_default FROM wf_calendar WHERE code = 'STANDARD'")
+        ).one()
+        assert row[1] is True
+
+    # STANDARD is already backfilled to is_default=true above, so a second row
+    # inserted with is_default=true must be rejected by the partial unique index
+    # immediately -- no need to promote a second row first.
+    with _disposable_engine(postgres_database_url) as engine, engine.connect() as connection:
+        with pytest.raises(Exception, match="uq_wf_calendar_is_default_true"):
+            connection.execute(
+                text(
+                    "INSERT INTO wf_calendar (code, name, weeks_per_year, is_active, "
+                    "is_default, created_at, updated_at) VALUES ('OTHER', 'Other', 47, true, "
+                    "true, now(), now())"
+                )
+            )
+        connection.rollback()
+
+    _downgrade_alembic(postgres_database_url, "20260831_0003")
+
+    with _disposable_engine(postgres_database_url) as engine, engine.connect() as connection:
+        calendar_columns = {
+            column["name"] for column in inspect(connection).get_columns("wf_calendar")
+        }
+        assert "is_default" not in calendar_columns
+
+    _run_alembic(postgres_database_url, "head")
+
+    with _disposable_engine(postgres_database_url) as engine, engine.connect() as connection:
+        calendar_columns = {
+            column["name"] for column in inspect(connection).get_columns("wf_calendar")
+        }
+        assert "is_default" in calendar_columns
+
+
 def test_resource_role_code_removal_migration_is_reversible() -> None:
     with TemporaryDirectory() as temporary_directory:
         database_path = Path(temporary_directory) / "migration.db"
@@ -387,10 +509,18 @@ def test_resource_role_code_removal_downgrade_rejects_long_role_code() -> None:
 
         _seed_estimate_line(database_url, role_code="R" * 100)
 
+        # Target the resource-role-code-removal revision explicitly (rather than "-1")
+        # so this test stays correct regardless of how many migrations now sit above it
+        # in the chain (see 20260901_0004, added after this migration for issue #51).
+        # alembic applies each intermediate downgrade step individually, so 20260901_0004's
+        # own downgrade (unrelated to role_code) still succeeds before 20260831_0003's
+        # downgrade raises -- the version lands one step short of the original target, at
+        # 20260831_0003, not back at head.
         with pytest.raises(subprocess.CalledProcessError):
-            _downgrade_alembic(database_url, "-1")
+            _downgrade_alembic(database_url, "20260829_0002")
 
-        # The rejected downgrade must not have applied: schema and data untouched.
+        # The rejected downgrade must not have applied the role_code-losing step: schema
+        # and data below it untouched.
         with _disposable_engine(database_url) as engine, engine.connect() as connection:
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
@@ -409,7 +539,9 @@ def test_resource_role_code_removal_downgrade_succeeds_with_short_role_code() ->
 
         _seed_estimate_line(database_url, role_code="R" * 50)
 
-        _downgrade_alembic(database_url, "-1")
+        # Target the resource-role-code-removal revision explicitly (rather than "-1"),
+        # same reasoning as the rejection test above.
+        _downgrade_alembic(database_url, "20260829_0002")
 
         with _disposable_engine(database_url) as engine, engine.connect() as connection:
             assert (
@@ -497,7 +629,7 @@ def test_postgres_migration_upgrade_head_succeeds(postgres_database_url: str) ->
             "wf_estimate",
             "wf_estimate_task_row",
         }.issubset(table_names)
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260831_0003"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260901_0004"
 
 
 def test_postgres_migration_is_reversible(postgres_database_url: str) -> None:

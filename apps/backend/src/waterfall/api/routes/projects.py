@@ -2335,7 +2335,7 @@ def delete_task_role_assignment(
 
 
 def _resolve_project_reference_calendar(
-    standard_calendar_id: int | None,
+    default_calendar_id: int | None,
     task_calendar_ids: dict[int, int],
     calendars_by_id: dict[int, Calendar],
     weekdays_by_calendar_id: dict[int, list[CalendarWeekday]],
@@ -2344,27 +2344,30 @@ def _resolve_project_reference_calendar(
 
     The current data model has no explicit "project calendar" concept at the
     ms_project level, so this is an E5-02 implementation decision: prefer the
-    well-known active STANDARD calendar, and otherwise fall back to the lowest
-    calendar id actually referenced by an exported task (deterministic, and
-    guarantees the calendar is one we are already exporting).
+    active calendar flagged ``is_default`` (issue #51 -- resolved by
+    ``calendar_schedule.resolve_default_calendar_id``, never by a well-known
+    ``code`` value), and otherwise fall back to the lowest calendar id
+    actually referenced by an exported task (deterministic, and guarantees
+    the calendar is one we are already exporting).
 
-    STANDARD can legally exist with no working day at all (an empty
-    ``weekdays`` list, or every day at 0 hours -- see ``CalendarCreate``), in
-    which case it would be useless as a reference calendar
-    (``_calendar_header_minutes`` cannot derive MinutesPerDay/Week from it).
-    Mirroring the fallback cascade already used by
+    The default calendar can legally exist with no working day at all (an
+    empty ``weekdays`` list, or every day at 0 hours -- see
+    ``CalendarCreate``), in which case it would be useless as a reference
+    calendar (``_calendar_header_minutes`` cannot derive MinutesPerDay/Week
+    from it). Mirroring the fallback cascade already used by
     ``calendar_schedule.resolve_calendars_for_tasks``
-    (see ``_has_any_working_day`` there), a STANDARD with no working day is
-    treated as if it did not exist, and resolution falls through to the same
-    "lowest referenced task calendar id" rule used when there is no STANDARD
-    at all -- rather than abandoning the reference calendar outright.
+    (see ``_has_any_working_day`` there), a default calendar with no working
+    day is treated as if it did not exist, and resolution falls through to
+    the same "lowest referenced task calendar id" rule used when there is no
+    default calendar at all -- rather than abandoning the reference calendar
+    outright.
 
     Returns ``(None, None)`` when no candidate calendar has any working day,
     in which case the caller preserves legacy stored project header values.
     """
     candidate_ids: list[int] = []
-    if standard_calendar_id is not None:
-        candidate_ids.append(standard_calendar_id)
+    if default_calendar_id is not None:
+        candidate_ids.append(default_calendar_id)
     if task_calendar_ids:
         fallback_id = min(task_calendar_ids.values())
         if fallback_id not in candidate_ids:
@@ -2476,15 +2479,15 @@ def export_project_xml(
     # replayed from an imported file's foreign uids (ms_project.calendar_uid /
     # ms_task.calendar_uid), which are never read here.
     task_calendar_ids = resolve_task_calendar_ids(db, project_id, {task.uid for task in tasks})
-    standard_calendar_id = resolve_default_calendar_id(db)
+    default_calendar_id = resolve_default_calendar_id(db)
 
-    # Load every candidate calendar (STANDARD plus every task-referenced one)
-    # up front, so the reference-calendar resolution below can check whether
-    # STANDARD actually has a working day before committing to it as the
+    # Load every candidate calendar (the calendar flagged is_default plus every
+    # task-referenced one) up front, so the reference-calendar resolution below can
+    # check whether it actually has a working day before committing to it as the
     # export's reference, instead of discovering that too late to fall back.
     exported_calendar_ids = set(task_calendar_ids.values())
-    if standard_calendar_id is not None:
-        exported_calendar_ids.add(standard_calendar_id)
+    if default_calendar_id is not None:
+        exported_calendar_ids.add(default_calendar_id)
 
     calendars_by_id: dict[int, Calendar] = {}
     weekdays_by_calendar_id: dict[int, list[CalendarWeekday]] = {}
@@ -2501,7 +2504,7 @@ def export_project_xml(
             weekdays_by_calendar_id.setdefault(weekday.calendar_id, []).append(weekday)
 
     reference_calendar_id, header_minutes = _resolve_project_reference_calendar(
-        standard_calendar_id, task_calendar_ids, calendars_by_id, weekdays_by_calendar_id
+        default_calendar_id, task_calendar_ids, calendars_by_id, weekdays_by_calendar_id
     )
 
     ET.register_namespace("", MSP_NS)

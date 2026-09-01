@@ -2,9 +2,11 @@ from typing import Any, cast
 
 from fastapi.testclient import TestClient
 from httpx import Response
+from sqlalchemy.exc import IntegrityError
 
 from waterfall.db.session import get_session_factory
 from waterfall.main import app
+from waterfall.models.resources import Calendar
 from waterfall.models.user import User
 
 
@@ -780,3 +782,250 @@ def test_calendar_writes_require_admin() -> None:
         )
         assert create_response.status_code == 403
         assert client.get("/resources/calendars", headers=headers).status_code == 200
+
+
+def _create_calendar_via_api(client: TestClient, headers: dict[str, str], code: str) -> int:
+    response: Response = client.post(
+        "/resources/calendars",
+        json={"code": code, "name": f"Calendrier {code}", "weeks_per_year": 47},
+        headers=headers,
+    )
+    assert response.status_code == 201
+    return cast(int, cast(dict[str, Any], response.json())["id"])
+
+
+def _promote_default(client: TestClient, headers: dict[str, str], calendar_id: int) -> Response:
+    return client.patch(
+        f"/resources/calendars/{calendar_id}",
+        json={"is_default": True},
+        headers=headers,
+    )
+
+
+def test_calendar_patch_deactivate_blocked_when_default() -> None:
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        calendar_id = _create_calendar_via_api(client, headers, "DEFAULT-DEACT")
+        assert _promote_default(client, headers, calendar_id).status_code == 200
+
+        blocked: Response = client.patch(
+            f"/resources/calendars/{calendar_id}",
+            json={"is_active": False},
+            headers=headers,
+        )
+        assert blocked.status_code == 409
+        assert blocked.json()["detail"] == (
+            "Calendar is the system default calendar and cannot be deactivated or deleted"
+        )
+
+
+def test_calendar_delete_blocked_when_default() -> None:
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        calendar_id = _create_calendar_via_api(client, headers, "DEFAULT-DEL")
+        assert _promote_default(client, headers, calendar_id).status_code == 200
+
+        blocked: Response = client.delete(f"/resources/calendars/{calendar_id}", headers=headers)
+        assert blocked.status_code == 409
+        assert blocked.json()["detail"] == (
+            "Calendar is the system default calendar and cannot be deactivated or deleted"
+        )
+
+
+def test_calendar_patch_cannot_unset_default_without_promoting_replacement() -> None:
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        calendar_id = _create_calendar_via_api(client, headers, "DEFAULT-UNSET")
+        assert _promote_default(client, headers, calendar_id).status_code == 200
+
+        blocked: Response = client.patch(
+            f"/resources/calendars/{calendar_id}",
+            json={"is_default": False},
+            headers=headers,
+        )
+        assert blocked.status_code == 409
+        assert blocked.json()["detail"] == (
+            "Cannot unset the default calendar directly; promote another calendar as "
+            "default instead (PATCH it with is_default=true)"
+        )
+
+        # The rejected PATCH must not have applied.
+        unchanged: Response = client.get(f"/resources/calendars/{calendar_id}", headers=headers)
+        assert unchanged.json()["is_default"] is True
+
+
+def test_calendar_patch_is_default_false_on_non_default_is_a_noop() -> None:
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        calendar_id = _create_calendar_via_api(client, headers, "NOT-DEFAULT")
+
+        response: Response = client.patch(
+            f"/resources/calendars/{calendar_id}",
+            json={"is_default": False},
+            headers=headers,
+        )
+        assert response.status_code == 200
+        assert response.json()["is_default"] is False
+
+
+def test_calendar_patch_promotes_new_default_and_demotes_previous_one() -> None:
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        old_default_id = _create_calendar_via_api(client, headers, "OLD-DEFAULT")
+        assert _promote_default(client, headers, old_default_id).status_code == 200
+
+        new_default_id = _create_calendar_via_api(client, headers, "NEW-DEFAULT")
+        promote_response = _promote_default(client, headers, new_default_id)
+        assert promote_response.status_code == 200
+        assert promote_response.json()["is_default"] is True
+
+        old_default: Response = client.get(
+            f"/resources/calendars/{old_default_id}", headers=headers
+        )
+        assert old_default.json()["is_default"] is False
+
+        new_default: Response = client.get(
+            f"/resources/calendars/{new_default_id}", headers=headers
+        )
+        assert new_default.json()["is_default"] is True
+
+        # The flag, not the code, is what is protected: the old default calendar can
+        # now be freely renamed and deactivated.
+        renamed: Response = client.patch(
+            f"/resources/calendars/{old_default_id}",
+            json={"code": "OLD-DEFAULT-RENAMED"},
+            headers=headers,
+        )
+        assert renamed.status_code == 200
+        assert renamed.json()["code"] == "OLD-DEFAULT-RENAMED"
+
+        deactivated: Response = client.patch(
+            f"/resources/calendars/{old_default_id}",
+            json={"is_active": False},
+            headers=headers,
+        )
+        assert deactivated.status_code == 200
+        assert deactivated.json()["is_active"] is False
+
+
+def test_calendar_patch_promote_requires_active_calendar() -> None:
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        calendar_id = _create_calendar_via_api(client, headers, "INACTIVE-PROMOTE")
+        deactivate: Response = client.patch(
+            f"/resources/calendars/{calendar_id}",
+            json={"is_active": False},
+            headers=headers,
+        )
+        assert deactivate.status_code == 200
+
+        promote: Response = _promote_default(client, headers, calendar_id)
+        assert promote.status_code == 400
+        assert promote.json()["detail"] == "Only an active calendar can be set as default"
+
+
+def test_calendar_patch_promote_allows_activating_and_promoting_in_same_request() -> None:
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        calendar_id = _create_calendar_via_api(client, headers, "ACTIVATE-AND-PROMOTE")
+        client.patch(
+            f"/resources/calendars/{calendar_id}",
+            json={"is_active": False},
+            headers=headers,
+        )
+
+        promote: Response = client.patch(
+            f"/resources/calendars/{calendar_id}",
+            json={"is_active": True, "is_default": True},
+            headers=headers,
+        )
+        assert promote.status_code == 200
+        payload = cast(dict[str, Any], promote.json())
+        assert payload["is_active"] is True
+        assert payload["is_default"] is True
+
+
+def test_calendar_patch_deactivate_and_promote_in_one_request_on_current_default() -> None:
+    """The is_active guard must fire before the is_default promotion logic even runs:
+
+    a single PATCH that both deactivates and (re)promotes the *current* default
+    calendar is rejected as a 409 on the deactivation check, not a 400 from the
+    promotion check -- `_ensure_calendar_not_default` runs first in `update_calendar`,
+    ahead of the `is_default` branch."""
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        calendar_id = _create_calendar_via_api(client, headers, "DEFAULT-COMBO")
+        assert _promote_default(client, headers, calendar_id).status_code == 200
+
+        response: Response = client.patch(
+            f"/resources/calendars/{calendar_id}",
+            json={"is_active": False, "is_default": True},
+            headers=headers,
+        )
+        assert response.status_code == 409
+        assert response.json()["detail"] == (
+            "Calendar is the system default calendar and cannot be deactivated or deleted"
+        )
+
+
+def test_calendar_patch_deactivate_and_promote_in_one_request_on_non_default() -> None:
+    """On a non-default, active calendar, the same combined payload's *effective*
+    is_active (after this same request) is False, so the promotion check must reject
+    it with a 400 -- there is no deactivation guard to trip first here, since the
+    calendar isn't the default."""
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        calendar_id = _create_calendar_via_api(client, headers, "NON-DEFAULT-COMBO")
+
+        response: Response = client.patch(
+            f"/resources/calendars/{calendar_id}",
+            json={"is_active": False, "is_default": True},
+            headers=headers,
+        )
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Only an active calendar can be set as default"
+
+
+def test_calendar_patch_explicit_null_is_default_matches_false_on_current_default() -> None:
+    """`payload.model_dump(exclude_unset=True)` keeps an explicitly-sent `null` the same
+    as an explicitly-sent `false` -- both land in the `elif calendar.is_default:` branch
+    once `is_default` is popped from `values`, since `pop()` returns the falsy `None`.
+    This documents existing, already-correct behavior; it is not a behavior change."""
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        calendar_id = _create_calendar_via_api(client, headers, "NULL-DEFAULT")
+        assert _promote_default(client, headers, calendar_id).status_code == 200
+
+        response: Response = client.patch(
+            f"/resources/calendars/{calendar_id}",
+            json={"is_default": None},
+            headers=headers,
+        )
+        assert response.status_code == 409
+        assert response.json()["detail"] == (
+            "Cannot unset the default calendar directly; promote another calendar as "
+            "default instead (PATCH it with is_default=true)"
+        )
+
+        unchanged: Response = client.get(f"/resources/calendars/{calendar_id}", headers=headers)
+        assert unchanged.json()["is_default"] is True
+
+
+def test_calendar_is_default_partial_unique_index_rejects_two_defaults() -> None:
+    """DB-level backstop test: even bypassing the API-layer promotion guard, the
+    partial unique index on wf_calendar.is_default must reject a second row flagged
+    is_default=True."""
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        first = Calendar(code="IDX-1", name="Index 1", weeks_per_year=47, is_default=True)
+        session.add(first)
+        session.commit()
+
+        second = Calendar(code="IDX-2", name="Index 2", weeks_per_year=47, is_default=True)
+        session.add(second)
+        try:
+            session.commit()
+        except IntegrityError:
+            session.rollback()
+        else:
+            raise AssertionError("only one calendar may be flagged is_default at a time")

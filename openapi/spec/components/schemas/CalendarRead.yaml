@@ -5,6 +5,7 @@ required:
 - name
 - weeks_per_year
 - is_active
+- is_default
 - created_at
 - updated_at
 properties:
@@ -24,6 +25,8 @@ properties:
     minimum: 1
     maximum: 53
   is_active:
+    type: boolean
+  is_default:
     type: boolean
   created_at:
     type: string
