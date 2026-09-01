@@ -67,7 +67,7 @@ class MsProject(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     owner_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
-    external_uid: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    external_uid: Mapped[str | None] = mapped_column(String(36), nullable=True)
     code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     short_description: Mapped[str | None] = mapped_column(String(500), nullable=True)
     source_version: Mapped[int] = mapped_column(SmallInteger, nullable=False)

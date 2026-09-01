@@ -38,6 +38,20 @@ def test_validator_rejects_cycles_and_bad_namespace() -> None:
     assert {"UNSUPPORTED_NAMESPACE", "DEPENDENCY_CYCLE"} <= codes
 
 
+def test_validator_rejects_external_uid_longer_than_persisted_limit() -> None:
+    xml = (
+        '<Project xmlns="http://schemas.microsoft.com/project">'
+        "<SaveVersion>16</SaveVersion><ScheduleFromStart>1</ScheduleFromStart>"
+        "<StartDate>2026-01-01T08:00:00</StartDate><GUID>"
+        f"{'G' * 37}</GUID><Tasks /></Project>"
+    ).encode()
+
+    with pytest.raises(MsProjectValidationError) as error:
+        parse_msproject_xml(xml)
+
+    assert {issue["code"] for issue in error.value.issues} == {"EXTERNAL_UID_TOO_LONG"}
+
+
 def test_validator_parses_iso_duration() -> None:
     parsed = parse_msproject_xml(
         b'<Project xmlns="http://schemas.microsoft.com/project"><SaveVersion>16</SaveVersion><ScheduleFromStart>1</ScheduleFromStart><StartDate>2026-01-01T08:00:00</StartDate><Tasks><Task><UID>1</UID><ID>1</ID><Name>A</Name><Duration>PT8H</Duration></Task></Tasks></Project>'

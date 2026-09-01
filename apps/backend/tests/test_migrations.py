@@ -13,7 +13,7 @@ from tempfile import TemporaryDirectory
 import pytest
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
-from sqlalchemy import Engine, create_engine, inspect, text
+from sqlalchemy import Engine, String, create_engine, inspect, text
 from sqlalchemy.engine import make_url
 
 from _postgres_support import (
@@ -172,10 +172,16 @@ def test_migration_upgrade_creates_expected_schema() -> None:
                 "wf_estimate_task_row",
             }.issubset(table_names)
 
-            project_columns = {column["name"] for column in inspector.get_columns("ms_project")}
+            project_column_details = {
+                column["name"]: column for column in inspector.get_columns("ms_project")
+            }
+            project_columns = set(project_column_details)
             assert {"status", "planning_reference_id", "displayed_planning_id"}.issubset(
                 project_columns
             )
+            external_uid_type = project_column_details["external_uid"]["type"]
+            assert isinstance(external_uid_type, String)
+            assert external_uid_type.length == 36
 
             planning_columns = {column["name"] for column in inspector.get_columns("wf_planning")}
             assert "structure_draft_json" in planning_columns
@@ -185,7 +191,7 @@ def test_migration_upgrade_creates_expected_schema() -> None:
 
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260901_0004"
+                == "20260901_0005"
             )
 
 
@@ -319,7 +325,7 @@ def test_calendar_default_flag_migration_backfills_standard_and_enforces_uniquen
 
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260901_0004"
+                == "20260901_0005"
             )
 
         # STANDARD is already backfilled to is_default=1 above, so a second row
@@ -614,6 +620,61 @@ def test_resource_role_code_removal_downgrade_succeeds_with_short_role_code() ->
             assert connection.scalar(text("SELECT role_code FROM wf_estimate_line")) == "R" * 50
 
 
+def test_project_external_uid_migration_downgrade_preserves_short_value() -> None:
+    with TemporaryDirectory() as temporary_directory:
+        database_url = f"sqlite+pysqlite:///{Path(temporary_directory) / 'migration.db'}"
+        _run_alembic(database_url, "head")
+
+        with _disposable_engine(database_url) as engine, engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO ms_project (external_uid, source_version, save_version_out, "
+                    "name, schedule_from_start, start_date, minutes_per_day, minutes_per_week, "
+                    "days_per_month, created_at, updated_at, status) VALUES (:external_uid, "
+                    "2016, 16, 'Downgrade', 1, '2026-01-01', 480, 2400, 20, "
+                    "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'cree')"
+                ),
+                {"external_uid": "G" * 16},
+            )
+
+        _downgrade_alembic(database_url, "20260901_0004")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            assert connection.scalar(text("SELECT external_uid FROM ms_project")) == "G" * 16
+            assert (
+                connection.scalar(text("SELECT version_num FROM alembic_version"))
+                == "20260901_0004"
+            )
+
+
+def test_project_external_uid_migration_downgrade_rejects_long_value() -> None:
+    with TemporaryDirectory() as temporary_directory:
+        database_url = f"sqlite+pysqlite:///{Path(temporary_directory) / 'migration.db'}"
+        _run_alembic(database_url, "head")
+
+        with _disposable_engine(database_url) as engine, engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO ms_project (external_uid, source_version, save_version_out, "
+                    "name, schedule_from_start, start_date, minutes_per_day, minutes_per_week, "
+                    "days_per_month, created_at, updated_at, status) VALUES (:external_uid, "
+                    "2016, 16, 'Downgrade', 1, '2026-01-01', 480, 2400, 20, "
+                    "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'cree')"
+                ),
+                {"external_uid": "G" * 17},
+            )
+
+        with pytest.raises(subprocess.CalledProcessError):
+            _downgrade_alembic(database_url, "20260901_0004")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            assert connection.scalar(text("SELECT external_uid FROM ms_project")) == "G" * 17
+            assert (
+                connection.scalar(text("SELECT version_num FROM alembic_version"))
+                == "20260901_0005"
+            )
+
+
 def test_migration_downgrade_drops_all_tables() -> None:
     with TemporaryDirectory() as temporary_directory:
         database_path = Path(temporary_directory) / "migration.db"
@@ -692,7 +753,29 @@ def test_postgres_migration_upgrade_head_succeeds(postgres_database_url: str) ->
             "wf_estimate",
             "wf_estimate_task_row",
         }.issubset(table_names)
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260901_0004"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260901_0005"
+
+
+def test_postgres_project_external_uid_accepts_canonical_guid(
+    postgres_database_url: str,
+) -> None:
+    """PostgreSQL enforces VARCHAR lengths that SQLite ignores."""
+    _run_alembic(postgres_database_url, "head")
+    external_uid = "12345678-1234-1234-1234-123456789abc"
+
+    with _disposable_engine(postgres_database_url) as engine, engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO ms_project (external_uid, source_version, save_version_out, name, "
+                "schedule_from_start, start_date, finish_date, minutes_per_day, "
+                "minutes_per_week, days_per_month, created_at, updated_at, status) VALUES "
+                "(:external_uid, 2016, 16, 'GUID import', true, '2026-01-01', '2026-12-31', "
+                "480, 2400, 20, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'cree')"
+            ),
+            {"external_uid": external_uid},
+        )
+
+        assert connection.scalar(text("SELECT external_uid FROM ms_project")) == external_uid
 
 
 def test_postgres_migration_is_reversible(postgres_database_url: str) -> None:
