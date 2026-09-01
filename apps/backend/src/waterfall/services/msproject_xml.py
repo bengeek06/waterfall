@@ -387,6 +387,14 @@ def parse_msproject_xml(xml_bytes: bytes) -> ParsedProject:
     for uid in task_uids:
         visit(uid)
     schedule_from_start = _boolean(_text(root, "ScheduleFromStart"), "ScheduleFromStart", issues)
+    external_uid = _text(root, "GUID")
+    if external_uid is not None and len(external_uid) > 36:
+        issues.append(
+            {
+                "code": "EXTERNAL_UID_TOO_LONG",
+                "message": "GUID must contain at most 36 characters",
+            }
+        )
     if schedule_from_start and start_date is None:
         issues.append(
             {"code": "MISSING_START_DATE", "message": "ScheduleFromStart requires StartDate"}
@@ -424,7 +432,7 @@ def parse_msproject_xml(xml_bytes: bytes) -> ParsedProject:
         namespace=namespace,
         save_version=save_version,
         source_version=source_version,
-        external_uid=_text(root, "GUID"),
+        external_uid=external_uid,
         name=_text(root, "Name"),
         schedule_from_start=schedule_from_start,
         start_date=start_date,

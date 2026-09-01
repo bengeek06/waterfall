@@ -35,7 +35,7 @@ Definir un schema SQL cible pour:
 
 ### ms_project
 - id (pk)
-- external_uid (varchar(16), nullable)
+- external_uid (varchar(36), nullable)
 - source_version (smallint, check in (2010, 2013, 2016))
 - save_version_out (smallint, check in (14, 15, 16), default 16)
 - name (varchar(255), not null)
