@@ -212,4 +212,101 @@ describe("CalendarsTable", () => {
     fireEvent.click(button);
     expect(onToggle).toHaveBeenCalledWith(calendar);
   });
+
+  it("disables the deactivate button and shows the default badge and hint when the calendar is the system default", () => {
+    const calendar = { id: 1, code: "STANDARD", name: "Calendrier standard", weeks_per_year: 47, is_active: true, is_default: true, weekdays: [] } as never;
+    render(
+      <CalendarsTable
+        items={[calendar]}
+        code=""
+        name=""
+        weeksPerYear="47"
+        weekdays={defaultWeekdays()}
+        draft={{ code: "", name: "", weeksPerYear: "47", weekdays: defaultWeekdays() }}
+        editingId={null}
+        busy={false}
+        calendarIdsInUseByActiveRoles={new Set()}
+        onSubmit={(event) => event.preventDefault()}
+        onCodeChange={vi.fn()}
+        onNameChange={vi.fn()}
+        onWeeksPerYearChange={vi.fn()}
+        onWeekdayChange={vi.fn()}
+        onStartEdit={vi.fn()}
+        onDraftChange={vi.fn()}
+        onDraftWeekdayChange={vi.fn()}
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+        onToggle={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Désactiver" })).toBeDisabled();
+    expect(screen.getByText("Calendrier par défaut")).toBeInTheDocument();
+    expect(screen.getByText("Par défaut")).toBeInTheDocument();
+  });
+
+  it("disables the deactivate button and shows both hints when the calendar is both the system default and assigned to an active role", () => {
+    const calendar = { id: 1, code: "STANDARD", name: "Calendrier standard", weeks_per_year: 47, is_active: true, is_default: true, weekdays: [] } as never;
+    render(
+      <CalendarsTable
+        items={[calendar]}
+        code=""
+        name=""
+        weeksPerYear="47"
+        weekdays={defaultWeekdays()}
+        draft={{ code: "", name: "", weeksPerYear: "47", weekdays: defaultWeekdays() }}
+        editingId={null}
+        busy={false}
+        calendarIdsInUseByActiveRoles={new Set([1])}
+        onSubmit={(event) => event.preventDefault()}
+        onCodeChange={vi.fn()}
+        onNameChange={vi.fn()}
+        onWeeksPerYearChange={vi.fn()}
+        onWeekdayChange={vi.fn()}
+        onStartEdit={vi.fn()}
+        onDraftChange={vi.fn()}
+        onDraftWeekdayChange={vi.fn()}
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+        onToggle={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Désactiver" })).toBeDisabled();
+    expect(screen.getByText("Assigné à un rôle actif")).toBeInTheDocument();
+    expect(screen.getByText("Calendrier par défaut")).toBeInTheDocument();
+    expect(screen.getByText("Par défaut")).toBeInTheDocument();
+  });
+
+  it("does not show the default calendar badge or hint for a non-default calendar", () => {
+    const calendar = { id: 1, code: "STANDARD", name: "Calendrier standard", weeks_per_year: 47, is_active: true, is_default: false, weekdays: [] } as never;
+    render(
+      <CalendarsTable
+        items={[calendar]}
+        code=""
+        name=""
+        weeksPerYear="47"
+        weekdays={defaultWeekdays()}
+        draft={{ code: "", name: "", weeksPerYear: "47", weekdays: defaultWeekdays() }}
+        editingId={null}
+        busy={false}
+        calendarIdsInUseByActiveRoles={new Set()}
+        onSubmit={(event) => event.preventDefault()}
+        onCodeChange={vi.fn()}
+        onNameChange={vi.fn()}
+        onWeeksPerYearChange={vi.fn()}
+        onWeekdayChange={vi.fn()}
+        onStartEdit={vi.fn()}
+        onDraftChange={vi.fn()}
+        onDraftWeekdayChange={vi.fn()}
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+        onToggle={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Désactiver" })).not.toBeDisabled();
+    expect(screen.queryByText("Calendrier par défaut")).not.toBeInTheDocument();
+    expect(screen.queryByText("Par défaut")).not.toBeInTheDocument();
+  });
 });

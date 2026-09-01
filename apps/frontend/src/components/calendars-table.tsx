@@ -2,6 +2,7 @@
 
 import type { FormEventHandler } from "react";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -97,7 +98,7 @@ export function CalendarsTable(props: CalendarsTableProps) {
                 const inUseByActiveRole = item.is_active && props.calendarIdsInUseByActiveRoles.has(item.id);
                 return (
                   <TableRow key={item.id} className={item.is_active ? undefined : "opacity-55"}>
-                    <TableCell>{editing ? <Input aria-label={`Code de ${item.code}`} value={props.draft.code} onChange={(event) => props.onDraftChange("code", event.target.value)} /> : <span className="font-medium">{item.code}</span>}</TableCell>
+                    <TableCell>{editing ? <Input aria-label={`Code de ${item.code}`} value={props.draft.code} onChange={(event) => props.onDraftChange("code", event.target.value)} /> : <span className="font-medium flex items-center gap-2">{item.code}{item.is_default ? <Badge variant="secondary">Par défaut</Badge> : null}</span>}</TableCell>
                     <TableCell>{editing ? <Input aria-label={`Nom de ${item.code}`} value={props.draft.name} onChange={(event) => props.onDraftChange("name", event.target.value)} /> : item.name}</TableCell>
                     <TableCell>{editing ? <Input aria-label={`Semaines par an de ${item.code}`} type="number" min="1" max="53" value={props.draft.weeksPerYear} onChange={(event) => props.onDraftChange("weeksPerYear", event.target.value)} /> : item.weeks_per_year}</TableCell>
                     {WEEKDAY_ORDER.map(({ dayType, label }) => {
@@ -131,8 +132,9 @@ export function CalendarsTable(props: CalendarsTableProps) {
                         ) : (
                           <Button size="sm" variant="outline" type="button" onClick={() => props.onStartEdit(item)}>Modifier</Button>
                         )}
-                        <Button size="sm" variant="outline" type="button" disabled={props.busy || inUseByActiveRole} onClick={() => props.onToggle(item)}>{item.is_active ? "Désactiver" : "Réactiver"}</Button>
+                        <Button size="sm" variant="outline" type="button" disabled={props.busy || inUseByActiveRole || item.is_default} onClick={() => props.onToggle(item)}>{item.is_active ? "Désactiver" : "Réactiver"}</Button>
                         {inUseByActiveRole ? <span className="text-xs text-muted-foreground">Assigné à un rôle actif</span> : null}
+                        {item.is_default ? <span className="text-xs text-muted-foreground">Calendrier par défaut</span> : null}
                       </div>
                     </TableCell>
                   </TableRow>
