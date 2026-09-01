@@ -1435,8 +1435,8 @@ def create_project_estimate(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> ProjectEstimateRead:
-    project = _get_project_or_404(db, project_id, current_user.id)
-    ensure_project_mutable(project)
+    # EstimateTaskRow snapshots retain task references checked during deletion.
+    project = get_mutable_project_lock(db, project_id, current_user.id)
     if payload.kind == "forecast_remaining" and payload.reference_estimate_id is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1554,8 +1554,8 @@ def validate_project_estimate(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> ProjectEstimateRead:
-    project = _get_project_or_404(db, project_id, current_user.id)
-    ensure_project_mutable(project)
+    # Validation derives EstimateLine task references from assignments and cost lines.
+    get_mutable_project_lock(db, project_id, current_user.id)
     estimate = _get_estimate_or_404(db, project_id, estimate_id)
     if estimate.status != "draft":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Estimate is not a draft")
@@ -1666,7 +1666,8 @@ def create_estimate_cost_line(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> EstimateCostLineRead:
-    _get_project_or_404(db, project_id, current_user.id)
+    # Serialize task-reference creation with the deletion reference check.
+    get_mutable_project_lock(db, project_id, current_user.id)
     _get_draft_estimate_or_409(db, project_id, estimate_id)
     if payload.task_id is not None:
         task = db.query(MsTask).filter(MsTask.id == payload.task_id).first()
@@ -1717,7 +1718,8 @@ def update_estimate_cost_line(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> EstimateCostLineRead:
-    _get_project_or_404(db, project_id, current_user.id)
+    # A patch can repoint the line to another task.
+    get_mutable_project_lock(db, project_id, current_user.id)
     _get_draft_estimate_or_409(db, project_id, estimate_id)
     line = (
         db.query(EstimateCostLine)
@@ -2216,8 +2218,9 @@ def create_task_role_assignment(
     # assignment here does not recalculate duration_minutes on any draft
     # planning summary task above it -- that only happens on the next
     # move_planning_tasks call (see planning_tree.py). Left for E3-03.
-    project = _get_project_or_404(db, project_id, current_user.id)
-    ensure_project_mutable(project)
+    #
+    # Use the same project-first lock order as planning task deletion.
+    project = get_mutable_project_lock(db, project_id, current_user.id)
     if project.displayed_planning_id is not None:
         planning = _get_planning_or_404(db, project_id, project.displayed_planning_id)
         snapshot = (
