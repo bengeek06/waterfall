@@ -9,8 +9,6 @@ properties:
   message:
     type: string
   taskUid:
-    type: integer
-    nullable: true
+    type: [integer, "null"]
   predecessorUid:
-    type: integer
-    nullable: true
+    type: [integer, "null"]

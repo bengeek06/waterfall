@@ -1,6 +1,5 @@
 type: object
 properties:
   description:
-    type: string
-    nullable: true
+    type: [string, "null"]
     maxLength: 10000

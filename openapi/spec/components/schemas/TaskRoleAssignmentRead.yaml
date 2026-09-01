@@ -35,8 +35,7 @@ properties:
   hours:
     type: number
   comment:
-    type: string
-    nullable: true
+    type: [string, "null"]
   created_at:
     type: string
     format: date-time

@@ -5,6 +5,9 @@ openapi: 3.1.0
 info:
   title: Waterfall API
   version: 0.1.0
+  license:
+    name: GNU Affero General Public License v3.0 only
+    identifier: AGPL-3.0-only
   summary: Contrat API pour l'import MS Project et la gestion des ressources
   description: |
     Contrat OpenAPI du backend Waterfall.
@@ -33,6 +36,7 @@ paths:
         - health
       summary: Vérifier la disponibilité de l'API
       operationId: getHealth
+      security: []
       responses:
         '200':
           description: API disponible
@@ -46,6 +50,7 @@ paths:
         - health
       summary: Vérifier que l'API est prête
       operationId: getReadiness
+      security: []
       responses:
         '200':
           description: API prête
@@ -59,6 +64,7 @@ paths:
         - observability
       summary: Exposer les métriques Prometheus
       operationId: getMetrics
+      security: []
       responses:
         '200':
           description: Métriques Prometheus
@@ -72,6 +78,7 @@ paths:
         - auth
       summary: Créer un utilisateur public lorsque l'inscription est activée
       operationId: registerUser
+      security: []
       requestBody:
         required: true
         content:
@@ -95,6 +102,7 @@ paths:
         - auth
       summary: Obtenir un access token et définir le cookie de refresh HttpOnly
       operationId: login
+      security: []
       requestBody:
         required: true
         content:
@@ -144,6 +152,7 @@ paths:
         - auth
       summary: Renouveler l'access token depuis le cookie de refresh HttpOnly
       operationId: refreshAccessToken
+      security: []
       responses:
         '200':
           description: Access token renouvelé et cookie de refresh renouvelé
@@ -165,6 +174,7 @@ paths:
         - auth
       summary: Effacer le cookie de refresh
       operationId: logout
+      security: []
       responses:
         '204':
           description: Session de refresh effacée
@@ -1045,9 +1055,10 @@ paths:
           in: query
           required: false
           schema:
-            type: integer
+            type:
+              - integer
+              - 'null'
             minimum: 1
-            nullable: true
       responses:
         '200':
           description: Liste de taches
@@ -1176,9 +1187,10 @@ paths:
           in: query
           required: false
           schema:
-            type: integer
+            type:
+              - integer
+              - 'null'
             minimum: 1
-            nullable: true
       responses:
         '200':
           description: Arbre hiérarchique du planning
@@ -1610,9 +1622,10 @@ paths:
           in: query
           required: false
           schema:
-            type: integer
+            type:
+              - integer
+              - 'null'
             minimum: 1
-            nullable: true
       responses:
         '200':
           description: XML du projet
@@ -2460,9 +2473,10 @@ components:
               type: integer
               minimum: 0
             locked_until:
-              type: string
+              type:
+                - string
+                - 'null'
               format: date-time
-              nullable: true
             created_at:
               type: string
               format: date-time
@@ -2569,21 +2583,25 @@ components:
         status:
           $ref: '#/components/schemas/BatchStatus'
         sourceName:
-          type: string
-          nullable: true
+          type:
+            - string
+            - 'null'
         sourceVersion:
           $ref: '#/components/schemas/SourceVersion'
         startedAt:
-          type: string
+          type:
+            - string
+            - 'null'
           format: date-time
-          nullable: true
         endedAt:
-          type: string
+          type:
+            - string
+            - 'null'
           format: date-time
-          nullable: true
         errorMessage:
-          type: string
-          nullable: true
+          type:
+            - string
+            - 'null'
         createdAt:
           type: string
           format: date-time
@@ -2649,11 +2667,13 @@ components:
         linkType:
           type: integer
         lagTenthMinute:
-          type: integer
-          nullable: true
+          type:
+            - integer
+            - 'null'
         lagFormat:
-          type: integer
-          nullable: true
+          type:
+            - integer
+            - 'null'
     ImportDiffResponse:
       type: object
       required:
@@ -2665,8 +2685,9 @@ components:
           type: integer
           minimum: 1
         sourceSha256:
-          type: string
-          nullable: true
+          type:
+            - string
+            - 'null'
         identicalSource:
           type: boolean
         items:
@@ -2706,9 +2727,10 @@ components:
         - type: object
           properties:
             projectId:
-              type: integer
+              type:
+                - integer
+                - 'null'
               minimum: 1
-              nullable: true
               description: ms_project.id cree par l'import
             counters:
               $ref: '#/components/schemas/ImportCounters'
@@ -2728,11 +2750,13 @@ components:
         message:
           type: string
         taskUid:
-          type: integer
-          nullable: true
+          type:
+            - integer
+            - 'null'
         predecessorUid:
-          type: integer
-          nullable: true
+          type:
+            - integer
+            - 'null'
     ImportErrorListResponse:
       type: object
       required:
@@ -2794,11 +2818,13 @@ components:
             - termine
             - abandonne
         code:
-          type: string
-          nullable: true
+          type:
+            - string
+            - 'null'
         short_description:
-          type: string
-          nullable: true
+          type:
+            - string
+            - 'null'
         source_version:
           type: integer
           enum:
@@ -2814,25 +2840,31 @@ components:
         schedule_from_start:
           type: boolean
         start_date:
-          type: string
+          type:
+            - string
+            - 'null'
           format: date-time
-          nullable: true
         finish_date:
-          type: string
+          type:
+            - string
+            - 'null'
           format: date-time
-          nullable: true
         currency_code:
-          type: string
-          nullable: true
+          type:
+            - string
+            - 'null'
         planning_reference_id:
-          type: integer
-          nullable: true
+          type:
+            - integer
+            - 'null'
         displayed_planning_id:
-          type: integer
-          nullable: true
+          type:
+            - integer
+            - 'null'
         reference_estimate_id:
-          type: integer
-          nullable: true
+          type:
+            - integer
+            - 'null'
     ProjectCreate:
       type: object
       required:
@@ -2843,18 +2875,21 @@ components:
           minLength: 1
           maxLength: 255
         code:
-          type: string
+          type:
+            - string
+            - 'null'
           maxLength: 64
-          nullable: true
         short_description:
-          type: string
+          type:
+            - string
+            - 'null'
           maxLength: 500
-          nullable: true
         currency_code:
-          type: string
+          type:
+            - string
+            - 'null'
           minLength: 3
           maxLength: 3
-          nullable: true
     ProjectUpdate:
       type: object
       properties:
@@ -2863,13 +2898,15 @@ components:
           minLength: 1
           maxLength: 255
         code:
-          type: string
+          type:
+            - string
+            - 'null'
           maxLength: 64
-          nullable: true
         short_description:
-          type: string
+          type:
+            - string
+            - 'null'
           maxLength: 500
-          nullable: true
         status:
           type: string
           enum:
@@ -2920,26 +2957,30 @@ components:
             - validated
             - superseded
         note:
-          type: string
-          nullable: true
+          type:
+            - string
+            - 'null'
         created_at:
           type: string
           format: date-time
         validated_at:
-          type: string
+          type:
+            - string
+            - 'null'
           format: date-time
-          nullable: true
     PlanningCreate:
       type: object
       properties:
         note:
-          type: string
+          type:
+            - string
+            - 'null'
           maxLength: 10000
-          nullable: true
         source_planning_id:
-          type: integer
+          type:
+            - integer
+            - 'null'
           minimum: 1
-          nullable: true
     PlanningTaskMove:
       type: object
       required:
@@ -3032,58 +3073,71 @@ components:
           type: integer
           minimum: 1
         id_display:
-          type: integer
-          nullable: true
+          type:
+            - integer
+            - 'null'
         structure_key:
-          type: string
-          nullable: true
+          type:
+            - string
+            - 'null'
         structure_kind:
-          type: string
+          type:
+            - string
+            - 'null'
           enum:
             - poste
             - lot
             - livrable
             - milestone
             - task
-          nullable: true
         parent_uid:
-          type: integer
-          nullable: true
+          type:
+            - integer
+            - 'null'
         position:
-          type: integer
-          nullable: true
+          type:
+            - integer
+            - 'null'
         name:
           type: string
         outline_number:
-          type: string
-          nullable: true
+          type:
+            - string
+            - 'null'
         outline_level:
-          type: integer
-          nullable: true
+          type:
+            - integer
+            - 'null'
         start_at:
-          type: string
+          type:
+            - string
+            - 'null'
           format: date-time
-          nullable: true
         finish_at:
-          type: string
+          type:
+            - string
+            - 'null'
           format: date-time
-          nullable: true
         duration_minutes:
-          type: integer
-          nullable: true
+          type:
+            - integer
+            - 'null'
         percent_complete:
-          type: integer
-          nullable: true
+          type:
+            - integer
+            - 'null'
         is_summary:
           type: boolean
         is_milestone:
           type: boolean
         is_manual:
-          type: boolean
-          nullable: true
+          type:
+            - boolean
+            - 'null'
         description:
-          type: string
-          nullable: true
+          type:
+            - string
+            - 'null'
         predecessor_links:
           type: array
           items:
@@ -3102,11 +3156,13 @@ components:
           minimum: 0
           maximum: 3
         lag_tenth_minute:
-          type: integer
-          nullable: true
+          type:
+            - integer
+            - 'null'
         lag_format:
-          type: integer
-          nullable: true
+          type:
+            - integer
+            - 'null'
     PlanningLinkRead:
       type: object
       required:
@@ -3125,11 +3181,13 @@ components:
           minimum: 0
           maximum: 3
         lag_tenth_minute:
-          type: integer
-          nullable: true
+          type:
+            - integer
+            - 'null'
         lag_format:
-          type: integer
-          nullable: true
+          type:
+            - integer
+            - 'null'
     PlanningStructureCreate:
       type: object
       required:
@@ -3240,8 +3298,9 @@ components:
       type: object
       properties:
         description:
-          type: string
-          nullable: true
+          type:
+            - string
+            - 'null'
           maxLength: 10000
     TaskRoleAssignmentCreate:
       type: object
@@ -3260,9 +3319,10 @@ components:
           type: number
           minimum: 0
         comment:
-          type: string
+          type:
+            - string
+            - 'null'
           maxLength: 10000
-          nullable: true
     TaskRoleAssignmentUpdate:
       type: object
       properties:
@@ -3273,9 +3333,10 @@ components:
           type: number
           minimum: 0
         comment:
-          type: string
+          type:
+            - string
+            - 'null'
           maxLength: 10000
-          nullable: true
     TaskRoleAssignmentRead:
       type: object
       required:
@@ -3314,8 +3375,9 @@ components:
         hours:
           type: number
         comment:
-          type: string
-          nullable: true
+          type:
+            - string
+            - 'null'
         created_at:
           type: string
           format: date-time
@@ -3339,13 +3401,15 @@ components:
           minLength: 3
           maxLength: 3
         reference_estimate_id:
-          type: integer
+          type:
+            - integer
+            - 'null'
           minimum: 1
-          nullable: true
         note:
-          type: string
+          type:
+            - string
+            - 'null'
           maxLength: 10000
-          nullable: true
     ProjectEstimateRead:
       type: object
       required:
@@ -3365,13 +3429,15 @@ components:
           type: integer
           minimum: 1
         planning_id:
-          type: integer
+          type:
+            - integer
+            - 'null'
           minimum: 1
-          nullable: true
         reference_estimate_id:
-          type: integer
+          type:
+            - integer
+            - 'null'
           minimum: 1
-          nullable: true
         version_number:
           type: integer
           minimum: 1
@@ -3394,12 +3460,14 @@ components:
           type: string
           format: date-time
         validated_at:
-          type: string
+          type:
+            - string
+            - 'null'
           format: date-time
-          nullable: true
         note:
-          type: string
-          nullable: true
+          type:
+            - string
+            - 'null'
     EstimateTaskRowRead:
       type: object
       required:
@@ -3416,24 +3484,28 @@ components:
           type: integer
           minimum: 1
         task_id:
-          type: integer
+          type:
+            - integer
+            - 'null'
           minimum: 1
-          nullable: true
         parent_task_id:
-          type: integer
+          type:
+            - integer
+            - 'null'
           minimum: 1
-          nullable: true
         position:
           type: integer
           minimum: 1
         task_name:
           type: string
         outline_number:
-          type: string
-          nullable: true
+          type:
+            - string
+            - 'null'
         outline_level:
-          type: integer
-          nullable: true
+          type:
+            - integer
+            - 'null'
         is_milestone:
           type: boolean
     SupplyStatus:
@@ -3452,9 +3524,10 @@ components:
         - unit_cost
       properties:
         task_id:
-          type: integer
+          type:
+            - integer
+            - 'null'
           minimum: 1
-          nullable: true
         cost_category_id:
           type: integer
           minimum: 1
@@ -3469,16 +3542,17 @@ components:
           type: number
           minimum: 0
         supply_status:
-          allOf:
+          anyOf:
             - $ref: '#/components/schemas/SupplyStatus'
-          nullable: true
+            - type: 'null'
     EstimateCostLineUpdate:
       type: object
       properties:
         task_id:
-          type: integer
+          type:
+            - integer
+            - 'null'
           minimum: 1
-          nullable: true
         cost_category_id:
           type: integer
           minimum: 1
@@ -3493,9 +3567,9 @@ components:
           type: number
           minimum: 0
         supply_status:
-          allOf:
+          anyOf:
             - $ref: '#/components/schemas/SupplyStatus'
-          nullable: true
+            - type: 'null'
     EstimateCostLineRead:
       type: object
       required:
@@ -3517,9 +3591,10 @@ components:
           type: integer
           minimum: 1
         task_id:
-          type: integer
+          type:
+            - integer
+            - 'null'
           minimum: 1
-          nullable: true
         cost_type_id:
           type: integer
           minimum: 1
@@ -3531,8 +3606,9 @@ components:
         accounting_code:
           type: string
         category_code:
-          type: string
-          nullable: true
+          type:
+            - string
+            - 'null'
         label:
           type: string
         quantity:
@@ -3542,9 +3618,9 @@ components:
         purchase_cost:
           type: number
         supply_status:
-          allOf:
+          anyOf:
             - $ref: '#/components/schemas/SupplyStatus'
-          nullable: true
+            - type: 'null'
     EstimateAggregatesRead:
       type: object
       required:
@@ -3708,9 +3784,10 @@ components:
           minLength: 1
           maxLength: 255
         parent_id:
-          type: integer
+          type:
+            - integer
+            - 'null'
           minimum: 1
-          nullable: true
     ResourceNodeUpdate:
       type: object
       properties:
@@ -3723,9 +3800,10 @@ components:
           minLength: 1
           maxLength: 255
         parent_id:
-          type: integer
+          type:
+            - integer
+            - 'null'
           minimum: 1
-          nullable: true
         is_active:
           type: boolean
     ResourceNodeRead:
@@ -3763,9 +3841,10 @@ components:
           type: integer
           minimum: 1
         calendar_id:
-          type: integer
+          type:
+            - integer
+            - 'null'
           minimum: 1
-          nullable: true
         name:
           type: string
           minLength: 1
@@ -3780,9 +3859,10 @@ components:
           type: integer
           minimum: 1
         calendar_id:
-          type: integer
+          type:
+            - integer
+            - 'null'
           minimum: 1
-          nullable: true
         name:
           type: string
           minLength: 1
@@ -3804,9 +3884,10 @@ components:
               type: integer
               minimum: 1
             calendar_id:
-              type: integer
+              type:
+                - integer
+                - 'null'
               minimum: 1
-              nullable: true
             is_active:
               type: boolean
             created_at:
@@ -3883,14 +3964,16 @@ components:
           minLength: 1
           maxLength: 64
         category_code:
-          type: string
+          type:
+            - string
+            - 'null'
           maxLength: 64
-          nullable: true
         name:
-          type: string
+          type:
+            - string
+            - 'null'
           minLength: 1
           maxLength: 255
-          nullable: true
     CostCategoryUpdate:
       type: object
       properties:
@@ -3902,14 +3985,16 @@ components:
           minLength: 1
           maxLength: 64
         category_code:
-          type: string
+          type:
+            - string
+            - 'null'
           maxLength: 64
-          nullable: true
         name:
-          type: string
+          type:
+            - string
+            - 'null'
           minLength: 1
           maxLength: 255
-          nullable: true
         is_active:
           type: boolean
     CostCategoryRead:
@@ -4090,18 +4175,21 @@ components:
         is_manual:
           type: boolean
         start_at:
-          type: string
+          type:
+            - string
+            - 'null'
           format: date-time
-          nullable: true
         finish_at:
-          type: string
+          type:
+            - string
+            - 'null'
           format: date-time
-          nullable: true
         duration_minutes:
-          type: integer
+          type:
+            - integer
+            - 'null'
           minimum: 0
           maximum: 7884000
-          nullable: true
     TaskLinkWrite:
       type: object
       required:
@@ -4116,12 +4204,14 @@ components:
           minimum: 0
           maximum: 3
         lag_tenth_minute:
-          type: integer
+          type:
+            - integer
+            - 'null'
           format: int32
-          nullable: true
         lag_format:
-          type: integer
-          nullable: true
+          type:
+            - integer
+            - 'null'
           description: MSPDI LagFormat code. See the "e" prefix convention documented in waterfall.services.planning_tree for which values denote elapsed (raw wall-clock) vs. working-time lag.
           enum:
             - 3

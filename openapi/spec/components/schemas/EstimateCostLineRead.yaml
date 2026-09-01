@@ -18,9 +18,8 @@ properties:
     type: integer
     minimum: 1
   task_id:
-    type: integer
+    type: [integer, "null"]
     minimum: 1
-    nullable: true
   cost_type_id:
     type: integer
     minimum: 1
@@ -32,8 +31,7 @@ properties:
   accounting_code:
     type: string
   category_code:
-    type: string
-    nullable: true
+    type: [string, "null"]
   label:
     type: string
   quantity:
@@ -43,6 +41,6 @@ properties:
   purchase_cost:
     type: number
   supply_status:
-    allOf:
+    anyOf:
     - $ref: SupplyStatus.yaml
-    nullable: true
+    - type: "null"

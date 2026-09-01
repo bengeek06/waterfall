@@ -11,9 +11,8 @@ properties:
     type: integer
     minimum: 1
   calendar_id:
-    type: integer
+    type: [integer, "null"]
     minimum: 1
-    nullable: true
   name:
     type: string
     minLength: 1

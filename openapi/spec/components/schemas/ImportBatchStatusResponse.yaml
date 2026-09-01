@@ -3,9 +3,8 @@ allOf:
 - type: object
   properties:
     projectId:
-      type: integer
+      type: [integer, "null"]
       minimum: 1
-      nullable: true
       description: ms_project.id cree par l'import
     counters:
       $ref: ImportCounters.yaml

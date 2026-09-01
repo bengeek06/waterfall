@@ -4,6 +4,7 @@
     - health
     summary: Vérifier la disponibilité de l'API
     operationId: getHealth
+    security: []
     responses:
       '200':
         description: API disponible
@@ -17,6 +18,7 @@
     - health
     summary: Vérifier que l'API est prête
     operationId: getReadiness
+    security: []
     responses:
       '200':
         description: API prête
@@ -30,6 +32,7 @@
     - observability
     summary: Exposer les métriques Prometheus
     operationId: getMetrics
+    security: []
     responses:
       '200':
         description: Métriques Prometheus

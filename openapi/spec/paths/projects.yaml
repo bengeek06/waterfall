@@ -530,9 +530,8 @@
       in: query
       required: false
       schema:
-        type: integer
+        type: [integer, "null"]
         minimum: 1
-        nullable: true
     responses:
       '200':
         description: Liste de taches
@@ -661,9 +660,8 @@
       in: query
       required: false
       schema:
-        type: integer
+        type: [integer, "null"]
         minimum: 1
-        nullable: true
     responses:
       '200':
         description: Arbre hiérarchique du planning
@@ -1095,9 +1093,8 @@
       in: query
       required: false
       schema:
-        type: integer
+        type: [integer, "null"]
         minimum: 1
-        nullable: true
     responses:
       '200':
         description: XML du projet

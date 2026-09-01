@@ -24,6 +24,15 @@ GENERATED_CLIENT_PATH = (
 )
 PATH_PARAMETER = re.compile(r"\{[^}]+\}")
 DOCUMENTATION_PATHS = {"/docs", "/docs/oauth2-redirect", "/openapi.json", "/redoc"}
+PUBLIC_OPERATIONS = {
+    ("/health", "get"),
+    ("/health/ready", "get"),
+    ("/metrics", "get"),
+    ("/auth/register", "post"),
+    ("/auth/token", "post"),
+    ("/auth/refresh", "post"),
+    ("/auth/logout", "post"),
+}
 
 
 def _normalize_path(path: str) -> str:
@@ -121,6 +130,51 @@ def test_static_openapi_matches_runtime_routes() -> None:
                 static_operations.add((_normalize_path(path), method))
 
     assert static_operations == _runtime_operations()
+
+
+def test_static_openapi_uses_31_nullability_syntax() -> None:
+    raw_document: object = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
+
+    def find_nullable_paths(value: object, path: str = "$") -> list[str]:
+        if isinstance(value, dict):
+            paths = [f"{path}/nullable"] if "nullable" in value else []
+            for key, child in cast(dict[object, object], value).items():
+                paths.extend(find_nullable_paths(child, f"{path}/{key}"))
+            return paths
+        if isinstance(value, list):
+            paths = []
+            for index, child in enumerate(cast(list[object], value)):
+                paths.extend(find_nullable_paths(child, f"{path}/{index}"))
+            return paths
+        return []
+
+    assert find_nullable_paths(raw_document) == []
+
+
+def test_static_openapi_declares_repository_license() -> None:
+    raw_document: object = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
+    if not isinstance(raw_document, dict):
+        raise AssertionError("OpenAPI document must be an object")
+
+    assert raw_document["info"]["license"] == {
+        "name": "GNU Affero General Public License v3.0 only",
+        "identifier": "AGPL-3.0-only",
+    }
+
+
+def test_public_operations_explicitly_disable_security() -> None:
+    raw_document: object = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
+    if not isinstance(raw_document, dict):
+        raise AssertionError("OpenAPI document must be an object")
+
+    paths = cast(dict[str, dict[str, Any]], raw_document["paths"])
+    unauthenticated_operations = {
+        (path, method)
+        for path, operations in paths.items()
+        for method, operation in operations.items()
+        if isinstance(operation, dict) and operation.get("security") == []
+    }
+    assert unauthenticated_operations == PUBLIC_OPERATIONS
 
 
 def test_static_openapi_matches_runtime_operation_ids_and_components() -> None:

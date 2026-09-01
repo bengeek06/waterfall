@@ -11,12 +11,10 @@ properties:
     minimum: 0
     maximum: 3
   lag_tenth_minute:
-    type: integer
+    type: [integer, "null"]
     format: int32
-    nullable: true
   lag_format:
-    type: integer
-    nullable: true
+    type: [integer, "null"]
     description: >-
       MSPDI LagFormat code. See the "e" prefix convention documented in
       waterfall.services.planning_tree for which values denote elapsed

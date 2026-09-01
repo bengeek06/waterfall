@@ -17,8 +17,6 @@ properties:
   linkType:
     type: integer
   lagTenthMinute:
-    type: integer
-    nullable: true
+    type: [integer, "null"]
   lagFormat:
-    type: integer
-    nullable: true
+    type: [integer, "null"]

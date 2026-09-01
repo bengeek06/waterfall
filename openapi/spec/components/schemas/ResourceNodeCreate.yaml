@@ -12,6 +12,5 @@ properties:
     minLength: 1
     maxLength: 255
   parent_id:
-    type: integer
+    type: [integer, "null"]
     minimum: 1
-    nullable: true

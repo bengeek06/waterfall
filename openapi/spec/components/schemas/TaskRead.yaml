@@ -17,58 +17,45 @@ properties:
     type: integer
     minimum: 1
   id_display:
-    type: integer
-    nullable: true
+    type: [integer, "null"]
   structure_key:
-    type: string
-    nullable: true
+    type: [string, "null"]
   structure_kind:
-    type: string
+    type: [string, "null"]
     enum:
     - poste
     - lot
     - livrable
     - milestone
     - task
-    nullable: true
   parent_uid:
-    type: integer
-    nullable: true
+    type: [integer, "null"]
   position:
-    type: integer
-    nullable: true
+    type: [integer, "null"]
   name:
     type: string
   outline_number:
-    type: string
-    nullable: true
+    type: [string, "null"]
   outline_level:
-    type: integer
-    nullable: true
+    type: [integer, "null"]
   start_at:
-    type: string
+    type: [string, "null"]
     format: date-time
-    nullable: true
   finish_at:
-    type: string
+    type: [string, "null"]
     format: date-time
-    nullable: true
   duration_minutes:
-    type: integer
-    nullable: true
+    type: [integer, "null"]
   percent_complete:
-    type: integer
-    nullable: true
+    type: [integer, "null"]
   is_summary:
     type: boolean
   is_milestone:
     type: boolean
   is_manual:
-    type: boolean
-    nullable: true
+    type: [boolean, "null"]
   description:
-    type: string
-    nullable: true
+    type: [string, "null"]
   predecessor_links:
     type: array
     items:

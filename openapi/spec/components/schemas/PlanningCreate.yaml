@@ -1,10 +1,8 @@
 type: object
 properties:
   note:
-    type: string
+    type: [string, "null"]
     maxLength: 10000
-    nullable: true
   source_planning_id:
-    type: integer
+    type: [integer, "null"]
     minimum: 1
-    nullable: true
