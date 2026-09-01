@@ -29,11 +29,14 @@ tests/conftest.py's `reset_database` fixture.
 
 from __future__ import annotations
 
+import threading
+import time
 from collections.abc import Generator
-from typing import cast
+from typing import Any, cast
 
 import pytest
-from sqlalchemy import create_engine, text
+from fastapi import HTTPException, status
+from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -78,6 +81,43 @@ def _seed_calendar(session: Session) -> int:
     session.add(calendar)
     session.commit()
     return calendar.id
+
+
+def _seed_three_calendars_with_a_default(session: Session) -> tuple[int, int, int]:
+    """Seeds calendar A (currently `is_default=True`) plus two challengers, B and C,
+    both active and not default -- the starting state for the issue #51 two-row
+    promotion race below."""
+    from waterfall.models.resources import Calendar
+
+    calendar_a = Calendar(code="DEFAULT-A", name="Default A", weeks_per_year=47, is_default=True)
+    calendar_b = Calendar(code="CHALLENGER-B", name="Challenger B", weeks_per_year=47)
+    calendar_c = Calendar(code="CHALLENGER-C", name="Challenger C", weeks_per_year=47)
+    session.add_all([calendar_a, calendar_b, calendar_c])
+    session.commit()
+    return calendar_a.id, calendar_b.id, calendar_c.id
+
+
+def _wait_until_backend_blocked_on_lock(
+    engine: Engine, backend_pid: int, timeout: float = 5.0
+) -> None:
+    """Polls pg_stat_activity until `backend_pid` is observed waiting on a lock.
+
+    Used instead of a fixed `time.sleep` so the test deterministically proves the
+    second session actually queued behind the first session's held row lock (rather
+    than, say, racing ahead and returning before the first session even committed,
+    which would make the assertions below vacuous).
+    """
+    deadline = time.monotonic() + timeout
+    with engine.connect() as probe:
+        while time.monotonic() < deadline:
+            row = probe.execute(
+                text("SELECT wait_event_type FROM pg_stat_activity WHERE pid = :pid"),
+                {"pid": backend_pid},
+            ).first()
+            if row is not None and row[0] == "Lock":
+                return
+            time.sleep(0.02)
+    pytest.fail(f"Backend pid {backend_pid} never entered a lock wait within {timeout}s")
 
 
 def _seed_inactive_role_with_calendar(session: Session, calendar_id: int) -> int:
@@ -247,5 +287,139 @@ def test_role_reactivation_lock_blocks_on_concurrent_calendar_deactivation(
         finally:
             session_a.close()
             session_b.close()
+    finally:
+        engine.dispose()
+
+
+def test_concurrent_default_promotions_serialize_to_one_default_and_a_409(
+    postgres_app_database_url: str,
+) -> None:
+    """Extends the issue #50 locking regressions to issue #51's two-row promotion.
+
+    `update_calendar`'s `is_default` promotion path locks *two* rows in one
+    transaction: the target calendar (via `_get_calendar_for_update_or_404`) and
+    whichever calendar currently holds `is_default=True` (via a second, explicit
+    `with_for_update()` query). This test proves that when two promotions race for
+    that same "current default" row, PostgreSQL serializes them correctly -- the
+    second transaction genuinely blocks (no deadlock/hang) and, once unblocked,
+    either succeeds cleanly or is rejected with a 409, never a 500 and never a
+    silent double-default.
+
+    Session A begins promoting calendar B to default: it locks B, then locks A (the
+    seeded, currently-default calendar) via the same "previous_default" query
+    `update_calendar` runs, and holds both locks open without committing yet.
+
+    Session B then runs the *real* `update_calendar` route function, on its own
+    thread (a genuine second connection is required here, not just a second
+    sequential call on the same connection, since it must actually block on a row
+    session A is holding open), promoting a third calendar C to default. Its
+    "previous_default" query matches A and queues behind session A's lock on that
+    row.
+
+    Once the test confirms (via `pg_stat_activity`, not a fixed sleep) that session
+    B is genuinely queued on the lock, session A commits, demoting A and promoting
+    B. PostgreSQL's `EvalPlanQual` re-checks A's row for session B's still-pending
+    query against its now-committed state (`is_default=False`) and excludes it --
+    but the rest of session B's scan already ran against its original snapshot
+    (predating session A's commit), so it does *not* pick up B as the new
+    "previous_default" either. Session B's query therefore returns no
+    previous-default row to demote, so it proceeds straight to setting
+    `calendar_c.is_default = True` and committing -- at which point the partial
+    unique index (`uq_wf_calendar_is_default_true`) rejects the second `True` row
+    (B is already committed as the default) with an `IntegrityError`, which
+    `_commit` converts to the expected 409. This is the exact "loser gets a 409, not
+    a deadlock or silent no-op" behavior this test is pinned to.
+    """
+    from waterfall.api.routes.resources import (
+        _get_calendar_for_update_or_404,  # pyright: ignore[reportPrivateUsage]
+        update_calendar,
+    )
+    from waterfall.models.resources import Calendar
+    from waterfall.models.user import User
+    from waterfall.schemas.resources import CalendarUpdate
+
+    engine = create_engine(postgres_app_database_url, future=True)
+    session_factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    try:
+        with session_factory() as seed_session:
+            calendar_a_id, calendar_b_id, calendar_c_id = _seed_three_calendars_with_a_default(
+                seed_session
+            )
+
+        session_a = session_factory()
+        session_b = session_factory()
+        try:
+            # Session A: begin promoting B -- replicate update_calendar's own
+            # locking sequence for the "is_default" branch up to (but not
+            # including) the commit, so the test can hold the previous-default row
+            # lock open while session B's concurrent promotion piles up behind it.
+            locked_b = _get_calendar_for_update_or_404(session_a, calendar_b_id)
+            previous_default = (
+                session_a.query(Calendar)
+                .filter(Calendar.is_default.is_(True))
+                .filter(Calendar.id != calendar_b_id)
+                .with_for_update()
+                .first()
+            )
+            assert previous_default is not None
+            assert previous_default.id == calendar_a_id
+            previous_default.is_default = False
+            locked_b.is_default = True
+            session_a.flush()
+
+            # Capture session B's backend pid *before* starting the thread that
+            # will block it -- a Session/connection cannot safely be driven from
+            # two threads at once, so this quick roundtrip must happen first.
+            backend_pid_b = session_b.execute(text("SELECT pg_backend_pid()")).scalar()
+            assert backend_pid_b is not None
+
+            results: dict[str, Any] = {}
+
+            def _run_session_b() -> None:
+                try:
+                    results["read"] = update_calendar(
+                        calendar_c_id,
+                        CalendarUpdate(is_default=True),
+                        db=session_b,
+                        _=cast(User, None),
+                    )
+                except HTTPException as exc:
+                    results["error"] = exc
+
+            thread = threading.Thread(target=_run_session_b)
+            thread.start()
+            try:
+                _wait_until_backend_blocked_on_lock(engine, backend_pid_b)
+
+                # Session A completes its promotion of B, releasing the lock
+                # session B is queued on.
+                session_a.commit()
+
+                thread.join(timeout=5)
+                assert not thread.is_alive(), (
+                    "session B's promotion never returned -- looks like a deadlock/hang"
+                )
+            finally:
+                thread.join(timeout=5)
+
+            assert "error" in results, (
+                f"expected session B's promotion to be rejected with a 409, got: {results}"
+            )
+            error = cast(HTTPException, results["error"])
+            assert error.status_code == status.HTTP_409_CONFLICT
+            session_b.rollback()
+        finally:
+            session_a.close()
+            session_b.close()
+
+        # Exactly one calendar ends up flagged is_default -- session A's winner (B)
+        # -- and session B's rejected promotion of C never took effect.
+        with session_factory() as verify_session:
+            defaults = verify_session.query(Calendar).filter(Calendar.is_default.is_(True)).all()
+            assert [calendar.id for calendar in defaults] == [calendar_b_id]
+
+            calendar_c = verify_session.get(Calendar, calendar_c_id)
+            assert calendar_c is not None
+            assert calendar_c.is_default is False
     finally:
         engine.dispose()

@@ -12,6 +12,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -26,6 +27,18 @@ class Calendar(Base):
             "weeks_per_year >= 1 AND weeks_per_year <= 53",
             name="ck_wf_calendar_weeks_per_year",
         ),
+        # At most one calendar system-wide may be flagged as the org-wide default
+        # (issue #51): a partial unique index enforces this at the DB layer as the
+        # backstop for the API-layer promotion guard in api/routes/resources.py.
+        # SQLite (default test suite) and PostgreSQL (prod target) both need their own
+        # dialect-specific partial-index kwarg to actually produce a partial index.
+        Index(
+            "uq_wf_calendar_is_default_true",
+            "is_default",
+            unique=True,
+            postgresql_where=text("is_default"),
+            sqlite_where=text("is_default"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -33,6 +46,7 @@ class Calendar(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     weeks_per_year: Mapped[int] = mapped_column(Integer, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
     )

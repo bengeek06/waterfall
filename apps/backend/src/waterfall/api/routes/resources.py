@@ -185,6 +185,16 @@ def _ensure_calendar_not_assigned_to_active_role(db: Session, calendar_id: int) 
         raise _conflict("Calendar is assigned to active resource roles and cannot be deactivated")
 
 
+def _ensure_calendar_not_default(calendar: Calendar) -> None:
+    # No DB query needed: the row is already loaded/locked by
+    # _get_calendar_for_update_or_404 (see issue #50), so its in-memory
+    # is_default reflects the value under the current transaction's lock.
+    if calendar.is_default:
+        raise _conflict(
+            "Calendar is the system default calendar and cannot be deactivated or deleted"
+        )
+
+
 def _weekdays_by_calendar(db: Session, calendar_ids: list[int]) -> dict[int, list[CalendarWeekday]]:
     if not calendar_ids:
         return {}
@@ -279,6 +289,51 @@ def update_calendar(
     values.pop("weekdays", None)
     if values.get("is_active") is False:
         _ensure_calendar_not_assigned_to_active_role(db, calendar_id)
+        _ensure_calendar_not_default(calendar)
+
+    # is_default is the only field that can never be applied by a plain setattr: promoting
+    # a new default calendar must atomically demote whichever calendar currently holds the
+    # flag (the partial unique index only allows one true row at a time), and unsetting the
+    # current default without promoting a replacement in the same call is rejected outright
+    # -- see issue #51.
+    if "is_default" in values:
+        promote_as_default = values.pop("is_default")
+        if promote_as_default:
+            effective_is_active = values.get("is_active", calendar.is_active)
+            if not effective_is_active:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Only an active calendar can be set as default",
+                )
+            previous_default = (
+                db.query(Calendar)
+                .filter(Calendar.is_default.is_(True))
+                .filter(Calendar.id != calendar_id)
+                .with_for_update()
+                .first()
+            )
+            if previous_default is not None:
+                previous_default.is_default = False
+                db.add(previous_default)
+                # Force the demotion UPDATE to hit the database before the promotion
+                # below is applied. SQLAlchemy's unit of work batches same-table
+                # UPDATEs ordered by primary key, not by session-attach order, so
+                # without this explicit flush, promoting a calendar whose id is
+                # LOWER than previous_default.id would flush "calendar.is_default =
+                # true" first while previous_default.is_default is still true in
+                # the database -- an immediate, non-deferrable violation of the
+                # partial unique index uq_wf_calendar_is_default_true, surfacing as
+                # a spurious 409 for an otherwise valid promotion.
+                db.flush()
+            calendar.is_default = True
+        elif calendar.is_default:
+            raise _conflict(
+                "Cannot unset the default calendar directly; promote another calendar as "
+                "default instead (PATCH it with is_default=true)"
+            )
+        # else: setting is_default=false on a calendar that is already not the default is
+        # a harmless no-op.
+
     # Known v1 limitation: editing an active calendar's weekdays here does not
     # recalculate duration_minutes on any draft planning task whose role is
     # already staffed with this calendar -- that only happens on the next
@@ -301,6 +356,7 @@ def delete_calendar(
 ) -> None:
     calendar = _get_calendar_for_update_or_404(db, calendar_id)
     _ensure_calendar_not_assigned_to_active_role(db, calendar_id)
+    _ensure_calendar_not_default(calendar)
     calendar.is_active = False
     db.add(calendar)
     _commit(db, "Calendar deletion conflicts with existing data")

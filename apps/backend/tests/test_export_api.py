@@ -89,6 +89,7 @@ def _create_calendar(
     code: str,
     weeks_per_year: int,
     weekday_hours: str,
+    is_default: bool = False,
 ) -> int:
     weekdays = [
         {"day_type": day_type, "hours_per_day": weekday_hours if 2 <= day_type <= 6 else "0"}
@@ -105,7 +106,17 @@ def _create_calendar(
         headers=headers,
     )
     assert response.status_code == 201
-    return cast(int, cast(dict[str, Any], response.json())["id"])
+    calendar_id = cast(int, cast(dict[str, Any], response.json())["id"])
+    if is_default:
+        # is_default cannot be set on create (issue #51): a calendar is always
+        # created as non-default and promoted afterward via PATCH.
+        promote_response: Response = client.patch(
+            f"/resources/calendars/{calendar_id}",
+            json={"is_default": True},
+            headers=headers,
+        )
+        assert promote_response.status_code == 200
+    return calendar_id
 
 
 def _create_role_with_calendar(
@@ -447,9 +458,17 @@ def test_export_falls_back_to_task_calendar_when_standard_has_no_working_day() -
     with TestClient(app) as client:
         headers = _admin_headers(client, "export.standard_no_workday@example.com")
 
-        # STANDARD exists and is active, but every weekday is at 0h -- no
-        # working day, so it must be skipped as an unusable reference.
-        _create_calendar(client, headers, code="STANDARD", weeks_per_year=47, weekday_hours="0")
+        # The default calendar exists, is active and flagged is_default, but
+        # every weekday is at 0h -- no working day, so it must be skipped as
+        # an unusable reference.
+        _create_calendar(
+            client,
+            headers,
+            code="STANDARD",
+            weeks_per_year=47,
+            weekday_hours="0",
+            is_default=True,
+        )
 
         project_response: Response = client.post(
             "/projects",
@@ -511,12 +530,18 @@ def test_export_of_imported_project_never_reuses_source_calendar_uid() -> None:
     with TestClient(app) as client:
         headers = _admin_headers(client, "export.imported.calendars@example.com")
 
-        # A STANDARD calendar must exist for the project reference calendar to
-        # resolve to something (E5-02 fallback rule); its wf_calendar.id is
-        # whatever the DB assigns, deliberately not equal to the source file's
-        # arbitrary Calendar UID (999) below.
+        # A calendar flagged is_default must exist for the project reference
+        # calendar to resolve to something (E5-02 fallback rule, resolved via
+        # is_default per issue #51); its wf_calendar.id is whatever the DB
+        # assigns, deliberately not equal to the source file's arbitrary
+        # Calendar UID (999) below.
         standard_calendar_id = _create_calendar(
-            client, headers, code="STANDARD", weeks_per_year=47, weekday_hours="7.00"
+            client,
+            headers,
+            code="STANDARD",
+            weeks_per_year=47,
+            weekday_hours="7.00",
+            is_default=True,
         )
 
         project_response: Response = client.post(
@@ -716,11 +741,17 @@ def test_export_then_reimport_round_trip_preserves_tasks_and_links() -> None:
     with TestClient(app) as client:
         headers = _admin_headers(client, "export.roundtrip@example.com")
 
-        # A STANDARD calendar so the project reference calendar resolves
-        # deterministically (E5-02 fallback rule), same setup as the other
-        # calendar-aware export tests in this module.
+        # A calendar flagged is_default so the project reference calendar
+        # resolves deterministically (E5-02 fallback rule, resolved via
+        # is_default per issue #51), same setup as the other calendar-aware
+        # export tests in this module.
         standard_calendar_id = _create_calendar(
-            client, headers, code="STANDARD", weeks_per_year=47, weekday_hours="7.00"
+            client,
+            headers,
+            code="STANDARD",
+            weeks_per_year=47,
+            weekday_hours="7.00",
+            is_default=True,
         )
 
         source_project_response: Response = client.post(

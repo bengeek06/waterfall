@@ -14,6 +14,12 @@ properties:
     maximum: 53
   is_active:
     type: boolean
+  is_default:
+    type: boolean
+    description: >-
+      Promote this calendar as the system-wide default (must already be active,
+      or be activated in the same request). Setting this to false on the
+      current default is rejected -- promote another calendar instead.
   weekdays:
     type: array
     maxItems: 7

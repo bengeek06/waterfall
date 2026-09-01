@@ -274,7 +274,7 @@ def _recalculate_summary_fields(
     else:
         # E5-04: the summary duration is calendar-aware. The calendar used is
         # resolved from the summary task's own assigned resource role,
-        # falling back to the org-wide default STANDARD calendar, and -- when
+        # falling back to the calendar flagged is_default, and -- when
         # no calendar exists in the system at all -- an implicit 24h/day
         # calendar (source == "wall_clock_fallback") that is mathematically
         # equivalent to the raw wall-clock diff (proven by

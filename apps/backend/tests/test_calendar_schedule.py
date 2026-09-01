@@ -22,6 +22,7 @@ from waterfall.services.calendar_schedule import (
     compute_start_at_for_finish_at_or_after,
     compute_working_minutes_between,
     resolve_calendars_for_tasks,
+    resolve_default_calendar_id,
 )
 
 STANDARD_HOURS = {
@@ -516,7 +517,7 @@ def test_compute_working_minutes_between_matches_wall_clock_diff_under_24h_calen
 def _create_standard_calendar() -> int:
     session_factory = get_session_factory()
     with session_factory() as session:
-        calendar = Calendar(code="STANDARD", name="Standard", weeks_per_year=47)
+        calendar = Calendar(code="STANDARD", name="Standard", weeks_per_year=47, is_default=True)
         session.add(calendar)
         session.flush()
         session.add_all(
@@ -567,6 +568,35 @@ def test_resolve_calendars_for_tasks_falls_back_to_default_standard_calendar() -
     assert resolved[1].source == "default"
     assert resolved[1].calendar_id == calendar_id
     assert resolved[1].weekday_hours == STANDARD_HOURS
+
+
+def test_resolve_default_calendar_id_is_code_independent() -> None:
+    """Regression test for issue #51: the system default calendar is resolved
+    purely from the ``is_default`` flag, never from a well-known ``code``
+    value like ``"STANDARD"``. A calendar flagged ``is_default`` under a
+    completely different code must still resolve as the default."""
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        calendar = Calendar(code="FOO", name="Foo", weeks_per_year=47, is_default=True)
+        session.add(calendar)
+        session.commit()
+        calendar_id = calendar.id
+
+    with session_factory() as session:
+        assert resolve_default_calendar_id(session) == calendar_id
+
+
+def test_resolve_default_calendar_id_ignores_standard_code_without_flag() -> None:
+    """Counterpart of the test above: a calendar whose code is literally
+    ``"STANDARD"`` but that is not flagged ``is_default`` must not be
+    resolved as the system default."""
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        session.add(Calendar(code="STANDARD", name="Standard", weeks_per_year=47))
+        session.commit()
+
+    with session_factory() as session:
+        assert resolve_default_calendar_id(session) is None
 
 
 def test_resolve_calendars_for_tasks_falls_back_to_wall_clock_when_no_calendar_exists() -> None:
