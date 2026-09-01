@@ -1029,6 +1029,26 @@ def _topological_cascade_order(
     zero), that is a residual invariant violation, surfaced as a
     :class:`PlanningTaskScheduleError` rather than silently dropping those
     tasks from the cascade or looping forever.
+
+    ``edited_task_uid`` itself is also checked for a residual cycle looping
+    back to it, not just cycles fully contained within ``candidates``: it is
+    unconditionally treated as already resolved below (its own schedule was
+    computed before this function ever runs -- see ``_release(edited_task_uid)``
+    further down), so a candidate whose own predecessor link points back at
+    ``edited_task_uid`` can never be made to wait on anything through the
+    normal Kahn queue mechanism -- ``edited_task_uid`` never itself passes
+    through that queue, so such an edge's source side can never decrement
+    down to a dequeue. Left unchecked, that residual edge is invisible to
+    both this function's in-degree bookkeeping (which only tracks in-degree
+    for members of ``candidates``) and to the plain "unresolved candidates"
+    check above, because the candidate on the other end of that edge can
+    still resolve to in-degree 0 and be dequeued normally -- e.g.
+    ``edited -> B -> edited``: B's only incoming edge is from
+    ``edited_task_uid``, so B is released immediately and ``order == [B]``,
+    even though B's own outgoing edge back to ``edited_task_uid`` means
+    ``edited_task_uid``'s already-applied schedule was computed against B's
+    stale, pre-cascade dates. This is therefore checked explicitly, up
+    front, rather than relying on the queue to surface it.
     """
     in_degree: dict[int, int] = dict.fromkeys(candidates, 0)
     dependents_by_source: dict[int, list[int]] = defaultdict(list)
@@ -1038,6 +1058,20 @@ def _topological_cascade_order(
             if source_uid == edited_task_uid or source_uid in candidates:
                 in_degree[candidate_uid] += 1
                 dependents_by_source[source_uid].append(candidate_uid)
+
+    residual_predecessors = sorted(
+        {
+            link.predecessor_uid
+            for link in links_by_task.get(edited_task_uid, [])
+            if link.predecessor_uid in candidates
+        }
+    )
+    if residual_predecessors:
+        raise PlanningTaskScheduleError(
+            "Planning predecessor links contain a cycle that loops back to the task "
+            f"being edited (uid={edited_task_uid}) through affected successor(s): "
+            f"{residual_predecessors}"
+        )
 
     queue: deque[int] = deque()
 
@@ -1053,7 +1087,9 @@ def _topological_cascade_order(
     # already been dequeued -- otherwise a candidate whose only incoming
     # edge comes directly from the edited task (in-degree 1, which can never
     # reach 0 on its own since the edited task never goes through this same
-    # queue) would never be queued at all.
+    # queue) would never be queued at all. Safe to do unconditionally only
+    # because the residual-cycle guard above already ruled out any edge
+    # feeding back into edited_task_uid from a candidate.
     _release(edited_task_uid)
 
     order: list[int] = []

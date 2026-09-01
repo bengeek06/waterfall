@@ -2030,6 +2030,32 @@ def test_topological_cascade_order_detects_residual_cycle_without_hanging() -> N
         )
 
 
+def test_topological_cascade_order_detects_residual_cycle_back_to_edited_task() -> None:
+    """PR #81 Copilot review finding: a residual cycle that loops back to
+    ``edited_task_uid`` itself (rather than being fully contained within
+    ``candidates``) must also be caught, not silently treated as resolved.
+
+    Reproduces ``edited -> B -> edited``: task ``B`` (uid 200) has a
+    predecessor link on the edited task (uid 1), and the edited task has its
+    own predecessor link on B. Before this fix, ``B``'s in-degree was 1
+    (from the edited task), got released unconditionally by
+    ``_release(edited_task_uid)``, and the function returned ``[200]``
+    successfully -- even though the edited task's own already-applied
+    schedule was computed against B's stale, pre-cascade dates, and B's edge
+    back to the edited task was never inspected at all.
+    """
+    link_200_from_edited = WfPlanningLinkSnapshot(
+        planning_id=1, task_uid=200, predecessor_uid=1, link_type=1, lag_tenth_minute=0
+    )
+    link_edited_from_200 = WfPlanningLinkSnapshot(
+        planning_id=1, task_uid=1, predecessor_uid=200, link_type=1, lag_tenth_minute=0
+    )
+    links_by_task = {200: [link_200_from_edited], 1: [link_edited_from_200]}
+
+    with pytest.raises(PlanningTaskScheduleError, match="cycle"):
+        _topological_cascade_order(edited_task_uid=1, candidates={200}, links_by_task=links_by_task)
+
+
 def test_automatic_task_start_at_near_datetime_max_returns_400_not_500() -> None:
     """Round-3 E3-03 PR review finding #2: ``compute_finish_at`` walks the
     calendar day by day and can raise ``OverflowError`` (not just
