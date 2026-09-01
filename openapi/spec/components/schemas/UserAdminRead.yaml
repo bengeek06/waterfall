@@ -13,9 +13,8 @@ allOf:
       type: integer
       minimum: 0
     locked_until:
-      type: string
+      type: [string, "null"]
       format: date-time
-      nullable: true
     created_at:
       type: string
       format: date-time

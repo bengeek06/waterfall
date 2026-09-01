@@ -23,11 +23,9 @@ properties:
     - termine
     - abandonne
   code:
-    type: string
-    nullable: true
+    type: [string, "null"]
   short_description:
-    type: string
-    nullable: true
+    type: [string, "null"]
   source_version:
     type: integer
     enum:
@@ -43,22 +41,16 @@ properties:
   schedule_from_start:
     type: boolean
   start_date:
-    type: string
+    type: [string, "null"]
     format: date-time
-    nullable: true
   finish_date:
-    type: string
+    type: [string, "null"]
     format: date-time
-    nullable: true
   currency_code:
-    type: string
-    nullable: true
+    type: [string, "null"]
   planning_reference_id:
-    type: integer
-    nullable: true
+    type: [integer, "null"]
   displayed_planning_id:
-    type: integer
-    nullable: true
+    type: [integer, "null"]
   reference_estimate_id:
-    type: integer
-    nullable: true
+    type: [integer, "null"]

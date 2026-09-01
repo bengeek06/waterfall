@@ -33,6 +33,10 @@
 
 Waterfall est une plateforme de pilotage de projets, de ressources et d’estimations. Elle aide à structurer un plan de travail, gérer les ressources, établir des coûts et valider des estimations dans un flux cohérent, depuis la création du projet jusqu’à l’exploitation de l’estimation finale.
 
+## Licence
+
+Waterfall est distribué sous la licence GNU Affero General Public License v3.0 uniquement (`AGPL-3.0-only`). Consultez [LICENSE](LICENSE) pour les conditions complètes.
+
 ## Vue d’ensemble produit
 
 Waterfall s’adresse à un besoin très concret : transformer un projet en plan exploitable, analyser les charges, gérer les rôles et les coûts, puis produire une estimation fiable et exportable. Le produit couvre trois grands axes :

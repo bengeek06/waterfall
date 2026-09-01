@@ -8,13 +8,11 @@ properties:
     minLength: 1
     maxLength: 64
   category_code:
-    type: string
+    type: [string, "null"]
     maxLength: 64
-    nullable: true
   name:
-    type: string
+    type: [string, "null"]
     minLength: 1
     maxLength: 255
-    nullable: true
   is_active:
     type: boolean

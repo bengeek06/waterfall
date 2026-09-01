@@ -6,9 +6,8 @@ required:
 - unit_cost
 properties:
   task_id:
-    type: integer
+    type: [integer, "null"]
     minimum: 1
-    nullable: true
   cost_category_id:
     type: integer
     minimum: 1
@@ -23,6 +22,6 @@ properties:
     type: number
     minimum: 0
   supply_status:
-    allOf:
+    anyOf:
     - $ref: SupplyStatus.yaml
-    nullable: true
+    - type: "null"

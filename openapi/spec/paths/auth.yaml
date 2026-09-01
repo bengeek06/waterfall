@@ -4,6 +4,7 @@
     - auth
     summary: Créer un utilisateur public lorsque l'inscription est activée
     operationId: registerUser
+    security: []
     requestBody:
       required: true
       content:
@@ -27,6 +28,7 @@
     - auth
     summary: Obtenir un access token et définir le cookie de refresh HttpOnly
     operationId: login
+    security: []
     requestBody:
       required: true
       content:
@@ -77,6 +79,7 @@
     - auth
     summary: Renouveler l'access token depuis le cookie de refresh HttpOnly
     operationId: refreshAccessToken
+    security: []
     responses:
       '200':
         description: Access token renouvelé et cookie de refresh renouvelé
@@ -98,6 +101,7 @@
     - auth
     summary: Effacer le cookie de refresh
     operationId: logout
+    security: []
     responses:
       '204':
         description: Session de refresh effacée

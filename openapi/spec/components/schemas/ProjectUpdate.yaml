@@ -5,13 +5,11 @@ properties:
     minLength: 1
     maxLength: 255
   code:
-    type: string
+    type: [string, "null"]
     maxLength: 64
-    nullable: true
   short_description:
-    type: string
+    type: [string, "null"]
     maxLength: 500
-    nullable: true
   status:
     type: string
     enum:

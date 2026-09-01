@@ -14,21 +14,17 @@ properties:
   status:
     $ref: BatchStatus.yaml
   sourceName:
-    type: string
-    nullable: true
+    type: [string, "null"]
   sourceVersion:
     $ref: SourceVersion.yaml
   startedAt:
-    type: string
+    type: [string, "null"]
     format: date-time
-    nullable: true
   endedAt:
-    type: string
+    type: [string, "null"]
     format: date-time
-    nullable: true
   errorMessage:
-    type: string
-    nullable: true
+    type: [string, "null"]
   createdAt:
     type: string
     format: date-time

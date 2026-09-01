@@ -22,12 +22,10 @@ properties:
     - validated
     - superseded
   note:
-    type: string
-    nullable: true
+    type: [string, "null"]
   created_at:
     type: string
     format: date-time
   validated_at:
-    type: string
+    type: [string, "null"]
     format: date-time
-    nullable: true

@@ -15,8 +15,6 @@ properties:
     minimum: 0
     maximum: 3
   lag_tenth_minute:
-    type: integer
-    nullable: true
+    type: [integer, "null"]
   lag_format:
-    type: integer
-    nullable: true
+    type: [integer, "null"]

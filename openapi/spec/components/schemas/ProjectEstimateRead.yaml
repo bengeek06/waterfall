@@ -16,13 +16,11 @@ properties:
     type: integer
     minimum: 1
   planning_id:
-    type: integer
+    type: [integer, "null"]
     minimum: 1
-    nullable: true
   reference_estimate_id:
-    type: integer
+    type: [integer, "null"]
     minimum: 1
-    nullable: true
   version_number:
     type: integer
     minimum: 1
@@ -45,9 +43,7 @@ properties:
     type: string
     format: date-time
   validated_at:
-    type: string
+    type: [string, "null"]
     format: date-time
-    nullable: true
   note:
-    type: string
-    nullable: true
+    type: [string, "null"]

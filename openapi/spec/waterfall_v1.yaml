@@ -2,6 +2,9 @@ openapi: 3.1.0
 info:
   title: Waterfall API
   version: 0.1.0
+  license:
+    name: GNU Affero General Public License v3.0 only
+    identifier: AGPL-3.0-only
   summary: Contrat API pour l'import MS Project et la gestion des ressources
   description: 'Contrat OpenAPI du backend Waterfall.
 

@@ -14,10 +14,8 @@ properties:
     minLength: 3
     maxLength: 3
   reference_estimate_id:
-    type: integer
+    type: [integer, "null"]
     minimum: 1
-    nullable: true
   note:
-    type: string
+    type: [string, "null"]
     maxLength: 10000
-    nullable: true

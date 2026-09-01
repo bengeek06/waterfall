@@ -7,6 +7,5 @@ properties:
     type: number
     minimum: 0
   comment:
-    type: string
+    type: [string, "null"]
     maxLength: 10000
-    nullable: true

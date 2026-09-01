@@ -13,23 +13,19 @@ properties:
     type: integer
     minimum: 1
   task_id:
-    type: integer
+    type: [integer, "null"]
     minimum: 1
-    nullable: true
   parent_task_id:
-    type: integer
+    type: [integer, "null"]
     minimum: 1
-    nullable: true
   position:
     type: integer
     minimum: 1
   task_name:
     type: string
   outline_number:
-    type: string
-    nullable: true
+    type: [string, "null"]
   outline_level:
-    type: integer
-    nullable: true
+    type: [integer, "null"]
   is_milestone:
     type: boolean

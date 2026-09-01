@@ -8,8 +8,7 @@ properties:
     type: integer
     minimum: 1
   sourceSha256:
-    type: string
-    nullable: true
+    type: [string, "null"]
   identicalSource:
     type: boolean
   items:

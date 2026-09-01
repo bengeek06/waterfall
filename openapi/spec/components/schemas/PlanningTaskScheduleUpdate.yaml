@@ -5,15 +5,12 @@ properties:
   is_manual:
     type: boolean
   start_at:
-    type: string
+    type: [string, "null"]
     format: date-time
-    nullable: true
   finish_at:
-    type: string
+    type: [string, "null"]
     format: date-time
-    nullable: true
   duration_minutes:
-    type: integer
+    type: [integer, "null"]
     minimum: 0
     maximum: 7884000
-    nullable: true
