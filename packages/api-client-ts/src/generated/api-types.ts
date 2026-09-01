@@ -1605,7 +1605,7 @@ export interface components {
             weeks_per_year?: number;
             is_active?: boolean;
             /** @description Promote this calendar as the system-wide default (must already be active, or be activated in the same request). Setting this to false on the current default is rejected -- promote another calendar instead. */
-            is_default?: boolean;
+            is_default?: boolean | null;
             /** @description Remplace integralement les jours de semaine du calendrier */
             weekdays?: components["schemas"]["CalendarWeekdayCreate"][];
         };
