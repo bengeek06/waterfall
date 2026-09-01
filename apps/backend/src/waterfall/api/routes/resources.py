@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TypeVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -51,6 +52,7 @@ from waterfall.schemas.resources import (
 
 router = APIRouter(prefix="/resources", tags=["resources"])
 ModelType = TypeVar("ModelType")
+ResponseType = TypeVar("ResponseType")
 
 
 def _conflict(detail: str) -> HTTPException:
@@ -71,6 +73,17 @@ def _flush(db: Session, detail: str) -> None:
     except IntegrityError as exc:
         db.rollback()
         raise _conflict(detail) from exc
+
+
+def _snapshot_and_commit(
+    db: Session,
+    detail: str,
+    snapshot: Callable[[], ResponseType],
+) -> ResponseType:
+    _flush(db, detail)
+    response = snapshot()
+    _commit(db, detail)
+    return response
 
 
 def _get_or_404(
@@ -262,9 +275,13 @@ def create_calendar(
     db.add(calendar)
     _flush(db, "Calendar code already exists")
     _replace_calendar_weekdays(db, calendar.id, payload.weekdays)
-    _commit(db, "Calendar code already exists")
-    db.refresh(calendar)
-    return _calendar_read(calendar, _weekdays_by_calendar(db, [calendar.id]).get(calendar.id, []))
+    return _snapshot_and_commit(
+        db,
+        "Calendar code already exists",
+        lambda: _calendar_read(
+            calendar, _weekdays_by_calendar(db, [calendar.id]).get(calendar.id, [])
+        ),
+    )
 
 
 @router.get("/calendars/{calendar_id}", response_model=CalendarRead)
@@ -343,9 +360,13 @@ def update_calendar(
     db.add(calendar)
     if payload.weekdays is not None:
         _replace_calendar_weekdays(db, calendar_id, payload.weekdays)
-    _commit(db, "Calendar update conflicts with existing data")
-    db.refresh(calendar)
-    return _calendar_read(calendar, _weekdays_by_calendar(db, [calendar_id]).get(calendar_id, []))
+    return _snapshot_and_commit(
+        db,
+        "Calendar update conflicts with existing data",
+        lambda: _calendar_read(
+            calendar, _weekdays_by_calendar(db, [calendar_id]).get(calendar_id, [])
+        ),
+    )
 
 
 @router.delete("/calendars/{calendar_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -380,14 +401,16 @@ def create_node(
     payload: ResourceNodeCreate,
     db: Session = Depends(get_db),
     _: User = Depends(get_current_admin_user),
-) -> ResourceNode:
+) -> ResourceNodeRead:
     if payload.parent_id is not None:
         _get_or_404(db, ResourceNode, payload.parent_id, "Parent node")
     node = ResourceNode(**payload.model_dump())
     db.add(node)
-    _commit(db, "Resource node code already exists")
-    db.refresh(node)
-    return node
+    return _snapshot_and_commit(
+        db,
+        "Resource node code already exists",
+        lambda: ResourceNodeRead.model_validate(node),
+    )
 
 
 @router.get("/nodes/{node_id}", response_model=ResourceNodeRead)
@@ -406,16 +429,18 @@ def update_node(
     payload: ResourceNodeUpdate,
     db: Session = Depends(get_db),
     _: User = Depends(get_current_admin_user),
-) -> ResourceNode:
+) -> ResourceNodeRead:
     node = _get_or_404(db, ResourceNode, node_id, "Resource node")
     if payload.parent_id is not None:
         _validate_node_parent(db, node.id, payload.parent_id)
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(node, field, value)
     db.add(node)
-    _commit(db, "Resource node update conflicts with existing data")
-    db.refresh(node)
-    return node
+    return _snapshot_and_commit(
+        db,
+        "Resource node update conflicts with existing data",
+        lambda: ResourceNodeRead.model_validate(node),
+    )
 
 
 @router.delete("/nodes/{node_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -458,16 +483,18 @@ def create_role(
     payload: ResourceRoleCreate,
     db: Session = Depends(get_db),
     _: User = Depends(get_current_admin_user),
-) -> ResourceRole:
+) -> ResourceRoleRead:
     _get_or_404(db, ResourceNode, payload.node_id, "Resource node")
     _get_active_category_or_400(db, payload.cost_category_id)
     if payload.calendar_id is not None:
         _get_active_calendar_or_400(db, payload.calendar_id)
     role = ResourceRole(**payload.model_dump())
     db.add(role)
-    _commit(db, "Resource role creation conflicts with existing data")
-    db.refresh(role)
-    return role
+    return _snapshot_and_commit(
+        db,
+        "Resource role creation conflicts with existing data",
+        lambda: ResourceRoleRead.model_validate(role),
+    )
 
 
 @router.get("/roles/{role_id}", response_model=ResourceRoleRead)
@@ -485,7 +512,7 @@ def update_role(
     payload: ResourceRoleUpdate,
     db: Session = Depends(get_db),
     _: User = Depends(get_current_admin_user),
-) -> ResourceRole:
+) -> ResourceRoleRead:
     role = _get_or_404(db, ResourceRole, role_id, "Resource role")
     values = payload.model_dump(exclude_unset=True)
     if "node_id" in values:
@@ -505,9 +532,11 @@ def update_role(
     for field, value in values.items():
         setattr(role, field, value)
     db.add(role)
-    _commit(db, "Resource role update conflicts with existing data")
-    db.refresh(role)
-    return role
+    return _snapshot_and_commit(
+        db,
+        "Resource role update conflicts with existing data",
+        lambda: ResourceRoleRead.model_validate(role),
+    )
 
 
 @router.get("/categories", response_model=list[CostCategoryRead])
@@ -539,12 +568,14 @@ def create_cost_type(
     payload: CostTypeCreate,
     db: Session = Depends(get_db),
     _: User = Depends(get_current_admin_user),
-) -> CostType:
+) -> CostTypeRead:
     cost_type = CostType(**payload.model_dump())
     db.add(cost_type)
-    _commit(db, "Cost type code already exists")
-    db.refresh(cost_type)
-    return cost_type
+    return _snapshot_and_commit(
+        db,
+        "Cost type code already exists",
+        lambda: CostTypeRead.model_validate(cost_type),
+    )
 
 
 @router.patch("/cost-types/{cost_type_id}", response_model=CostTypeRead)
@@ -553,14 +584,16 @@ def update_cost_type(
     payload: CostTypeUpdate,
     db: Session = Depends(get_db),
     _: User = Depends(get_current_admin_user),
-) -> CostType:
+) -> CostTypeRead:
     cost_type = _get_or_404(db, CostType, cost_type_id, "Cost type")
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(cost_type, field, value)
     db.add(cost_type)
-    _commit(db, "Cost type update conflicts with existing data")
-    db.refresh(cost_type)
-    return cost_type
+    return _snapshot_and_commit(
+        db,
+        "Cost type update conflicts with existing data",
+        lambda: CostTypeRead.model_validate(cost_type),
+    )
 
 
 @router.post("/categories", response_model=CostCategoryRead, status_code=status.HTTP_201_CREATED)
@@ -568,13 +601,15 @@ def create_category(
     payload: CostCategoryCreate,
     db: Session = Depends(get_db),
     _: User = Depends(get_current_admin_user),
-) -> CostCategory:
+) -> CostCategoryRead:
     _get_or_404(db, CostType, payload.cost_type_id, "Cost type")
     category = CostCategory(**payload.model_dump())
     db.add(category)
-    _commit(db, "Cost category code already exists")
-    db.refresh(category)
-    return category
+    return _snapshot_and_commit(
+        db,
+        "Cost category code already exists",
+        lambda: CostCategoryRead.model_validate(category),
+    )
 
 
 @router.get("/categories/{category_id}", response_model=CostCategoryRead)
@@ -592,7 +627,7 @@ def update_category(
     payload: CostCategoryUpdate,
     db: Session = Depends(get_db),
     _: User = Depends(get_current_admin_user),
-) -> CostCategory:
+) -> CostCategoryRead:
     category = _get_or_404(db, CostCategory, category_id, "Cost category")
     values = payload.model_dump(exclude_unset=True)
     if "cost_type_id" in values and values["cost_type_id"] != category.cost_type_id:
@@ -602,9 +637,11 @@ def update_category(
     for field, value in values.items():
         setattr(category, field, value)
     db.add(category)
-    _commit(db, "Cost category update conflicts with existing data")
-    db.refresh(category)
-    return category
+    return _snapshot_and_commit(
+        db,
+        "Cost category update conflicts with existing data",
+        lambda: CostCategoryRead.model_validate(category),
+    )
 
 
 @router.get("/categories/{category_id}/rates", response_model=list[CostRateRead])
@@ -627,13 +664,15 @@ def create_rate(
     payload: CostRateCreate,
     db: Session = Depends(get_db),
     _: User = Depends(get_current_admin_user),
-) -> CostRate:
+) -> CostRateRead:
     _get_or_404(db, CostCategory, payload.cost_category_id, "Cost category")
     rate = CostRate(**payload.model_dump())
     db.add(rate)
-    _commit(db, "A cost rate already exists for this category and year")
-    db.refresh(rate)
-    return rate
+    return _snapshot_and_commit(
+        db,
+        "A cost rate already exists for this category and year",
+        lambda: CostRateRead.model_validate(rate),
+    )
 
 
 @router.get("/rates", response_model=list[CostRateRead])
@@ -650,14 +689,16 @@ def update_rate(
     payload: CostRateUpdate,
     db: Session = Depends(get_db),
     _: User = Depends(get_current_admin_user),
-) -> CostRate:
+) -> CostRateRead:
     rate = _get_or_404(db, CostRate, rate_id, "Cost rate")
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(rate, field, value)
     db.add(rate)
-    _commit(db, "Cost rate update conflicts with existing data")
-    db.refresh(rate)
-    return rate
+    return _snapshot_and_commit(
+        db,
+        "Cost rate update conflicts with existing data",
+        lambda: CostRateRead.model_validate(rate),
+    )
 
 
 @router.get("/inflation", response_model=list[InflationRateRead])
@@ -674,7 +715,7 @@ def put_inflation_rate(
     payload: InflationRateUpdate,
     db: Session = Depends(get_db),
     _: User = Depends(get_current_admin_user),
-) -> InflationRate:
+) -> InflationRateRead:
     rate = db.query(InflationRate).filter(InflationRate.year == year).first()
     if rate is None:
         coefficient = payload.coefficient
@@ -683,9 +724,11 @@ def put_inflation_rate(
     else:
         rate.coefficient = payload.coefficient
         db.add(rate)
-    _commit(db, "Inflation rate update conflicts with existing data")
-    db.refresh(rate)
-    return rate
+    return _snapshot_and_commit(
+        db,
+        "Inflation rate update conflicts with existing data",
+        lambda: InflationRateRead.model_validate(rate),
+    )
 
 
 @router.get("/capacities", response_model=list[RoleCapacityRead])
@@ -705,7 +748,7 @@ def create_capacity(
     payload: RoleCapacityCreate,
     db: Session = Depends(get_db),
     _: User = Depends(get_current_admin_user),
-) -> RoleCapacity:
+) -> RoleCapacityRead:
     _get_or_404(db, ResourceRole, payload.role_id, "Resource role")
     capacity = db.query(RoleCapacity).filter(RoleCapacity.role_id == payload.role_id).one_or_none()
     if capacity is None:
@@ -714,9 +757,11 @@ def create_capacity(
     else:
         capacity.person_count = payload.person_count
         capacity.available_hours = payload.available_hours
-    _commit(db, "Role capacity conflicts with existing data")
-    db.refresh(capacity)
-    return capacity
+    return _snapshot_and_commit(
+        db,
+        "Role capacity conflicts with existing data",
+        lambda: RoleCapacityRead.model_validate(capacity),
+    )
 
 
 @router.patch("/capacities/{capacity_id}", response_model=RoleCapacityRead)
@@ -725,12 +770,14 @@ def update_capacity(
     payload: RoleCapacityUpdate,
     db: Session = Depends(get_db),
     _: User = Depends(get_current_admin_user),
-) -> RoleCapacity:
+) -> RoleCapacityRead:
     capacity = _get_or_404(db, RoleCapacity, capacity_id, "Role capacity")
     values = payload.model_dump(exclude_unset=True)
     for field, value in values.items():
         setattr(capacity, field, value)
     db.add(capacity)
-    _commit(db, "Role capacity update conflicts with existing data")
-    db.refresh(capacity)
-    return capacity
+    return _snapshot_and_commit(
+        db,
+        "Role capacity update conflicts with existing data",
+        lambda: RoleCapacityRead.model_validate(capacity),
+    )
