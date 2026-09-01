@@ -28,6 +28,7 @@ properties:
     - livrable
     - milestone
     - task
+    - null
   parent_uid:
     type: [integer, "null"]
   position:

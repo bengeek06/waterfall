@@ -151,6 +151,35 @@ def test_static_openapi_uses_31_nullability_syntax() -> None:
     assert find_nullable_paths(raw_document) == []
 
 
+def test_nullable_enums_include_null_member() -> None:
+    raw_document: object = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
+
+    def find_invalid_enum_paths(value: object, path: str = "$") -> list[str]:
+        if isinstance(value, dict):
+            schema = cast(dict[object, object], value)
+            type_value = schema.get("type")
+            enum_value = schema.get("enum")
+            paths = (
+                [path]
+                if isinstance(type_value, list)
+                and "null" in type_value
+                and isinstance(enum_value, list)
+                and None not in enum_value
+                else []
+            )
+            for key, child in schema.items():
+                paths.extend(find_invalid_enum_paths(child, f"{path}/{key}"))
+            return paths
+        if isinstance(value, list):
+            paths = []
+            for index, child in enumerate(cast(list[object], value)):
+                paths.extend(find_invalid_enum_paths(child, f"{path}/{index}"))
+            return paths
+        return []
+
+    assert find_invalid_enum_paths(raw_document) == []
+
+
 def test_static_openapi_declares_repository_license() -> None:
     raw_document: object = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
     if not isinstance(raw_document, dict):

@@ -3090,6 +3090,7 @@ components:
             - livrable
             - milestone
             - task
+            - null
         parent_uid:
           type:
             - integer
@@ -4238,6 +4239,7 @@ components:
             - 44
             - 51
             - 52
+            - null
     TaskLinksReplace:
       type: object
       required:
