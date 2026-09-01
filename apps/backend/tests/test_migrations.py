@@ -404,6 +404,34 @@ def test_calendar_default_flag_migration_does_not_backfill_inactive_standard() -
             assert any_default_count == 0
 
 
+def test_calendar_default_flag_migration_warns_when_standard_renamed() -> None:
+    """Follow-up to issue #51: if a deployment renames (or deletes) the STANDARD
+    calendar's code before ever running the 20260901_0004 migration -- the literal
+    rename/delete deployment scenario the issue describes -- the backfill's UPDATE
+    matches zero rows and there is no row with code == 'STANDARD' to inspect at all.
+    That must still emit the "no calendar with code == 'STANDARD' was found" warning
+    (distinct from the inactive-row warning covered above) so an operator notices the
+    system ended up with no default calendar, rather than failing silently."""
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "migration.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        _run_alembic(database_url, "20260831_0003")
+
+        with _disposable_engine(database_url) as engine, engine.begin() as connection:
+            connection.execute(
+                text("UPDATE wf_calendar SET code = 'RENAMED' WHERE code = 'STANDARD'")
+            )
+
+        result = _run_alembic(database_url, "head")
+        assert "no calendar with code == 'STANDARD' was found" in result.stderr
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            any_default_count = connection.scalar(
+                text("SELECT COUNT(*) FROM wf_calendar WHERE is_default = 1")
+            )
+            assert any_default_count == 0
+
+
 def test_postgres_calendar_default_flag_migration_upgrade_and_downgrade(
     postgres_database_url: str,
 ) -> None:
