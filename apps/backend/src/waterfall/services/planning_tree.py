@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import math
-from collections import defaultdict
+from collections import defaultdict, deque
 from datetime import UTC, datetime, timedelta
 from typing import overload
 
+from pydantic import ValidationError
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -947,6 +948,260 @@ def _apply_automatic_schedule(
     task.duration_minutes = duration_minutes
 
 
+def _discover_cascade_candidates(
+    edited_task_uid: int,
+    tasks_by_uid: dict[int, WfPlanningTaskSnapshot],
+    links_by_predecessor: dict[int, list[WfPlanningLinkSnapshot]],
+) -> set[int]:
+    """Phase A of the issue #73 cascade: BFS forward from the edited task.
+
+    Walks :class:`WfPlanningLinkSnapshot` edges from a task to the tasks that
+    reference it as ``predecessor_uid`` (i.e. the opposite direction from
+    :func:`_resolve_predecessor_constraints`, which walks a task back to its
+    own predecessors). A manual successor is a dead end -- its own dates
+    never move as a side effect of a predecessor edit, so nothing downstream
+    of it can need recalculating *through* it either -- but it is still
+    marked visited so a diamond or cycle in the link graph cannot revisit it
+    and loop. A dangling link (``task_uid`` not in ``tasks_by_uid``) or a
+    summary successor (its dates are derived from its children, never from a
+    predecessor link -- see :func:`update_planning_task_schedule`'s own
+    rejection of a direct edit on a summary task) is likewise treated as a
+    dead end rather than crashing or being added to the candidate set.
+
+    ``is_manual`` is nullable at the model level (``NULL`` when an imported
+    MS Project task never carried an explicit ``<Manual>`` element -- see
+    ``msproject_xml.py`` -- and is a genuinely reachable value in real data,
+    not just a theoretical one). Only ``is_manual is False`` (confirmed
+    automatic) is eligible for the cascade; ``None`` (never decided) must be
+    treated exactly like ``True`` (explicitly manual) -- a dead end whose
+    dates are left untouched -- rather than falsy-coerced into "confirmed
+    automatic" and silently rescheduled while its own ``is_manual`` column
+    stays ``NULL`` forever.
+
+    Critically, this only *discovers* which tasks are affected -- it does
+    not decide the order to recompute them in. A plain BFS/DFS visit order
+    is not safe to also use as the recompute order whenever two branches of
+    the walk reconverge on the same task (a diamond: B and C both successors
+    of the edited task, D a successor of both B and C) -- see
+    :func:`_topological_cascade_order`, which is responsible for that.
+    """
+    visited = {edited_task_uid}
+    candidates: set[int] = set()
+    queue: deque[int] = deque([edited_task_uid])
+    while queue:
+        current_uid = queue.popleft()
+        for link in links_by_predecessor.get(current_uid, []):
+            successor_uid = link.task_uid
+            if successor_uid in visited:
+                continue
+            visited.add(successor_uid)
+            successor = tasks_by_uid.get(successor_uid)
+            if successor is None or successor.is_summary or successor.is_manual is not False:
+                continue
+            candidates.add(successor_uid)
+            queue.append(successor_uid)
+    return candidates
+
+
+def _topological_cascade_order(
+    edited_task_uid: int,
+    candidates: set[int],
+    links_by_task: dict[int, list[WfPlanningLinkSnapshot]],
+) -> list[int]:
+    """Phase B of the issue #73 cascade: Kahn's algorithm over ``candidates``.
+
+    Required on top of :func:`_discover_cascade_candidates`'s BFS because of
+    diamonds: if B and C are both successors of the edited task, and D is a
+    successor of both B and C, D must only be recomputed after *both* B and
+    C have themselves been recomputed -- a naive single-pass BFS/DFS visiting
+    D through whichever of B/C is walked first would recompute D against one
+    stale and one fresh predecessor.
+
+    In-degree is counted only for edges whose source is the edited task
+    itself or another candidate: an edge from a predecessor *outside* the
+    affected set never needs to be waited for, because that predecessor's
+    stored value has not changed and is already correct in ``tasks_by_uid``.
+
+    ``waterfall.services.planning_links._validate_no_cycles`` already
+    rejects a cyclic predecessor graph at link-write time, but this function
+    does not trust that blindly: if Kahn's algorithm terminates with
+    candidates that were never dequeued (their in-degree never reached
+    zero), that is a residual invariant violation, surfaced as a
+    :class:`PlanningTaskScheduleError` rather than silently dropping those
+    tasks from the cascade or looping forever.
+    """
+    in_degree: dict[int, int] = dict.fromkeys(candidates, 0)
+    dependents_by_source: dict[int, list[int]] = defaultdict(list)
+    for candidate_uid in candidates:
+        for link in links_by_task.get(candidate_uid, []):
+            source_uid = link.predecessor_uid
+            if source_uid == edited_task_uid or source_uid in candidates:
+                in_degree[candidate_uid] += 1
+                dependents_by_source[source_uid].append(candidate_uid)
+
+    queue: deque[int] = deque()
+
+    def _release(source_uid: int) -> None:
+        for dependent_uid in dependents_by_source.get(source_uid, []):
+            in_degree[dependent_uid] -= 1
+            if in_degree[dependent_uid] == 0:
+                queue.append(dependent_uid)
+
+    # The edited task's own schedule is already applied by the time this
+    # function runs: it is never itself a candidate, but its outgoing edges
+    # still have to be released into the queue exactly as though it had
+    # already been dequeued -- otherwise a candidate whose only incoming
+    # edge comes directly from the edited task (in-degree 1, which can never
+    # reach 0 on its own since the edited task never goes through this same
+    # queue) would never be queued at all.
+    _release(edited_task_uid)
+
+    order: list[int] = []
+    while queue:
+        current_uid = queue.popleft()
+        order.append(current_uid)
+        _release(current_uid)
+
+    if len(order) != len(candidates):
+        unresolved = sorted(candidates - set(order))
+        raise PlanningTaskScheduleError(
+            "Planning predecessor links contain a cycle among the tasks affected by this "
+            f"schedule edit: {unresolved}"
+        )
+    return order
+
+
+def _cascade_successor_schedules(
+    db: Session,
+    planning: WfPlanning,
+    tasks_by_uid: dict[int, WfPlanningTaskSnapshot],
+    edited_task: WfPlanningTaskSnapshot,
+) -> list[WfPlanningTaskSnapshot]:
+    """Issue #73: reschedule every automatic-mode successor affected by editing ``edited_task``.
+
+    Reuses :func:`_apply_automatic_schedule`/:func:`_apply_automatic_milestone_schedule`
+    verbatim for each affected successor -- the same constraint-resolution
+    logic a direct edit of that successor would go through, never a
+    duplicated/divergent copy of it -- via a synthetic
+    :class:`PlanningTaskScheduleUpdate` representing "no explicit override,
+    just re-derive from the current predecessor links and the task's own
+    already-stored duration/start as fallback anchor". ``finish_at`` is
+    deliberately left unset (not in ``model_fields_set``): ``_apply_automatic_schedule``
+    ignores it entirely, and setting it could otherwise wrongly trip
+    ``_check_milestone_duration_and_finish_consistency`` for a milestone
+    successor. For a milestone candidate, ``duration_minutes`` is likewise
+    left unset rather than populated from ``candidate.duration_minutes``:
+    ``_apply_automatic_milestone_schedule`` never reads it for anything
+    except that same consistency check, and a milestone's duration is always
+    definitionally 0 regardless of what a stale/drifted stored value happens
+    to be (e.g. leftover from imported data) -- populating it here would
+    spuriously fail an otherwise-unrelated cascade the moment that stored
+    value isn't ``None``/``0``.
+
+    Unlike every other :class:`PlanningTaskScheduleUpdate` construction in
+    this module, this one is built from already-stored database values
+    rather than a validated request body, so it is not protected by the
+    route's request-body 422->400 conversion. ``duration_minutes`` in
+    particular has no upper-bound DB constraint and can be out of the
+    schema's ``ge=0``/``le=...`` range for data that predates that bound or
+    was imported from an MS Project XML file with no equivalent limit (see
+    ``msproject_xml.parse_duration``); constructing the payload is wrapped
+    below so a malformed stored value surfaces as this module's own
+    :class:`PlanningTaskScheduleError` (converted by the route to a
+    documented 400) instead of leaking a bare ``pydantic.ValidationError``
+    as an uncaught 500.
+
+    Each candidate is looked up using its *own* full incoming link list from
+    ``links_by_task`` -- not just the edges discovered by the BFS -- because
+    a successor can have other, unaffected predecessors too, and
+    ``_resolve_predecessor_constraints`` already takes the max across all of
+    them, exactly like a direct edit would.
+
+    Returns the list of successor tasks actually recomputed (in topological
+    order), so the caller can recalculate summary ancestors for each of
+    them too, on top of ``edited_task``'s own.
+
+    Known, accepted performance tradeoff (not fixed here): this loop calls
+    :func:`_apply_automatic_schedule`/:func:`_apply_automatic_milestone_schedule`
+    once per candidate, and each of those independently re-resolves its own
+    task's calendar via :func:`resolve_calendars_for_tasks` (a fresh query
+    per candidate rather than one batched resolution for the whole affected
+    set); :func:`_recalculate_ancestor_summaries`, called once per touched
+    task by the caller below, likewise rebuilds ``children_by_parent`` and
+    re-resolves calendars per call rather than once for the whole batch.
+    This is real, avoidable N+1-style query overhead for a long cascade
+    chain or a wide diamond -- all still inside the single row lock the
+    caller already holds, so it does serialize other writers longer than
+    strictly necessary -- but it is not a correctness bug, and batching it
+    properly would require changing
+    :func:`_apply_automatic_schedule`'s/:func:`_apply_automatic_milestone_schedule`'s
+    signatures to accept a pre-resolved calendar map, too large a change for
+    this ticket. Deliberately left unoptimized here for typical planning
+    sizes; not an oversight.
+    """
+    all_links = (
+        db.query(WfPlanningLinkSnapshot)
+        .filter(WfPlanningLinkSnapshot.planning_id == planning.id)
+        .all()
+    )
+    links_by_task: dict[int, list[WfPlanningLinkSnapshot]] = defaultdict(list)
+    links_by_predecessor: dict[int, list[WfPlanningLinkSnapshot]] = defaultdict(list)
+    for link in all_links:
+        links_by_task[link.task_uid].append(link)
+        links_by_predecessor[link.predecessor_uid].append(link)
+
+    candidates = _discover_cascade_candidates(edited_task.uid, tasks_by_uid, links_by_predecessor)
+    if not candidates:
+        return []
+
+    order = _topological_cascade_order(edited_task.uid, candidates, links_by_task)
+
+    touched: list[WfPlanningTaskSnapshot] = []
+    for candidate_uid in order:
+        candidate = tasks_by_uid[candidate_uid]
+        candidate_links = links_by_task.get(candidate_uid, [])
+        try:
+            synthetic_payload = PlanningTaskScheduleUpdate(
+                is_manual=False,
+                duration_minutes=None if candidate.is_milestone else candidate.duration_minutes,
+                start_at=_to_naive_utc(candidate.start_at),
+            )
+        except ValidationError as exc:
+            raise PlanningTaskScheduleError(
+                f"Successor task {candidate_uid} has an out-of-range stored "
+                "duration_minutes and cannot be automatically rescheduled"
+            ) from exc
+        # Mirrors the ValidationError handling immediately above: a
+        # candidate's own stored data can independently violate
+        # _apply_automatic_schedule's/_apply_automatic_milestone_schedule's
+        # internal checks (most commonly duration_minutes<=0 or None on an
+        # automatic-mode task -- realistic imported data, since MS Project
+        # XML import writes duration_minutes=None whenever the <Duration>
+        # element is absent, with is_manual set independently and no
+        # cross-check) even when it passes the schema's own Field(ge=0, ...)
+        # validation above and so never trips the ValidationError branch.
+        # Without this, that pre-existing, unrelated degenerate data on a
+        # cascade candidate raises a bare, unattributed
+        # PlanningTaskScheduleError straight out of this loop, surfacing as a
+        # 400 that looks like it is about the caller's own (perfectly valid)
+        # edit rather than about this candidate's own stored data.
+        try:
+            if candidate.is_milestone:
+                _apply_automatic_milestone_schedule(
+                    db, planning, candidate_links, tasks_by_uid, candidate, synthetic_payload
+                )
+            else:
+                _apply_automatic_schedule(
+                    db, planning, tasks_by_uid, candidate_links, candidate, synthetic_payload
+                )
+        except PlanningTaskScheduleError as exc:
+            raise PlanningTaskScheduleError(
+                f"Successor task {candidate_uid} cannot be automatically rescheduled: {exc}"
+            ) from exc
+        touched.append(candidate)
+    return touched
+
+
 def _recalculate_ancestor_summaries(
     db: Session,
     planning: WfPlanning,
@@ -997,21 +1252,36 @@ def update_planning_task_schedule(
     Only reads predecessor links (:class:`WfPlanningLinkSnapshot`); editing
     the links themselves is out of scope (E3-04).
 
-    Known v1 limitation: only ``task``'s summary *ancestors* are recalculated
-    afterwards (see :func:`_recalculate_ancestor_summaries`). Its
-    *successors* -- other tasks whose :class:`WfPlanningLinkSnapshot`
-    references ``task_uid`` as ``predecessor_uid`` -- are never revisited,
-    even when they are in automatic mode. Editing ``task``'s dates can
-    therefore leave an automatic successor with dates that violate its own
-    FS/SS/FF/SF constraint until that successor is itself edited separately
-    -- even though that constraint is now resolved exactly and
-    calendar-aware for all four link types (see
-    :func:`_resolve_predecessor_constraints`), it is simply never
-    re-evaluated for a successor as a side effect of editing its
-    predecessor. Accepted for v1, tracked by issue #73 ("Automatic-mode
-    successors are not rescheduled when their predecessor's dates change"),
-    with a regression test freezing the current (non-cascading) behaviour
-    rather than leaving the gap untested.
+    Issue #73: after ``task``'s own schedule is applied, every automatic-mode
+    successor transitively affected by the change -- other tasks whose
+    :class:`WfPlanningLinkSnapshot` references ``task_uid`` (or a successor
+    of it, and so on) as ``predecessor_uid`` -- is rescheduled too, via
+    :func:`_cascade_successor_schedules`, so an automatic successor's
+    FS/SS/FF/SF constraint against its *direct, non-summary* predecessor is
+    always satisfied immediately, in the same request/response, rather than
+    only becoming consistent the next time that successor happens to be
+    edited directly. A manual successor is left untouched (dead end, its
+    dates are frozen by definition), and nothing recomputes *through* it --
+    but a task reachable through some other, still-live automatic path is
+    still recomputed normally (see :func:`_discover_cascade_candidates`'s
+    docstring for the manual-interrupts-chain case, and
+    :func:`_topological_cascade_order`'s for why a diamond in the link graph
+    needs a real topological sort rather than a plain BFS/DFS visit order).
+
+    Known, documented, out-of-scope-for-#73 limitation: this cascade only
+    walks forward from ``task_uid`` itself via direct predecessor links. It
+    does *not* reach a task whose ``predecessor_uid`` points at a *summary*
+    task, even when editing ``task`` changes that summary's own aggregate
+    ``start_at``/``finish_at`` via :func:`_recalculate_ancestor_summaries`
+    (which runs after this cascade, below). Nothing in
+    ``planning_links.py``'s validation prevents a predecessor link from
+    referencing a summary task (it only rejects "not found",
+    self-referencing, and duplicate links), so this is a real, reachable
+    gap -- see
+    ``test_cascade_does_not_propagate_through_a_summary_task_acting_as_a_predecessor``
+    -- but closing it is a materially larger change (cascading through
+    summary-derived date changes, not just through direct predecessor
+    edits) and is left as a candidate follow-up rather than fixed here.
     """
     tasks = (
         db.query(WfPlanningTaskSnapshot)
@@ -1050,6 +1320,16 @@ def update_planning_task_schedule(
         _apply_automatic_schedule(db, planning, tasks_by_uid, links, task, payload)
 
     task.is_manual = payload.is_manual
+
+    # Issue #73: cascade the edit forward to every automatic-mode successor
+    # transitively affected by it (see _cascade_successor_schedules). Must
+    # run before the ancestor-summary recalculation below so that a
+    # successor sharing a summary ancestor with `task` (e.g. a sibling under
+    # the same summary parent) is reflected into that ancestor's min/max
+    # window in the same pass, rather than the ancestor recalculation seeing
+    # a stale successor date.
+    cascaded_tasks = _cascade_successor_schedules(db, planning, tasks_by_uid, task)
+
     # _recalculate_ancestor_summaries recalculates every summary ancestor's
     # duration via _recalculate_summary_fields, which walks the affected
     # calendar day by day through compute_working_minutes_between. That walk
@@ -1060,9 +1340,15 @@ def update_planning_task_schedule(
     # _apply_manual_schedule), so a task like that landing under a summary
     # ancestor is a genuinely-invalid-input case rather than an internal
     # error, and is surfaced as the same 400 as any other schedule
-    # validation failure.
+    # validation failure. This applies identically to a cascaded successor's
+    # own ancestors, not just `task`'s -- _recalculate_ancestor_summaries is
+    # naturally idempotent (re-derives purely from each ancestor's current
+    # children on every call), so calling it once per touched task below is
+    # correct regardless of call order.
     try:
         _recalculate_ancestor_summaries(db, planning, tasks_by_uid, task)
+        for cascaded_task in cascaded_tasks:
+            _recalculate_ancestor_summaries(db, planning, tasks_by_uid, cascaded_task)
     except (ValueError, OverflowError) as exc:
         raise PlanningTaskScheduleError(str(exc)) from exc
     return task
