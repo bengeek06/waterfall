@@ -1,3 +1,5 @@
+from datetime import datetime
+
 import pytest
 
 from waterfall.services.msproject_xml import (
@@ -105,8 +107,8 @@ def test_parser_preserves_optional_project_task_and_link_fields() -> None:
         outline_number="1.2",
         outline_level=2,
         wbs="1.2",
-        start_at=parsed.tasks[1].start_at,
-        finish_at=parsed.tasks[1].finish_at,
+        start_at=datetime(2026, 1, 2, 8, 0, 0),
+        finish_at=datetime(2026, 1, 2, 15, 30, 0),
         duration_minutes=450,
         duration_format=7,
         percent_complete=50,
