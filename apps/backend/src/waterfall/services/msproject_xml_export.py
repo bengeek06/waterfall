@@ -80,21 +80,18 @@ def _calendar_working_time_to_text(hours_per_day: Decimal) -> str:
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
-def build_project_export_xml(
+def _load_export_calendars(
     db: Session,
-    project: MsProject,
+    project_id: int,
     tasks: list[MsTask] | list[WfPlanningTaskSnapshot],
-    links: list[MsTaskLink] | list[WfPlanningLinkSnapshot],
-) -> bytes:
-    enrichments = db.query(WfTaskEnrichment).filter(WfTaskEnrichment.project_id == project.id).all()
-    descriptions_by_uid = {
-        enrichment.task_uid: enrichment.description for enrichment in enrichments
-    }
-    links_by_task_uid: dict[int, list[Any]] = {}
-    for link in links:
-        links_by_task_uid.setdefault(link.task_uid, []).append(link)
-
-    task_calendar_ids = resolve_task_calendar_ids(db, project.id, {task.uid for task in tasks})
+) -> tuple[
+    dict[int, int],
+    set[int],
+    dict[int, Calendar],
+    dict[int, list[CalendarWeekday]],
+    int | None,
+]:
+    task_calendar_ids = resolve_task_calendar_ids(db, project_id, {task.uid for task in tasks})
     default_calendar_id = resolve_default_calendar_id(db)
     exported_calendar_ids = set(task_calendar_ids.values())
     if default_calendar_id is not None:
@@ -113,14 +110,21 @@ def build_project_export_xml(
             .all()
         ):
             weekdays_by_calendar_id.setdefault(weekday.calendar_id, []).append(weekday)
-
-    reference_calendar_id, header_minutes = _resolve_project_reference_calendar(
-        default_calendar_id, task_calendar_ids, calendars_by_id, weekdays_by_calendar_id
+    return (
+        task_calendar_ids,
+        exported_calendar_ids,
+        calendars_by_id,
+        weekdays_by_calendar_id,
+        default_calendar_id,
     )
 
-    ET.register_namespace("", MSP_NS)
-    root = ET.Element(f"{{{MSP_NS}}}Project")
 
+def _append_project_header(
+    root: ET.Element,
+    project: MsProject,
+    reference_calendar_id: int | None,
+    header_minutes: tuple[int, int, int] | None,
+) -> None:
     ET.SubElement(root, f"{{{MSP_NS}}}SaveVersion").text = str(project.save_version_out)
     if project.external_uid is not None:
         ET.SubElement(root, f"{{{MSP_NS}}}GUID").text = project.external_uid
@@ -128,7 +132,6 @@ def build_project_export_xml(
     ET.SubElement(root, f"{{{MSP_NS}}}ScheduleFromStart").text = _bool_to_msp_flag(
         project.schedule_from_start
     )
-
     start_date = _dt_to_msp_text(project.start_date)
     if start_date is not None:
         ET.SubElement(root, f"{{{MSP_NS}}}StartDate").text = start_date
@@ -150,91 +153,154 @@ def build_project_export_xml(
     if project.currency_code is not None:
         ET.SubElement(root, f"{{{MSP_NS}}}CurrencyCode").text = project.currency_code
 
-    if exported_calendar_ids:
-        calendars_node = ET.SubElement(root, f"{{{MSP_NS}}}Calendars")
-        for calendar_id in sorted(exported_calendar_ids):
-            calendar = calendars_by_id.get(calendar_id)
-            if calendar is None:
-                continue
-            calendar_node = ET.SubElement(calendars_node, f"{{{MSP_NS}}}Calendar")
-            ET.SubElement(calendar_node, f"{{{MSP_NS}}}UID").text = str(calendar.id)
-            ET.SubElement(calendar_node, f"{{{MSP_NS}}}Name").text = calendar.name
-            weekdays_node = ET.SubElement(calendar_node, f"{{{MSP_NS}}}WeekDays")
-            hours_by_day_type = {
-                weekday.day_type: weekday.hours_per_day
-                for weekday in weekdays_by_calendar_id.get(calendar_id, [])
-            }
-            for day_type in range(1, 8):
-                hours_per_day = hours_by_day_type.get(day_type, Decimal(0))
-                weekday_node = ET.SubElement(weekdays_node, f"{{{MSP_NS}}}WeekDay")
-                ET.SubElement(weekday_node, f"{{{MSP_NS}}}DayType").text = str(day_type)
-                is_working = hours_per_day > 0
-                ET.SubElement(weekday_node, f"{{{MSP_NS}}}DayWorking").text = _bool_to_msp_flag(
-                    is_working
-                )
-                if is_working:
-                    working_times_node = ET.SubElement(weekday_node, f"{{{MSP_NS}}}WorkingTimes")
-                    working_time_node = ET.SubElement(
-                        working_times_node, f"{{{MSP_NS}}}WorkingTime"
-                    )
-                    ET.SubElement(working_time_node, f"{{{MSP_NS}}}FromTime").text = "00:00:00"
-                    ET.SubElement(
-                        working_time_node, f"{{{MSP_NS}}}ToTime"
-                    ).text = _calendar_working_time_to_text(hours_per_day)
+
+def _append_calendars(
+    root: ET.Element,
+    exported_calendar_ids: set[int],
+    calendars_by_id: dict[int, Calendar],
+    weekdays_by_calendar_id: dict[int, list[CalendarWeekday]],
+) -> None:
+    if not exported_calendar_ids:
+        return
+    calendars_node = ET.SubElement(root, f"{{{MSP_NS}}}Calendars")
+    for calendar_id in sorted(exported_calendar_ids):
+        calendar = calendars_by_id.get(calendar_id)
+        if calendar is None:
+            continue
+        calendar_node = ET.SubElement(calendars_node, f"{{{MSP_NS}}}Calendar")
+        ET.SubElement(calendar_node, f"{{{MSP_NS}}}UID").text = str(calendar.id)
+        ET.SubElement(calendar_node, f"{{{MSP_NS}}}Name").text = calendar.name
+        weekdays_node = ET.SubElement(calendar_node, f"{{{MSP_NS}}}WeekDays")
+        hours_by_day_type = {
+            weekday.day_type: weekday.hours_per_day
+            for weekday in weekdays_by_calendar_id.get(calendar_id, [])
+        }
+        for day_type in range(1, 8):
+            _append_calendar_weekday(
+                weekdays_node, day_type, hours_by_day_type.get(day_type, Decimal(0))
+            )
+
+
+def _append_calendar_weekday(
+    weekdays_node: ET.Element,
+    day_type: int,
+    hours_per_day: Decimal,
+) -> None:
+    weekday_node = ET.SubElement(weekdays_node, f"{{{MSP_NS}}}WeekDay")
+    ET.SubElement(weekday_node, f"{{{MSP_NS}}}DayType").text = str(day_type)
+    is_working = hours_per_day > 0
+    ET.SubElement(weekday_node, f"{{{MSP_NS}}}DayWorking").text = _bool_to_msp_flag(is_working)
+    if is_working:
+        working_times_node = ET.SubElement(weekday_node, f"{{{MSP_NS}}}WorkingTimes")
+        working_time_node = ET.SubElement(working_times_node, f"{{{MSP_NS}}}WorkingTime")
+        ET.SubElement(working_time_node, f"{{{MSP_NS}}}FromTime").text = "00:00:00"
+        ET.SubElement(
+            working_time_node, f"{{{MSP_NS}}}ToTime"
+        ).text = _calendar_working_time_to_text(hours_per_day)
+
+
+def _append_task(
+    tasks_node: ET.Element,
+    task: MsTask | WfPlanningTaskSnapshot,
+    task_calendar_ids: dict[int, int],
+    calendars_by_id: dict[int, Calendar],
+    descriptions_by_uid: dict[int, str | None],
+    links_by_task_uid: dict[int, list[Any]],
+) -> None:
+    task_node = ET.SubElement(tasks_node, f"{{{MSP_NS}}}Task")
+    ET.SubElement(task_node, f"{{{MSP_NS}}}UID").text = str(task.uid)
+    if task.id_display is not None:
+        ET.SubElement(task_node, f"{{{MSP_NS}}}ID").text = str(task.id_display)
+    ET.SubElement(task_node, f"{{{MSP_NS}}}Name").text = task.name
+    if task.task_type is not None:
+        ET.SubElement(task_node, f"{{{MSP_NS}}}Type").text = str(task.task_type)
+    if task.outline_number is not None:
+        ET.SubElement(task_node, f"{{{MSP_NS}}}OutlineNumber").text = task.outline_number
+    if task.outline_level is not None:
+        ET.SubElement(task_node, f"{{{MSP_NS}}}OutlineLevel").text = str(task.outline_level)
+    start_at = _dt_to_msp_text(task.start_at)
+    if start_at is not None:
+        ET.SubElement(task_node, f"{{{MSP_NS}}}Start").text = start_at
+    finish_at = _dt_to_msp_text(task.finish_at)
+    if finish_at is not None:
+        ET.SubElement(task_node, f"{{{MSP_NS}}}Finish").text = finish_at
+    duration = format_duration(task.duration_minutes)
+    if duration is not None:
+        ET.SubElement(task_node, f"{{{MSP_NS}}}Duration").text = duration
+    if task.duration_format is not None:
+        ET.SubElement(task_node, f"{{{MSP_NS}}}DurationFormat").text = str(task.duration_format)
+    if task.percent_complete is not None:
+        ET.SubElement(task_node, f"{{{MSP_NS}}}PercentComplete").text = str(task.percent_complete)
+    ET.SubElement(task_node, f"{{{MSP_NS}}}Summary").text = _bool_to_msp_flag(task.is_summary)
+    ET.SubElement(task_node, f"{{{MSP_NS}}}Milestone").text = _bool_to_msp_flag(task.is_milestone)
+    if task.is_manual is not None:
+        ET.SubElement(task_node, f"{{{MSP_NS}}}Manual").text = _bool_to_msp_flag(task.is_manual)
+    task_calendar_id = task_calendar_ids.get(task.uid)
+    if task_calendar_id is not None and task_calendar_id in calendars_by_id:
+        ET.SubElement(task_node, f"{{{MSP_NS}}}CalendarUID").text = str(task_calendar_id)
+    description = getattr(task, "notes", None) or descriptions_by_uid.get(task.uid)
+    if description:
+        ET.SubElement(task_node, f"{{{MSP_NS}}}Notes").text = description
+    _append_predecessor_links(task_node, links_by_task_uid.get(task.uid, []))
+
+
+def _append_predecessor_links(task_node: ET.Element, links: list[Any]) -> None:
+    for link in links:
+        predecessor_link_node = ET.SubElement(task_node, f"{{{MSP_NS}}}PredecessorLink")
+        ET.SubElement(predecessor_link_node, f"{{{MSP_NS}}}PredecessorUID").text = str(
+            link.predecessor_uid
+        )
+        ET.SubElement(predecessor_link_node, f"{{{MSP_NS}}}Type").text = str(link.link_type)
+        if link.lag_tenth_minute is not None:
+            ET.SubElement(predecessor_link_node, f"{{{MSP_NS}}}LinkLag").text = str(
+                link.lag_tenth_minute
+            )
+        if link.lag_format is not None:
+            ET.SubElement(predecessor_link_node, f"{{{MSP_NS}}}LagFormat").text = str(
+                link.lag_format
+            )
+
+
+def build_project_export_xml(
+    db: Session,
+    project: MsProject,
+    tasks: list[MsTask] | list[WfPlanningTaskSnapshot],
+    links: list[MsTaskLink] | list[WfPlanningLinkSnapshot],
+) -> bytes:
+    enrichments = db.query(WfTaskEnrichment).filter(WfTaskEnrichment.project_id == project.id).all()
+    descriptions_by_uid: dict[int, str | None] = {
+        enrichment.task_uid: enrichment.description for enrichment in enrichments
+    }
+    links_by_task_uid: dict[int, list[Any]] = {}
+    for link in links:
+        links_by_task_uid.setdefault(link.task_uid, []).append(link)
+
+    (
+        task_calendar_ids,
+        exported_calendar_ids,
+        calendars_by_id,
+        weekdays_by_calendar_id,
+        default_calendar_id,
+    ) = _load_export_calendars(db, project.id, tasks)
+
+    reference_calendar_id, header_minutes = _resolve_project_reference_calendar(
+        default_calendar_id, task_calendar_ids, calendars_by_id, weekdays_by_calendar_id
+    )
+
+    ET.register_namespace("", MSP_NS)
+    root = ET.Element(f"{{{MSP_NS}}}Project")
+    _append_project_header(root, project, reference_calendar_id, header_minutes)
+    _append_calendars(root, exported_calendar_ids, calendars_by_id, weekdays_by_calendar_id)
 
     tasks_node = ET.SubElement(root, f"{{{MSP_NS}}}Tasks")
     for task in tasks:
-        task_node = ET.SubElement(tasks_node, f"{{{MSP_NS}}}Task")
-        ET.SubElement(task_node, f"{{{MSP_NS}}}UID").text = str(task.uid)
-        if task.id_display is not None:
-            ET.SubElement(task_node, f"{{{MSP_NS}}}ID").text = str(task.id_display)
-        ET.SubElement(task_node, f"{{{MSP_NS}}}Name").text = task.name
-        if task.task_type is not None:
-            ET.SubElement(task_node, f"{{{MSP_NS}}}Type").text = str(task.task_type)
-        if task.outline_number is not None:
-            ET.SubElement(task_node, f"{{{MSP_NS}}}OutlineNumber").text = task.outline_number
-        if task.outline_level is not None:
-            ET.SubElement(task_node, f"{{{MSP_NS}}}OutlineLevel").text = str(task.outline_level)
-        start_at = _dt_to_msp_text(task.start_at)
-        if start_at is not None:
-            ET.SubElement(task_node, f"{{{MSP_NS}}}Start").text = start_at
-        finish_at = _dt_to_msp_text(task.finish_at)
-        if finish_at is not None:
-            ET.SubElement(task_node, f"{{{MSP_NS}}}Finish").text = finish_at
-        duration = format_duration(task.duration_minutes)
-        if duration is not None:
-            ET.SubElement(task_node, f"{{{MSP_NS}}}Duration").text = duration
-        if task.duration_format is not None:
-            ET.SubElement(task_node, f"{{{MSP_NS}}}DurationFormat").text = str(task.duration_format)
-        if task.percent_complete is not None:
-            ET.SubElement(task_node, f"{{{MSP_NS}}}PercentComplete").text = str(
-                task.percent_complete
-            )
-        ET.SubElement(task_node, f"{{{MSP_NS}}}Summary").text = _bool_to_msp_flag(task.is_summary)
-        ET.SubElement(task_node, f"{{{MSP_NS}}}Milestone").text = _bool_to_msp_flag(
-            task.is_milestone
+        _append_task(
+            tasks_node,
+            task,
+            task_calendar_ids,
+            calendars_by_id,
+            descriptions_by_uid,
+            links_by_task_uid,
         )
-        if task.is_manual is not None:
-            ET.SubElement(task_node, f"{{{MSP_NS}}}Manual").text = _bool_to_msp_flag(task.is_manual)
-        task_calendar_id = task_calendar_ids.get(task.uid)
-        if task_calendar_id is not None and task_calendar_id in calendars_by_id:
-            ET.SubElement(task_node, f"{{{MSP_NS}}}CalendarUID").text = str(task_calendar_id)
-        description = getattr(task, "notes", None) or descriptions_by_uid.get(task.uid)
-        if description:
-            ET.SubElement(task_node, f"{{{MSP_NS}}}Notes").text = description
-        for link in links_by_task_uid.get(task.uid, []):
-            predecessor_link_node = ET.SubElement(task_node, f"{{{MSP_NS}}}PredecessorLink")
-            ET.SubElement(predecessor_link_node, f"{{{MSP_NS}}}PredecessorUID").text = str(
-                link.predecessor_uid
-            )
-            ET.SubElement(predecessor_link_node, f"{{{MSP_NS}}}Type").text = str(link.link_type)
-            if link.lag_tenth_minute is not None:
-                ET.SubElement(predecessor_link_node, f"{{{MSP_NS}}}LinkLag").text = str(
-                    link.lag_tenth_minute
-                )
-            if link.lag_format is not None:
-                ET.SubElement(predecessor_link_node, f"{{{MSP_NS}}}LagFormat").text = str(
-                    link.lag_format
-                )
 
     return ET.tostring(root, encoding="utf-8", xml_declaration=True)

@@ -1,4 +1,5 @@
 import xml.etree.ElementTree as ET
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
 
@@ -386,6 +387,35 @@ def _assert_no_dangling_calendar_uid_references(root: ET.Element) -> None:
     }
     referenced_calendar_uids = {node.text for node in root.findall(".//ms:CalendarUID", NS)}
     assert referenced_calendar_uids <= declared_calendar_uids
+
+
+def test_export_calendar_weekday_serialization_preserves_working_time_shape() -> None:
+    from waterfall.services.msproject_xml_export import (
+        MSP_NS,
+        _append_calendar_weekday,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    weekdays_node = ET.Element(f"{{{MSP_NS}}}WeekDays")
+    _append_calendar_weekday(weekdays_node, 1, Decimal("0"))
+    _append_calendar_weekday(weekdays_node, 2, Decimal("24"))
+
+    weekdays = weekdays_node.findall(f"{{{MSP_NS}}}WeekDay")
+    assert len(weekdays) == 2
+    non_working_flag = weekdays[0].find(f"{{{MSP_NS}}}DayWorking")
+    assert non_working_flag is not None
+    assert non_working_flag.text == "0"
+    assert weekdays[0].find(f"{{{MSP_NS}}}WorkingTimes") is None
+    working_flag = weekdays[1].find(f"{{{MSP_NS}}}DayWorking")
+    assert working_flag is not None
+    assert working_flag.text == "1"
+    working_time = weekdays[1].find(f"{{{MSP_NS}}}WorkingTimes/{{{MSP_NS}}}WorkingTime")
+    assert working_time is not None
+    from_time = working_time.find(f"{{{MSP_NS}}}FromTime")
+    to_time = working_time.find(f"{{{MSP_NS}}}ToTime")
+    assert from_time is not None
+    assert to_time is not None
+    assert from_time.text == "00:00:00"
+    assert to_time.text == "23:59:59"
 
 
 def test_export_task_calendar_uses_lowest_role_id_among_multiple_assignments() -> None:
