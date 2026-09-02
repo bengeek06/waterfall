@@ -9,7 +9,7 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
-from waterfall.api.routes import projects
+from waterfall.api.routes import planning_support, project_access
 from waterfall.db.session import get_session_factory
 from waterfall.main import app
 from waterfall.models.ms_core import MsProject, MsTask
@@ -142,9 +142,9 @@ def test_mutable_draft_planning_locks_project_then_planning(
         assert project_query.with_for_update.called
         assert planning_query.with_for_update.called
 
-    monkeypatch.setattr(projects, "ensure_project_mutable", assert_state_checks_follow_locks)
+    monkeypatch.setattr(project_access, "ensure_project_mutable", assert_state_checks_follow_locks)
 
-    result = projects.get_mutable_draft_planning_with_locks(db, 10, 20, 30)
+    result = project_access.get_mutable_draft_planning_with_locks(db, 10, 20, 30)
 
     assert result == (project, planning)
     assert db.query.call_args_list == [
@@ -192,9 +192,9 @@ def test_displayed_planning_branch_is_selected_after_project_refresh_and_lock(
     def check_project(_: MsProject) -> None:
         events.append("project_mutable")
 
-    monkeypatch.setattr(projects, "ensure_project_mutable", check_project)
+    monkeypatch.setattr(project_access, "ensure_project_mutable", check_project)
 
-    result = projects.get_mutable_project_with_displayed_planning_lock(db, 10, 30)
+    result = planning_support.get_mutable_project_with_displayed_planning_lock(db, 10, 30)
 
     assert result == (project, planning)
     assert events == [
@@ -230,9 +230,13 @@ def test_mutable_displayed_draft_planning_locks_project_then_planning(
     def assert_project_check_follows_lock(_: MsProject) -> None:
         assert project_query.with_for_update.called
 
-    monkeypatch.setattr(projects, "ensure_project_mutable", assert_project_check_follows_lock)
+    monkeypatch.setattr(
+        project_access,
+        "ensure_project_mutable",
+        assert_project_check_follows_lock,
+    )
 
-    result = projects.get_mutable_displayed_draft_planning_with_locks(db, 10, 30)
+    result = planning_support.get_mutable_displayed_draft_planning_with_locks(db, 10, 30)
 
     assert result == (project, planning)
     assert db.query.call_args_list == [

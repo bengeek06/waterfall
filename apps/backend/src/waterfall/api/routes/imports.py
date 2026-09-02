@@ -13,7 +13,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from waterfall.api.dependencies import get_current_active_user
-from waterfall.api.routes.projects import get_mutable_project_lock
+from waterfall.api.routes.project_access import get_mutable_project_lock
 from waterfall.core.config import get_settings
 from waterfall.db.session import get_db
 from waterfall.models.ms_core import MsProject

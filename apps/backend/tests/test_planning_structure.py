@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 from httpx import Response
 
-from waterfall.api.routes import projects
+from waterfall.api.routes import planning_support, plannings, tasks
 from waterfall.db.session import get_session_factory
 from waterfall.main import app
 from waterfall.models.ms_core import MsProject
@@ -97,9 +97,9 @@ def test_direct_planning_structure_writers_use_project_lock(
     calls: list[int] = []
     latest_draft_calls: list[int] = []
     displayed_planning_calls: list[int] = []
-    original_lock = projects.get_mutable_project_lock
-    original_latest_draft = projects.get_mutable_project_with_latest_draft_lock
-    original_displayed_planning = projects.get_mutable_project_with_displayed_planning_lock
+    original_lock = planning_support.get_mutable_project_lock
+    original_latest_draft = plannings.get_mutable_project_with_latest_draft_lock
+    original_displayed_planning = tasks.get_mutable_project_with_displayed_planning_lock
 
     def locked_project(db: Any, project_id: int, owner_id: int) -> MsProject:
         calls.append(project_id)
@@ -115,10 +115,14 @@ def test_direct_planning_structure_writers_use_project_lock(
         displayed_planning_calls.append(project_id)
         return original_displayed_planning(db, project_id, owner_id)
 
-    monkeypatch.setattr(projects, "get_mutable_project_lock", locked_project)
-    monkeypatch.setattr(projects, "get_mutable_project_with_latest_draft_lock", locked_latest_draft)
+    monkeypatch.setattr(planning_support, "get_mutable_project_lock", locked_project)
     monkeypatch.setattr(
-        projects,
+        plannings,
+        "get_mutable_project_with_latest_draft_lock",
+        locked_latest_draft,
+    )
+    monkeypatch.setattr(
+        tasks,
         "get_mutable_project_with_displayed_planning_lock",
         locked_displayed_planning,
     )

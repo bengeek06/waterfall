@@ -3,10 +3,12 @@ from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from waterfall.api.dependencies import get_current_active_user
-from waterfall.api.routes.projects import (
+from waterfall.api.routes.planning_support import (
+    order_snapshots_depth_first,
+)
+from waterfall.api.routes.project_access import (
     get_planning_or_404,
     get_project_or_404,
-    order_snapshots_depth_first,
 )
 from waterfall.db.session import get_db
 from waterfall.models.ms_core import MsTask, MsTaskLink
