@@ -1015,6 +1015,11 @@ def test_estimate_cost_lines_support_non_labor_costs_and_draft_locking() -> None
             headers=other_headers,
         )
         assert other_response.status_code == 404
+        other_delete_response = client.delete(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines/{cost_line_id}",
+            headers=other_headers,
+        )
+        assert other_delete_response.status_code == 404
 
         fee_response = client.post(
             f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",

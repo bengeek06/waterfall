@@ -415,6 +415,7 @@ def delete_estimate_cost_line(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> None:
+    get_project_or_404(db, project_id, current_user.id)
     get_draft_estimate_or_409(db, project_id, estimate_id)
     line = (
         db.query(EstimateCostLine)
