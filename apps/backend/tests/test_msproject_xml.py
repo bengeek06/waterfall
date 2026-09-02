@@ -59,6 +59,72 @@ def test_validator_parses_iso_duration() -> None:
     assert parsed.tasks[0].duration_minutes == 480
 
 
+def test_parser_preserves_optional_project_task_and_link_fields() -> None:
+    xml = b"""<Project xmlns="http://schemas.microsoft.com/project">
+        <SaveVersion>15</SaveVersion><GUID>external-uid</GUID><Name>Imported project</Name>
+        <ScheduleFromStart>0</ScheduleFromStart><FinishDate>2026-01-02T17:00:00</FinishDate>
+        <CalendarUID>42</CalendarUID><MinutesPerDay>450</MinutesPerDay>
+        <MinutesPerWeek>2250</MinutesPerWeek><DaysPerMonth>19</DaysPerMonth>
+        <CurrencyCode>EUR</CurrencyCode><Tasks>
+            <Task><UID>1</UID><Name>Predecessor</Name></Task>
+            <Task><UID>2</UID><ID>7</ID><Name>Detailed task</Name><Type>2</Type>
+                <OutlineNumber>1.2</OutlineNumber><OutlineLevel>2</OutlineLevel><WBS>1.2</WBS>
+                <Start>2026-01-02T08:00:00</Start><Finish>2026-01-02T15:30:00</Finish>
+                <Duration>PT450M</Duration><DurationFormat>7</DurationFormat>
+                <PercentComplete>50</PercentComplete><Summary>1</Summary><Milestone>0</Milestone>
+                <Manual>true</Manual><CalendarUID>99</CalendarUID><Notes>Keep this note</Notes>
+                <PredecessorLink><PredecessorUID>1</PredecessorUID><Type>3</Type>
+                    <LinkLag>25</LinkLag><LagFormat>8</LagFormat>
+                </PredecessorLink>
+            </Task>
+        </Tasks></Project>"""
+
+    parsed = parse_msproject_xml(xml)
+
+    assert (parsed.save_version, parsed.source_version, parsed.external_uid) == (
+        15,
+        2013,
+        "external-uid",
+    )
+    assert (parsed.name, parsed.schedule_from_start, parsed.calendar_uid) == (
+        "Imported project",
+        False,
+        42,
+    )
+    assert (parsed.minutes_per_day, parsed.minutes_per_week, parsed.days_per_month) == (
+        450,
+        2250,
+        19,
+    )
+    assert parsed.currency_code == "EUR"
+    assert parsed.tasks[1] == parsed.tasks[1].__class__(
+        uid=2,
+        id_display=7,
+        name="Detailed task",
+        task_type=2,
+        outline_number="1.2",
+        outline_level=2,
+        wbs="1.2",
+        start_at=parsed.tasks[1].start_at,
+        finish_at=parsed.tasks[1].finish_at,
+        duration_minutes=450,
+        duration_format=7,
+        percent_complete=50,
+        is_summary=True,
+        is_milestone=False,
+        is_manual=True,
+        calendar_uid=99,
+        notes="Keep this note",
+    )
+    assert parsed.links[0].__dict__ == {
+        "task_uid": 2,
+        "predecessor_uid": 1,
+        "link_type": 3,
+        "lag_tenth_minute": 25,
+        "lag_format": 8,
+    }
+
+
 def test_canonical_schema_accepts_minimal_project() -> None:
     xml = b'<Project xmlns="http://schemas.microsoft.com/project/2007"><SaveVersion>16</SaveVersion><ScheduleFromStart>true</ScheduleFromStart><StartDate>2026-01-01T08:00:00</StartDate><Tasks><Task><UID>1</UID><Name>One</Name><Duration>PT480M</Duration></Task></Tasks></Project>'
     validate_canonical_xml(xml)
