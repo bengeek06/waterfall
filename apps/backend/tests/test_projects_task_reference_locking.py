@@ -146,14 +146,14 @@ def test_project_lock_blocks_every_task_reference_creator(
     operation: str,
 ) -> None:
     """Every reference creator must queue behind task deletion's project lock."""
-    from waterfall.api.routes.projects import (
+    from waterfall.api.routes.estimates import (
         create_estimate_cost_line,
         create_project_estimate,
-        create_task_role_assignment,
-        get_mutable_draft_planning_with_locks,
         update_estimate_cost_line,
         validate_project_estimate,
     )
+    from waterfall.api.routes.project_access import get_mutable_draft_planning_with_locks
+    from waterfall.api.routes.tasks import create_task_role_assignment
     from waterfall.models.user import User
     from waterfall.schemas.projects import (
         EstimateCostLineCreate,
