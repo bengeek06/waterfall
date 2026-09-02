@@ -18,6 +18,7 @@ Waterfall backend relies on:
 - FastAPI + SQLAlchemy 2 + Pydantic v2 + Alembic
 - PostgreSQL in Docker Compose and SQLite in tests
 - Quality gates: ruff, pyright, pytest
+- Complexity policy: Ruff C90 (McCabe), maximum complexity 15 for E4 work
 - OpenAPI static contract parity check against runtime routes
 - OpenAPI source is split under `openapi/spec/` (paths per domain, one file per schema/parameter/response); the committed `openapi/waterfall_v1.yaml` is a generated bundle (banner comment, do not edit directly)
 
@@ -31,6 +32,8 @@ Waterfall backend relies on:
 - SQLAlchemy model changes require migration impact assessment.
 - Pydantic constraints must match DB constraints and business rules.
 - Route or OpenAPI changes require editing the split sources under `openapi/spec/` (never the generated `openapi/waterfall_v1.yaml` directly), then `npm run openapi:bundle`, then parity checks and regeneration of the committed TypeScript client with `npm run api-client:generate`; verify both the bundled spec and the generated client diffs are committed.
+- After editing OpenAPI sources, run `npm run openapi:lint`. Valid warnings must be reported,
+  never hidden by weakening the lint configuration.
 
 3. Avoid non-traceable database hotfixes.
 - Prefer Alembic workflows over ad-hoc SQL patches.
@@ -47,6 +50,13 @@ Waterfall backend relies on:
 6. Use repository virtual environment consistently.
 - A persistent shell may be in any directory: never assume you're at the repository root. Self-anchor every invocation with `cd "$(git rev-parse --show-toplevel)" &&` before sourcing, instead of relying on the shell's current working directory.
 - For commands that require `apps/backend`, change directory after activation: `cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && cd apps/backend && ...`.
+
+7. Apply E4 concurrency and performance decisions when relevant.
+- Planning mutations use the `WfPlanning.revision` / `expected_revision` optimistic-concurrency
+	protocol defined in issue #18. A stale revision must return a structured 409 without partial
+	mutation or revision increment.
+- Concurrency and performance claims require real PostgreSQL, not SQLite. Performance work uses
+	the issue #14 budgets and reports p50/p95 separately from fixture setup.
 
 ## Verification checklist
 
@@ -69,6 +79,7 @@ Waterfall backend relies on:
 - Run pyright for backend package.
 - Run targeted pytest for changed scope.
 - Run full backend pytest when change is cross-cutting.
+- For E4 refactors, run `ruff check <changed modules> --select C90 --config 'lint.mccabe.max-complexity=15'`.
 
 ### D. Compose/runtime checks (if incident)
 
@@ -86,6 +97,8 @@ From the repository root:
 - cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && cd apps/backend && pytest --no-cov tests/<target_file>.py
 - cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && cd apps/backend && alembic upgrade head
 - cd "$(git rev-parse --show-toplevel)" && npm run openapi:bundle (after editing openapi/spec/**)
+- cd "$(git rev-parse --show-toplevel)" && npm run openapi:lint (after editing openapi/spec/**)
+- cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && cd apps/backend && ruff check src --select C90 --config 'lint.mccabe.max-complexity=15' (for E4 complexity work)
 
 Root commands:
 

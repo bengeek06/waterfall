@@ -27,7 +27,7 @@ Si un skill n'est pas utilisé, indique brièvement pourquoi.
 ## Contexte frontend Waterfall
 
 - Stack: Next.js 16 App Router, React 19, TypeScript.
-- UI libs: Radix primitives, lucide-react.
+- UI libs: Base UI primitives (`@base-ui/react`), shadcn, lucide-react.
 - Qualité: ESLint, Vitest + Testing Library, build Next.
 - Contrat API: types générés via `@waterfall/api-client`, base URL configurable par `NEXT_PUBLIC_API_BASE_URL`.
 - Session/auth: token en mémoire (`src/lib/session.ts`) + refresh dedup (`refreshInFlight`) dans `src/lib/backend.ts`.
