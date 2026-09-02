@@ -1,7 +1,5 @@
-import xml.etree.ElementTree as ET
 from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime
-from decimal import Decimal
 from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -17,8 +15,6 @@ from waterfall.db.session import get_db
 from waterfall.models.ms_core import MsProject, MsTask, MsTaskLink
 from waterfall.models.planning import WfPlanning, WfPlanningLinkSnapshot, WfPlanningTaskSnapshot
 from waterfall.models.resources import (
-    Calendar,
-    CalendarWeekday,
     CostCategory,
     CostType,
     Estimate,
@@ -89,15 +85,8 @@ from waterfall.services import (
     load_planning_structure_draft,
     move_planning_tasks,
     replace_task_predecessor_links,
-    resolve_default_calendar_id,
-    resolve_task_calendar_ids,
     save_planning_structure_draft,
     update_planning_task_schedule,
-)
-from waterfall.services.msproject_xml import (
-    MsProjectValidationError,
-    format_duration,
-    validate_canonical_export_xml,
 )
 from waterfall.services.project_lifecycle import (
     ensure_project_mutable,
@@ -105,7 +94,6 @@ from waterfall.services.project_lifecycle import (
 )
 
 router = APIRouter(prefix="/projects", tags=["projects"])
-MSP_NS = "http://schemas.microsoft.com/project/2007"
 
 
 class _PlanningTaskBodyValidationRoute(APIRoute):
@@ -134,19 +122,7 @@ class _PlanningTaskBodyValidationRoute(APIRoute):
         return body_validation_route_handler
 
 
-def _bool_to_msp_flag(value: bool) -> str:
-    return "1" if value else "0"
-
-
-def _dt_to_msp_text(value: datetime | None) -> str | None:
-    if value is None:
-        return None
-    if value.tzinfo is not None:
-        return value.astimezone(UTC).replace(tzinfo=None).isoformat(timespec="seconds")
-    return value.isoformat(timespec="seconds")
-
-
-def _get_project_or_404(db: Session, project_id: int, owner_id: int) -> MsProject:
+def get_project_or_404(db: Session, project_id: int, owner_id: int) -> MsProject:
     project = (
         db.query(MsProject)
         .filter(MsProject.id == project_id)
@@ -177,7 +153,7 @@ def _to_project_read(project: MsProject) -> ProjectRead:
     )
 
 
-def _get_planning_or_404(db: Session, project_id: int, planning_id: int) -> WfPlanning:
+def get_planning_or_404(db: Session, project_id: int, planning_id: int) -> WfPlanning:
     planning = (
         db.query(WfPlanning)
         .filter(WfPlanning.id == planning_id, WfPlanning.project_id == project_id)
@@ -388,7 +364,7 @@ def _to_planning_read(planning: WfPlanning) -> PlanningRead:
     )
 
 
-def _order_snapshots_depth_first(
+def order_snapshots_depth_first(
     snapshots: list[WfPlanningTaskSnapshot],
 ) -> list[WfPlanningTaskSnapshot]:
     """Return snapshots depth-first: each parent immediately followed by its children.
@@ -438,7 +414,7 @@ def _planning_detail(
     offset: int = 0,
     limit: int | None = None,
 ) -> PlanningDetailRead:
-    ordered = _order_snapshots_depth_first(
+    ordered = order_snapshots_depth_first(
         db.query(WfPlanningTaskSnapshot)
         .filter(WfPlanningTaskSnapshot.planning_id == planning.id)
         .all()
@@ -723,7 +699,7 @@ def list_plannings(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> list[PlanningRead]:
-    _get_project_or_404(db, project_id, current_user.id)
+    get_project_or_404(db, project_id, current_user.id)
     plannings = (
         db.query(WfPlanning)
         .filter(WfPlanning.project_id == project_id)
@@ -893,9 +869,9 @@ def get_planning(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> PlanningDetailRead:
-    _get_project_or_404(db, project_id, current_user.id)
+    get_project_or_404(db, project_id, current_user.id)
     return _planning_detail(
-        db, _get_planning_or_404(db, project_id, planning_id), offset=offset, limit=limit
+        db, get_planning_or_404(db, project_id, planning_id), offset=offset, limit=limit
     )
 
 
@@ -1414,7 +1390,7 @@ def list_project_estimates(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> list[ProjectEstimateRead]:
-    _get_project_or_404(db, project_id, current_user.id)
+    get_project_or_404(db, project_id, current_user.id)
     estimates = (
         db.query(Estimate)
         .filter(Estimate.project_id == project_id)
@@ -1465,12 +1441,12 @@ def create_project_estimate(
     db.flush()
 
     source_planning = (
-        _get_planning_or_404(db, project_id, project.displayed_planning_id)
+        get_planning_or_404(db, project_id, project.displayed_planning_id)
         if project.displayed_planning_id is not None
         else None
     )
     snapshots = (
-        _order_snapshots_depth_first(
+        order_snapshots_depth_first(
             db.query(WfPlanningTaskSnapshot)
             .filter(WfPlanningTaskSnapshot.planning_id == source_planning.id)
             .all()
@@ -1522,7 +1498,7 @@ def get_project_estimate(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> ProjectEstimateRead:
-    _get_project_or_404(db, project_id, current_user.id)
+    get_project_or_404(db, project_id, current_user.id)
     return _to_project_estimate_read(_get_estimate_or_404(db, project_id, estimate_id))
 
 
@@ -1536,7 +1512,7 @@ def list_estimate_task_rows(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> list[EstimateTaskRowRead]:
-    _get_project_or_404(db, project_id, current_user.id)
+    get_project_or_404(db, project_id, current_user.id)
     _get_estimate_or_404(db, project_id, estimate_id)
     rows = (
         db.query(EstimateTaskRow)
@@ -1585,7 +1561,7 @@ def set_estimate_reference(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> ProjectRead:
-    project = _get_project_or_404(db, project_id, current_user.id)
+    project = get_project_or_404(db, project_id, current_user.id)
     ensure_project_mutable(project)
     estimate = _get_estimate_or_404(db, project_id, estimate_id)
     if estimate.status != "validated":
@@ -1609,7 +1585,7 @@ def get_estimate_aggregates(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> EstimateAggregatesRead:
-    _get_project_or_404(db, project_id, current_user.id)
+    get_project_or_404(db, project_id, current_user.id)
     _get_estimate_or_404(db, project_id, estimate_id)
     aggregates = calculate_estimate_aggregates(db, estimate_id)
     return EstimateAggregatesRead(**aggregates)
@@ -1622,7 +1598,7 @@ def export_estimate_excel(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> Response:
-    project = _get_project_or_404(db, project_id, current_user.id)
+    project = get_project_or_404(db, project_id, current_user.id)
     estimate = _get_estimate_or_404(db, project_id, estimate_id)
     workbook_bytes = build_estimate_workbook(db, project, estimate)
     filename = f"devis-{project.name}-v{estimate.version_number}.xlsx".replace(" ", "-")
@@ -1643,7 +1619,7 @@ def list_estimate_cost_lines(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> list[EstimateCostLineRead]:
-    _get_project_or_404(db, project_id, current_user.id)
+    get_project_or_404(db, project_id, current_user.id)
     _get_estimate_or_404(db, project_id, estimate_id)
     lines = (
         db.query(EstimateCostLine)
@@ -1783,7 +1759,7 @@ def delete_estimate_cost_line(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> None:
-    _get_project_or_404(db, project_id, current_user.id)
+    get_project_or_404(db, project_id, current_user.id)
     _get_draft_estimate_or_409(db, project_id, estimate_id)
     line = (
         db.query(EstimateCostLine)
@@ -1806,7 +1782,7 @@ def get_project(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> ProjectRead:
-    return _to_project_read(_get_project_or_404(db, project_id, current_user.id))
+    return _to_project_read(get_project_or_404(db, project_id, current_user.id))
 
 
 @router.patch("/{project_id}", response_model=ProjectRead)
@@ -1816,7 +1792,7 @@ def update_project(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> ProjectRead:
-    project = _get_project_or_404(db, project_id, current_user.id)
+    project = get_project_or_404(db, project_id, current_user.id)
     ensure_project_mutable(project)
 
     values = payload.model_dump(exclude_unset=True)
@@ -1853,7 +1829,7 @@ def update_project_status(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> ProjectRead:
-    project = _get_project_or_404(db, project_id, current_user.id)
+    project = get_project_or_404(db, project_id, current_user.id)
     ensure_project_mutable(project)
     validate_project_status_transition(db, project, payload.status)
     project.status = payload.status
@@ -1868,7 +1844,7 @@ def delete_project(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> Response:
-    project = _get_project_or_404(db, project_id, current_user.id)
+    project = get_project_or_404(db, project_id, current_user.id)
     ensure_project_mutable(project)
     planning_ids = [
         row[0] for row in db.query(WfPlanning.id).filter(WfPlanning.project_id == project_id).all()
@@ -1950,10 +1926,10 @@ def list_project_tasks(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> list[TaskRead]:
-    project = _get_project_or_404(db, project_id, current_user.id)
+    project = get_project_or_404(db, project_id, current_user.id)
     selected_id = planning_id or project.displayed_planning_id
     if selected_id is not None:
-        planning = _get_planning_or_404(db, project_id, selected_id)
+        planning = get_planning_or_404(db, project_id, selected_id)
         return _planning_detail(db, planning, offset=offset, limit=limit).tasks
 
     tasks = (
@@ -1974,10 +1950,10 @@ def get_planning_tree(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> PlanningTreeRead:
-    project = _get_project_or_404(db, project_id, current_user.id)
+    project = get_project_or_404(db, project_id, current_user.id)
     selected_id = planning_id or project.displayed_planning_id
     if selected_id is not None:
-        detail = _planning_detail(db, _get_planning_or_404(db, project_id, selected_id))
+        detail = _planning_detail(db, get_planning_or_404(db, project_id, selected_id))
         tasks = detail.tasks
     else:
         stored_tasks = (
@@ -2088,7 +2064,7 @@ def get_planning_structure_draft_route(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> PlanningStructureDraftRead:
-    project = _get_project_or_404(db, project_id, current_user.id)
+    project = get_project_or_404(db, project_id, current_user.id)
     planning = (
         db.query(WfPlanning)
         .filter(
@@ -2185,7 +2161,7 @@ def list_task_role_assignments(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> list[TaskRoleAssignmentRead]:
-    _get_project_or_404(db, project_id, current_user.id)
+    get_project_or_404(db, project_id, current_user.id)
     task = _get_task_or_404(db, project_id, task_uid)
     rows = (
         db.query(TaskRoleAssignment, ResourceRole, CostCategory)
@@ -2222,7 +2198,7 @@ def create_task_role_assignment(
     # Use the same project-first lock order as planning task deletion.
     project = get_mutable_project_lock(db, project_id, current_user.id)
     if project.displayed_planning_id is not None:
-        planning = _get_planning_or_404(db, project_id, project.displayed_planning_id)
+        planning = get_planning_or_404(db, project_id, project.displayed_planning_id)
         snapshot = (
             db.query(WfPlanningTaskSnapshot)
             .filter(WfPlanningTaskSnapshot.planning_id == planning.id)
@@ -2282,7 +2258,7 @@ def update_task_role_assignment(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> TaskRoleAssignmentRead:
-    project = _get_project_or_404(db, project_id, current_user.id)
+    project = get_project_or_404(db, project_id, current_user.id)
     ensure_project_mutable(project)
     task = _get_task_or_404(db, project_id, task_uid)
     row = (
@@ -2319,7 +2295,7 @@ def delete_task_role_assignment(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> None:
-    project = _get_project_or_404(db, project_id, current_user.id)
+    project = get_project_or_404(db, project_id, current_user.id)
     ensure_project_mutable(project)
     task = _get_task_or_404(db, project_id, task_uid)
     assignment = (
@@ -2335,323 +2311,3 @@ def delete_task_role_assignment(
         )
     db.delete(assignment)
     db.commit()
-
-
-def _resolve_project_reference_calendar(
-    default_calendar_id: int | None,
-    task_calendar_ids: dict[int, int],
-    calendars_by_id: dict[int, Calendar],
-    weekdays_by_calendar_id: dict[int, list[CalendarWeekday]],
-) -> tuple[int | None, tuple[int, int, int] | None]:
-    """Pick the calendar exported as the project's reference calendar.
-
-    The current data model has no explicit "project calendar" concept at the
-    ms_project level, so this is an E5-02 implementation decision: prefer the
-    active calendar flagged ``is_default`` (issue #51 -- resolved by
-    ``calendar_schedule.resolve_default_calendar_id``, never by a well-known
-    ``code`` value), and otherwise fall back to the lowest calendar id
-    actually referenced by an exported task (deterministic, and guarantees
-    the calendar is one we are already exporting).
-
-    The default calendar can legally exist with no working day at all (an
-    empty ``weekdays`` list, or every day at 0 hours -- see
-    ``CalendarCreate``), in which case it would be useless as a reference
-    calendar (``_calendar_header_minutes`` cannot derive MinutesPerDay/Week
-    from it). Mirroring the fallback cascade already used by
-    ``calendar_schedule.resolve_calendars_for_tasks``
-    (see ``_has_any_working_day`` there), a default calendar with no working
-    day is treated as if it did not exist, and resolution falls through to
-    the same "lowest referenced task calendar id" rule used when there is no
-    default calendar at all -- rather than abandoning the reference calendar
-    outright.
-
-    Returns ``(None, None)`` when no candidate calendar has any working day,
-    in which case the caller preserves legacy stored project header values.
-    """
-    candidate_ids: list[int] = []
-    if default_calendar_id is not None:
-        candidate_ids.append(default_calendar_id)
-    if task_calendar_ids:
-        fallback_id = min(task_calendar_ids.values())
-        if fallback_id not in candidate_ids:
-            candidate_ids.append(fallback_id)
-
-    for calendar_id in candidate_ids:
-        calendar = calendars_by_id.get(calendar_id)
-        if calendar is None:
-            continue
-        header_minutes = _calendar_header_minutes(
-            calendar, weekdays_by_calendar_id.get(calendar_id, [])
-        )
-        if header_minutes is not None:
-            return calendar_id, header_minutes
-    return None, None
-
-
-def _calendar_header_minutes(
-    calendar: Calendar, weekdays: list[CalendarWeekday]
-) -> tuple[int, int, int] | None:
-    """Derive MinutesPerDay/MinutesPerWeek/DaysPerMonth from a calendar's weekdays.
-
-    Returns None when the calendar has no working day at all, so callers can
-    fall back to the legacy stored project values instead of dividing by zero.
-
-    This intentionally does not reuse ``calendar_schedule._day_capacity_minutes``:
-    that helper converts a *single* day's ``hours_per_day`` to that day's
-    minute capacity, whereas ``minutes_per_day`` here is an *average* over all
-    working days and ``minutes_per_week`` is a *sum* across them -- a
-    different formula shape, not just the same hours->minutes conversion
-    applied once. It already rounds (not truncates) its own hours->minutes
-    conversions, so it does not share the truncation bug that motivated
-    ``_day_capacity_minutes``.
-    """
-    working = [weekday for weekday in weekdays if weekday.hours_per_day > 0]
-    if not working:
-        return None
-    total_hours = sum((weekday.hours_per_day for weekday in working), start=Decimal(0))
-    minutes_per_day = round(total_hours / len(working) * 60)
-    minutes_per_week = round(total_hours * 60)
-    days_per_month = max(1, round(calendar.weeks_per_year * len(working) / 12))
-    return minutes_per_day, minutes_per_week, days_per_month
-
-
-def _calendar_working_time_to_text(hours_per_day: Decimal) -> str:
-    """Format a calendar day's working hours as a WorkingTime/ToTime xs:time value.
-
-    hours_per_day is capped at 24 by the DB constraint; a full 24h day would
-    format as "24:00:00", which is not a valid xs:time, so it is clamped to
-    "23:59:59" (E5-02 edge case, no MS Project semantic loss in practice since
-    a 24h/day working calendar is not a realistic scenario).
-    """
-    total_seconds = int(hours_per_day * 3600)
-    if total_seconds >= 24 * 3600:
-        return "23:59:59"
-    hours, remainder = divmod(total_seconds, 3600)
-    minutes, seconds = divmod(remainder, 60)
-    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-
-
-@router.get("/{project_id}/export.xml")
-def export_project_xml(
-    project_id: int,
-    planning_id: int | None = Query(default=None, gt=0),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-) -> Response:
-    project = _get_project_or_404(db, project_id, current_user.id)
-
-    selected_planning_id = planning_id or project.displayed_planning_id
-    selected_planning = (
-        _get_planning_or_404(db, project_id, selected_planning_id)
-        if selected_planning_id is not None
-        else None
-    )
-    if selected_planning is not None:
-        tasks = _order_snapshots_depth_first(
-            db.query(WfPlanningTaskSnapshot)
-            .filter(WfPlanningTaskSnapshot.planning_id == selected_planning.id)
-            .all()
-        )
-        links = (
-            db.query(WfPlanningLinkSnapshot)
-            .filter(WfPlanningLinkSnapshot.planning_id == selected_planning.id)
-            .order_by(WfPlanningLinkSnapshot.id.asc())
-            .all()
-        )
-    else:
-        tasks = (
-            db.query(MsTask).filter(MsTask.project_id == project_id).order_by(MsTask.id.asc()).all()
-        )
-        links = (
-            db.query(MsTaskLink)
-            .filter(MsTaskLink.project_id == project_id)
-            .order_by(MsTaskLink.id.asc())
-            .all()
-        )
-    enrichments = db.query(WfTaskEnrichment).filter(WfTaskEnrichment.project_id == project_id).all()
-
-    descriptions_by_uid = {
-        enrichment.task_uid: enrichment.description for enrichment in enrichments
-    }
-    links_by_task_uid: dict[int, list[Any]] = {}
-    for link in links:
-        links_by_task_uid.setdefault(link.task_uid, []).append(link)
-
-    # Waterfall is the source of truth for working calendars (E5-02): CalendarUID
-    # values emitted below are always recomputed from wf_calendar.id, never
-    # replayed from an imported file's foreign uids (ms_project.calendar_uid /
-    # ms_task.calendar_uid), which are never read here.
-    task_calendar_ids = resolve_task_calendar_ids(db, project_id, {task.uid for task in tasks})
-    default_calendar_id = resolve_default_calendar_id(db)
-
-    # Load every candidate calendar (the calendar flagged is_default plus every
-    # task-referenced one) up front, so the reference-calendar resolution below can
-    # check whether it actually has a working day before committing to it as the
-    # export's reference, instead of discovering that too late to fall back.
-    exported_calendar_ids = set(task_calendar_ids.values())
-    if default_calendar_id is not None:
-        exported_calendar_ids.add(default_calendar_id)
-
-    calendars_by_id: dict[int, Calendar] = {}
-    weekdays_by_calendar_id: dict[int, list[CalendarWeekday]] = {}
-    if exported_calendar_ids:
-        calendars_by_id = {
-            calendar.id: calendar
-            for calendar in db.query(Calendar).filter(Calendar.id.in_(exported_calendar_ids)).all()
-        }
-        for weekday in (
-            db.query(CalendarWeekday)
-            .filter(CalendarWeekday.calendar_id.in_(exported_calendar_ids))
-            .all()
-        ):
-            weekdays_by_calendar_id.setdefault(weekday.calendar_id, []).append(weekday)
-
-    reference_calendar_id, header_minutes = _resolve_project_reference_calendar(
-        default_calendar_id, task_calendar_ids, calendars_by_id, weekdays_by_calendar_id
-    )
-
-    ET.register_namespace("", MSP_NS)
-    root = ET.Element(f"{{{MSP_NS}}}Project")
-
-    ET.SubElement(root, f"{{{MSP_NS}}}SaveVersion").text = str(project.save_version_out)
-    if project.external_uid is not None:
-        ET.SubElement(root, f"{{{MSP_NS}}}GUID").text = project.external_uid
-    ET.SubElement(root, f"{{{MSP_NS}}}Name").text = project.name
-    ET.SubElement(root, f"{{{MSP_NS}}}ScheduleFromStart").text = _bool_to_msp_flag(
-        project.schedule_from_start
-    )
-
-    start_date = _dt_to_msp_text(project.start_date)
-    if start_date is not None:
-        ET.SubElement(root, f"{{{MSP_NS}}}StartDate").text = start_date
-
-    finish_date = _dt_to_msp_text(project.finish_date)
-    if finish_date is not None:
-        ET.SubElement(root, f"{{{MSP_NS}}}FinishDate").text = finish_date
-
-    if reference_calendar_id is not None:
-        ET.SubElement(root, f"{{{MSP_NS}}}CalendarUID").text = str(reference_calendar_id)
-
-    if header_minutes is not None:
-        minutes_per_day, minutes_per_week, days_per_month = header_minutes
-    else:
-        minutes_per_day = project.minutes_per_day
-        minutes_per_week = project.minutes_per_week
-        days_per_month = project.days_per_month
-    ET.SubElement(root, f"{{{MSP_NS}}}MinutesPerDay").text = str(minutes_per_day)
-    ET.SubElement(root, f"{{{MSP_NS}}}MinutesPerWeek").text = str(minutes_per_week)
-    ET.SubElement(root, f"{{{MSP_NS}}}DaysPerMonth").text = str(days_per_month)
-
-    if project.currency_code is not None:
-        ET.SubElement(root, f"{{{MSP_NS}}}CurrencyCode").text = project.currency_code
-
-    if exported_calendar_ids:
-        calendars_node = ET.SubElement(root, f"{{{MSP_NS}}}Calendars")
-        for calendar_id in sorted(exported_calendar_ids):
-            calendar = calendars_by_id.get(calendar_id)
-            if calendar is None:
-                continue
-            calendar_node = ET.SubElement(calendars_node, f"{{{MSP_NS}}}Calendar")
-            ET.SubElement(calendar_node, f"{{{MSP_NS}}}UID").text = str(calendar.id)
-            ET.SubElement(calendar_node, f"{{{MSP_NS}}}Name").text = calendar.name
-            weekdays_node = ET.SubElement(calendar_node, f"{{{MSP_NS}}}WeekDays")
-            hours_by_day_type = {
-                weekday.day_type: weekday.hours_per_day
-                for weekday in weekdays_by_calendar_id.get(calendar_id, [])
-            }
-            for day_type in range(1, 8):
-                hours_per_day = hours_by_day_type.get(day_type, Decimal(0))
-                weekday_node = ET.SubElement(weekdays_node, f"{{{MSP_NS}}}WeekDay")
-                ET.SubElement(weekday_node, f"{{{MSP_NS}}}DayType").text = str(day_type)
-                is_working = hours_per_day > 0
-                ET.SubElement(weekday_node, f"{{{MSP_NS}}}DayWorking").text = _bool_to_msp_flag(
-                    is_working
-                )
-                if is_working:
-                    working_times_node = ET.SubElement(weekday_node, f"{{{MSP_NS}}}WorkingTimes")
-                    working_time_node = ET.SubElement(
-                        working_times_node, f"{{{MSP_NS}}}WorkingTime"
-                    )
-                    ET.SubElement(working_time_node, f"{{{MSP_NS}}}FromTime").text = "00:00:00"
-                    ET.SubElement(
-                        working_time_node, f"{{{MSP_NS}}}ToTime"
-                    ).text = _calendar_working_time_to_text(hours_per_day)
-
-    tasks_node = ET.SubElement(root, f"{{{MSP_NS}}}Tasks")
-    for task in tasks:
-        task_node = ET.SubElement(tasks_node, f"{{{MSP_NS}}}Task")
-        ET.SubElement(task_node, f"{{{MSP_NS}}}UID").text = str(task.uid)
-
-        if task.id_display is not None:
-            ET.SubElement(task_node, f"{{{MSP_NS}}}ID").text = str(task.id_display)
-
-        ET.SubElement(task_node, f"{{{MSP_NS}}}Name").text = task.name
-
-        if task.task_type is not None:
-            ET.SubElement(task_node, f"{{{MSP_NS}}}Type").text = str(task.task_type)
-
-        if task.outline_number is not None:
-            ET.SubElement(task_node, f"{{{MSP_NS}}}OutlineNumber").text = task.outline_number
-
-        if task.outline_level is not None:
-            ET.SubElement(task_node, f"{{{MSP_NS}}}OutlineLevel").text = str(task.outline_level)
-
-        start_at = _dt_to_msp_text(task.start_at)
-        if start_at is not None:
-            ET.SubElement(task_node, f"{{{MSP_NS}}}Start").text = start_at
-
-        finish_at = _dt_to_msp_text(task.finish_at)
-        if finish_at is not None:
-            ET.SubElement(task_node, f"{{{MSP_NS}}}Finish").text = finish_at
-
-        duration = format_duration(task.duration_minutes)
-        if duration is not None:
-            ET.SubElement(task_node, f"{{{MSP_NS}}}Duration").text = duration
-
-        if task.duration_format is not None:
-            ET.SubElement(task_node, f"{{{MSP_NS}}}DurationFormat").text = str(task.duration_format)
-
-        if task.percent_complete is not None:
-            ET.SubElement(task_node, f"{{{MSP_NS}}}PercentComplete").text = str(
-                task.percent_complete
-            )
-
-        ET.SubElement(task_node, f"{{{MSP_NS}}}Summary").text = _bool_to_msp_flag(task.is_summary)
-        ET.SubElement(task_node, f"{{{MSP_NS}}}Milestone").text = _bool_to_msp_flag(
-            task.is_milestone
-        )
-        if task.is_manual is not None:
-            ET.SubElement(task_node, f"{{{MSP_NS}}}Manual").text = _bool_to_msp_flag(task.is_manual)
-
-        task_calendar_id = task_calendar_ids.get(task.uid)
-        if task_calendar_id is not None and task_calendar_id in calendars_by_id:
-            ET.SubElement(task_node, f"{{{MSP_NS}}}CalendarUID").text = str(task_calendar_id)
-
-        description = getattr(task, "notes", None) or descriptions_by_uid.get(task.uid)
-        if description:
-            ET.SubElement(task_node, f"{{{MSP_NS}}}Notes").text = description
-
-        for link in links_by_task_uid.get(task.uid, []):
-            predecessor_link_node = ET.SubElement(task_node, f"{{{MSP_NS}}}PredecessorLink")
-            ET.SubElement(predecessor_link_node, f"{{{MSP_NS}}}PredecessorUID").text = str(
-                link.predecessor_uid
-            )
-            ET.SubElement(predecessor_link_node, f"{{{MSP_NS}}}Type").text = str(link.link_type)
-            if link.lag_tenth_minute is not None:
-                ET.SubElement(predecessor_link_node, f"{{{MSP_NS}}}LinkLag").text = str(
-                    link.lag_tenth_minute
-                )
-            if link.lag_format is not None:
-                ET.SubElement(predecessor_link_node, f"{{{MSP_NS}}}LagFormat").text = str(
-                    link.lag_format
-                )
-
-    xml_content = ET.tostring(root, encoding="utf-8", xml_declaration=True)
-    try:
-        validate_canonical_export_xml(xml_content)
-    except MsProjectValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"code": "EXPORT_VALIDATION_FAILED", "issues": exc.issues},
-        ) from exc
-    return Response(content=xml_content, media_type="application/xml")

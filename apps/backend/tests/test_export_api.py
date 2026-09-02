@@ -353,9 +353,9 @@ def test_export_includes_task_calendar_and_reference_minutes() -> None:
         assert project_calendar_node is not None
         assert project_calendar_node.text == str(calendar_id)
 
-        # Expected values recomputed from the same rule as the export code
-        # (services/../projects.py::_calendar_header_minutes): 5 working days
-        # at 7h/day.
+        # Expected values recomputed from the same rule as the export service
+        # (services/msproject_xml_export.py::_calendar_header_minutes): 5
+        # working days at 7h/day.
         working_days = 5
         hours_per_day = 7
         expected_minutes_per_day = round(hours_per_day * 60)
