@@ -186,7 +186,7 @@ def validate_canonical_export_xml(xml_bytes: bytes) -> None:
     _validate_against(xml_bytes, EXPORT_SCHEMA_PATH)
 
 
-def parse_msproject_xml(xml_bytes: bytes) -> ParsedProject:
+def _parse_document(xml_bytes: bytes) -> tuple[ET.Element, str]:
     try:
         root = ET.fromstring(xml_bytes)
     except ET.ParseError as exc:
@@ -195,21 +195,139 @@ def parse_msproject_xml(xml_bytes: bytes) -> ParsedProject:
     namespace = root.tag[1:].split("}", 1)[0] if root.tag.startswith("{") else ""
     if namespace == CANONICAL_NAMESPACE:
         validate_canonical_xml(xml_bytes)
-    issues: list[dict[str, object]] = []
-    if namespace not in SUPPORTED_NAMESPACES:
+    return root, namespace
+
+
+def _validate_outline(
+    uid: int, outline: str | None, level: int | None, issues: list[dict[str, object]]
+) -> None:
+    if outline is None:
+        return
+    segments = outline.split(".")
+    if not all(segment.isdigit() and int(segment) > 0 for segment in segments):
         issues.append(
-            {"code": "UNSUPPORTED_NAMESPACE", "message": namespace or "Missing XML namespace"}
+            {
+                "code": "INVALID_OUTLINE",
+                "message": f"Task UID {uid} has an invalid outline",
+                "taskUid": uid,
+            }
+        )
+    elif level is not None and level != len(segments):
+        issues.append(
+            {
+                "code": "OUTLINE_LEVEL_MISMATCH",
+                "message": f"Task UID {uid} outline level mismatch",
+                "taskUid": uid,
+            }
         )
 
-    save_version = _integer(_text(root, "SaveVersion"), "SaveVersion", issues) or 16
-    if save_version not in SAVE_VERSIONS:
-        issues.append({"code": "UNSUPPORTED_VERSION", "message": str(save_version)})
-    source_version = SAVE_VERSIONS.get(save_version, 2016)
-    minutes_per_day = _integer(_text(root, "MinutesPerDay"), "MinutesPerDay", issues) or 480
-    minutes_per_week = _integer(_text(root, "MinutesPerWeek"), "MinutesPerWeek", issues) or 2400
-    days_per_month = _integer(_text(root, "DaysPerMonth"), "DaysPerMonth", issues) or 20
-    start_date = _datetime(_text(root, "StartDate"), "Project StartDate", issues)
-    finish_date = _datetime(_text(root, "FinishDate"), "Project FinishDate", issues)
+
+def _parse_task_duration(
+    task_node: ET.Element, uid: int, minutes_per_day: int, issues: list[dict[str, object]]
+) -> int | None:
+    duration_text = _text(task_node, "Duration")
+    if duration_text is None:
+        return None
+    try:
+        return parse_duration(duration_text, minutes_per_day)
+    except ValueError as exc:
+        issues.append({"code": "INVALID_DURATION", "message": str(exc), "taskUid": uid})
+        return None
+
+
+def _validate_task_values(
+    task_node: ET.Element, uid: int, issues: list[dict[str, object]]
+) -> tuple[int | None, int | None]:
+    task_type = _integer(_text(task_node, "Type"), "Task Type", issues)
+    if task_type is not None and task_type not in (0, 1, 2):
+        issues.append(
+            {
+                "code": "INVALID_TASK_TYPE",
+                "message": f"Task UID {uid} has invalid Type",
+                "taskUid": uid,
+            }
+        )
+    percent_complete = _integer(_text(task_node, "PercentComplete"), "PercentComplete", issues)
+    if percent_complete is not None and not 0 <= percent_complete <= 100:
+        issues.append(
+            {
+                "code": "INVALID_PERCENT_COMPLETE",
+                "message": f"Task UID {uid} has invalid completion",
+                "taskUid": uid,
+            }
+        )
+    return task_type, percent_complete
+
+
+def _parse_task(
+    task_node: ET.Element, uid: int, minutes_per_day: int, issues: list[dict[str, object]]
+) -> ParsedTask:
+    outline = _text(task_node, "OutlineNumber")
+    level = _integer(_text(task_node, "OutlineLevel"), "OutlineLevel", issues)
+    _validate_outline(uid, outline, level, issues)
+    duration = _parse_task_duration(task_node, uid, minutes_per_day, issues)
+    task_type, percent_complete = _validate_task_values(task_node, uid, issues)
+    manual = _text(task_node, "Manual")
+    return ParsedTask(
+        uid=uid,
+        id_display=_integer(_text(task_node, "ID"), "Task ID", issues),
+        name=_text(task_node, "Name") or f"Task {uid}",
+        task_type=task_type,
+        outline_number=outline,
+        outline_level=level,
+        wbs=_text(task_node, "WBS"),
+        start_at=_datetime(_text(task_node, "Start"), "Task Start", issues),
+        finish_at=_datetime(_text(task_node, "Finish"), "Task Finish", issues),
+        duration_minutes=duration,
+        duration_format=_integer(_text(task_node, "DurationFormat"), "DurationFormat", issues),
+        percent_complete=percent_complete,
+        is_summary=_boolean(_text(task_node, "Summary"), "Summary", issues),
+        is_milestone=_boolean(_text(task_node, "Milestone"), "Milestone", issues),
+        is_manual=_boolean(manual, "Manual", issues) if manual is not None else None,
+        calendar_uid=_integer(_text(task_node, "CalendarUID"), "CalendarUID", issues),
+        notes=_text(task_node, "Notes"),
+    )
+
+
+def _parse_task_links(
+    task_node: ET.Element, uid: int, issues: list[dict[str, object]]
+) -> list[ParsedLink]:
+    links: list[ParsedLink] = []
+    for link_node in _children(task_node, "PredecessorLink"):
+        predecessor_uid = _integer(_text(link_node, "PredecessorUID"), "PredecessorUID", issues)
+        link_type = _integer(_text(link_node, "Type"), "Link Type", issues)
+        if predecessor_uid is None or link_type is None:
+            issues.append(
+                {
+                    "code": "INCOMPLETE_LINK",
+                    "message": f"Task UID {uid} has an incomplete predecessor link",
+                    "taskUid": uid,
+                }
+            )
+            continue
+        if link_type not in (0, 1, 2, 3):
+            issues.append(
+                {
+                    "code": "INVALID_LINK_TYPE",
+                    "message": f"Invalid link type for task UID {uid}",
+                    "taskUid": uid,
+                }
+            )
+        links.append(
+            ParsedLink(
+                task_uid=uid,
+                predecessor_uid=predecessor_uid,
+                link_type=link_type,
+                lag_tenth_minute=_integer(_text(link_node, "LinkLag"), "LinkLag", issues),
+                lag_format=_integer(_text(link_node, "LagFormat"), "LagFormat", issues),
+            )
+        )
+    return links
+
+
+def _parse_tasks(
+    root: ET.Element, minutes_per_day: int, issues: list[dict[str, object]]
+) -> tuple[list[ParsedTask], list[ParsedLink], set[int]]:
     tasks: list[ParsedTask] = []
     links: list[ParsedLink] = []
     task_uids: set[int] = set()
@@ -229,104 +347,46 @@ def parse_msproject_xml(xml_bytes: bytes) -> ParsedProject:
             )
             continue
         task_uids.add(uid)
-        outline = _text(task_node, "OutlineNumber")
-        level = _integer(_text(task_node, "OutlineLevel"), "OutlineLevel", issues)
-        if outline is not None:
-            segments = outline.split(".")
-            if not all(segment.isdigit() and int(segment) > 0 for segment in segments):
-                issues.append(
-                    {
-                        "code": "INVALID_OUTLINE",
-                        "message": f"Task UID {uid} has an invalid outline",
-                        "taskUid": uid,
-                    }
-                )
-            elif level is not None and level != len(segments):
-                issues.append(
-                    {
-                        "code": "OUTLINE_LEVEL_MISMATCH",
-                        "message": f"Task UID {uid} outline level mismatch",
-                        "taskUid": uid,
-                    }
-                )
-        duration: int | None = None
-        duration_text = _text(task_node, "Duration")
-        if duration_text is not None:
-            try:
-                duration = parse_duration(duration_text, minutes_per_day)
-            except ValueError as exc:
-                issues.append({"code": "INVALID_DURATION", "message": str(exc), "taskUid": uid})
-        task_type = _integer(_text(task_node, "Type"), "Task Type", issues)
-        if task_type is not None and task_type not in (0, 1, 2):
-            issues.append(
-                {
-                    "code": "INVALID_TASK_TYPE",
-                    "message": f"Task UID {uid} has invalid Type",
-                    "taskUid": uid,
-                }
-            )
-        percent_complete = _integer(_text(task_node, "PercentComplete"), "PercentComplete", issues)
-        if percent_complete is not None and not 0 <= percent_complete <= 100:
-            issues.append(
-                {
-                    "code": "INVALID_PERCENT_COMPLETE",
-                    "message": f"Task UID {uid} has invalid completion",
-                    "taskUid": uid,
-                }
-            )
-        task = ParsedTask(
-            uid=uid,
-            id_display=_integer(_text(task_node, "ID"), "Task ID", issues),
-            name=_text(task_node, "Name") or f"Task {uid}",
-            task_type=task_type,
-            outline_number=outline,
-            outline_level=level,
-            wbs=_text(task_node, "WBS"),
-            start_at=_datetime(_text(task_node, "Start"), "Task Start", issues),
-            finish_at=_datetime(_text(task_node, "Finish"), "Task Finish", issues),
-            duration_minutes=duration,
-            duration_format=_integer(_text(task_node, "DurationFormat"), "DurationFormat", issues),
-            percent_complete=percent_complete,
-            is_summary=_boolean(_text(task_node, "Summary"), "Summary", issues),
-            is_milestone=_boolean(_text(task_node, "Milestone"), "Milestone", issues),
-            is_manual=(
-                _boolean(_text(task_node, "Manual"), "Manual", issues)
-                if _text(task_node, "Manual") is not None
-                else None
-            ),
-            calendar_uid=_integer(_text(task_node, "CalendarUID"), "CalendarUID", issues),
-            notes=_text(task_node, "Notes"),
-        )
-        tasks.append(task)
-        for link_node in _children(task_node, "PredecessorLink"):
-            predecessor_uid = _integer(_text(link_node, "PredecessorUID"), "PredecessorUID", issues)
-            link_type = _integer(_text(link_node, "Type"), "Link Type", issues)
-            if predecessor_uid is None or link_type is None:
-                issues.append(
-                    {
-                        "code": "INCOMPLETE_LINK",
-                        "message": f"Task UID {uid} has an incomplete predecessor link",
-                        "taskUid": uid,
-                    }
-                )
-                continue
-            if link_type not in (0, 1, 2, 3):
-                issues.append(
-                    {
-                        "code": "INVALID_LINK_TYPE",
-                        "message": f"Invalid link type for task UID {uid}",
-                        "taskUid": uid,
-                    }
-                )
-            link = ParsedLink(
-                task_uid=uid,
-                predecessor_uid=predecessor_uid,
-                link_type=link_type,
-                lag_tenth_minute=_integer(_text(link_node, "LinkLag"), "LinkLag", issues),
-                lag_format=_integer(_text(link_node, "LagFormat"), "LagFormat", issues),
-            )
-            links.append(link)
+        tasks.append(_parse_task(task_node, uid, minutes_per_day, issues))
+        links.extend(_parse_task_links(task_node, uid, issues))
+    return tasks, links, task_uids
 
+
+def _validate_dependency_cycles(
+    links: list[ParsedLink], task_uids: set[int], issues: list[dict[str, object]]
+) -> None:
+    graph: dict[int, list[int]] = {uid: [] for uid in task_uids}
+    for link in links:
+        if link.predecessor_uid in task_uids:
+            graph[link.predecessor_uid].append(link.task_uid)
+    visiting: set[int] = set()
+    visited: set[int] = set()
+
+    def visit(uid: int) -> None:
+        if uid in visiting:
+            issues.append(
+                {
+                    "code": "DEPENDENCY_CYCLE",
+                    "message": f"Dependency cycle includes task UID {uid}",
+                    "taskUid": uid,
+                }
+            )
+            return
+        if uid in visited:
+            return
+        visiting.add(uid)
+        for child_uid in graph[uid]:
+            visit(child_uid)
+        visiting.remove(uid)
+        visited.add(uid)
+
+    for uid in task_uids:
+        visit(uid)
+
+
+def _validate_links(
+    links: list[ParsedLink], task_uids: set[int], issues: list[dict[str, object]]
+) -> None:
     link_keys = set()
     for link in links:
         key = (link.task_uid, link.predecessor_uid, link.link_type)
@@ -358,34 +418,15 @@ def parse_msproject_xml(xml_bytes: bytes) -> ParsedProject:
                     "taskUid": link.task_uid,
                 }
             )
+    _validate_dependency_cycles(links, task_uids, issues)
 
-    graph: dict[int, list[int]] = {uid: [] for uid in task_uids}
-    for link in links:
-        if link.predecessor_uid in task_uids:
-            graph[link.predecessor_uid].append(link.task_uid)
-    visiting: set[int] = set()
-    visited: set[int] = set()
 
-    def visit(uid: int) -> None:
-        if uid in visiting:
-            issues.append(
-                {
-                    "code": "DEPENDENCY_CYCLE",
-                    "message": f"Dependency cycle includes task UID {uid}",
-                    "taskUid": uid,
-                }
-            )
-            return
-        if uid in visited:
-            return
-        visiting.add(uid)
-        for child_uid in graph[uid]:
-            visit(child_uid)
-        visiting.remove(uid)
-        visited.add(uid)
-
-    for uid in task_uids:
-        visit(uid)
+def _validate_project(
+    root: ET.Element,
+    start_date: datetime | None,
+    finish_date: datetime | None,
+    issues: list[dict[str, object]],
+) -> tuple[bool, str | None]:
     schedule_from_start = _boolean(_text(root, "ScheduleFromStart"), "ScheduleFromStart", issues)
     external_uid = _text(root, "GUID")
     if external_uid is not None and len(external_uid) > 36:
@@ -403,12 +444,10 @@ def parse_msproject_xml(xml_bytes: bytes) -> ParsedProject:
         issues.append(
             {"code": "MISSING_FINISH_DATE", "message": "ScheduleFromFinish requires FinishDate"}
         )
+    return schedule_from_start, external_uid
 
-    # Waterfall is the source of truth for working calendars (E5-02): custom
-    # calendars carried by an imported MS Project file are never written to
-    # wf_calendar/wf_calendar_weekday. Their presence is only surfaced as a
-    # non-blocking diagnostic so the import can proceed without silently
-    # dropping information the caller may want to reconcile manually.
+
+def _calendar_warnings(root: ET.Element) -> list[dict[str, object]]:
     warnings: list[dict[str, object]] = []
     calendars_node = _child(root, "Calendars")
     if calendars_node is not None:
@@ -424,6 +463,36 @@ def parse_msproject_xml(xml_bytes: bytes) -> ParsedProject:
                     ),
                 }
             )
+    return warnings
+
+
+def parse_msproject_xml(xml_bytes: bytes) -> ParsedProject:
+    root, namespace = _parse_document(xml_bytes)
+    issues: list[dict[str, object]] = []
+    if namespace not in SUPPORTED_NAMESPACES:
+        issues.append(
+            {"code": "UNSUPPORTED_NAMESPACE", "message": namespace or "Missing XML namespace"}
+        )
+
+    save_version = _integer(_text(root, "SaveVersion"), "SaveVersion", issues) or 16
+    if save_version not in SAVE_VERSIONS:
+        issues.append({"code": "UNSUPPORTED_VERSION", "message": str(save_version)})
+    source_version = SAVE_VERSIONS.get(save_version, 2016)
+    minutes_per_day = _integer(_text(root, "MinutesPerDay"), "MinutesPerDay", issues) or 480
+    minutes_per_week = _integer(_text(root, "MinutesPerWeek"), "MinutesPerWeek", issues) or 2400
+    days_per_month = _integer(_text(root, "DaysPerMonth"), "DaysPerMonth", issues) or 20
+    start_date = _datetime(_text(root, "StartDate"), "Project StartDate", issues)
+    finish_date = _datetime(_text(root, "FinishDate"), "Project FinishDate", issues)
+    tasks, links, task_uids = _parse_tasks(root, minutes_per_day, issues)
+    _validate_links(links, task_uids, issues)
+    schedule_from_start, external_uid = _validate_project(root, start_date, finish_date, issues)
+
+    # Waterfall is the source of truth for working calendars (E5-02): custom
+    # calendars carried by an imported MS Project file are never written to
+    # wf_calendar/wf_calendar_weekday. Their presence is only surfaced as a
+    # non-blocking diagnostic so the import can proceed without silently
+    # dropping information the caller may want to reconcile manually.
+    warnings = _calendar_warnings(root)
 
     if issues:
         raise MsProjectValidationError(issues)
