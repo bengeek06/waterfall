@@ -216,13 +216,17 @@ def generate_planning_structure(
     return tasks
 
 
-def generate_planning_snapshot(
+def _fetch_and_prepare_existing_tasks(
     db: Session,
-    project: MsProject,
-    payload: PlanningStructureCreate,
     planning: WfPlanning,
-) -> list[WfPlanningTaskSnapshot]:
-    nodes = _build_nodes(payload)
+    project: MsProject,
+) -> tuple[
+    list[WfPlanningTaskSnapshot],
+    dict[str, WfPlanningTaskSnapshot],
+    list[WfPlanningTaskSnapshot] | None,
+    int,
+]:
+    """Load existing and source tasks with existing_by_key map and max_uid."""
     existing = (
         db.query(WfPlanningTaskSnapshot)
         .filter(WfPlanningTaskSnapshot.planning_id == planning.id)
@@ -250,9 +254,17 @@ def generate_planning_snapshot(
     )
     if source:
         max_uid = max(max_uid, max(task.uid for task in source))
-    uid_by_key: dict[str, int] = {}
-    snapshots: list[WfPlanningTaskSnapshot] = []
-    incoming_keys = {node.key for node in nodes}
+
+    return existing, existing_by_key, source, max_uid
+
+
+def _delete_obsolete_tasks_and_links(
+    db: Session,
+    planning: WfPlanning,
+    existing: list[WfPlanningTaskSnapshot],
+    incoming_keys: set[str],
+) -> None:
+    """Delete obsolete links and tasks that are no longer in the incoming structure."""
     links = (
         db.query(WfPlanningLinkSnapshot)
         .filter(WfPlanningLinkSnapshot.planning_id == planning.id)
@@ -266,20 +278,35 @@ def generate_planning_snapshot(
     for link in links:
         if link.task_uid not in existing_uids or link.predecessor_uid not in existing_uids:
             db.delete(link)
+
     removed_ids = [
         task.id
         for task in existing
         if task.structure_key is not None and task.structure_key not in incoming_keys
     ]
+
     db.query(WfPlanningTaskSnapshot).filter(
         WfPlanningTaskSnapshot.planning_id == planning.id
     ).update({WfPlanningTaskSnapshot.parent_uid: None}, synchronize_session=False)
     db.flush()
+
     if removed_ids:
         db.query(WfPlanningTaskSnapshot).filter(WfPlanningTaskSnapshot.id.in_(removed_ids)).delete(
             synchronize_session=False
         )
     db.flush()
+
+
+def _create_or_update_node_snapshots(
+    db: Session,
+    nodes: list[_GeneratedNode],
+    existing_by_key: dict[str, WfPlanningTaskSnapshot],
+    planning: WfPlanning,
+    max_uid: int,
+) -> tuple[list[WfPlanningTaskSnapshot], dict[str, int]]:
+    """Create or update snapshot tasks for each node."""
+    uid_by_key: dict[str, int] = {}
+    snapshots: list[WfPlanningTaskSnapshot] = []
 
     for node in nodes:
         task = existing_by_key.get(node.key)
@@ -316,44 +343,68 @@ def generate_planning_snapshot(
         uid_by_key[node.key] = task.uid
 
     db.flush()
-    source_links = []
-    if source:
-        source_links = (
-            db.query(WfPlanningLinkSnapshot)
-            .filter(WfPlanningLinkSnapshot.planning_id == project.displayed_planning_id)
-            .all()
-        )
-        source_uid_by_key = {task.structure_key: task.uid for task in source}
-        source_uid_to_new_uid = {
-            source_uid_by_key[node.key]: uid_by_key[node.key]
-            for node in nodes
-            if node.key in source_uid_by_key
-        }
-        for link in source_links:
-            task_uid = source_uid_to_new_uid.get(link.task_uid)
-            predecessor_uid = source_uid_to_new_uid.get(link.predecessor_uid)
-            if task_uid is None or predecessor_uid is None:
-                continue
-            if (
-                not db.query(WfPlanningLinkSnapshot.id)
-                .filter_by(
+
+    return snapshots, uid_by_key
+
+
+def _copy_links_from_source(
+    db: Session,
+    source: list[WfPlanningTaskSnapshot] | None,
+    nodes: list[_GeneratedNode],
+    planning: WfPlanning,
+    project: MsProject,
+    uid_by_key: dict[str, int],
+) -> None:
+    """Copy links from source planning if it exists."""
+    if not source:
+        return
+
+    source_links = (
+        db.query(WfPlanningLinkSnapshot)
+        .filter(WfPlanningLinkSnapshot.planning_id == project.displayed_planning_id)
+        .all()
+    )
+    source_uid_by_key = {task.structure_key: task.uid for task in source}
+    source_uid_to_new_uid = {
+        source_uid_by_key[node.key]: uid_by_key[node.key]
+        for node in nodes
+        if node.key in source_uid_by_key
+    }
+    for link in source_links:
+        task_uid = source_uid_to_new_uid.get(link.task_uid)
+        predecessor_uid = source_uid_to_new_uid.get(link.predecessor_uid)
+        if task_uid is None or predecessor_uid is None:
+            continue
+        if (
+            not db.query(WfPlanningLinkSnapshot.id)
+            .filter_by(
+                planning_id=planning.id,
+                task_uid=task_uid,
+                predecessor_uid=predecessor_uid,
+                link_type=link.link_type,
+            )
+            .first()
+        ):
+            db.add(
+                WfPlanningLinkSnapshot(
                     planning_id=planning.id,
                     task_uid=task_uid,
                     predecessor_uid=predecessor_uid,
                     link_type=link.link_type,
+                    lag_tenth_minute=link.lag_tenth_minute,
+                    lag_format=link.lag_format,
                 )
-                .first()
-            ):
-                db.add(
-                    WfPlanningLinkSnapshot(
-                        planning_id=planning.id,
-                        task_uid=task_uid,
-                        predecessor_uid=predecessor_uid,
-                        link_type=link.link_type,
-                        lag_tenth_minute=link.lag_tenth_minute,
-                        lag_format=link.lag_format,
-                    )
-                )
+            )
+
+
+def _create_deliverable_milestone_links(
+    db: Session,
+    nodes: list[_GeneratedNode],
+    payload: PlanningStructureCreate,
+    planning: WfPlanning,
+    uid_by_key: dict[str, int],
+) -> None:
+    """Create links from deliverables to milestones."""
     deliverables_by_lot_key = {
         f"{post.key}/{lot.key}": lot.deliverables for post in payload.posts for lot in post.lots
     }
@@ -371,5 +422,29 @@ def generate_planning_snapshot(
             }
             if not db.query(WfPlanningLinkSnapshot.id).filter_by(**link_values).first():
                 db.add(WfPlanningLinkSnapshot(**link_values))
+
+
+def generate_planning_snapshot(
+    db: Session,
+    project: MsProject,
+    payload: PlanningStructureCreate,
+    planning: WfPlanning,
+) -> list[WfPlanningTaskSnapshot]:
+    nodes = _build_nodes(payload)
+    existing, existing_by_key, source, max_uid = _fetch_and_prepare_existing_tasks(
+        db, planning, project
+    )
+
+    incoming_keys = {node.key for node in nodes}
+    _delete_obsolete_tasks_and_links(db, planning, existing, incoming_keys)
+
+    snapshots, uid_by_key = _create_or_update_node_snapshots(
+        db, nodes, existing_by_key, planning, max_uid
+    )
+
+    _copy_links_from_source(db, source, nodes, planning, project, uid_by_key)
+
+    _create_deliverable_milestone_links(db, nodes, payload, planning, uid_by_key)
+
     db.flush()
     return snapshots
