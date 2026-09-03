@@ -92,6 +92,7 @@ const planning = (overrides: Partial<Planning> = {}): Planning => ({
   project_id: 1,
   version_number: 1,
   status: "draft",
+  revision: 0,
   note: null,
   created_at: "2026-08-21T00:00:00Z",
   validated_at: null,
@@ -576,7 +577,7 @@ describe("ProjectDetailsPage planning lifecycle", () => {
       expect(mocks.movePlanningTasks).toHaveBeenCalledWith(
         1,
         draft.id,
-        { task_uids: [11], target_parent_uid: null, position: 1 },
+        { task_uids: [11], target_parent_uid: null, position: 1, expected_revision: 0 },
         expect.anything(),
         expect.anything(),
       ),

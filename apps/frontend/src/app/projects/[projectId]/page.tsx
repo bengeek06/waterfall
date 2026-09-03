@@ -489,7 +489,7 @@ export default function ProjectDetailsPage() {
       const updated = await movePlanningTasks(
         projectId,
         requestedPlanningId,
-        command,
+        { ...command, expected_revision: selectedPlanning.revision },
         session,
         onSessionRefresh,
       );

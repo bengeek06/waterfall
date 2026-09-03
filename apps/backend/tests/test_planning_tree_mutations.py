@@ -382,11 +382,12 @@ def test_move_schema_validation_returns_bad_request() -> None:
         path = f"/projects/{project_id}/plannings/{planning_id}/tasks/move"
 
         for payload in (
-            {"task_uids": [], "target_parent_uid": None, "position": 1},
-            {"task_uids": [0], "target_parent_uid": None, "position": 1},
-            {"task_uids": [-1], "target_parent_uid": None, "position": 1},
-            {"task_uids": [2], "target_parent_uid": 0, "position": 1},
-            {"task_uids": [2], "target_parent_uid": None, "position": 0},
+            {"task_uids": [], "target_parent_uid": None, "position": 1, "expected_revision": 0},
+            {"task_uids": [0], "target_parent_uid": None, "position": 1, "expected_revision": 0},
+            {"task_uids": [-1], "target_parent_uid": None, "position": 1, "expected_revision": 0},
+            {"task_uids": [2], "target_parent_uid": 0, "position": 1, "expected_revision": 0},
+            {"task_uids": [2], "target_parent_uid": None, "position": 0, "expected_revision": 0},
+            {"task_uids": [2], "target_parent_uid": None, "position": 1, "expected_revision": -1},
         ):
             response = client.post(path, json=payload, headers=headers)
             assert response.status_code == 400
@@ -627,6 +628,10 @@ def test_move_rejects_validated_planning_and_read_only_project() -> None:
             headers=headers,
         )
         assert validated.status_code == 409
+        validated_planning = client.get(
+            f"/projects/{project_id}/plannings/{first_planning_id}", headers=headers
+        )
+        assert validated_planning.json()["revision"] == 0
         with get_session_factory()() as session:
             project = session.get(MsProject, project_id)
             assert project is not None
@@ -638,6 +643,10 @@ def test_move_rejects_validated_planning_and_read_only_project() -> None:
             headers=headers,
         )
         assert read_only.status_code == 409
+        read_only_planning = client.get(
+            f"/projects/{project_id}/plannings/{second_planning_id}", headers=headers
+        )
+        assert read_only_planning.json()["revision"] == 0
 
 
 def test_move_revision_conflict_returns_structured_409_without_mutating() -> None:
