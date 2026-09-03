@@ -4,6 +4,7 @@ required:
 - project_id
 - version_number
 - status
+- revision
 - created_at
 properties:
   id:
@@ -21,6 +22,9 @@ properties:
     - draft
     - validated
     - superseded
+  revision:
+    type: integer
+    minimum: 0
   note:
     type: [string, "null"]
   created_at:

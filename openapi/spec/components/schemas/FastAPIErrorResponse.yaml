@@ -5,6 +5,8 @@ properties:
   detail:
     anyOf:
     - type: string
+    - type: object
+      additionalProperties: true
     - type: array
       items:
         type: object

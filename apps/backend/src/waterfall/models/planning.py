@@ -33,6 +33,7 @@ class WfPlanning(Base):
     project_id: Mapped[int] = mapped_column(ForeignKey("ms_project.id"), nullable=False)
     version_number: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft")
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     structure_draft_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

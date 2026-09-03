@@ -1329,6 +1329,8 @@ export interface components {
         FastAPIErrorResponse: {
             detail: string | {
                 [key: string]: unknown;
+            } | {
+                [key: string]: unknown;
             }[];
         };
         ProjectRead: {
@@ -1375,6 +1377,7 @@ export interface components {
             version_number: number;
             /** @enum {string} */
             status: "draft" | "validated" | "superseded";
+            revision: number;
             note?: string | null;
             /** Format: date-time */
             created_at: string;
@@ -1389,6 +1392,11 @@ export interface components {
             task_uids: number[];
             target_parent_uid?: number | null;
             position: number;
+            /**
+             * @description Revision of the planning this mutation was computed against. Compared to the
+             *     persisted revision under lock; a mismatch returns a 409 PLANNING_REVISION_CONFLICT.
+             */
+            expected_revision: number;
         };
         PlanningTaskCreate: {
             name: string;
@@ -1872,7 +1880,10 @@ export interface components {
                 "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
-        /** @description Le deplacement entre en conflit avec le planning */
+        /**
+         * @description Le deplacement entre en conflit avec le planning, ou `expected_revision` ne
+         *     correspond plus a la revision persistee (code `PLANNING_REVISION_CONFLICT`).
+         */
         MovePlanningTasksConflict: {
             headers: {
                 [name: string]: unknown;
