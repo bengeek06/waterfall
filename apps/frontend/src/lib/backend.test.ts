@@ -5,6 +5,7 @@ import {
   deletePlanningTasks,
   getPlanning,
   getPlanningTaskDeleteConflict,
+  movePlanningTasks,
   updateResourceRole,
 } from "./backend";
 
@@ -92,6 +93,37 @@ describe("parseError", () => {
     await expect(
       updateResourceRole(1, { name: "Dev" }, { accessToken: "token" }, vi.fn()),
     ).rejects.toMatchObject({ status: 404, message: "Role not found" } as Partial<ApiError>);
+  });
+
+  it("turns a PLANNING_REVISION_CONFLICT detail into a readable message", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          detail: {
+            code: "PLANNING_REVISION_CONFLICT",
+            project_id: 1,
+            planning_id: 7,
+            expected_revision: 0,
+            current_revision: 1,
+          },
+        }),
+        { status: 409, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      movePlanningTasks(
+        1,
+        7,
+        { task_uids: [1], target_parent_uid: null, position: 1, expected_revision: 0 },
+        { accessToken: "token" },
+        vi.fn(),
+      ),
+    ).rejects.toMatchObject({
+      status: 409,
+      message: "Ce planning a été modifié entre-temps : recharge-le avant de réessayer.",
+    } as Partial<ApiError>);
   });
 });
 

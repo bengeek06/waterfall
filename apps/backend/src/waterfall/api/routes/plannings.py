@@ -440,12 +440,14 @@ router.add_api_route(
             "description": "Projet, planning ou tache introuvable pendant la suppression",
         },
         status.HTTP_409_CONFLICT: {
-            "model": PlanningTaskDeleteConflict,
+            "model": PlanningTaskDeleteConflict | FastAPIErrorResponse,
             "description": (
                 "Suppression en cascade non confirmee (detail.code="
                 "CASCADE_CONFIRMATION_REQUIRED, avec detail.descendant_uids), "
-                "ou tache referencee par un devis, une affectation ou une "
-                "charge (detail.code=TASK_REFERENCED, avec detail.task_uids)"
+                "tache referencee par un devis, une affectation ou une "
+                "charge (detail.code=TASK_REFERENCED, avec detail.task_uids), "
+                "ou expected_revision obsolete (detail.code="
+                "PLANNING_REVISION_CONFLICT)"
             ),
         },
     },
