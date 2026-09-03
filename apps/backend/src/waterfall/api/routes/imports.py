@@ -278,6 +278,206 @@ async def upload_xml(
     return _to_batch_response(batch)
 
 
+def _validate_run_request(batch: WfImportBatch, run_request: ImportRunRequest) -> dict[str, Any]:
+    if not run_request.dry_run and not run_request.confirm:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Import requires explicit confirmation",
+        )
+    if not batch.log_json:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No XML uploaded for this batch",
+        )
+    try:
+        stored_payload = json.loads(batch.log_json)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Corrupted batch payload",
+        ) from exc
+    if not isinstance(stored_payload, dict):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Corrupted batch payload")
+    return stored_payload
+
+
+def _relock_pending_batch(
+    db: Session,
+    batch: WfImportBatch,
+    project_id: int,
+    owner_id: int,
+    expected_sha256: str | None,
+) -> MsProject:
+    project = get_mutable_project_lock(db, project_id, owner_id)
+    # Re-read under the project lock: a concurrent writer may have finished the
+    # batch, or replaced its uploaded XML, while it was read/parsed unlocked.
+    db.refresh(batch)
+    if batch.status != "pending" or batch.source_sha256 != expected_sha256:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Batch is not pending")
+    return project
+
+
+def _run_dry_validation(
+    db: Session,
+    batch: WfImportBatch,
+    project_id: int,
+    owner_id: int,
+    expected_sha256: str | None,
+    xml_bytes: bytes,
+    accepted_at: datetime,
+) -> ImportRunAcceptedResponse:
+    validation_error: MsProjectValidationError | None = None
+    try:
+        parse_msproject_xml(xml_bytes)
+    except MsProjectValidationError as exc:
+        validation_error = exc
+
+    _relock_pending_batch(db, batch, project_id, owner_id, expected_sha256)
+
+    if validation_error is not None:
+        batch.log_json = json.dumps(
+            {"error": str(validation_error), "errors": validation_error.issues}
+        )
+        db.add(batch)
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Import validation failed",
+        ) from validation_error
+
+    return ImportRunAcceptedResponse(batchId=batch.id, status="pending", acceptedAt=accepted_at)
+
+
+def _reject_diff_conflicts(db: Session, project: MsProject, xml_bytes: bytes) -> None:
+    # Reject referenced tasks that the diff preview flagged as conflicts before
+    # mutating any state, keeping the batch reusable (still pending).
+    try:
+        parsed_project = parse_msproject_xml(xml_bytes)
+    except MsProjectValidationError:
+        return
+    conflicting_uids = [
+        item["uid"]
+        for item in build_import_diff(db, project, parsed_project)
+        if item.get("kind") == "conflict"
+    ]
+    if conflicting_uids:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "IMPORT_CONFLICT", "conflicts": conflicting_uids},
+        )
+
+
+def _mark_batch_running(db: Session, batch: WfImportBatch, accepted_at: datetime) -> None:
+    updated = (
+        db.query(WfImportBatch)
+        .filter(WfImportBatch.id == batch.id)
+        .filter(WfImportBatch.status == "pending")
+        .update(
+            {
+                WfImportBatch.status: "running",
+                WfImportBatch.started_at: accepted_at,
+                WfImportBatch.finished_at: None,
+            },
+            synchronize_session=False,
+        )
+    )
+    db.commit()
+    if updated != 1:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Batch is not pending")
+    db.refresh(batch)
+
+
+def _mark_batch_failed(
+    db: Session, batch_id: int, owner_id: int, error: str, issues: list[dict[str, Any]]
+) -> None:
+    failed_batch = _get_batch_or_404(db, batch_id, owner_id)
+    failed_batch.status = "failed"
+    failed_batch.finished_at = datetime.now(UTC)
+    failed_batch.log_json = json.dumps({"error": error, "errors": issues})
+    db.add(failed_batch)
+    db.commit()
+
+
+def _apply_confirmed_import(
+    db: Session,
+    batch: WfImportBatch,
+    batch_id: int,
+    project_id: int,
+    owner_id: int,
+    xml_bytes: bytes,
+    stored_payload: dict[str, Any],
+) -> None:
+    try:
+        # The status commit above released the project row lock; re-acquire it
+        # immediately before mutating snapshots so a concurrent writer cannot
+        # change displayed_planning_id/status between the two transactions.
+        project = get_mutable_project_lock(db, project_id, owner_id)
+        identical_source = (
+            db.query(WfImportBatch.id)
+            .filter(WfImportBatch.project_id == project_id)
+            .filter(WfImportBatch.status == "success")
+            .filter(WfImportBatch.source_sha256 == batch.source_sha256)
+            .filter(WfImportBatch.id != batch.id)
+            .first()
+            is not None
+        )
+        task_count, link_count, import_warnings = import_tasks_and_links(db, xml_bytes, project)
+        batch.status = "success"
+        batch.finished_at = datetime.now(UTC)
+        stored_payload["counters"] = {"tasks": task_count, "links": link_count}
+        stored_payload["errors"] = []
+        stored_payload["warnings"] = list(import_warnings)
+        stored_payload["dry_run"] = False
+        if identical_source:
+            stored_payload["identical_source"] = True
+        batch.log_json = json.dumps(stored_payload)
+        db.add(batch)
+        db.commit()
+    except HTTPException as exc:
+        # Preserve the precise status/detail (e.g. project became read-only
+        # concurrently) instead of masking it as a generic import failure.
+        db.rollback()
+        _mark_batch_failed(
+            db,
+            batch_id,
+            owner_id,
+            str(exc.detail),
+            [{"code": "IMPORT_FAILED", "message": str(exc.detail)}],
+        )
+        raise
+    except Exception as exc:
+        db.rollback()
+        issues = (
+            exc.issues
+            if isinstance(exc, MsProjectValidationError)
+            else [{"code": "IMPORT_FAILED", "message": str(exc)}]
+        )
+        _mark_batch_failed(db, batch_id, owner_id, str(exc), issues)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Import failed",
+        ) from exc
+
+
+def _run_confirmed_import(
+    db: Session,
+    batch: WfImportBatch,
+    batch_id: int,
+    project_id: int,
+    owner_id: int,
+    expected_sha256: str | None,
+    xml_bytes: bytes,
+    stored_payload: dict[str, Any],
+    accepted_at: datetime,
+) -> ImportRunAcceptedResponse:
+    project = _relock_pending_batch(db, batch, project_id, owner_id, expected_sha256)
+    _reject_diff_conflicts(db, project, xml_bytes)
+    _mark_batch_running(db, batch, accepted_at)
+    _apply_confirmed_import(db, batch, batch_id, project_id, owner_id, xml_bytes, stored_payload)
+
+    return ImportRunAcceptedResponse(batchId=batch.id, status="success", acceptedAt=accepted_at)
+
+
 @router.post(
     "/{batch_id}/run",
     response_model=ImportRunAcceptedResponse,
@@ -298,157 +498,31 @@ def run_batch(
     batch = _get_batch_or_404(db, batch_id, current_user.id)
     if batch.project_id is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-    project = get_mutable_project_lock(db, batch.project_id, current_user.id)
-    # Re-read under the project lock: a concurrent writer may have finished while
-    # we waited to acquire it, leaving this instance stale.
-    db.refresh(batch)
-    if batch.status != "pending":
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Batch is not pending")
 
-    run_request = payload
-    if not run_request.dry_run and not run_request.confirm:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Import requires explicit confirmation",
-        )
+    stored_payload = _validate_run_request(batch, payload)
+    project_id = batch.project_id
+    expected_sha256 = batch.source_sha256
 
-    if not batch.log_json:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="No XML uploaded for this batch",
-        )
-
-    try:
-        payload = json.loads(batch.log_json)
-    except json.JSONDecodeError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Corrupted batch payload",
-        ) from exc
-
-    if not isinstance(payload, dict):
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Corrupted batch payload")
-
+    # Read and parse the uploaded XML before acquiring the project lock so slow
+    # file I/O and XML parsing never block other writers serialized on it.
     xml_bytes = _read_source_xml(batch)
-
     accepted_at = datetime.now(UTC)
-    if run_request.dry_run:
-        try:
-            parse_msproject_xml(xml_bytes)
-        except MsProjectValidationError as exc:
-            batch.log_json = json.dumps({"error": str(exc), "errors": exc.issues})
-            db.add(batch)
-            db.commit()
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Import validation failed",
-            ) from exc
-        return ImportRunAcceptedResponse(
-            batchId=batch.id,
-            status="pending",
-            acceptedAt=accepted_at,
+
+    if payload.dry_run:
+        return _run_dry_validation(
+            db, batch, project_id, current_user.id, expected_sha256, xml_bytes, accepted_at
         )
 
-    # Confirmation path only: reject referenced tasks that the diff preview flagged as
-    # conflicts before mutating any state, keeping the batch reusable (still pending).
-    try:
-        parsed_project = parse_msproject_xml(xml_bytes)
-    except MsProjectValidationError:
-        parsed_project = None
-    if parsed_project is not None:
-        conflicting_uids = [
-            item["uid"]
-            for item in build_import_diff(db, project, parsed_project)
-            if item.get("kind") == "conflict"
-        ]
-        if conflicting_uids:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={"code": "IMPORT_CONFLICT", "conflicts": conflicting_uids},
-            )
-
-    updated = (
-        db.query(WfImportBatch)
-        .filter(WfImportBatch.id == batch.id)
-        .filter(WfImportBatch.status == "pending")
-        .update(
-            {
-                WfImportBatch.status: "running",
-                WfImportBatch.started_at: accepted_at,
-                WfImportBatch.finished_at: None,
-            },
-            synchronize_session=False,
-        )
-    )
-    db.commit()
-    if updated != 1:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Batch is not pending")
-    db.refresh(batch)
-
-    try:
-        # The status commit above released the project row lock; re-acquire it
-        # immediately before mutating snapshots so a concurrent writer cannot
-        # change displayed_planning_id/status between the two transactions.
-        project = get_mutable_project_lock(db, batch.project_id, current_user.id)
-        identical_source = (
-            db.query(WfImportBatch.id)
-            .filter(WfImportBatch.project_id == batch.project_id)
-            .filter(WfImportBatch.status == "success")
-            .filter(WfImportBatch.source_sha256 == batch.source_sha256)
-            .filter(WfImportBatch.id != batch.id)
-            .first()
-            is not None
-        )
-        task_count, link_count, import_warnings = import_tasks_and_links(db, xml_bytes, project)
-        batch.status = "success"
-        batch.finished_at = datetime.now(UTC)
-        payload["counters"] = {"tasks": task_count, "links": link_count}
-        payload["errors"] = []
-        payload["warnings"] = list(import_warnings)
-        payload["dry_run"] = False
-        if identical_source:
-            payload["identical_source"] = True
-        batch.log_json = json.dumps(payload)
-        db.add(batch)
-        db.commit()
-    except HTTPException as exc:
-        # Preserve the precise status/detail (e.g. project became read-only
-        # concurrently) instead of masking it as a generic import failure.
-        db.rollback()
-        failed_batch = _get_batch_or_404(db, batch_id, current_user.id)
-        failed_batch.status = "failed"
-        failed_batch.finished_at = datetime.now(UTC)
-        failed_batch.log_json = json.dumps(
-            {
-                "error": str(exc.detail),
-                "errors": [{"code": "IMPORT_FAILED", "message": str(exc.detail)}],
-            }
-        )
-        db.add(failed_batch)
-        db.commit()
-        raise
-    except Exception as exc:
-        db.rollback()
-        failed_batch = _get_batch_or_404(db, batch_id, current_user.id)
-        failed_batch.status = "failed"
-        failed_batch.finished_at = datetime.now(UTC)
-        issues = (
-            exc.issues
-            if isinstance(exc, MsProjectValidationError)
-            else [{"code": "IMPORT_FAILED", "message": str(exc)}]
-        )
-        failed_batch.log_json = json.dumps({"error": str(exc), "errors": issues})
-        db.add(failed_batch)
-        db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Import failed",
-        ) from exc
-
-    return ImportRunAcceptedResponse(
-        batchId=batch.id,
-        status="success",
-        acceptedAt=accepted_at,
+    return _run_confirmed_import(
+        db,
+        batch,
+        batch_id,
+        project_id,
+        current_user.id,
+        expected_sha256,
+        xml_bytes,
+        stored_payload,
+        accepted_at,
     )
 
 
