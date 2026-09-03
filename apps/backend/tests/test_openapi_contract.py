@@ -385,6 +385,7 @@ def test_move_planning_tasks_documents_all_not_found_resources() -> None:
     error_schema = static_components["schemas"]["FastAPIErrorResponse"]
     assert error_schema["properties"]["detail"]["anyOf"] == [
         {"type": "string"},
+        {"type": "object", "additionalProperties": True},
         {"type": "array", "items": {"type": "object", "additionalProperties": True}},
     ]
 

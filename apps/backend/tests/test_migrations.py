@@ -185,13 +185,14 @@ def test_migration_upgrade_creates_expected_schema() -> None:
 
             planning_columns = {column["name"] for column in inspector.get_columns("wf_planning")}
             assert "structure_draft_json" in planning_columns
+            assert "revision" in planning_columns
 
             role_columns = {column["name"] for column in inspector.get_columns("wf_resource_role")}
             assert "code" not in role_columns
 
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260901_0005"
+                == "20260903_0006"
             )
 
 
@@ -325,7 +326,7 @@ def test_calendar_default_flag_migration_backfills_standard_and_enforces_uniquen
 
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260901_0005"
+                == "20260903_0006"
             )
 
         # STANDARD is already backfilled to is_default=1 above, so a second row
@@ -753,7 +754,7 @@ def test_postgres_migration_upgrade_head_succeeds(postgres_database_url: str) ->
             "wf_estimate",
             "wf_estimate_task_row",
         }.issubset(table_names)
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260901_0005"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260903_0006"
 
 
 def test_postgres_project_external_uid_accepts_canonical_guid(

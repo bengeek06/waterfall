@@ -1,4 +1,6 @@
-description: Le deplacement entre en conflit avec le planning
+description: |-
+  Le deplacement entre en conflit avec le planning, ou `expected_revision` ne
+  correspond plus a la revision persistee (code `PLANNING_REVISION_CONFLICT`).
 content:
   application/json:
     schema:

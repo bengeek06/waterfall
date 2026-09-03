@@ -22,6 +22,7 @@ from waterfall.api.routes.project_access import (
     get_mutable_project_lock,
     get_planning_or_404,
     get_project_or_404,
+    raise_on_planning_revision_conflict,
 )
 from waterfall.db.session import get_db
 from waterfall.models.ms_core import MsTask, MsTaskLink
@@ -262,8 +263,11 @@ def move_planning_tasks_route(
     _, planning = get_mutable_draft_planning_with_locks(
         db, project_id, planning_id, current_user.id
     )
+    raise_on_planning_revision_conflict(project_id, planning, payload.expected_revision)
     try:
         move_planning_tasks(db, planning, payload)
+        planning.revision += 1
+        db.add(planning)
         # Capture the response while the row locks are still held so a concurrent
         # writer cannot make us return a later transaction's state.
         detail = _planning_detail(db, planning)

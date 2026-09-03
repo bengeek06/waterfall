@@ -247,6 +247,7 @@ def _to_planning_read(planning: WfPlanning) -> PlanningRead:
         project_id=planning.project_id,
         version_number=planning.version_number,
         status=cast(Any, planning.status),
+        revision=planning.revision,
         note=planning.note,
         created_at=planning.created_at,
         validated_at=planning.validated_at,

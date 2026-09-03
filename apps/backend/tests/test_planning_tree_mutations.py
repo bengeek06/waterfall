@@ -255,7 +255,7 @@ def test_move_leaf_targets_explicit_planning_and_recalculates_tree() -> None:
 
         response = client.post(
             f"/projects/{project_id}/plannings/{second_planning_id}/tasks/move",
-            json={"task_uids": [3], "target_parent_uid": 4, "position": 1},
+            json={"task_uids": [3], "target_parent_uid": 4, "position": 1, "expected_revision": 0},
             headers=headers,
         )
 
@@ -276,7 +276,12 @@ def test_move_group_normalizes_selected_descendant_and_preserves_subtree_order()
 
         response = client.post(
             f"/projects/{project_id}/plannings/{planning_id}/tasks/move",
-            json={"task_uids": [1, 2], "target_parent_uid": None, "position": 2},
+            json={
+                "task_uids": [1, 2],
+                "target_parent_uid": None,
+                "position": 2,
+                "expected_revision": 0,
+            },
             headers=headers,
         )
 
@@ -297,7 +302,12 @@ def test_move_multiple_roots_preserves_current_depth_first_order() -> None:
 
         response = client.post(
             f"/projects/{project_id}/plannings/{planning_id}/tasks/move",
-            json={"task_uids": [3, 5], "target_parent_uid": None, "position": 2},
+            json={
+                "task_uids": [3, 5],
+                "target_parent_uid": None,
+                "position": 2,
+                "expected_revision": 0,
+            },
             headers=headers,
         )
 
@@ -313,7 +323,12 @@ def test_move_task_to_root() -> None:
 
         response = client.post(
             f"/projects/{project_id}/plannings/{planning_id}/tasks/move",
-            json={"task_uids": [3], "target_parent_uid": None, "position": 1},
+            json={
+                "task_uids": [3],
+                "target_parent_uid": None,
+                "position": 1,
+                "expected_revision": 0,
+            },
             headers=headers,
         )
 
@@ -332,10 +347,19 @@ def test_invalid_move_rolls_back_tree() -> None:
         path = f"/projects/{project_id}/plannings/{planning_id}/tasks/move"
 
         cycle = client.post(
-            path, json={"task_uids": [1], "target_parent_uid": 2, "position": 1}, headers=headers
+            path,
+            json={"task_uids": [1], "target_parent_uid": 2, "position": 1, "expected_revision": 0},
+            headers=headers,
         )
         missing = client.post(
-            path, json={"task_uids": [3], "target_parent_uid": 999, "position": 1}, headers=headers
+            path,
+            json={
+                "task_uids": [3],
+                "target_parent_uid": 999,
+                "position": 1,
+                "expected_revision": 0,
+            },
+            headers=headers,
         )
         detail = client.get(f"/projects/{project_id}/plannings/{planning_id}", headers=headers)
 
@@ -380,7 +404,7 @@ def test_move_recalculates_summary_invariants() -> None:
 
         promoted = client.post(
             path,
-            json={"task_uids": [2], "target_parent_uid": 6, "position": 1},
+            json={"task_uids": [2], "target_parent_uid": 6, "position": 1, "expected_revision": 0},
             headers=headers,
         )
 
@@ -392,7 +416,7 @@ def test_move_recalculates_summary_invariants() -> None:
 
         demoted = client.post(
             path,
-            json={"task_uids": [3], "target_parent_uid": 4, "position": 2},
+            json={"task_uids": [3], "target_parent_uid": 4, "position": 2, "expected_revision": 1},
             headers=headers,
         )
 
@@ -495,7 +519,7 @@ def test_move_recalculates_summary_duration_from_assigned_resource_role_calendar
 
         response = client.post(
             f"/projects/{project_id}/plannings/{planning_id}/tasks/move",
-            json={"task_uids": [3], "target_parent_uid": 4, "position": 2},
+            json={"task_uids": [3], "target_parent_uid": 4, "position": 2, "expected_revision": 0},
             headers=headers,
         )
 
@@ -535,7 +559,7 @@ def test_move_rejects_milestone_as_target_parent() -> None:
 
         response = client.post(
             f"/projects/{project_id}/plannings/{planning_id}/tasks/move",
-            json={"task_uids": [2], "target_parent_uid": 6, "position": 1},
+            json={"task_uids": [2], "target_parent_uid": 6, "position": 1, "expected_revision": 0},
             headers=headers,
         )
 
@@ -576,7 +600,7 @@ def test_move_recalculating_summary_with_near_date_max_child_returns_400_not_500
         # recalculates every summary task's duration in the whole tree.
         response = client.post(
             f"/projects/{project_id}/plannings/{planning_id}/tasks/move",
-            json={"task_uids": [6], "target_parent_uid": 4, "position": 1},
+            json={"task_uids": [6], "target_parent_uid": 4, "position": 1, "expected_revision": 0},
             headers=headers,
         )
 
@@ -589,7 +613,7 @@ def test_move_rejects_validated_planning_and_read_only_project() -> None:
         headers = _auth_headers(client)
         project_id = _create_project(client, headers)
         first_planning_id, second_planning_id = _seed_plannings(project_id)
-        move = {"task_uids": [3], "target_parent_uid": None, "position": 1}
+        move = {"task_uids": [3], "target_parent_uid": None, "position": 1, "expected_revision": 0}
         assert (
             client.post(
                 f"/projects/{project_id}/plannings/{first_planning_id}/validate", headers=headers
@@ -614,3 +638,76 @@ def test_move_rejects_validated_planning_and_read_only_project() -> None:
             headers=headers,
         )
         assert read_only.status_code == 409
+
+
+def test_move_revision_conflict_returns_structured_409_without_mutating() -> None:
+    """E4-01/#18: a stale expected_revision must be rejected atomically, and the
+    same stale request replayed after a successful move must still be rejected
+    (no silent duplication of a mutation already applied under a newer revision)."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        _, planning_id = _seed_plannings(project_id)
+        path = f"/projects/{project_id}/plannings/{planning_id}/tasks/move"
+
+        stale = client.post(
+            path,
+            json={
+                "task_uids": [3],
+                "target_parent_uid": None,
+                "position": 1,
+                "expected_revision": 5,
+            },
+            headers=headers,
+        )
+        assert stale.status_code == 409
+        conflict = cast(dict[str, Any], stale.json())["detail"]
+        assert conflict == {
+            "code": "PLANNING_REVISION_CONFLICT",
+            "project_id": project_id,
+            "planning_id": planning_id,
+            "expected_revision": 5,
+            "current_revision": 0,
+        }
+        # A rejected mutation must never advance the revision.
+        detail = client.get(f"/projects/{project_id}/plannings/{planning_id}", headers=headers)
+        assert detail.json()["revision"] == 0
+
+        first_client = client.post(
+            path,
+            json={
+                "task_uids": [3],
+                "target_parent_uid": None,
+                "position": 1,
+                "expected_revision": 0,
+            },
+            headers=headers,
+        )
+        assert first_client.status_code == 200
+        assert first_client.json()["revision"] == 1
+
+        # Replaying the exact same payload (same stale expected_revision) must
+        # not duplicate the move: the planning already moved on, so this is
+        # now itself a stale request and is rejected without any mutation.
+        replay = client.post(
+            path,
+            json={
+                "task_uids": [3],
+                "target_parent_uid": None,
+                "position": 1,
+                "expected_revision": 0,
+            },
+            headers=headers,
+        )
+        assert replay.status_code == 409
+        assert cast(dict[str, Any], replay.json())["detail"] == {
+            "code": "PLANNING_REVISION_CONFLICT",
+            "project_id": project_id,
+            "planning_id": planning_id,
+            "expected_revision": 0,
+            "current_revision": 1,
+        }
+        detail_after_replay = client.get(
+            f"/projects/{project_id}/plannings/{planning_id}", headers=headers
+        )
+        assert detail_after_replay.json()["revision"] == 1

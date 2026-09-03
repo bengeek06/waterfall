@@ -513,6 +513,7 @@ def test_structure_versions_validated_planning_is_immutable_and_reopenable() -> 
                 "project_id",
                 "version_number",
                 "status",
+                "revision",
                 "note",
                 "created_at",
                 "validated_at",

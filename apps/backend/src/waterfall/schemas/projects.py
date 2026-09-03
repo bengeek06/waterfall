@@ -208,6 +208,7 @@ class PlanningRead(BaseModel):
     project_id: int
     version_number: int
     status: Literal["draft", "validated", "superseded"]
+    revision: int
     note: str | None
     created_at: datetime
     validated_at: datetime | None
@@ -235,6 +236,7 @@ class PlanningTaskMove(BaseModel):
     task_uids: list[Annotated[int, Field(ge=1)]] = Field(min_length=1)
     target_parent_uid: int | None = Field(default=None, gt=0)
     position: int = Field(ge=1)
+    expected_revision: int = Field(ge=0)
 
 
 class PlanningTaskCreate(BaseModel):
@@ -334,7 +336,7 @@ class PlanningTaskScheduleUpdate(BaseModel):
 
 
 class FastAPIErrorResponse(BaseModel):
-    detail: str | list[dict[str, object]]
+    detail: str | dict[str, object] | list[dict[str, object]]
 
 
 class ProjectStatusUpdate(BaseModel):

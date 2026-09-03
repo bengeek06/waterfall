@@ -76,6 +76,23 @@ def get_mutable_draft_planning_with_locks(
     return project, planning
 
 
+def raise_on_planning_revision_conflict(
+    project_id: int, planning: WfPlanning, expected_revision: int
+) -> None:
+    """Compare a mutation's expected_revision to the persisted one under the caller's lock."""
+    if planning.revision != expected_revision:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "PLANNING_REVISION_CONFLICT",
+                "project_id": project_id,
+                "planning_id": planning.id,
+                "expected_revision": expected_revision,
+                "current_revision": planning.revision,
+            },
+        )
+
+
 def get_latest_draft_planning(
     db: Session, project_id: int, *, for_update: bool = False
 ) -> WfPlanning | None:
