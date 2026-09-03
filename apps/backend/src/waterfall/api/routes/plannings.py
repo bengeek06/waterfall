@@ -323,8 +323,11 @@ def create_planning_task_route(
     _, planning = get_mutable_draft_planning_with_locks(
         db, project_id, planning_id, current_user.id
     )
+    raise_on_planning_revision_conflict(project_id, planning, payload.expected_revision)
     try:
         create_planning_task(db, planning, payload)
+        planning.revision += 1
+        db.add(planning)
         # Capture the response while the row locks are still held so a concurrent
         # writer cannot make us return a later transaction's state.
         detail = _planning_detail(db, planning)
@@ -380,8 +383,11 @@ def delete_planning_tasks_route(
     _, planning = get_mutable_draft_planning_with_locks(
         db, project_id, planning_id, current_user.id
     )
+    raise_on_planning_revision_conflict(project_id, planning, payload.expected_revision)
     try:
         delete_planning_tasks(db, planning, payload)
+        planning.revision += 1
+        db.add(planning)
         # Capture the response while the row locks are still held so a concurrent
         # writer cannot make us return a later transaction's state.
         detail = _planning_detail(db, planning)
@@ -458,8 +464,11 @@ def update_planning_task_schedule_route(
     _, planning = get_mutable_draft_planning_with_locks(
         db, project_id, planning_id, current_user.id
     )
+    raise_on_planning_revision_conflict(project_id, planning, payload.expected_revision)
     try:
         update_planning_task_schedule(db, planning, task_uid, payload)
+        planning.revision += 1
+        db.add(planning)
         # Capture the response while the row locks are still held so a concurrent
         # writer cannot make us return a later transaction's state.
         detail = _planning_detail(db, planning)
@@ -513,8 +522,11 @@ def replace_task_predecessor_links_route(
     _, planning = get_mutable_draft_planning_with_locks(
         db, project_id, planning_id, current_user.id
     )
+    raise_on_planning_revision_conflict(project_id, planning, payload.expected_revision)
     try:
         replace_task_predecessor_links(db, planning, task_uid, payload.links)
+        planning.revision += 1
+        db.add(planning)
         # Capture the response while the row locks are still held so a concurrent
         # writer cannot make us return a later transaction's state.
         detail = _planning_detail(db, planning)

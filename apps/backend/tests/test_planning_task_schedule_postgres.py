@@ -156,6 +156,7 @@ def test_schedule_update_with_summary_sibling_does_not_raise_on_postgresql(
                 start_at=datetime(2026, 1, 9, 8, 0, tzinfo=UTC),
                 finish_at=datetime(2026, 1, 11, 8, 0, tzinfo=UTC),
                 duration_minutes=500,
+                expected_revision=0,
             )
 
             # This must not raise TypeError on PostgreSQL.

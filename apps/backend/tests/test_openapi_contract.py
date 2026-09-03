@@ -550,7 +550,7 @@ def test_delete_planning_tasks_cascade_confirmation_conflict_matches_declared_sc
 
         response = client.post(
             f"/projects/{project_id}/plannings/{planning_id}/tasks/delete",
-            json={"task_uids": [1]},
+            json={"task_uids": [1], "expected_revision": 0},
             headers=headers,
         )
 
@@ -583,7 +583,7 @@ def test_delete_planning_tasks_task_referenced_conflict_matches_declared_schema(
 
         response = client.post(
             f"/projects/{project_id}/plannings/{planning_id}/tasks/delete",
-            json={"task_uids": [2]},
+            json={"task_uids": [2], "expected_revision": 0},
             headers=headers,
         )
 

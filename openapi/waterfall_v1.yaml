@@ -3018,6 +3018,7 @@ components:
       type: object
       required:
         - name
+        - expected_revision
       properties:
         name:
           type: string
@@ -3036,10 +3037,14 @@ components:
             - integer
             - 'null'
           minimum: 1
+        expected_revision:
+          type: integer
+          minimum: 0
     PlanningTaskDelete:
       type: object
       required:
         - task_uids
+        - expected_revision
       properties:
         task_uids:
           type: array
@@ -3050,6 +3055,9 @@ components:
         confirm_cascade:
           type: boolean
           default: false
+        expected_revision:
+          type: integer
+          minimum: 0
     PlanningDetailRead:
       allOf:
         - $ref: '#/components/schemas/PlanningRead'
@@ -4185,6 +4193,7 @@ components:
       type: object
       required:
         - is_manual
+        - expected_revision
       properties:
         is_manual:
           type: boolean
@@ -4204,6 +4213,9 @@ components:
             - 'null'
           minimum: 0
           maximum: 7884000
+        expected_revision:
+          type: integer
+          minimum: 0
     TaskLinkWrite:
       type: object
       required:
@@ -4257,11 +4269,15 @@ components:
       type: object
       required:
         - links
+        - expected_revision
       properties:
         links:
           type: array
           items:
             $ref: '#/components/schemas/TaskLinkWrite'
+        expected_revision:
+          type: integer
+          minimum: 0
   parameters:
     BatchId:
       name: batchId
@@ -4474,7 +4490,9 @@ components:
           schema:
             $ref: '#/components/schemas/FastAPIErrorResponse'
     CreatePlanningTaskConflict:
-      description: La creation entre en conflit avec le planning
+      description: |-
+        La creation entre en conflit avec le planning, ou `expected_revision` ne
+        correspond plus a la revision persistee (code `PLANNING_REVISION_CONFLICT`).
       content:
         application/json:
           schema:
@@ -4492,7 +4510,7 @@ components:
           schema:
             $ref: '#/components/schemas/FastAPIErrorResponse'
     DeletePlanningTasksConflict:
-      description: Suppression en cascade non confirmee (detail.code=CASCADE_CONFIRMATION_REQUIRED, avec la liste des uid descendants dans detail.descendant_uids), ou tache referencee par un devis, une affectation ou une charge (detail.code=TASK_REFERENCED, avec la liste des uid references dans detail.task_uids). D'autres conflits (planning non brouillon, conflit d'integrite sur la hierarchie) renvoient le detail texte brut generique FastAPI plutot que ce detail structure.
+      description: Suppression en cascade non confirmee (detail.code=CASCADE_CONFIRMATION_REQUIRED, avec la liste des uid descendants dans detail.descendant_uids), ou tache referencee par un devis, une affectation ou une charge (detail.code=TASK_REFERENCED, avec la liste des uid references dans detail.task_uids). D'autres conflits (planning non brouillon, conflit d'integrite sur la hierarchie, `expected_revision` obsolete avec detail.code=PLANNING_REVISION_CONFLICT) renvoient le detail generique FastAPI plutot que ce detail structure.
       content:
         application/json:
           schema:
@@ -4536,7 +4554,9 @@ components:
           schema:
             $ref: '#/components/schemas/FastAPIErrorResponse'
     UpdatePlanningTaskScheduleConflict:
-      description: La mise a jour du planning entre en conflit avec les donnees
+      description: |-
+        La mise a jour du planning entre en conflit avec les donnees, ou `expected_revision`
+        ne correspond plus a la revision persistee (code `PLANNING_REVISION_CONFLICT`).
       content:
         application/json:
           schema:
@@ -4554,7 +4574,9 @@ components:
           schema:
             $ref: '#/components/schemas/FastAPIErrorResponse'
     ReplaceTaskLinksConflict:
-      description: La mise a jour des liens entre en conflit avec le planning
+      description: |-
+        La mise a jour des liens entre en conflit avec le planning, ou `expected_revision`
+        ne correspond plus a la revision persistee (code `PLANNING_REVISION_CONFLICT`).
       content:
         application/json:
           schema:

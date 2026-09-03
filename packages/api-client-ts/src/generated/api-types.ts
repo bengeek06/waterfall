@@ -1404,11 +1404,13 @@ export interface components {
             is_milestone: boolean;
             target_parent_uid?: number | null;
             insert_after_uid?: number | null;
+            expected_revision: number;
         };
         PlanningTaskDelete: {
             task_uids: number[];
             /** @default false */
             confirm_cascade: boolean;
+            expected_revision: number;
         };
         PlanningDetailRead: components["schemas"]["PlanningRead"] & {
             tasks: components["schemas"]["TaskRead"][];
@@ -1773,6 +1775,7 @@ export interface components {
             /** Format: date-time */
             finish_at?: string | null;
             duration_minutes?: number | null;
+            expected_revision: number;
         };
         TaskLinkWrite: {
             predecessor_uid: number;
@@ -1787,6 +1790,7 @@ export interface components {
         };
         TaskLinksReplace: {
             links: components["schemas"]["TaskLinkWrite"][];
+            expected_revision: number;
         };
     };
     responses: {
@@ -1910,7 +1914,10 @@ export interface components {
                 "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
-        /** @description La creation entre en conflit avec le planning */
+        /**
+         * @description La creation entre en conflit avec le planning, ou `expected_revision` ne
+         *     correspond plus a la revision persistee (code `PLANNING_REVISION_CONFLICT`).
+         */
         CreatePlanningTaskConflict: {
             headers: {
                 [name: string]: unknown;
@@ -1937,7 +1944,7 @@ export interface components {
                 "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
-        /** @description Suppression en cascade non confirmee (detail.code=CASCADE_CONFIRMATION_REQUIRED, avec la liste des uid descendants dans detail.descendant_uids), ou tache referencee par un devis, une affectation ou une charge (detail.code=TASK_REFERENCED, avec la liste des uid references dans detail.task_uids). D'autres conflits (planning non brouillon, conflit d'integrite sur la hierarchie) renvoient le detail texte brut generique FastAPI plutot que ce detail structure. */
+        /** @description Suppression en cascade non confirmee (detail.code=CASCADE_CONFIRMATION_REQUIRED, avec la liste des uid descendants dans detail.descendant_uids), ou tache referencee par un devis, une affectation ou une charge (detail.code=TASK_REFERENCED, avec la liste des uid references dans detail.task_uids). D'autres conflits (planning non brouillon, conflit d'integrite sur la hierarchie, `expected_revision` obsolete avec detail.code=PLANNING_REVISION_CONFLICT) renvoient le detail generique FastAPI plutot que ce detail structure. */
         DeletePlanningTasksConflict: {
             headers: {
                 [name: string]: unknown;
@@ -2000,7 +2007,10 @@ export interface components {
                 "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
-        /** @description La mise a jour du planning entre en conflit avec les donnees */
+        /**
+         * @description La mise a jour du planning entre en conflit avec les donnees, ou `expected_revision`
+         *     ne correspond plus a la revision persistee (code `PLANNING_REVISION_CONFLICT`).
+         */
         UpdatePlanningTaskScheduleConflict: {
             headers: {
                 [name: string]: unknown;
@@ -2027,7 +2037,10 @@ export interface components {
                 "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
-        /** @description La mise a jour des liens entre en conflit avec le planning */
+        /**
+         * @description La mise a jour des liens entre en conflit avec le planning, ou `expected_revision`
+         *     ne correspond plus a la revision persistee (code `PLANNING_REVISION_CONFLICT`).
+         */
         ReplaceTaskLinksConflict: {
             headers: {
                 [name: string]: unknown;

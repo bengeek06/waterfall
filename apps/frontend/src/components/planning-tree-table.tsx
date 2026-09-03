@@ -295,7 +295,10 @@ type PlanningTreeTableProps = Readonly<{
   versionKey: number | string | null;
   readOnly?: boolean;
   onMove?: (command: PlanningMoveCommand) => void;
-  onScheduleUpdate?: (taskUid: number, payload: PlanningTaskScheduleUpdate) => Promise<boolean>;
+  onScheduleUpdate?: (
+    taskUid: number,
+    payload: Omit<PlanningTaskScheduleUpdate, "expected_revision">,
+  ) => Promise<boolean>;
   /** Replaces the full predecessor link list of one task; rejects with a user-facing message on failure. */
   onEditLinks?: (payload: { taskUid: number; links: TaskLinkWrite[] }) => Promise<void>;
   /** Creates a single new task at an explicit position; errors are reported by the parent's own error state. */
@@ -538,7 +541,7 @@ export function PlanningTreeTable({
       return;
     }
     const draft = scheduleDraftFor(row);
-    let payload: PlanningTaskScheduleUpdate;
+    let payload: Omit<PlanningTaskScheduleUpdate, "expected_revision">;
     if (row.is_milestone) {
       // A milestone only exposes its start date: duration and finish are always forced by the
       // server, so omitting them here avoids conflicting with a stale finish_at/duration.
@@ -596,7 +599,7 @@ export function PlanningTreeTable({
     if (!onScheduleUpdate || mutationBusy) {
       return;
     }
-    const payload: PlanningTaskScheduleUpdate = row.is_milestone
+    const payload: Omit<PlanningTaskScheduleUpdate, "expected_revision"> = row.is_milestone
       ? { is_manual: isManual, start_at: row.start_at ?? null }
       : {
           is_manual: isManual,

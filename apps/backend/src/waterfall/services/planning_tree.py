@@ -1204,6 +1204,11 @@ def _cascade_successor_schedules(
                 is_manual=False,
                 duration_minutes=None if candidate.is_milestone else candidate.duration_minutes,
                 start_at=_to_naive_utc(candidate.start_at),
+                # Internal cascade re-derivation, not a client request: the
+                # route already checked/incremented the planning's revision
+                # once for the top-level edit, and nothing downstream reads
+                # this field off a synthetic payload.
+                expected_revision=0,
             )
         except ValidationError as exc:
             raise PlanningTaskScheduleError(

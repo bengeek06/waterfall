@@ -325,7 +325,7 @@ def test_delete_planning_task_referenced_by_cost_line_conflicts_without_mutation
 
         delete_response: Response = client.post(
             f"/projects/{project_id}/plannings/{planning_id}/tasks/delete",
-            json={"task_uids": [1001]},
+            json={"task_uids": [1001], "expected_revision": 0},
             headers=headers,
         )
         assert delete_response.status_code == 409
@@ -381,7 +381,7 @@ def test_delete_planning_task_referenced_by_parent_task_row_conflicts_without_mu
 
         delete_response: Response = client.post(
             f"/projects/{project_id}/plannings/{planning_id}/tasks/delete",
-            json={"task_uids": [1001]},
+            json={"task_uids": [1001], "expected_revision": 0},
             headers=headers,
         )
         assert delete_response.status_code == 409

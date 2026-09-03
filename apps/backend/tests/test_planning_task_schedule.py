@@ -199,6 +199,7 @@ def test_manual_task_stores_dates_verbatim_without_recalculation() -> None:
                 "start_at": "2026-01-09T08:00:00Z",
                 "finish_at": "2026-01-11T08:00:00Z",
                 "duration_minutes": 500,
+                "expected_revision": 0,
             },
             headers=headers,
         )
@@ -240,6 +241,7 @@ def test_manual_task_without_parent_skips_ancestor_recalculation() -> None:
                 "is_manual": True,
                 "start_at": "2026-03-01T08:00:00Z",
                 "finish_at": "2026-03-01T09:00:00Z",
+                "expected_revision": 0,
             },
             headers=headers,
         )
@@ -258,7 +260,7 @@ def test_manual_task_requires_start_at() -> None:
 
         response = client.patch(
             _schedule_path(project_id, planning_id, 3),
-            json={"is_manual": True, "duration_minutes": 100},
+            json={"is_manual": True, "duration_minutes": 100, "expected_revision": 0},
             headers=headers,
         )
 
@@ -278,6 +280,7 @@ def test_manual_task_rejects_finish_before_start() -> None:
                 "is_manual": True,
                 "start_at": "2026-01-10T08:00:00Z",
                 "finish_at": "2026-01-09T08:00:00Z",
+                "expected_revision": 0,
             },
             headers=headers,
         )
@@ -293,7 +296,7 @@ def test_automatic_task_requires_positive_duration() -> None:
 
         response = client.patch(
             _schedule_path(project_id, planning_id, 3),
-            json={"is_manual": False, "start_at": "2026-01-05T08:00:00Z"},
+            json={"is_manual": False, "start_at": "2026-01-05T08:00:00Z", "expected_revision": 0},
             headers=headers,
         )
 
@@ -313,6 +316,7 @@ def test_automatic_task_without_predecessor_uses_payload_start_at() -> None:
                 "is_manual": False,
                 "start_at": "2026-01-20T08:00:00Z",
                 "duration_minutes": 90,
+                "expected_revision": 0,
             },
             headers=headers,
         )
@@ -344,7 +348,7 @@ def test_automatic_task_without_predecessor_falls_back_to_stored_start_at() -> N
 
         response = client.patch(
             _schedule_path(project_id, planning_id, 3),
-            json={"is_manual": False, "duration_minutes": 60},
+            json={"is_manual": False, "duration_minutes": 60, "expected_revision": 0},
             headers=headers,
         )
 
@@ -362,7 +366,7 @@ def test_automatic_task_without_predecessor_or_any_start_at_is_rejected() -> Non
 
         response = client.patch(
             _schedule_path(project_id, planning_id, 3),
-            json={"is_manual": False, "duration_minutes": 60},
+            json={"is_manual": False, "duration_minutes": 60, "expected_revision": 0},
             headers=headers,
         )
 
@@ -379,7 +383,7 @@ def test_automatic_task_finish_start_predecessor_sets_start_after_predecessor_fi
 
         response = client.patch(
             _schedule_path(project_id, planning_id, 3),
-            json={"is_manual": False, "duration_minutes": 240},
+            json={"is_manual": False, "duration_minutes": 240, "expected_revision": 0},
             headers=headers,
         )
 
@@ -402,7 +406,7 @@ def test_automatic_task_multiple_predecessors_uses_latest_constraint() -> None:
 
         response = client.patch(
             _schedule_path(project_id, planning_id, 3),
-            json={"is_manual": False, "duration_minutes": 240},
+            json={"is_manual": False, "duration_minutes": 240, "expected_revision": 0},
             headers=headers,
         )
 
@@ -453,7 +457,7 @@ def test_automatic_task_working_day_lag_format_resolves_through_calendar_skippin
 
         response = client.patch(
             _schedule_path(project_id, planning_id, 3),
-            json={"is_manual": False, "duration_minutes": 60},
+            json={"is_manual": False, "duration_minutes": 60, "expected_revision": 0},
             headers=headers,
         )
 
@@ -513,7 +517,7 @@ def test_automatic_task_negative_working_day_lag_resolves_through_calendar_skipp
 
         response = client.patch(
             _schedule_path(project_id, planning_id, 3),
-            json={"is_manual": False, "duration_minutes": 60},
+            json={"is_manual": False, "duration_minutes": 60, "expected_revision": 0},
             headers=headers,
         )
 
@@ -566,7 +570,7 @@ def test_automatic_task_short_negative_lag_stays_within_the_anchors_own_day() ->
 
         response = client.patch(
             _schedule_path(project_id, planning_id, 3),
-            json={"is_manual": False, "duration_minutes": 60},
+            json={"is_manual": False, "duration_minutes": 60, "expected_revision": 0},
             headers=headers,
         )
 
@@ -610,7 +614,7 @@ def test_automatic_task_negative_elapsed_lag_format_keeps_raw_wall_clock_arithme
 
         response = client.patch(
             _schedule_path(project_id, planning_id, 3),
-            json={"is_manual": False, "duration_minutes": 60},
+            json={"is_manual": False, "duration_minutes": 60, "expected_revision": 0},
             headers=headers,
         )
 
@@ -642,7 +646,7 @@ def test_automatic_task_sub_minute_lag_preserves_fractional_offset() -> None:
 
         response = client.patch(
             _schedule_path(project_id, planning_id, 3),
-            json={"is_manual": False, "duration_minutes": 60},
+            json={"is_manual": False, "duration_minutes": 60, "expected_revision": 0},
             headers=headers,
         )
 
@@ -695,7 +699,7 @@ def test_automatic_task_sub_minute_lag_that_exactly_exhausts_a_days_capacity_rol
 
         response = client.patch(
             _schedule_path(project_id, planning_id, 3),
-            json={"is_manual": False, "duration_minutes": 60},
+            json={"is_manual": False, "duration_minutes": 60, "expected_revision": 0},
             headers=headers,
         )
 
@@ -751,7 +755,7 @@ def test_automatic_task_negative_sub_minute_lag_exhausting_a_days_capacity_rolls
 
         response = client.patch(
             _schedule_path(project_id, planning_id, 3),
-            json={"is_manual": False, "duration_minutes": 60},
+            json={"is_manual": False, "duration_minutes": 60, "expected_revision": 0},
             headers=headers,
         )
 
@@ -796,7 +800,7 @@ def test_automatic_task_elapsed_lag_format_keeps_raw_wall_clock_arithmetic() -> 
 
         response = client.patch(
             _schedule_path(project_id, planning_id, 3),
-            json={"is_manual": False, "duration_minutes": 60},
+            json={"is_manual": False, "duration_minutes": 60, "expected_revision": 0},
             headers=headers,
         )
 
@@ -822,7 +826,7 @@ def test_automatic_task_missing_lag_format_keeps_raw_wall_clock_arithmetic() -> 
 
         response = client.patch(
             _schedule_path(project_id, planning_id, 3),
-            json={"is_manual": False, "duration_minutes": 240},
+            json={"is_manual": False, "duration_minutes": 240, "expected_revision": 0},
             headers=headers,
         )
 
@@ -859,7 +863,7 @@ def test_automatic_task_finish_finish_predecessor_resolves_exact_calendar_aware_
 
         response = client.patch(
             _schedule_path(project_id, planning_id, 3),
-            json={"is_manual": False, "duration_minutes": 240},
+            json={"is_manual": False, "duration_minutes": 240, "expected_revision": 0},
             headers=headers,
         )
 
@@ -884,7 +888,7 @@ def test_automatic_task_start_finish_predecessor_resolves_exact_calendar_aware_s
 
         response = client.patch(
             _schedule_path(project_id, planning_id, 3),
-            json={"is_manual": False, "duration_minutes": 240},
+            json={"is_manual": False, "duration_minutes": 240, "expected_revision": 0},
             headers=headers,
         )
 
@@ -947,7 +951,7 @@ def test_automatic_task_finish_finish_predecessor_resolves_through_calendar_skip
 
         response = client.patch(
             _schedule_path(project_id, planning_id, 3),
-            json={"is_manual": False, "duration_minutes": 60},
+            json={"is_manual": False, "duration_minutes": 60, "expected_revision": 0},
             headers=headers,
         )
 
@@ -1003,7 +1007,7 @@ def test_automatic_task_start_finish_predecessor_resolves_through_calendar_skipp
 
         response = client.patch(
             _schedule_path(project_id, planning_id, 3),
-            json={"is_manual": False, "duration_minutes": 60},
+            json={"is_manual": False, "duration_minutes": 60, "expected_revision": 0},
             headers=headers,
         )
 
@@ -1055,7 +1059,7 @@ def test_automatic_task_finish_finish_target_on_non_working_day_falls_back_to_mo
 
         response = client.patch(
             _schedule_path(project_id, planning_id, 3),
-            json={"is_manual": False, "duration_minutes": 60},
+            json={"is_manual": False, "duration_minutes": 60, "expected_revision": 0},
             headers=headers,
         )
 
@@ -1090,7 +1094,7 @@ def test_automatic_task_start_finish_target_on_non_working_day_falls_back_to_mon
 
         response = client.patch(
             _schedule_path(project_id, planning_id, 3),
-            json={"is_manual": False, "duration_minutes": 60},
+            json={"is_manual": False, "duration_minutes": 60, "expected_revision": 0},
             headers=headers,
         )
 
@@ -1165,6 +1169,7 @@ def test_automatic_task_uses_assigned_role_calendar_for_duration() -> None:
                 "is_manual": False,
                 "start_at": "2026-01-05T08:00:00Z",
                 "duration_minutes": 1200,
+                "expected_revision": 0,
             },
             headers=headers,
         )
@@ -1186,7 +1191,7 @@ def test_summary_task_rejects_direct_schedule_edit() -> None:
 
         response = client.patch(
             _schedule_path(project_id, planning_id, 2),
-            json={"is_manual": True, "start_at": "2026-01-05T08:00:00Z"},
+            json={"is_manual": True, "start_at": "2026-01-05T08:00:00Z", "expected_revision": 0},
             headers=headers,
         )
 
@@ -1202,7 +1207,7 @@ def test_milestone_forces_zero_duration_and_matching_finish_at() -> None:
 
         response = client.patch(
             _schedule_path(project_id, planning_id, 5),
-            json={"is_manual": True, "start_at": "2026-02-01T09:00:00Z"},
+            json={"is_manual": True, "start_at": "2026-02-01T09:00:00Z", "expected_revision": 0},
             headers=headers,
         )
 
@@ -1225,6 +1230,7 @@ def test_milestone_rejects_explicit_nonzero_duration() -> None:
                 "is_manual": True,
                 "start_at": "2026-02-01T09:00:00Z",
                 "duration_minutes": 120,
+                "expected_revision": 0,
             },
             headers=headers,
         )
@@ -1245,6 +1251,7 @@ def test_milestone_rejects_explicit_finish_at_different_from_start_at() -> None:
                 "is_manual": True,
                 "start_at": "2026-02-01T09:00:00Z",
                 "finish_at": "2026-02-02T09:00:00Z",
+                "expected_revision": 0,
             },
             headers=headers,
         )
@@ -1260,7 +1267,7 @@ def test_milestone_without_any_start_at_is_rejected() -> None:
 
         response = client.patch(
             _schedule_path(project_id, planning_id, 5),
-            json={"is_manual": True},
+            json={"is_manual": True, "expected_revision": 0},
             headers=headers,
         )
 
@@ -1275,7 +1282,7 @@ def test_automatic_milestone_without_predecessor_uses_payload_start_at() -> None
 
         response = client.patch(
             _schedule_path(project_id, planning_id, 5),
-            json={"is_manual": False, "start_at": "2026-02-01T09:00:00Z"},
+            json={"is_manual": False, "start_at": "2026-02-01T09:00:00Z", "expected_revision": 0},
             headers=headers,
         )
 
@@ -1296,7 +1303,7 @@ def test_automatic_milestone_finish_start_predecessor_sets_start_after_predecess
 
         response = client.patch(
             _schedule_path(project_id, planning_id, 5),
-            json={"is_manual": False},
+            json={"is_manual": False, "expected_revision": 0},
             headers=headers,
         )
 
@@ -1320,7 +1327,7 @@ def test_automatic_milestone_multiple_predecessors_uses_latest_constraint() -> N
 
         response = client.patch(
             _schedule_path(project_id, planning_id, 5),
-            json={"is_manual": False},
+            json={"is_manual": False, "expected_revision": 0},
             headers=headers,
         )
 
@@ -1338,7 +1345,7 @@ def test_automatic_milestone_without_predecessor_or_any_start_at_is_rejected() -
 
         response = client.patch(
             _schedule_path(project_id, planning_id, 5),
-            json={"is_manual": False},
+            json={"is_manual": False, "expected_revision": 0},
             headers=headers,
         )
 
@@ -1368,7 +1375,7 @@ def test_editing_predecessor_reschedules_automatic_successor() -> None:
 
         automatic_response = client.patch(
             _schedule_path(project_id, planning_id, 3),
-            json={"is_manual": False, "duration_minutes": 240},
+            json={"is_manual": False, "duration_minutes": 240, "expected_revision": 0},
             headers=headers,
         )
         assert automatic_response.status_code == 200
@@ -1384,6 +1391,7 @@ def test_editing_predecessor_reschedules_automatic_successor() -> None:
                 "is_manual": True,
                 "start_at": "2026-02-01T08:00:00Z",
                 "finish_at": "2026-02-01T09:00:00Z",
+                "expected_revision": 1,
             },
             headers=headers,
         )
@@ -1448,6 +1456,7 @@ def test_automatic_task_schedule_cascades_across_a_chain() -> None:
                 "is_manual": True,
                 "start_at": "2026-03-02T08:00:00Z",
                 "finish_at": "2026-03-02T10:00:00Z",
+                "expected_revision": 0,
             },
             headers=headers,
         )
@@ -1529,6 +1538,7 @@ def test_automatic_task_schedule_cascades_diamond_using_both_updated_predecessor
                 "is_manual": True,
                 "start_at": "2026-03-02T08:00:00Z",
                 "finish_at": "2026-03-02T10:00:00Z",
+                "expected_revision": 0,
             },
             headers=headers,
         )
@@ -1567,6 +1577,7 @@ def test_manual_successor_is_never_rescheduled_when_predecessor_changes() -> Non
                 "is_manual": True,
                 "start_at": "2026-01-10T08:00:00Z",
                 "finish_at": "2026-01-10T09:00:00Z",
+                "expected_revision": 0,
             },
             headers=headers,
         )
@@ -1578,6 +1589,7 @@ def test_manual_successor_is_never_rescheduled_when_predecessor_changes() -> Non
                 "is_manual": True,
                 "start_at": "2026-03-02T08:00:00Z",
                 "finish_at": "2026-03-02T10:00:00Z",
+                "expected_revision": 1,
             },
             headers=headers,
         )
@@ -1645,6 +1657,7 @@ def test_manual_successor_interrupts_cascade_but_a_second_live_predecessor_still
                 "is_manual": True,
                 "start_at": "2026-03-02T08:00:00Z",
                 "finish_at": "2026-03-02T10:00:00Z",
+                "expected_revision": 0,
             },
             headers=headers,
         )
@@ -1704,6 +1717,7 @@ def test_cascade_leaves_a_successor_with_unset_is_manual_untouched() -> None:
                 "is_manual": True,
                 "start_at": "2026-03-02T08:00:00Z",
                 "finish_at": "2026-03-02T10:00:00Z",
+                "expected_revision": 0,
             },
             headers=headers,
         )
@@ -1761,6 +1775,7 @@ def test_cascade_successor_with_out_of_range_stored_duration_returns_400_not_500
                 "is_manual": True,
                 "start_at": "2026-03-02T08:00:00Z",
                 "finish_at": "2026-03-02T10:00:00Z",
+                "expected_revision": 0,
             },
             headers=headers,
         )
@@ -1812,6 +1827,7 @@ def test_cascade_milestone_successor_ignores_stray_stored_duration() -> None:
                 "is_manual": True,
                 "start_at": "2026-03-02T08:00:00Z",
                 "finish_at": "2026-03-02T10:00:00Z",
+                "expected_revision": 0,
             },
             headers=headers,
         )
@@ -1871,6 +1887,7 @@ def test_cascade_successor_with_zero_stored_duration_returns_400_attributed_to_c
                 "is_manual": True,
                 "start_at": "2026-03-02T08:00:00Z",
                 "finish_at": "2026-03-02T10:00:00Z",
+                "expected_revision": 0,
             },
             headers=headers,
         )
@@ -1939,6 +1956,7 @@ def test_cascade_does_not_propagate_through_a_summary_task_acting_as_a_predecess
                 "is_manual": True,
                 "start_at": "2026-02-01T08:00:00Z",
                 "finish_at": "2026-02-01T09:00:00Z",
+                "expected_revision": 0,
             },
             headers=headers,
         )
@@ -1988,7 +2006,7 @@ def test_editing_a_milestone_cascades_to_its_own_automatic_successor() -> None:
 
         response = client.patch(
             _schedule_path(project_id, planning_id, 5),
-            json={"is_manual": True, "start_at": "2026-03-02T08:00:00Z"},
+            json={"is_manual": True, "start_at": "2026-03-02T08:00:00Z", "expected_revision": 0},
             headers=headers,
         )
 
@@ -2079,6 +2097,7 @@ def test_automatic_task_start_at_near_datetime_max_returns_400_not_500() -> None
                 "is_manual": False,
                 "start_at": "9999-12-31T00:00:00Z",
                 "duration_minutes": 1441,
+                "expected_revision": 0,
             },
             headers=headers,
         )
@@ -2129,6 +2148,7 @@ def test_automatic_task_sparse_calendar_duration_rejected_without_hanging() -> N
                 # working minutes than a 1 min/day, 1 day/week calendar
                 # could ever plausibly absorb within the iteration ceiling.
                 "duration_minutes": 7_000_000,
+                "expected_revision": 0,
             },
             headers=headers,
         )
@@ -2166,6 +2186,7 @@ def test_manual_task_near_date_max_recalculating_ancestor_summary_returns_400_no
                 "is_manual": True,
                 "start_at": "2026-01-05T08:00:00Z",
                 "finish_at": "9999-12-31T00:00:00Z",
+                "expected_revision": 0,
             },
             headers=headers,
         )
@@ -2179,7 +2200,11 @@ def test_schedule_update_rejects_validated_planning_and_read_only_project() -> N
         headers = _auth_headers(client)
         project_id = _create_project(client, headers)
         planning_id = _seed_hierarchy(project_id)
-        payload = {"is_manual": True, "start_at": "2026-01-05T08:00:00Z"}
+        payload = {
+            "is_manual": True,
+            "start_at": "2026-01-05T08:00:00Z",
+            "expected_revision": 0,
+        }
 
         assert (
             client.post(
@@ -2242,6 +2267,7 @@ def test_schedule_update_rejects_duration_minutes_above_upper_bound() -> None:
                 "is_manual": True,
                 "start_at": "2026-01-05T08:00:00Z",
                 "duration_minutes": 7_884_001,
+                "expected_revision": 0,
             },
             headers=headers,
         )
@@ -2265,6 +2291,7 @@ def test_schedule_update_accepts_duration_minutes_at_upper_bound() -> None:
                 "is_manual": True,
                 "start_at": "2026-01-05T08:00:00Z",
                 "duration_minutes": 7_884_000,
+                "expected_revision": 0,
             },
             headers=headers,
         )
@@ -2280,8 +2307,38 @@ def test_schedule_update_returns_404_for_unknown_task() -> None:
 
         response = client.patch(
             _schedule_path(project_id, planning_id, 999),
-            json={"is_manual": True, "start_at": "2026-01-05T08:00:00Z"},
+            json={"is_manual": True, "start_at": "2026-01-05T08:00:00Z", "expected_revision": 0},
             headers=headers,
         )
 
         assert response.status_code == 404
+
+
+def test_schedule_update_revision_conflict_returns_structured_409_without_mutating() -> None:
+    """E4-01/#18: schedule update shares move's raise_on_planning_revision_conflict guard."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_hierarchy(project_id)
+
+        response = client.patch(
+            _schedule_path(project_id, planning_id, 3),
+            json={
+                "is_manual": True,
+                "start_at": "2026-01-05T08:00:00Z",
+                "expected_revision": 5,
+            },
+            headers=headers,
+        )
+
+        assert response.status_code == 409
+        assert cast(dict[str, Any], response.json())["detail"] == {
+            "code": "PLANNING_REVISION_CONFLICT",
+            "project_id": project_id,
+            "planning_id": planning_id,
+            "expected_revision": 5,
+            "current_revision": 0,
+        }
+        detail = client.get(f"/projects/{project_id}/plannings/{planning_id}", headers=headers)
+        assert detail.json()["revision"] == 0
+        assert _tasks_by_uid(cast(dict[str, Any], detail.json()))[3]["start_at"] is None

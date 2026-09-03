@@ -314,7 +314,7 @@ def test_task_mutations_target_displayed_draft_snapshot() -> None:
 
         create = client.post(
             f"/projects/{project_id}/plannings/{planning_id}/tasks",
-            json={"name": "Draft task"},
+            json={"name": "Draft task", "expected_revision": 0},
             headers=headers,
         )
         assert create.status_code == 200
@@ -329,7 +329,7 @@ def test_task_mutations_target_displayed_draft_snapshot() -> None:
         # confirming the cascade.
         summary_delete = client.post(
             f"/projects/{project_id}/plannings/{planning_id}/tasks/delete",
-            json={"task_uids": [summary_uid]},
+            json={"task_uids": [summary_uid], "expected_revision": 1},
             headers=headers,
         )
         assert summary_delete.status_code == 409
@@ -338,7 +338,7 @@ def test_task_mutations_target_displayed_draft_snapshot() -> None:
         # A leaf task added to the displayed draft snapshot can be removed.
         leaf_delete = client.post(
             f"/projects/{project_id}/plannings/{planning_id}/tasks/delete",
-            json={"task_uids": [new_uid]},
+            json={"task_uids": [new_uid], "expected_revision": 1},
             headers=headers,
         )
         assert leaf_delete.status_code == 200
@@ -403,7 +403,7 @@ def test_regenerate_structure_preserves_manual_tasks() -> None:
         ]
         created = client.post(
             f"/projects/{project_id}/plannings/{planning_id}/tasks",
-            json={"name": "Manual task"},
+            json={"name": "Manual task", "expected_revision": 0},
             headers=headers,
         )
         assert created.status_code == 200

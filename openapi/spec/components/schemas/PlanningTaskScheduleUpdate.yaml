@@ -1,6 +1,7 @@
 type: object
 required:
 - is_manual
+- expected_revision
 properties:
   is_manual:
     type: boolean
@@ -14,3 +15,6 @@ properties:
     type: [integer, "null"]
     minimum: 0
     maximum: 7884000
+  expected_revision:
+    type: integer
+    minimum: 0

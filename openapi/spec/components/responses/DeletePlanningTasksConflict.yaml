@@ -4,7 +4,8 @@ description: >-
   referencee par un devis, une affectation ou une charge
   (detail.code=TASK_REFERENCED, avec la liste des uid references dans
   detail.task_uids). D'autres conflits (planning non brouillon, conflit
-  d'integrite sur la hierarchie) renvoient le detail texte brut generique
+  d'integrite sur la hierarchie, `expected_revision` obsolete avec
+  detail.code=PLANNING_REVISION_CONFLICT) renvoient le detail generique
   FastAPI plutot que ce detail structure.
 content:
   application/json:

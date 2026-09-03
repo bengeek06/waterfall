@@ -1,4 +1,6 @@
-description: La mise a jour du planning entre en conflit avec les donnees
+description: |-
+  La mise a jour du planning entre en conflit avec les donnees, ou `expected_revision`
+  ne correspond plus a la revision persistee (code `PLANNING_REVISION_CONFLICT`).
 content:
   application/json:
     schema:

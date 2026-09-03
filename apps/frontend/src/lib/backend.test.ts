@@ -114,7 +114,7 @@ describe("getPlanningTaskDeleteConflict", () => {
       await deletePlanningTasks(
         1,
         7,
-        { task_uids: [1], confirm_cascade: false },
+        { task_uids: [1], confirm_cascade: false, expected_revision: 0 },
         { accessToken: "token" },
         vi.fn(),
       );
@@ -147,7 +147,7 @@ describe("getPlanningTaskDeleteConflict", () => {
       await deletePlanningTasks(
         1,
         7,
-        { task_uids: [4], confirm_cascade: true },
+        { task_uids: [4], confirm_cascade: true, expected_revision: 0 },
         { accessToken: "token" },
         vi.fn(),
       );
