@@ -67,10 +67,13 @@ def _task_kwargs(task: Any, planning_id: int) -> dict[str, object]:
 
 
 def import_tasks_and_links(
-    db: Session, xml_bytes: bytes, project: MsProject
+    db: Session,
+    xml_bytes: bytes,
+    project: MsProject,
+    parsed_project: ParsedProject | None = None,
 ) -> tuple[int, int, tuple[dict[str, object], ...]]:
     ensure_project_mutable(project)
-    parsed = parse_msproject_xml(xml_bytes)
+    parsed = parsed_project if parsed_project is not None else parse_msproject_xml(xml_bytes)
     _apply_project_metadata(project, parsed)
     db.add(project)
     db.flush()

@@ -123,13 +123,16 @@ def _seed_project_with_pending_batch(session: Session, tmp_path: Path) -> tuple[
 def test_run_batch_queues_behind_project_lock(
     postgres_app_database_url: str,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     dry_run: bool,
 ) -> None:
-    """Both the dry-run and confirmation paths must queue behind a held project lock."""
-    from waterfall.api.routes.imports import run_batch
+    """Both paths must read and parse the XML before ever requesting the project lock."""
+    import waterfall.api.routes.imports as imports_module
     from waterfall.api.routes.project_access import get_mutable_project_lock
     from waterfall.models.user import User
+    from waterfall.models.wf_core import WfImportBatch
     from waterfall.schemas.imports import ImportRunRequest
+    from waterfall.services.msproject_xml import ParsedProject
 
     engine = create_engine(postgres_app_database_url, future=True)
     session_factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
@@ -148,13 +151,34 @@ def test_run_batch_queues_behind_project_lock(
             session_b.execute(text("SET LOCAL lock_timeout = '200ms'"))
             current_user = User(id=owner_id)
 
+            completed = {"read": False, "parse": False}
+            real_read_source_xml = imports_module._read_source_xml  # pyright: ignore[reportPrivateUsage]
+            real_parse = imports_module.parse_msproject_xml
+
+            def traced_read(batch: WfImportBatch) -> bytes:
+                xml_bytes = real_read_source_xml(batch)
+                completed["read"] = True
+                return xml_bytes
+
+            def traced_parse(xml_bytes: bytes) -> ParsedProject:
+                parsed = real_parse(xml_bytes)
+                completed["parse"] = True
+                return parsed
+
+            monkeypatch.setattr(imports_module, "_read_source_xml", traced_read)
+            monkeypatch.setattr(imports_module, "parse_msproject_xml", traced_parse)
+
             with pytest.raises(OperationalError, match="lock timeout"):
-                run_batch(
+                imports_module.run_batch(
                     batch_id,
                     ImportRunRequest(dryRun=dry_run, confirm=not dry_run),
                     db=session_b,
                     current_user=current_user,
                 )
+
+            assert completed["read"], "XML must be read before the project lock is requested"
+            assert completed["parse"], "XML must be parsed before the project lock is requested"
+
             session_b.rollback()
             session_a.rollback()
         finally:
@@ -214,7 +238,7 @@ def test_run_batch_rejects_stale_source_after_concurrent_reupload(
                     current_user=current_user,
                 )
             assert excinfo.value.status_code == 409
-            assert excinfo.value.detail == "Batch is not pending"
+            assert excinfo.value.detail == "Uploaded XML changed concurrently; re-run the batch"
         finally:
             session_b.close()
     finally:

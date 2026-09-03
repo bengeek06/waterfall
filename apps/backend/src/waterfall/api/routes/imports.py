@@ -37,7 +37,11 @@ from waterfall.schemas.imports import (
 )
 from waterfall.services.import_diff import build_import_diff
 from waterfall.services.import_v1 import import_tasks_and_links
-from waterfall.services.msproject_xml import MsProjectValidationError, parse_msproject_xml
+from waterfall.services.msproject_xml import (
+    MsProjectValidationError,
+    ParsedProject,
+    parse_msproject_xml,
+)
 from waterfall.services.project_lifecycle import ensure_project_mutable
 
 router = APIRouter(prefix="/imports/v1/batches", tags=["imports-v1"])
@@ -312,8 +316,13 @@ def _relock_pending_batch(
     # Re-read under the project lock: a concurrent writer may have finished the
     # batch, or replaced its uploaded XML, while it was read/parsed unlocked.
     db.refresh(batch)
-    if batch.status != "pending" or batch.source_sha256 != expected_sha256:
+    if batch.status != "pending":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Batch is not pending")
+    if batch.source_sha256 != expected_sha256:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Uploaded XML changed concurrently; re-run the batch",
+        )
     return project
 
 
@@ -348,12 +357,12 @@ def _run_dry_validation(
     return ImportRunAcceptedResponse(batchId=batch.id, status="pending", acceptedAt=accepted_at)
 
 
-def _reject_diff_conflicts(db: Session, project: MsProject, xml_bytes: bytes) -> None:
+def _reject_diff_conflicts(
+    db: Session, project: MsProject, parsed_project: ParsedProject | None
+) -> None:
     # Reject referenced tasks that the diff preview flagged as conflicts before
     # mutating any state, keeping the batch reusable (still pending).
-    try:
-        parsed_project = parse_msproject_xml(xml_bytes)
-    except MsProjectValidationError:
+    if parsed_project is None:
         return
     conflicting_uids = [
         item["uid"]
@@ -405,6 +414,7 @@ def _apply_confirmed_import(
     project_id: int,
     owner_id: int,
     xml_bytes: bytes,
+    parsed_project: ParsedProject | None,
     stored_payload: dict[str, Any],
 ) -> None:
     try:
@@ -421,7 +431,9 @@ def _apply_confirmed_import(
             .first()
             is not None
         )
-        task_count, link_count, import_warnings = import_tasks_and_links(db, xml_bytes, project)
+        task_count, link_count, import_warnings = import_tasks_and_links(
+            db, xml_bytes, project, parsed_project
+        )
         batch.status = "success"
         batch.finished_at = datetime.now(UTC)
         stored_payload["counters"] = {"tasks": task_count, "links": link_count}
@@ -467,13 +479,16 @@ def _run_confirmed_import(
     owner_id: int,
     expected_sha256: str | None,
     xml_bytes: bytes,
+    parsed_project: ParsedProject | None,
     stored_payload: dict[str, Any],
     accepted_at: datetime,
 ) -> ImportRunAcceptedResponse:
     project = _relock_pending_batch(db, batch, project_id, owner_id, expected_sha256)
-    _reject_diff_conflicts(db, project, xml_bytes)
+    _reject_diff_conflicts(db, project, parsed_project)
     _mark_batch_running(db, batch, accepted_at)
-    _apply_confirmed_import(db, batch, batch_id, project_id, owner_id, xml_bytes, stored_payload)
+    _apply_confirmed_import(
+        db, batch, batch_id, project_id, owner_id, xml_bytes, parsed_project, stored_payload
+    )
 
     return ImportRunAcceptedResponse(batchId=batch.id, status="success", acceptedAt=accepted_at)
 
@@ -513,6 +528,13 @@ def run_batch(
             db, batch, project_id, current_user.id, expected_sha256, xml_bytes, accepted_at
         )
 
+    # Parse once, unlocked, and reuse the result for both conflict detection and
+    # the import itself so neither re-parses while holding the project lock.
+    try:
+        parsed_project = parse_msproject_xml(xml_bytes)
+    except MsProjectValidationError:
+        parsed_project = None
+
     return _run_confirmed_import(
         db,
         batch,
@@ -521,6 +543,7 @@ def run_batch(
         current_user.id,
         expected_sha256,
         xml_bytes,
+        parsed_project,
         stored_payload,
         accepted_at,
     )
