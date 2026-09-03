@@ -36,12 +36,12 @@ from waterfall.schemas.imports import (
     ImportRunRequest,
 )
 from waterfall.services.import_diff import build_import_diff
-from waterfall.services.import_v1 import import_tasks_and_links
 from waterfall.services.msproject_xml import (
     MsProjectValidationError,
     ParsedProject,
     parse_msproject_xml,
 )
+from waterfall.services.msproject_xml_import import import_tasks_and_links
 from waterfall.services.project_lifecycle import ensure_project_mutable
 
 router = APIRouter(prefix="/imports/v1/batches", tags=["imports-v1"])

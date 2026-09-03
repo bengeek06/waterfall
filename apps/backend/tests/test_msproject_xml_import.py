@@ -4,7 +4,7 @@ from pathlib import Path
 from waterfall.db.session import get_session_factory
 from waterfall.models.ms_core import MsProject, MsTask
 from waterfall.models.planning import WfPlanning, WfPlanningLinkSnapshot, WfPlanningTaskSnapshot
-from waterfall.services.import_v1 import import_tasks_and_links
+from waterfall.services.msproject_xml_import import import_tasks_and_links
 
 EXAMPLE_XML = Path(__file__).resolve().parent / "planning_test.xml"
 
