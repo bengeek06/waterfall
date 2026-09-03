@@ -283,6 +283,11 @@ async def upload_xml(
 
 
 def _validate_run_request(batch: WfImportBatch, run_request: ImportRunRequest) -> dict[str, Any]:
+    # Unlocked fast path: reject a batch that is already running/finished before
+    # spending any time on file I/O or XML parsing. The authoritative recheck
+    # under the project lock in `_relock_pending_batch` still guards races.
+    if batch.status != "pending":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Batch is not pending")
     if not run_request.dry_run and not run_request.confirm:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -415,6 +420,7 @@ def _apply_confirmed_import(
     owner_id: int,
     xml_bytes: bytes,
     parsed_project: ParsedProject | None,
+    parse_error: MsProjectValidationError | None,
     stored_payload: dict[str, Any],
 ) -> None:
     try:
@@ -422,6 +428,10 @@ def _apply_confirmed_import(
         # immediately before mutating snapshots so a concurrent writer cannot
         # change displayed_planning_id/status between the two transactions.
         project = get_mutable_project_lock(db, project_id, owner_id)
+        if parse_error is not None:
+            # Already parsed unlocked; re-raise instead of letting
+            # import_tasks_and_links parse the same invalid XML again.
+            raise parse_error
         identical_source = (
             db.query(WfImportBatch.id)
             .filter(WfImportBatch.project_id == project_id)
@@ -480,6 +490,7 @@ def _run_confirmed_import(
     expected_sha256: str | None,
     xml_bytes: bytes,
     parsed_project: ParsedProject | None,
+    parse_error: MsProjectValidationError | None,
     stored_payload: dict[str, Any],
     accepted_at: datetime,
 ) -> ImportRunAcceptedResponse:
@@ -487,7 +498,15 @@ def _run_confirmed_import(
     _reject_diff_conflicts(db, project, parsed_project)
     _mark_batch_running(db, batch, accepted_at)
     _apply_confirmed_import(
-        db, batch, batch_id, project_id, owner_id, xml_bytes, parsed_project, stored_payload
+        db,
+        batch,
+        batch_id,
+        project_id,
+        owner_id,
+        xml_bytes,
+        parsed_project,
+        parse_error,
+        stored_payload,
     )
 
     return ImportRunAcceptedResponse(batchId=batch.id, status="success", acceptedAt=accepted_at)
@@ -530,10 +549,12 @@ def run_batch(
 
     # Parse once, unlocked, and reuse the result for both conflict detection and
     # the import itself so neither re-parses while holding the project lock.
+    parse_error: MsProjectValidationError | None = None
     try:
         parsed_project = parse_msproject_xml(xml_bytes)
-    except MsProjectValidationError:
+    except MsProjectValidationError as exc:
         parsed_project = None
+        parse_error = exc
 
     return _run_confirmed_import(
         db,
@@ -544,6 +565,7 @@ def run_batch(
         expected_sha256,
         xml_bytes,
         parsed_project,
+        parse_error,
         stored_payload,
         accepted_at,
     )
