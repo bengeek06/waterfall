@@ -388,6 +388,46 @@ def test_invalid_import_exposes_structured_validation_errors() -> None:
         assert errors.json()["items"][0]["code"] == "MALFORMED_XML"
 
 
+def test_invalid_confirmed_import_parses_the_xml_only_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A malformed confirm-path import must not re-parse the XML under the project lock."""
+    import waterfall.api.routes.imports as imports_module
+
+    call_count = 0
+    real_parse = imports_module.parse_msproject_xml
+
+    def counting_parse(xml_bytes: bytes) -> object:
+        nonlocal call_count
+        call_count += 1
+        return real_parse(xml_bytes)
+
+    monkeypatch.setattr(imports_module, "parse_msproject_xml", counting_parse)
+
+    with TestClient(app) as client:
+        headers = _auth_headers(client, "import.invalid-once@example.com")
+        project_id = _create_project(client, headers)
+        response = client.post(
+            "/imports/v1/batches",
+            json={"projectId": project_id, "importMode": "standard"},
+            headers=headers,
+        )
+        batch_id = response.json()["id"]
+        client.post(
+            f"/imports/v1/batches/{batch_id}/xml",
+            files={"file": ("invalid.xml", b"<Project", "application/xml")},
+            headers=headers,
+        )
+        run = client.post(
+            f"/imports/v1/batches/{batch_id}/run",
+            json={"confirm": True},
+            headers=headers,
+        )
+        assert run.status_code == 400
+
+    assert call_count == 1
+
+
 def test_identical_source_is_detected_without_reapplying() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client, "import.identical@example.com")
