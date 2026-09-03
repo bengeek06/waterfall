@@ -556,16 +556,26 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     };
     const movedDetail: PlanningDetail = {
       ...draft,
+      revision: 1,
       tasks: [
         { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second", position: 1, parent_uid: null },
         { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 2, parent_uid: null },
       ],
       links: [],
     };
+    const secondMovedDetail: PlanningDetail = {
+      ...draft,
+      revision: 2,
+      tasks: [
+        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second", position: 2, parent_uid: null },
+      ],
+      links: [],
+    };
     mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draft.id }));
     mocks.listPlannings.mockResolvedValue([draft]);
     mocks.getPlanning.mockResolvedValue(siblingsDetail);
-    mocks.movePlanningTasks.mockResolvedValue(movedDetail);
+    mocks.movePlanningTasks.mockResolvedValueOnce(movedDetail).mockResolvedValueOnce(secondMovedDetail);
 
     render(<ProjectDetailsPage />);
 
@@ -586,6 +596,21 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     expect(rows).toHaveLength(3);
     expect(rows[1]).toHaveTextContent("Second");
     expect(rows[2]).toHaveTextContent("Premier");
+
+    // The second move must send the revision the first move's response actually
+    // returned (1), not the stale revision (0) still held on the plannings list.
+    fireEvent.click(screen.getByText("Premier"));
+    fireEvent.click(screen.getByRole("button", { name: "Monter" }));
+
+    await waitFor(() =>
+      expect(mocks.movePlanningTasks).toHaveBeenCalledWith(
+        1,
+        draft.id,
+        { task_uids: [10], target_parent_uid: null, position: 1, expected_revision: 1 },
+        expect.anything(),
+        expect.anything(),
+      ),
+    );
   });
 
   it("ignores a move response for a planning that is no longer selected", async () => {

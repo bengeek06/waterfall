@@ -479,17 +479,25 @@ export default function ProjectDetailsPage() {
   }
 
   async function movePlanningTaskSelection(command: PlanningMoveCommand) {
-    if (!session || !selectedPlanning || selectedPlanning.status !== "draft" || isReadOnlyProject) {
+    if (
+      !session ||
+      !selectedPlanning ||
+      selectedPlanning.status !== "draft" ||
+      isReadOnlyProject ||
+      !planningDetail ||
+      planningDetail.id !== selectedPlanning.id
+    ) {
       return;
     }
     const requestedPlanningId = selectedPlanning.id;
+    const expectedRevision = planningDetail.revision;
     setPlanningMutationBusy(true);
     setError(null);
     try {
       const updated = await movePlanningTasks(
         projectId,
         requestedPlanningId,
-        { ...command, expected_revision: selectedPlanning.revision },
+        { ...command, expected_revision: expectedRevision },
         session,
         onSessionRefresh,
       );
