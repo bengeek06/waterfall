@@ -131,6 +131,7 @@ class TaskLinkWrite(BaseModel):
 
 class TaskLinksReplace(BaseModel):
     links: list[TaskLinkWrite]
+    expected_revision: int = Field(ge=0)
 
 
 class TaskDescriptionUpdate(BaseModel):
@@ -251,6 +252,7 @@ class PlanningTaskCreate(BaseModel):
     is_milestone: bool = False
     target_parent_uid: int | None = Field(default=None, gt=0)
     insert_after_uid: int | None = Field(default=None, gt=0)
+    expected_revision: int = Field(ge=0)
 
     _normalize_name = field_validator("name")(_required_text)
 
@@ -258,6 +260,7 @@ class PlanningTaskCreate(BaseModel):
 class PlanningTaskDelete(BaseModel):
     task_uids: list[Annotated[int, Field(ge=1)]] = Field(min_length=1)
     confirm_cascade: bool = False
+    expected_revision: int = Field(ge=0)
 
 
 class PlanningTaskDeleteConflictDetail(BaseModel):
@@ -298,6 +301,7 @@ class PlanningTaskScheduleUpdate(BaseModel):
     is_manual: bool
     start_at: datetime | None = None
     finish_at: datetime | None = None
+    expected_revision: int = Field(ge=0)
     # Upper-bounded at 15 years in minutes (365 * 24 * 60 = 525_600 per year,
     # * 15 = 7_884_000): far beyond any realistic single planning task's
     # duration, but well under the limits that would otherwise be reachable

@@ -524,12 +524,20 @@ export default function ProjectDetailsPage() {
   // table's inline schedule edit) knows whether it is safe to discard the user's local draft.
   async function updateTaskScheduleSelection(
     taskUid: number,
-    payload: PlanningTaskScheduleUpdate,
+    payload: Omit<PlanningTaskScheduleUpdate, "expected_revision">,
   ): Promise<boolean> {
-    if (!session || !selectedPlanning || selectedPlanning.status !== "draft" || isReadOnlyProject) {
+    if (
+      !session ||
+      !selectedPlanning ||
+      selectedPlanning.status !== "draft" ||
+      isReadOnlyProject ||
+      !planningDetail ||
+      planningDetail.id !== selectedPlanning.id
+    ) {
       return false;
     }
     const requestedPlanningId = selectedPlanning.id;
+    const expectedRevision = planningDetail.revision;
     setPlanningMutationBusy(true);
     setError(null);
     try {
@@ -537,7 +545,7 @@ export default function ProjectDetailsPage() {
         projectId,
         requestedPlanningId,
         taskUid,
-        payload,
+        { ...payload, expected_revision: expectedRevision },
         session,
         onSessionRefresh,
       );
@@ -575,7 +583,11 @@ export default function ProjectDetailsPage() {
     if (!selectedPlanning || selectedPlanning.status !== "draft" || isReadOnlyProject) {
       throw new Error("Ce planning n'est plus modifiable : les prédécesseurs n'ont pas été enregistrés.");
     }
+    if (!planningDetail || planningDetail.id !== selectedPlanning.id) {
+      throw new Error("Le planning affiché a changé : relance la modification des prédécesseurs.");
+    }
     const requestedPlanningId = selectedPlanning.id;
+    const expectedRevision = planningDetail.revision;
     setPlanningMutationBusy(true);
     setError(null);
     try {
@@ -583,7 +595,7 @@ export default function ProjectDetailsPage() {
         projectId,
         requestedPlanningId,
         taskUid,
-        { links },
+        { links, expected_revision: expectedRevision },
         session,
         onSessionRefresh,
       );
@@ -618,7 +630,11 @@ export default function ProjectDetailsPage() {
     if (!session || !selectedPlanning || selectedPlanning.status !== "draft" || isReadOnlyProject) {
       return;
     }
+    if (!planningDetail || planningDetail.id !== selectedPlanning.id) {
+      return;
+    }
     const requestedPlanningId = selectedPlanning.id;
+    const expectedRevision = planningDetail.revision;
     setPlanningMutationBusy(true);
     setError(null);
     try {
@@ -630,6 +646,7 @@ export default function ProjectDetailsPage() {
           is_milestone: command.isMilestone,
           target_parent_uid: command.targetParentUid,
           insert_after_uid: command.insertAfterUid,
+          expected_revision: expectedRevision,
         },
         session,
         onSessionRefresh,
@@ -685,13 +702,19 @@ export default function ProjectDetailsPage() {
       setError(message);
       throw new Error(message);
     }
+    if (!planningDetail || planningDetail.id !== requestedPlanningId) {
+      const message = "Le planning affiché a changé : relance la suppression.";
+      setError(message);
+      throw new Error(message);
+    }
+    const expectedRevision = planningDetail.revision;
     setPlanningMutationBusy(true);
     setError(null);
     try {
       const updated = await deletePlanningTasks(
         projectId,
         requestedPlanningId,
-        { task_uids: taskUids, confirm_cascade: confirmCascade },
+        { task_uids: taskUids, confirm_cascade: confirmCascade, expected_revision: expectedRevision },
         session,
         onSessionRefresh,
       );

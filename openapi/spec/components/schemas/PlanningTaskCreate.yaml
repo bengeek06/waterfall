@@ -1,6 +1,7 @@
 type: object
 required:
 - name
+- expected_revision
 properties:
   name:
     type: string
@@ -19,3 +20,6 @@ properties:
     - integer
     - 'null'
     minimum: 1
+  expected_revision:
+    type: integer
+    minimum: 0

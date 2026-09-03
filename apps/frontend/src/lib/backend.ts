@@ -75,15 +75,18 @@ function formatValidationErrors(details: PydanticValidationErrorItem[]): string 
 
 type ParsedError = { message: string; detail?: unknown };
 
-// Readable French copy for the two structured PlanningTaskDeleteConflict codes (see
-// PlanningTaskDeleteConflict in the generated schema); anything else falls back to the raw
-// response body via the caller in parseError.
+// Readable French copy for structured detail codes (PlanningTaskDeleteConflict's two codes, see
+// that generated schema, plus PLANNING_REVISION_CONFLICT shared by every versioned planning
+// mutation); anything else falls back to the raw response body via the caller in parseError.
 function describeStructuredDetailCode(code: unknown): string | null {
   if (code === "CASCADE_CONFIRMATION_REQUIRED") {
     return "Cette tâche a des tâches enfants et nécessite une confirmation.";
   }
   if (code === "TASK_REFERENCED") {
     return "Cette tâche est référencée par un devis, une affectation ou une charge.";
+  }
+  if (code === "PLANNING_REVISION_CONFLICT") {
+    return "Ce planning a été modifié entre-temps : recharge-le avant de réessayer.";
   }
   return null;
 }

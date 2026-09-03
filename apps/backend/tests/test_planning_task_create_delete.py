@@ -144,7 +144,7 @@ def test_create_task_with_no_position_becomes_first_root() -> None:
 
         response = client.post(
             f"/projects/{project_id}/plannings/{planning_id}/tasks",
-            json={"name": "New root"},
+            json={"name": "New root", "expected_revision": 0},
             headers=headers,
         )
 
@@ -166,7 +166,7 @@ def test_create_task_as_first_child_of_parent() -> None:
 
         response = client.post(
             f"/projects/{project_id}/plannings/{planning_id}/tasks",
-            json={"name": "New leaf", "target_parent_uid": 1},
+            json={"name": "New leaf", "target_parent_uid": 1, "expected_revision": 0},
             headers=headers,
         )
 
@@ -187,7 +187,12 @@ def test_create_task_after_given_sibling() -> None:
 
         response = client.post(
             f"/projects/{project_id}/plannings/{planning_id}/tasks",
-            json={"name": "New leaf", "target_parent_uid": 1, "insert_after_uid": 2},
+            json={
+                "name": "New leaf",
+                "target_parent_uid": 1,
+                "insert_after_uid": 2,
+                "expected_revision": 0,
+            },
             headers=headers,
         )
 
@@ -208,7 +213,7 @@ def test_create_task_root_appended_after_given_sibling() -> None:
 
         response = client.post(
             f"/projects/{project_id}/plannings/{planning_id}/tasks",
-            json={"name": "New root", "insert_after_uid": 6},
+            json={"name": "New root", "insert_after_uid": 6, "expected_revision": 0},
             headers=headers,
         )
 
@@ -228,7 +233,7 @@ def test_create_task_rejects_missing_target_parent() -> None:
 
         response = client.post(
             f"/projects/{project_id}/plannings/{planning_id}/tasks",
-            json={"name": "Orphan", "target_parent_uid": 999},
+            json={"name": "Orphan", "target_parent_uid": 999, "expected_revision": 0},
             headers=headers,
         )
 
@@ -252,7 +257,7 @@ def test_create_task_rejects_milestone_as_target_parent() -> None:
 
         response = client.post(
             f"/projects/{project_id}/plannings/{planning_id}/tasks",
-            json={"name": "Under milestone", "target_parent_uid": 6},
+            json={"name": "Under milestone", "target_parent_uid": 6, "expected_revision": 0},
             headers=headers,
         )
 
@@ -268,7 +273,12 @@ def test_create_task_rejects_insert_after_uid_not_a_sibling() -> None:
         # uid=5 (Leaf C, a child of Group B) is not a sibling of Group A's children.
         response = client.post(
             f"/projects/{project_id}/plannings/{planning_id}/tasks",
-            json={"name": "Misplaced", "target_parent_uid": 1, "insert_after_uid": 5},
+            json={
+                "name": "Misplaced",
+                "target_parent_uid": 1,
+                "insert_after_uid": 5,
+                "expected_revision": 0,
+            },
             headers=headers,
         )
 
@@ -283,10 +293,10 @@ def test_create_task_schema_validation_returns_bad_request() -> None:
         path = f"/projects/{project_id}/plannings/{planning_id}/tasks"
 
         for payload in (
-            {"name": ""},
+            {"name": "", "expected_revision": 0},
             {},
-            {"name": "New leaf", "target_parent_uid": 0},
-            {"name": "New leaf", "insert_after_uid": 0},
+            {"name": "New leaf", "target_parent_uid": 0, "expected_revision": 0},
+            {"name": "New leaf", "insert_after_uid": 0, "expected_revision": 0},
         ):
             response = client.post(path, json=payload, headers=headers)
             assert response.status_code == 400
@@ -303,7 +313,7 @@ def test_create_task_rejects_unknown_insert_after_uid() -> None:
 
         response = client.post(
             f"/projects/{project_id}/plannings/{planning_id}/tasks",
-            json={"name": "Misplaced", "insert_after_uid": 999},
+            json={"name": "Misplaced", "insert_after_uid": 999, "expected_revision": 0},
             headers=headers,
         )
 
@@ -323,7 +333,7 @@ def test_delete_selection_without_children_renumbers_tree() -> None:
 
         response = client.post(
             f"/projects/{project_id}/plannings/{planning_id}/tasks/delete",
-            json={"task_uids": [6]},
+            json={"task_uids": [6], "expected_revision": 0},
             headers=headers,
         )
 
@@ -342,7 +352,7 @@ def test_delete_task_with_children_without_confirm_cascade_is_refused_without_mu
 
         response = client.post(
             f"/projects/{project_id}/plannings/{planning_id}/tasks/delete",
-            json={"task_uids": [1]},
+            json={"task_uids": [1], "expected_revision": 0},
             headers=headers,
         )
 
@@ -369,7 +379,7 @@ def test_delete_task_with_children_confirm_cascade_deletes_subtree_and_renumbers
 
         response = client.post(
             f"/projects/{project_id}/plannings/{planning_id}/tasks/delete",
-            json={"task_uids": [1], "confirm_cascade": True},
+            json={"task_uids": [1], "confirm_cascade": True, "expected_revision": 0},
             headers=headers,
         )
 
@@ -389,7 +399,7 @@ def test_delete_selection_mixing_parent_and_descendant_normalizes_to_parent() ->
 
         response = client.post(
             f"/projects/{project_id}/plannings/{planning_id}/tasks/delete",
-            json={"task_uids": [1, 2], "confirm_cascade": True},
+            json={"task_uids": [1, 2], "confirm_cascade": True, "expected_revision": 0},
             headers=headers,
         )
 
@@ -407,7 +417,7 @@ def test_delete_task_not_found() -> None:
 
         response = client.post(
             f"/projects/{project_id}/plannings/{planning_id}/tasks/delete",
-            json={"task_uids": [999]},
+            json={"task_uids": [999], "expected_revision": 0},
             headers=headers,
         )
 
@@ -422,8 +432,8 @@ def test_delete_task_schema_validation_returns_bad_request() -> None:
         path = f"/projects/{project_id}/plannings/{planning_id}/tasks/delete"
 
         for payload in (
-            {"task_uids": []},
-            {"task_uids": [0]},
+            {"task_uids": [], "expected_revision": 0},
+            {"task_uids": [0], "expected_revision": 0},
         ):
             response = client.post(path, json=payload, headers=headers)
             assert response.status_code == 400
@@ -449,7 +459,7 @@ def test_delete_task_referenced_by_charge_line_conflicts_without_mutation() -> N
 
         response = client.post(
             f"/projects/{project_id}/plannings/{planning_id}/tasks/delete",
-            json={"task_uids": [6]},
+            json={"task_uids": [6], "expected_revision": 0},
             headers=headers,
         )
 
@@ -509,7 +519,7 @@ def test_delete_task_referenced_by_role_assignment_in_cascade_conflicts_without_
         # leaf, and nothing may be partially deleted.
         response = client.post(
             f"/projects/{project_id}/plannings/{planning_id}/tasks/delete",
-            json={"task_uids": [4], "confirm_cascade": True},
+            json={"task_uids": [4], "confirm_cascade": True, "expected_revision": 0},
             headers=headers,
         )
 
@@ -592,7 +602,7 @@ def test_delete_large_cascade_batches_reference_checks_instead_of_per_task_queri
         try:
             response = client.post(
                 f"/projects/{project_id}/plannings/{planning_id}/tasks/delete",
-                json={"task_uids": [1], "confirm_cascade": True},
+                json={"task_uids": [1], "confirm_cascade": True, "expected_revision": 0},
                 headers=headers,
             )
         finally:
@@ -649,14 +659,14 @@ def test_create_task_after_delete_does_not_collide_with_uid_alive_in_another_ver
 
         deleted = client.post(
             f"/projects/{project_id}/plannings/{planning_id}/tasks/delete",
-            json={"task_uids": [6]},
+            json={"task_uids": [6], "expected_revision": 0},
             headers=headers,
         )
         assert deleted.status_code == 200
 
         created = client.post(
             f"/projects/{project_id}/plannings/{planning_id}/tasks",
-            json={"name": "New root"},
+            json={"name": "New root", "expected_revision": 1},
             headers=headers,
         )
         assert created.status_code == 200
@@ -681,7 +691,7 @@ def test_delete_then_create_fully_renumbers_the_tree_without_gaps() -> None:
         # numbering gaps, this must renumber the remaining sibling(s).
         deleted = client.post(
             f"/projects/{project_id}/plannings/{planning_id}/tasks/delete",
-            json={"task_uids": [3]},
+            json={"task_uids": [3], "expected_revision": 0},
             headers=headers,
         )
         assert deleted.status_code == 200
@@ -690,7 +700,7 @@ def test_delete_then_create_fully_renumbers_the_tree_without_gaps() -> None:
 
         recreated = client.post(
             f"/projects/{project_id}/plannings/{planning_id}/tasks",
-            json={"name": "Leaf D", "target_parent_uid": 1},
+            json={"name": "Leaf D", "target_parent_uid": 1, "expected_revision": 1},
             headers=headers,
         )
         assert recreated.status_code == 200
@@ -730,12 +740,12 @@ def test_create_and_delete_reject_validated_planning_without_mutation() -> None:
 
         create = client.post(
             f"/projects/{project_id}/plannings/{planning_id}/tasks",
-            json={"name": "Refused"},
+            json={"name": "Refused", "expected_revision": 0},
             headers=headers,
         )
         delete = client.post(
             f"/projects/{project_id}/plannings/{planning_id}/tasks/delete",
-            json={"task_uids": [6]},
+            json={"task_uids": [6], "expected_revision": 0},
             headers=headers,
         )
 
@@ -763,12 +773,12 @@ def test_create_and_delete_reject_read_only_project_without_mutation() -> None:
 
         create = client.post(
             f"/projects/{project_id}/plannings/{planning_id}/tasks",
-            json={"name": "Refused"},
+            json={"name": "Refused", "expected_revision": 0},
             headers=headers,
         )
         delete = client.post(
             f"/projects/{project_id}/plannings/{planning_id}/tasks/delete",
-            json={"task_uids": [6]},
+            json={"task_uids": [6], "expected_revision": 0},
             headers=headers,
         )
 
@@ -810,3 +820,59 @@ def test_legacy_project_task_create_and_delete_endpoints_are_gone() -> None:
             headers=headers,
         )
         assert patched.status_code == 200
+
+
+def test_create_task_revision_conflict_returns_structured_409_without_mutating() -> None:
+    """E4-01/#18: create shares move's raise_on_planning_revision_conflict guard."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_planning(project_id)
+        path = f"/projects/{project_id}/plannings/{planning_id}/tasks"
+
+        response = client.post(
+            path,
+            json={"name": "Stale", "expected_revision": 5},
+            headers=headers,
+        )
+
+        assert response.status_code == 409
+        assert cast(dict[str, Any], response.json())["detail"] == {
+            "code": "PLANNING_REVISION_CONFLICT",
+            "project_id": project_id,
+            "planning_id": planning_id,
+            "expected_revision": 5,
+            "current_revision": 0,
+        }
+        detail = client.get(f"/projects/{project_id}/plannings/{planning_id}", headers=headers)
+        assert detail.json()["revision"] == 0
+        assert "Stale" not in {
+            task["name"] for task in _tasks_by_uid(cast(dict[str, Any], detail.json())).values()
+        }
+
+
+def test_delete_task_revision_conflict_returns_structured_409_without_mutating() -> None:
+    """E4-01/#18: delete shares move's raise_on_planning_revision_conflict guard."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_planning(project_id)
+        path = f"/projects/{project_id}/plannings/{planning_id}/tasks/delete"
+
+        response = client.post(
+            path,
+            json={"task_uids": [6], "expected_revision": 5},
+            headers=headers,
+        )
+
+        assert response.status_code == 409
+        assert cast(dict[str, Any], response.json())["detail"] == {
+            "code": "PLANNING_REVISION_CONFLICT",
+            "project_id": project_id,
+            "planning_id": planning_id,
+            "expected_revision": 5,
+            "current_revision": 0,
+        }
+        detail = client.get(f"/projects/{project_id}/plannings/{planning_id}", headers=headers)
+        assert detail.json()["revision"] == 0
+        assert 6 in _tasks_by_uid(cast(dict[str, Any], detail.json()))

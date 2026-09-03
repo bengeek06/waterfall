@@ -1,6 +1,7 @@
 type: object
 required:
 - task_uids
+- expected_revision
 properties:
   task_uids:
     type: array
@@ -11,3 +12,6 @@ properties:
   confirm_cascade:
     type: boolean
     default: false
+  expected_revision:
+    type: integer
+    minimum: 0

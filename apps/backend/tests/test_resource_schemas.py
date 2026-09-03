@@ -154,7 +154,7 @@ def test_project_schema_normalizes_and_rejects_blank_input() -> None:
         name="  Développement  ",
     )
     category_update = CostCategoryUpdate(category_code="  MAJ  ")
-    task = PlanningTaskCreate(name="  Nouvelle tâche  ", is_milestone=True)
+    task = PlanningTaskCreate(name="  Nouvelle tâche  ", is_milestone=True, expected_revision=0)
     task_assignment = TaskRoleAssignmentCreate(
         task_id=1,
         role_id=2,

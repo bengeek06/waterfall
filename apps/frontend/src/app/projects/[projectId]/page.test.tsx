@@ -784,7 +784,10 @@ describe("ProjectDetailsPage planning lifecycle", () => {
         1,
         draft.id,
         11,
-        { links: [{ predecessor_uid: 10, link_type: 1, lag_tenth_minute: 0, lag_format: 7 }] },
+        {
+          links: [{ predecessor_uid: 10, link_type: 1, lag_tenth_minute: 0, lag_format: 7 }],
+          expected_revision: 0,
+        },
         expect.anything(),
         expect.anything(),
       ),
@@ -961,7 +964,13 @@ describe("ProjectDetailsPage planning lifecycle", () => {
       expect(mocks.createPlanningTask).toHaveBeenCalledWith(
         1,
         draft.id,
-        { name: "Nouvelle tâche", is_milestone: false, target_parent_uid: undefined, insert_after_uid: undefined },
+        {
+          name: "Nouvelle tâche",
+          is_milestone: false,
+          target_parent_uid: undefined,
+          insert_after_uid: undefined,
+          expected_revision: 0,
+        },
         expect.anything(),
         expect.anything(),
       ),
@@ -999,7 +1008,7 @@ describe("ProjectDetailsPage planning lifecycle", () => {
       expect(mocks.deletePlanningTasks).toHaveBeenCalledWith(
         1,
         draft.id,
-        { task_uids: [11], confirm_cascade: false },
+        { task_uids: [11], confirm_cascade: false, expected_revision: 0 },
         expect.anything(),
         expect.anything(),
       ),
