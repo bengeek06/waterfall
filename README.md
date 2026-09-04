@@ -213,6 +213,9 @@ Depuis la racine du dépôt, renseignez au minimum dans `.env` :
 CORS_ALLOW_ORIGINS=http://<IP_VM>:3000
 NEXT_PUBLIC_API_BASE_URL=http://<IP_VM>:8000
 WF_ADMIN_PASSWORD=<mot-de-passe-local>
+PGADMIN_DEFAULT_PASSWORD=<mot-de-passe-local>
+GRAFANA_ADMIN_PASSWORD=<mot-de-passe-local>
+# ADMIN_BIND_ADDRESS=127.0.0.1
 ```
 
 Le mot de passe admin est obligatoire et ne doit jamais être commité. Pour une VM, utilisez
@@ -235,12 +238,16 @@ docker compose --env-file .env \
 Adresses par défaut :
 
 - frontend : `http://<IP_VM>:3000`
-- API : `http://<IP_VM>:8000/docs`
-- Grafana : `http://<IP_VM>:3001`
-- Prometheus : `http://<IP_VM>:9090`
-- pgAdmin : `http://<IP_VM>:5050`
+- API : `http://<IP_VM>:8000`
+- documentation API : `http://<IP_VM>:8000/docs`
+- Grafana : `http://127.0.0.1:3001`
+- Prometheus : `http://127.0.0.1:9090`
+- pgAdmin : `http://127.0.0.1:5050`
 
 `docker-compose.yml` utilisé seul ne lance pas le frontend. Il fournit uniquement l’API et PostgreSQL.
+PostgreSQL et les outils d’observabilité sont limités à la VM par défaut. Utilisez un tunnel SSH
+ou définissez `ADMIN_BIND_ADDRESS` uniquement si ces interfaces doivent être accessibles à distance,
+avec un filtrage réseau adapté.
 
 ### 5) Vérifications
 
@@ -338,18 +345,9 @@ de devis, les types de lignes, les calculs, les versions et les exports. Elle pe
 
 ## Statut du dépôt
 
-Waterfall est un projet applicatif en développement orienté vers :
-
-- piloter des projets de planification
-- calculer les coûts et budgets
-- gérer les ressources et affectations
-- centraliser les données de devis et d’estimation
-- exporter les données vers des formats de travail standardisés
-
-- la structuration de plannings
-- le chiffrage et le suivi budgétaire
-- la gestion des ressources, rôles et capacités
-- l’analyse et l’export des données de projet
+Waterfall est un projet applicatif en développement orienté vers la structuration de plannings,
+le chiffrage et le suivi budgétaire, la gestion des ressources et capacités, ainsi que l’analyse
+et l’export des données de projet.
 
 Pour les commandes et contrôles spécifiques au backend, consultez
 [apps/backend/README.md](apps/backend/README.md).
