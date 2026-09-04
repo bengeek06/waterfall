@@ -1,0 +1,23 @@
+type: object
+required:
+- task_uid
+- predecessor_uid
+- link_type
+- lag_tenth_minute
+- lag_format
+properties:
+  task_uid:
+    type: integer
+    minimum: 1
+  predecessor_uid:
+    type: integer
+    minimum: 1
+  link_type:
+    type: integer
+    minimum: 0
+    maximum: 3
+  lag_tenth_minute:
+    type: [integer, "null"]
+    format: int32
+  lag_format:
+    type: [integer, "null"]

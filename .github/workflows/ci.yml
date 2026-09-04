@@ -95,6 +95,11 @@ jobs:
           TEST_POSTGRES_URL: postgresql+psycopg://waterfall:waterfall@localhost:5432/waterfall
         run: pytest -q
 
+      - name: PostgreSQL planning benchmark baseline
+        env:
+          TEST_POSTGRES_URL: postgresql+psycopg://waterfall:waterfall@localhost:5432/waterfall
+        run: pytest -q -s --no-cov tests/test_planning_benchmark_postgres.py
+
   frontend-quality:
     needs: changes
     if: needs.changes.outputs.frontend == 'true'

@@ -87,13 +87,18 @@ class TaskRead(BaseModel):
     name: str
     outline_number: str | None
     outline_level: int | None
+    wbs: str | None
     start_at: datetime | None
     finish_at: datetime | None
     duration_minutes: int | None
+    duration_format: int | None
+    work_minutes: int | None
+    task_type: int | None
     percent_complete: int | None
     is_summary: bool
     is_milestone: bool
     is_manual: bool | None
+    calendar_uid: int | None
     description: str | None
     predecessor_links: list["TaskLinkRead"] = Field(default_factory=list)
 
@@ -237,6 +242,75 @@ class PlanningTaskMove(BaseModel):
     task_uids: list[Annotated[int, Field(ge=1)]] = Field(min_length=1)
     target_parent_uid: int | None = Field(default=None, gt=0)
     position: int = Field(ge=1)
+    expected_revision: int = Field(ge=0)
+
+
+class PlanningTaskSnapshotWrite(BaseModel):
+    """One task's full raw state for :class:`PlanningSnapshotRestore` (E4-01 undo/redo).
+
+    Mirrors every field of ``WfPlanningTaskSnapshot`` the client can already see
+    via ``TaskRead`` (plus the raw ``notes``, not exposed as ``description`` on
+    reads for no particular reason other than naming): values are restored
+    verbatim, never recalculated, since they were already valid when the
+    server originally computed and returned them.
+    """
+
+    uid: int = Field(ge=1)
+    id_display: int | None
+    structure_key: str | None = Field(max_length=128)
+    structure_kind: StructureKind | None
+    parent_uid: int | None = Field(gt=0)
+    position: int | None = Field(gt=0)
+    name: str = Field(min_length=1, max_length=512)
+    outline_number: str | None = Field(max_length=512)
+    outline_level: int | None
+    wbs: str | None = Field(max_length=255)
+    start_at: datetime | None
+    finish_at: datetime | None
+    duration_minutes: int | None = Field(ge=0)
+    duration_format: int | None
+    work_minutes: int | None = Field(ge=0)
+    task_type: int | None = Field(ge=0, le=2)
+    percent_complete: int | None = Field(ge=0, le=100)
+    is_summary: bool
+    is_milestone: bool
+    is_manual: bool | None
+    calendar_uid: int | None
+    # Unbounded, unlike most other free-text fields here: imported MSPDI Notes are stored
+    # in an unbounded Text column (wf_planning_task_snapshot.notes), so a snapshot captured
+    # from a legitimately imported planning can already exceed a smaller limit -- this must
+    # round-trip whatever the server can already return, not impose a stricter one.
+    notes: str | None
+
+
+class PlanningLinkSnapshotWrite(BaseModel):
+    """Link state for undo/redo restore. All fields required (null is explicit)."""
+
+    task_uid: int = Field(ge=1)
+    predecessor_uid: int = Field(ge=1)
+    link_type: int = Field(ge=0, le=3)
+    lag_tenth_minute: int | None = Field(ge=-2_147_483_648, le=2_147_483_647)
+    # Unlike TaskLinkWrite (validated MSPDI import), this must round-trip whatever
+    # PlanningLinkRead can already return, including a legacy-imported value outside
+    # the MspdiLagFormat enum (TaskLinkRead itself exposes lag_format as a plain
+    # integer for exactly that reason).
+    lag_format: int | None
+
+
+class PlanningSnapshotRestore(BaseModel):
+    """Full-state restore payload driving undo/redo (E4-01): replaces every task and
+    link of a draft planning with exactly the given lists -- the same complete
+    ``tasks``/``links`` shape the client already received from a previous response
+    (either before or after the mutation being undone/redone), so replaying it back
+    restores that exact prior state instead of recomputing an approximation.
+
+    Both lists are required (no default): since this endpoint replaces the *entire*
+    planning, an omitted list cannot mean "leave unchanged" -- it must be an explicit,
+    deliberate empty list instead, so a caller can never wipe a planning by mistake.
+    """
+
+    tasks: list[PlanningTaskSnapshotWrite]
+    links: list[PlanningLinkSnapshotWrite]
     expected_revision: int = Field(ge=0)
 
 
