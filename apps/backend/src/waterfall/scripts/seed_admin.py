@@ -20,7 +20,9 @@ def _as_bool(value: str | None, default: bool) -> bool:
 
 def main() -> None:
     email = normalize_email(os.getenv("WF_ADMIN_EMAIL", "admin@example.com"))
-    password = os.getenv("WF_ADMIN_PASSWORD", "admin1234")
+    password = os.getenv("WF_ADMIN_PASSWORD")
+    if password is None:
+        raise ValueError("WF_ADMIN_PASSWORD must be set to seed the admin user")
     is_active = _as_bool(os.getenv("WF_ADMIN_IS_ACTIVE"), default=True)
 
     try:

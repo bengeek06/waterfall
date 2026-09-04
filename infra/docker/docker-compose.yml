@@ -4,8 +4,14 @@ services:
       context: ../../apps/backend
       dockerfile: Dockerfile
     environment:
+      APP_ENV: ${APP_ENV:-dev}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
       DATABASE_URL: postgresql+psycopg://waterfall:waterfall@postgres:5432/waterfall
       IMPORT_STORAGE_PATH: /data/imports
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set}
+      WF_ADMIN_EMAIL: ${WF_ADMIN_EMAIL:-admin@example.com}
+      WF_ADMIN_IS_ACTIVE: ${WF_ADMIN_IS_ACTIVE:-true}
+      WF_ADMIN_PASSWORD: ${WF_ADMIN_PASSWORD:?WF_ADMIN_PASSWORD must be set}
     ports:
       - "8000:8000"
     depends_on:
@@ -21,7 +27,7 @@ services:
       POSTGRES_USER: waterfall
       POSTGRES_PASSWORD: waterfall
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:

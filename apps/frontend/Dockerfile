@@ -1,4 +1,4 @@
-FROM node:24-alpine AS runtime
+FROM node:24-slim AS runtime
 
 WORKDIR /workspace
 
@@ -12,7 +12,10 @@ RUN npm ci
 COPY apps/frontend apps/frontend
 COPY packages/api-client-ts packages/api-client-ts
 
-RUN npm run api-client:build && npm --workspace frontend run build
+ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
+
+RUN npm run api-client:build && npm --workspace frontend run build -- --webpack
 
 EXPOSE 3000
 
