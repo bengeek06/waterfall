@@ -256,43 +256,45 @@ class PlanningTaskSnapshotWrite(BaseModel):
     """
 
     uid: int = Field(ge=1)
-    id_display: int | None = None
-    structure_key: str | None = Field(default=None, max_length=128)
-    structure_kind: StructureKind | None = None
-    parent_uid: int | None = Field(default=None, gt=0)
-    position: int | None = Field(default=None, gt=0)
+    id_display: int | None
+    structure_key: str | None = Field(max_length=128)
+    structure_kind: StructureKind | None
+    parent_uid: int | None = Field(gt=0)
+    position: int | None = Field(gt=0)
     name: str = Field(min_length=1, max_length=512)
-    outline_number: str | None = Field(default=None, max_length=512)
-    outline_level: int | None = None
-    wbs: str | None = Field(default=None, max_length=255)
-    start_at: datetime | None = None
-    finish_at: datetime | None = None
-    duration_minutes: int | None = Field(default=None, ge=0)
-    duration_format: int | None = None
-    work_minutes: int | None = Field(default=None, ge=0)
-    task_type: int | None = Field(default=None, ge=0, le=2)
-    percent_complete: int | None = Field(default=None, ge=0, le=100)
-    is_summary: bool = False
-    is_milestone: bool = False
-    is_manual: bool | None = None
-    calendar_uid: int | None = None
+    outline_number: str | None = Field(max_length=512)
+    outline_level: int | None
+    wbs: str | None = Field(max_length=255)
+    start_at: datetime | None
+    finish_at: datetime | None
+    duration_minutes: int | None = Field(ge=0)
+    duration_format: int | None
+    work_minutes: int | None = Field(ge=0)
+    task_type: int | None = Field(ge=0, le=2)
+    percent_complete: int | None = Field(ge=0, le=100)
+    is_summary: bool
+    is_milestone: bool
+    is_manual: bool | None
+    calendar_uid: int | None
     # Unbounded, unlike most other free-text fields here: imported MSPDI Notes are stored
     # in an unbounded Text column (wf_planning_task_snapshot.notes), so a snapshot captured
     # from a legitimately imported planning can already exceed a smaller limit -- this must
     # round-trip whatever the server can already return, not impose a stricter one.
-    notes: str | None = None
+    notes: str | None
 
 
 class PlanningLinkSnapshotWrite(BaseModel):
+    """Link state for undo/redo restore. All fields required (null is explicit)."""
+
     task_uid: int = Field(ge=1)
     predecessor_uid: int = Field(ge=1)
     link_type: int = Field(ge=0, le=3)
-    lag_tenth_minute: int | None = Field(default=None, ge=-2_147_483_648, le=2_147_483_647)
+    lag_tenth_minute: int | None = Field(ge=-2_147_483_648, le=2_147_483_647)
     # Unlike TaskLinkWrite (validated MSPDI import), this must round-trip whatever
     # PlanningLinkRead can already return, including a legacy-imported value outside
     # the MspdiLagFormat enum (TaskLinkRead itself exposes lag_format as a plain
     # integer for exactly that reason).
-    lag_format: int | None = None
+    lag_format: int | None
 
 
 class PlanningSnapshotRestore(BaseModel):

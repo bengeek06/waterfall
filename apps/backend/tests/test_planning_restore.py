@@ -40,11 +40,92 @@ def _tasks_by_uid(payload: dict[str, Any]) -> dict[int, dict[str, Any]]:
     return {task["uid"]: task for task in cast(list[dict[str, Any]], payload["tasks"])}
 
 
-def _links(payload: dict[str, Any]) -> list[tuple[int, int, int]]:
+def _links(payload: dict[str, Any]) -> list[tuple[int, int, int, int | None, int | None]]:
     return [
-        (link["task_uid"], link["predecessor_uid"], link["link_type"])
+        (
+            link["task_uid"],
+            link["predecessor_uid"],
+            link["link_type"],
+            link.get("lag_tenth_minute"),
+            link.get("lag_format"),
+        )
         for link in cast(list[dict[str, Any]], payload["links"])
     ]
+
+
+def _full_restore_payload(payload: dict[str, Any], expected_revision: int) -> dict[str, Any]:
+    """Build a restore payload including all required fields (for sparse-payload prevention)."""
+    return {
+        "tasks": [
+            {
+                "uid": task["uid"],
+                "id_display": task.get("id_display"),
+                "structure_key": task.get("structure_key"),
+                "structure_kind": task.get("structure_kind"),
+                "parent_uid": task.get("parent_uid"),
+                "position": task["position"],
+                "name": task["name"],
+                "outline_number": task.get("outline_number"),
+                "outline_level": task.get("outline_level"),
+                "wbs": task.get("wbs"),
+                "start_at": task.get("start_at"),
+                "finish_at": task.get("finish_at"),
+                "duration_minutes": task.get("duration_minutes"),
+                "duration_format": task.get("duration_format"),
+                "work_minutes": task.get("work_minutes"),
+                "task_type": task.get("task_type"),
+                "percent_complete": task.get("percent_complete"),
+                "is_summary": task["is_summary"],
+                "is_milestone": task["is_milestone"],
+                "is_manual": task.get("is_manual"),
+                "calendar_uid": task.get("calendar_uid"),
+                "notes": task.get("description"),
+            }
+            for task in _tasks_by_uid(payload).values()
+        ],
+        "links": [
+            {
+                "task_uid": task_uid,
+                "predecessor_uid": predecessor_uid,
+                "link_type": link_type,
+                "lag_tenth_minute": lag_tenth_minute,
+                "lag_format": lag_format,
+            }
+            for task_uid, predecessor_uid, link_type, lag_tenth_minute, lag_format in _links(
+                payload
+            )
+        ],
+        "expected_revision": expected_revision,
+    }
+
+
+def _task_payload(uid: int, name: str, **overrides: Any) -> dict[str, Any]:
+    payload = {
+        "uid": uid,
+        "id_display": None,
+        "structure_key": None,
+        "structure_kind": None,
+        "parent_uid": None,
+        "position": 1,
+        "name": name,
+        "outline_number": None,
+        "outline_level": None,
+        "wbs": None,
+        "start_at": None,
+        "finish_at": None,
+        "duration_minutes": None,
+        "duration_format": None,
+        "work_minutes": None,
+        "task_type": None,
+        "percent_complete": None,
+        "is_summary": False,
+        "is_milestone": False,
+        "is_manual": None,
+        "calendar_uid": None,
+        "notes": None,
+    }
+    payload.update(overrides)
+    return payload
 
 
 def _seed_planning(project_id: int) -> int:
@@ -148,6 +229,7 @@ def test_restore_recreates_a_cascade_deleted_subtree_exactly() -> None:
                         "duration_minutes": task["duration_minutes"],
                         "duration_format": task["duration_format"],
                         "work_minutes": task["work_minutes"],
+                        "task_type": task.get("task_type"),
                         "percent_complete": task["percent_complete"],
                         "is_summary": task["is_summary"],
                         "is_milestone": task["is_milestone"],
@@ -162,8 +244,16 @@ def test_restore_recreates_a_cascade_deleted_subtree_exactly() -> None:
                         "task_uid": task_uid,
                         "predecessor_uid": predecessor_uid,
                         "link_type": link_type,
+                        "lag_tenth_minute": lag_tenth_minute,
+                        "lag_format": lag_format,
                     }
-                    for task_uid, predecessor_uid, link_type in before_links
+                    for (
+                        task_uid,
+                        predecessor_uid,
+                        link_type,
+                        lag_tenth_minute,
+                        lag_format,
+                    ) in before_links
                 ],
                 "expected_revision": 1,
             },
@@ -241,8 +331,8 @@ def test_restore_rejects_cycle_without_mutating() -> None:
             _restore_path(project_id, planning_id),
             json={
                 "tasks": [
-                    {"uid": 10, "name": "A", "parent_uid": 11},
-                    {"uid": 11, "name": "B", "parent_uid": 10},
+                    _task_payload(10, "A", parent_uid=11),
+                    _task_payload(11, "B", parent_uid=10),
                 ],
                 "links": [],
                 "expected_revision": 0,
@@ -287,10 +377,22 @@ def test_restore_rejects_link_dependency_cycle_without_mutating() -> None:
         response = client.put(
             _restore_path(project_id, planning_id),
             json={
-                "tasks": [{"uid": 10, "name": "A"}, {"uid": 11, "name": "B"}],
+                "tasks": [_task_payload(10, "A"), _task_payload(11, "B")],
                 "links": [
-                    {"task_uid": 10, "predecessor_uid": 11, "link_type": 1},
-                    {"task_uid": 11, "predecessor_uid": 10, "link_type": 1},
+                    {
+                        "task_uid": 10,
+                        "predecessor_uid": 11,
+                        "link_type": 1,
+                        "lag_tenth_minute": None,
+                        "lag_format": None,
+                    },
+                    {
+                        "task_uid": 11,
+                        "predecessor_uid": 10,
+                        "link_type": 1,
+                        "lag_tenth_minute": None,
+                        "lag_format": None,
+                    },
                 ],
                 "expected_revision": 0,
             },
@@ -310,18 +412,53 @@ def test_restore_preserves_task_type() -> None:
         project_id = _create_project(client, headers)
         planning_id = _seed_planning(project_id)
 
+        # First, retrieve the planning to get the full snapshot structure
+        get_response = client.get(
+            f"/projects/{project_id}/plannings/{planning_id}", headers=headers
+        )
+        planning_detail = cast(dict[str, Any], get_response.json())
+
+        # Build a restore payload with all required fields, changing task_type to 2
+        tasks = [
+            {
+                "uid": task["uid"],
+                "id_display": task.get("id_display"),
+                "structure_key": task.get("structure_key"),
+                "structure_kind": task.get("structure_kind"),
+                "parent_uid": task.get("parent_uid"),
+                "position": task["position"],
+                "name": task["name"],
+                "outline_number": task.get("outline_number"),
+                "outline_level": task.get("outline_level"),
+                "wbs": task.get("wbs"),
+                "start_at": task.get("start_at"),
+                "finish_at": task.get("finish_at"),
+                "duration_minutes": task.get("duration_minutes"),
+                "duration_format": task.get("duration_format"),
+                "work_minutes": task.get("work_minutes"),
+                "task_type": 2,  # Set to verify it round-trips
+                "percent_complete": task.get("percent_complete"),
+                "is_summary": task.get("is_summary", False),
+                "is_milestone": task.get("is_milestone", False),
+                "is_manual": task.get("is_manual"),
+                "calendar_uid": task.get("calendar_uid"),
+                "notes": task.get("description"),  # Note: description in read, notes in write
+            }
+            for task in planning_detail["tasks"]
+        ]
+
         response = client.put(
             _restore_path(project_id, planning_id),
             json={
-                "tasks": [{"uid": 10, "name": "A", "task_type": 2}],
-                "links": [],
+                "tasks": tasks,
+                "links": planning_detail.get("links", []),
                 "expected_revision": 0,
             },
             headers=headers,
         )
 
         assert response.status_code == 200
-        assert _tasks_by_uid(cast(dict[str, Any], response.json()))[10]["task_type"] == 2
+        assert _tasks_by_uid(cast(dict[str, Any], response.json()))[1]["task_type"] == 2
 
 
 def test_restore_rejects_missing_tasks_or_links_instead_of_defaulting_to_empty() -> None:
@@ -362,7 +499,7 @@ def test_restore_round_trips_notes_longer_than_ten_thousand_characters() -> None
         response = client.put(
             _restore_path(project_id, planning_id),
             json={
-                "tasks": [{"uid": 10, "name": "A", "notes": long_notes}],
+                "tasks": [_task_payload(10, "A", notes=long_notes)],
                 "links": [],
                 "expected_revision": 0,
             },
@@ -383,8 +520,8 @@ def test_restore_rejects_milestone_with_children() -> None:
             _restore_path(project_id, planning_id),
             json={
                 "tasks": [
-                    {"uid": 10, "name": "Milestone", "is_milestone": True},
-                    {"uid": 11, "name": "Child", "parent_uid": 10},
+                    _task_payload(10, "Milestone", is_milestone=True),
+                    _task_payload(11, "Child", parent_uid=10),
                 ],
                 "links": [],
                 "expected_revision": 0,
@@ -393,6 +530,56 @@ def test_restore_rejects_milestone_with_children() -> None:
         )
 
         assert response.status_code == 409
+        detail = client.get(f"/projects/{project_id}/plannings/{planning_id}", headers=headers)
+        assert detail.json()["revision"] == 0
+
+
+def test_restore_rejects_partial_task_payload_with_missing_required_fields() -> None:
+    """Finding #1: sparse payloads must not silently clear data (all fields required)."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_planning(project_id)
+
+        # Partial payload: omits required fields like is_summary, is_milestone, etc.
+        response = client.put(
+            _restore_path(project_id, planning_id),
+            json={
+                "tasks": [
+                    {"uid": 10, "name": "Partial Task"},  # Missing required fields
+                ],
+                "links": [],
+                "expected_revision": 0,
+            },
+            headers=headers,
+        )
+
+        # Should reject with 422 (Pydantic validation error)
+        # The restore route maps validation failures to a bad request.
+        assert response.status_code == 400
+        # Planning unchanged
+        detail = client.get(f"/projects/{project_id}/plannings/{planning_id}", headers=headers)
+        assert detail.json()["revision"] == 0
+
+
+def test_restore_rejects_partial_link_payload_without_mutating() -> None:
+    """Sparse link payloads must not silently clear lag metadata."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_planning(project_id)
+
+        response = client.put(
+            _restore_path(project_id, planning_id),
+            json={
+                "tasks": [],
+                "links": [{"task_uid": 10, "predecessor_uid": 11}],
+                "expected_revision": 0,
+            },
+            headers=headers,
+        )
+
+        assert response.status_code == 400
         detail = client.get(f"/projects/{project_id}/plannings/{planning_id}", headers=headers)
         assert detail.json()["revision"] == 0
 
@@ -443,26 +630,7 @@ def test_redo_reapplies_a_move_after_undo() -> None:
         assert after_payload["revision"] == 1
 
         def _restore_payload(payload: dict[str, Any], expected_revision: int) -> dict[str, Any]:
-            return {
-                "tasks": [
-                    {
-                        "uid": task["uid"],
-                        "name": task["name"],
-                        "parent_uid": task["parent_uid"],
-                        "position": task["position"],
-                        "outline_number": task["outline_number"],
-                        "outline_level": task["outline_level"],
-                        "is_summary": task["is_summary"],
-                        "is_milestone": task["is_milestone"],
-                    }
-                    for task in _tasks_by_uid(payload).values()
-                ],
-                "links": [
-                    {"task_uid": t, "predecessor_uid": p, "link_type": lt}
-                    for t, p, lt in _links(payload)
-                ],
-                "expected_revision": expected_revision,
-            }
+            return _full_restore_payload(payload, expected_revision)
 
         undone = client.put(
             _restore_path(project_id, planning_id),

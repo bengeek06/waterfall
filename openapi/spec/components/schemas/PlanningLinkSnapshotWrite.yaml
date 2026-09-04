@@ -3,6 +3,8 @@ required:
 - task_uid
 - predecessor_uid
 - link_type
+- lag_tenth_minute
+- lag_format
 properties:
   task_uid:
     type: integer

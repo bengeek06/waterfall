@@ -1,7 +1,27 @@
 type: object
 required:
 - uid
+- id_display
+- structure_key
+- structure_kind
+- parent_uid
+- position
 - name
+- outline_number
+- outline_level
+- wbs
+- start_at
+- finish_at
+- duration_minutes
+- duration_format
+- work_minutes
+- task_type
+- percent_complete
+- is_summary
+- is_milestone
+- is_manual
+- calendar_uid
+- notes
 properties:
   uid:
     type: integer
@@ -62,10 +82,8 @@ properties:
     maximum: 100
   is_summary:
     type: boolean
-    default: false
   is_milestone:
     type: boolean
-    default: false
   is_manual:
     type: [boolean, "null"]
   calendar_uid:
