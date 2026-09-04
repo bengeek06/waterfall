@@ -8,6 +8,9 @@ services:
       CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
       DATABASE_URL: postgresql+psycopg://waterfall:waterfall@postgres:5432/waterfall
       IMPORT_STORAGE_PATH: /data/imports
+      WF_ADMIN_EMAIL: ${WF_ADMIN_EMAIL:-admin@example.com}
+      WF_ADMIN_IS_ACTIVE: ${WF_ADMIN_IS_ACTIVE:-true}
+      WF_ADMIN_PASSWORD: ${WF_ADMIN_PASSWORD:?WF_ADMIN_PASSWORD must be set}
     ports:
       - "8000:8000"
     depends_on:

@@ -41,7 +41,7 @@ alembic upgrade head
 
 ```bash
 WF_ADMIN_EMAIL=admin@example.com \
-WF_ADMIN_PASSWORD=admin1234 \
+WF_ADMIN_PASSWORD="$WF_ADMIN_PASSWORD" \
 waterfall-seed-admin
 ```
 
