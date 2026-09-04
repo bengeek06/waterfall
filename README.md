@@ -212,14 +212,16 @@ Depuis la racine du dépôt, renseignez au minimum dans `.env` :
 ```env
 CORS_ALLOW_ORIGINS=http://<IP_VM>:3000
 NEXT_PUBLIC_API_BASE_URL=http://<IP_VM>:8000
+SECRET_KEY=<clé-secrète-générée>
 WF_ADMIN_PASSWORD=<mot-de-passe-local>
 PGADMIN_DEFAULT_PASSWORD=<mot-de-passe-local>
 GRAFANA_ADMIN_PASSWORD=<mot-de-passe-local>
 # ADMIN_BIND_ADDRESS=127.0.0.1
 ```
 
-Le mot de passe admin est obligatoire et ne doit jamais être commité. Pour une VM, utilisez
-l’adresse IP réellement accessible depuis le navigateur, pas le nom Docker `api`.
+La clé secrète et les mots de passe sont obligatoires et ne doivent jamais être commités. Générez
+une valeur aléatoire pour `SECRET_KEY`. Pour une VM, utilisez l’adresse IP réellement accessible
+depuis le navigateur, pas le nom Docker `api`.
 
 ```bash
 make up-full                # API + DB + frontend + observabilité

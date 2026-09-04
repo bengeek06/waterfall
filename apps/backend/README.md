@@ -40,8 +40,8 @@ alembic upgrade head
 ## Seed Admin (idempotent)
 
 ```bash
-WF_ADMIN_EMAIL=admin@example.com \
-WF_ADMIN_PASSWORD="$WF_ADMIN_PASSWORD" \
+export WF_ADMIN_EMAIL=admin@example.com
+export WF_ADMIN_PASSWORD='<mot-de-passe-local>'
 waterfall-seed-admin
 ```
 
