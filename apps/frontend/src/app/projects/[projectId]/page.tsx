@@ -170,6 +170,7 @@ export default function ProjectDetailsPage() {
   const [plannings, setPlannings] = useState<Planning[]>([]);
   const [selectedPlanningId, setSelectedPlanningId] = useState<number | null>(null);
   const selectedPlanningIdRef = useRef(selectedPlanningId);
+  const planningLoadGenerationRef = useRef(0);
   // Updated synchronously (not via effect) so an in-flight move can never observe a stale ID:
   // an effect only runs after commit, leaving a window where a race could still slip through.
   function updateSelectedPlanningId(next: number | null) {
@@ -320,6 +321,7 @@ export default function ProjectDetailsPage() {
     let cancelled = false;
 
     async function loadPlanningDetail() {
+      const loadGeneration = ++planningLoadGenerationRef.current;
       if (!session || selectedPlanningId === null) {
         setPlanningDetail(null);
         setPlanningDetailBusy(false);
@@ -330,7 +332,11 @@ export default function ProjectDetailsPage() {
       try {
         const detail = await getPlanning(projectId, selectedPlanningId, session, onSessionRefresh);
         const savedDraft = await getPlanningStructureDraft(projectId, session, onSessionRefresh);
-        if (!cancelled) {
+        if (
+          !cancelled &&
+          loadGeneration === planningLoadGenerationRef.current &&
+          selectedPlanningIdRef.current === selectedPlanningId
+        ) {
           const history = getPlanningHistory(historyByPlanningIdRef.current, selectedPlanningId);
           const historyRevision = history.revision;
           if (historyRevision !== null && historyRevision !== detail.revision) {
@@ -363,7 +369,7 @@ export default function ProjectDetailsPage() {
           }
         }
       } catch (cause) {
-        if (cancelled) {
+        if (cancelled || loadGeneration !== planningLoadGenerationRef.current) {
           return;
         }
         if (cause instanceof SessionExpiredError) {
@@ -373,7 +379,7 @@ export default function ProjectDetailsPage() {
         }
         setError(cause instanceof ApiError ? cause.message : "Impossible de charger le planning.");
       } finally {
-        if (!cancelled) {
+        if (!cancelled && loadGeneration === planningLoadGenerationRef.current) {
           setPlanningDetailBusy(false);
         }
       }
