@@ -1,0 +1,40 @@
+{
+  "posts": [
+    {
+      "key": "engineering",
+      "name": "Engineering",
+      "lots": [
+        {
+          "key": "design",
+          "name": "Design",
+          "deliverables": [
+            {
+              "key": "requirements",
+              "name": "Requirements"
+            },
+            {
+              "key": "prototype",
+              "name": "Prototype"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "delivery",
+      "name": "Delivery",
+      "lots": [
+        {
+          "key": "release",
+          "name": "Release",
+          "deliverables": [
+            {
+              "key": "handover",
+              "name": "Handover"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
