@@ -1,18 +1,8 @@
 type: object
 required:
-- id
-- project_id
 - uid
 - name
-- is_summary
-- is_milestone
 properties:
-  id:
-    type: integer
-    minimum: 1
-  project_id:
-    type: integer
-    minimum: 1
   uid:
     type: integer
     minimum: 1
@@ -20,6 +10,7 @@ properties:
     type: [integer, "null"]
   structure_key:
     type: [string, "null"]
+    maxLength: 128
   structure_kind:
     type: [string, "null"]
     enum:
@@ -31,16 +22,22 @@ properties:
     - null
   parent_uid:
     type: [integer, "null"]
+    minimum: 1
   position:
     type: [integer, "null"]
+    minimum: 1
   name:
     type: string
+    minLength: 1
+    maxLength: 512
   outline_number:
     type: [string, "null"]
+    maxLength: 512
   outline_level:
     type: [integer, "null"]
   wbs:
     type: [string, "null"]
+    maxLength: 255
   start_at:
     type: [string, "null"]
     format: date-time
@@ -49,23 +46,26 @@ properties:
     format: date-time
   duration_minutes:
     type: [integer, "null"]
+    minimum: 0
   duration_format:
     type: [integer, "null"]
   work_minutes:
     type: [integer, "null"]
+    minimum: 0
   percent_complete:
     type: [integer, "null"]
+    minimum: 0
+    maximum: 100
   is_summary:
     type: boolean
+    default: false
   is_milestone:
     type: boolean
+    default: false
   is_manual:
     type: [boolean, "null"]
   calendar_uid:
     type: [integer, "null"]
-  description:
+  notes:
     type: [string, "null"]
-  predecessor_links:
-    type: array
-    items:
-      $ref: TaskLinkRead.yaml
+    maxLength: 10000

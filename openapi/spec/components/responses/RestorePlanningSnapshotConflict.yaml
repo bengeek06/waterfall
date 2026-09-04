@@ -1,0 +1,8 @@
+description: >-
+  Le snapshot entre en conflit avec le planning (cycle, parent orphelin,
+  milestone avec enfants), ou `expected_revision` ne correspond plus a la
+  revision persistee (code `PLANNING_REVISION_CONFLICT`).
+content:
+  application/json:
+    schema:
+      $ref: ../schemas/FastAPIErrorResponse.yaml

@@ -1,0 +1,22 @@
+type: object
+required:
+- task_uid
+- predecessor_uid
+- link_type
+properties:
+  task_uid:
+    type: integer
+    minimum: 1
+  predecessor_uid:
+    type: integer
+    minimum: 1
+  link_type:
+    type: integer
+    minimum: 0
+    maximum: 3
+  lag_tenth_minute:
+    type: [integer, "null"]
+    format: int32
+  lag_format:
+    type: [integer, "null"]
+    enum: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 19, 20, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 51, 52, null]
