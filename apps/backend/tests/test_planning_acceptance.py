@@ -46,6 +46,41 @@ def _auth_headers(client: TestClient) -> dict[str, str]:
     return {"Authorization": f"Bearer {token.json()['access_token']}"}
 
 
+def _import_xml(
+    client: TestClient,
+    headers: dict[str, str],
+    project_id: int,
+    xml: bytes,
+    filename: str,
+    *,
+    confirm: bool = True,
+) -> int:
+    batch_response = client.post(
+        "/imports/v1/batches",
+        json={"projectId": project_id, "importMode": "standard"},
+        headers=headers,
+    )
+    assert batch_response.status_code == 201
+    batch_id = cast(int, batch_response.json()["id"])
+
+    upload_response = client.post(
+        f"/imports/v1/batches/{batch_id}/xml",
+        files={"file": (filename, xml, "application/xml")},
+        headers=headers,
+    )
+    assert upload_response.status_code == 202
+
+    if confirm:
+        run_response = client.post(
+            f"/imports/v1/batches/{batch_id}/run",
+            json={"dryRun": False, "confirm": True},
+            headers=headers,
+        )
+        assert run_response.status_code == 202
+        assert run_response.json()["status"] == "success"
+    return batch_id
+
+
 def test_planning_version_and_draft_lifecycle() -> None:
     structure = cast(dict[str, Any], json.loads(STRUCTURE_FIXTURE.read_text()))
 
@@ -165,3 +200,80 @@ def test_import_diff_confirmation_and_export_lifecycle() -> None:
         )
         assert validated.status_code == 200
         assert validated.json()["status"] == "validated"
+
+
+def test_import_modify_export_reimport_round_trip() -> None:
+    modified_xml = IMPORT_XML.replace(b"Imported acceptance task", b"Imported acceptance task v2")
+
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        source_project = client.post(
+            "/projects", json={"name": "Round-trip source"}, headers=headers
+        )
+        assert source_project.status_code == 201
+        source_project_id = cast(int, source_project.json()["id"])
+
+        _import_xml(client, headers, source_project_id, IMPORT_XML, "initial.xml")
+        first_planning = cast(
+            list[dict[str, Any]],
+            client.get(f"/projects/{source_project_id}/plannings", headers=headers).json(),
+        )[0]
+        first_planning_id = cast(int, first_planning["id"])
+        assert (
+            client.post(
+                f"/projects/{source_project_id}/plannings/{first_planning_id}/validate",
+                headers=headers,
+            ).status_code
+            == 200
+        )
+        assert (
+            client.post(
+                f"/projects/{source_project_id}/plannings/{first_planning_id}/reference",
+                headers=headers,
+            ).status_code
+            == 200
+        )
+
+        modified_batch_id = _import_xml(
+            client,
+            headers,
+            source_project_id,
+            modified_xml,
+            "modified.xml",
+            confirm=False,
+        )
+        diff = client.get(f"/imports/v1/batches/{modified_batch_id}/diff", headers=headers)
+        assert diff.status_code == 200
+        diff_items = cast(list[dict[str, Any]], diff.json()["items"])
+        assert any(item["kind"] == "modified" for item in diff_items)
+        confirmed = client.post(
+            f"/imports/v1/batches/{modified_batch_id}/run",
+            json={"dryRun": False, "confirm": True},
+            headers=headers,
+        )
+        assert confirmed.status_code == 202
+        assert confirmed.json()["status"] == "success"
+
+        plannings = client.get(f"/projects/{source_project_id}/plannings", headers=headers)
+        assert plannings.status_code == 200
+        planning_statuses = [item["status"] for item in plannings.json()]
+        assert planning_statuses == ["validated", "draft"]
+        source_export = client.get(f"/projects/{source_project_id}/export.xml", headers=headers)
+        assert source_export.status_code == 200
+        assert b"Imported acceptance task v2" in source_export.content
+
+        target_project = client.post(
+            "/projects", json={"name": "Round-trip target"}, headers=headers
+        )
+        assert target_project.status_code == 201
+        target_project_id = cast(int, target_project.json()["id"])
+        _import_xml(
+            client,
+            headers,
+            target_project_id,
+            cast(bytes, source_export.content),
+            "round-trip.xml",
+        )
+        target_tasks = client.get(f"/projects/{target_project_id}/tasks", headers=headers)
+        assert target_tasks.status_code == 200
+        assert target_tasks.json()[0]["name"] == "Imported acceptance task v2"
