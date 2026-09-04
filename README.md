@@ -200,6 +200,7 @@ Adresses par défaut :
 Pour lancer les processus séparément : `make run-backend`, puis `make run-frontend`.
 Le frontend utilise `NEXT_PUBLIC_API_BASE_URL=http://localhost:8000` et l’API doit autoriser
 `http://localhost:3000` dans `CORS_ALLOW_ORIGINS`.
+Pour un accès depuis une VM, ajoutez `NEXT_ALLOWED_DEV_ORIGINS=<IP_VM>,localhost,127.0.0.1`.
 
 ### 4) Configuration B : stack Docker complet
 
@@ -212,7 +213,6 @@ Depuis la racine du dépôt, renseignez au minimum dans `.env` :
 ```env
 CORS_ALLOW_ORIGINS=http://<IP_VM>:3000
 NEXT_PUBLIC_API_BASE_URL=http://<IP_VM>:8000
-NEXT_ALLOWED_DEV_ORIGINS=<IP_VM>,localhost,127.0.0.1
 SECRET_KEY=<clé-secrète-générée>
 WF_ADMIN_PASSWORD=<mot-de-passe-local>
 PGADMIN_DEFAULT_PASSWORD=<mot-de-passe-local>
