@@ -73,6 +73,8 @@ class Settings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     settings = Settings()
-    if settings.app_env not in {"dev", "test"} and settings.secret_key == "change-me":
+    if settings.app_env not in {"dev", "test"} and (
+        not settings.secret_key.strip() or settings.secret_key == "change-me"
+    ):
         raise ValueError("SECRET_KEY must be set in non-dev environments")
     return settings

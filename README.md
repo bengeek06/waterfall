@@ -212,6 +212,7 @@ Depuis la racine du dépôt, renseignez au minimum dans `.env` :
 ```env
 CORS_ALLOW_ORIGINS=http://<IP_VM>:3000
 NEXT_PUBLIC_API_BASE_URL=http://<IP_VM>:8000
+NEXT_ALLOWED_DEV_ORIGINS=<IP_VM>,localhost,127.0.0.1
 SECRET_KEY=<clé-secrète-générée>
 WF_ADMIN_PASSWORD=<mot-de-passe-local>
 PGADMIN_DEFAULT_PASSWORD=<mot-de-passe-local>

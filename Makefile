@@ -62,9 +62,9 @@ run: dev  ## Alias for 'dev'
 dev:  ## Run backend + frontend natively (Ctrl-C stops both)
 	@bash -c 'set -a; [ ! -f .env ] || . ./.env; set +a; backend_pid=; frontend_pid=; cleanup() { trap - EXIT INT TERM; kill "$$backend_pid" "$$frontend_pid" 2>/dev/null || true; wait "$$backend_pid" "$$frontend_pid" 2>/dev/null || true; }; trap cleanup EXIT INT TERM; (cd $(BACKEND) && $(PYTHON) -m uvicorn waterfall.main:app --app-dir src --reload --host "$${APP_HOST:-0.0.0.0}" --port "$${APP_PORT:-8000}") & backend_pid=$$!; npm run frontend:dev & frontend_pid=$$!; wait -n "$$backend_pid" "$$frontend_pid"'
 run-backend:  ## Run backend only (uvicorn --reload)
-	cd $(BACKEND) && $(PYTHON) -m uvicorn waterfall.main:app --app-dir src --reload --host "$${APP_HOST:-0.0.0.0}" --port "$${APP_PORT:-8000}"
+	@set -a; [ ! -f .env ] || . ./.env; set +a; cd $(BACKEND) && $(PYTHON) -m uvicorn waterfall.main:app --app-dir src --reload --host "$${APP_HOST:-0.0.0.0}" --port "$${APP_PORT:-8000}"
 run-frontend:  ## Run frontend only (next dev)
-	npm run frontend:dev
+	@set -a; [ ! -f .env ] || . ./.env; set +a; npm run frontend:dev
 
 # ---- Docker ----
 db-up:  ## Start Postgres only (detached) for native dev
