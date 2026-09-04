@@ -36,7 +36,7 @@ class Settings(BaseSettings):
         default="sqlite+pysqlite:///./waterfall.db",
         alias="DATABASE_URL",
     )
-    secret_key: str = Field(default="change-me", alias="SECRET_KEY")
+    secret_key: str = Field(default="", alias="SECRET_KEY")
     jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
     access_token_expire_minutes: int = Field(default=30, alias="ACCESS_TOKEN_EXPIRE_MINUTES")
     refresh_token_expire_minutes: int = Field(default=1440, alias="REFRESH_TOKEN_EXPIRE_MINUTES")
@@ -70,9 +70,13 @@ class Settings(BaseSettings):
         return []
 
 
+def _validate_settings(settings: Settings) -> Settings:
+    secret_key = settings.secret_key.strip()
+    if not secret_key or secret_key == "change-me":
+        raise ValueError("SECRET_KEY must be set")
+    return settings
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    settings = Settings()
-    if settings.app_env not in {"dev", "test"} and settings.secret_key == "change-me":
-        raise ValueError("SECRET_KEY must be set in non-dev environments")
-    return settings
+    return _validate_settings(Settings())

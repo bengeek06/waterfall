@@ -198,8 +198,16 @@ Adresses par défaut :
 - documentation API : `http://localhost:8000/docs`
 
 Pour lancer les processus séparément : `make run-backend`, puis `make run-frontend`.
-Le frontend utilise `NEXT_PUBLIC_API_BASE_URL=http://localhost:8000` et l’API doit autoriser
-`http://localhost:3000` dans `CORS_ALLOW_ORIGINS`.
+Pour un accès depuis une VM, configurez dans `.env` :
+
+```env
+NEXT_PUBLIC_API_BASE_URL=http://<IP_VM>:8000
+CORS_ALLOW_ORIGINS=http://<IP_VM>:3000
+NEXT_ALLOWED_DEV_ORIGINS=<IP_VM>,localhost,127.0.0.1
+SECRET_KEY=<clé-secrète-générée>
+```
+
+En local, remplacez `<IP_VM>` par `localhost` et utilisez les ports indiqués ci-dessus.
 
 ### 4) Configuration B : stack Docker complet
 
