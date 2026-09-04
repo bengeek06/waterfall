@@ -7,10 +7,14 @@ from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 from httpx import Response
+from sqlalchemy import update
 
+from waterfall.db.session import get_session_factory
 from waterfall.main import app
+from waterfall.models.ms_core import MsProject
 
 STRUCTURE_FIXTURE = (
     Path(__file__).resolve().parents[3] / "tests" / "data" / "planning" / "versioned-structure.json"
@@ -277,3 +281,106 @@ def test_import_modify_export_reimport_round_trip() -> None:
         target_tasks = client.get(f"/projects/{target_project_id}/tasks", headers=headers)
         assert target_tasks.status_code == 200
         assert target_tasks.json()[0]["name"] == "Imported acceptance task v2"
+
+
+def test_import_round_trip_allows_direct_draft_edit() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project = client.post("/projects", json={"name": "Direct edit acceptance"}, headers=headers)
+        assert project.status_code == 201
+        project_id = cast(int, project.json()["id"])
+        _import_xml(client, headers, project_id, IMPORT_XML, "direct-edit.xml")
+
+        planning = cast(
+            list[dict[str, Any]],
+            client.get(f"/projects/{project_id}/plannings", headers=headers).json(),
+        )[0]
+        planning_id = cast(int, planning["id"])
+        update_response = client.patch(
+            f"/projects/{project_id}/plannings/{planning_id}/tasks/1",
+            json={
+                "is_manual": True,
+                "start_at": "2026-01-05T08:00:00Z",
+                "finish_at": "2026-01-06T18:00:00Z",
+                "duration_minutes": 480,
+                "expected_revision": 0,
+            },
+            headers=headers,
+        )
+
+        assert update_response.status_code == 200
+        assert update_response.json()["revision"] == 1
+        edited_task = update_response.json()["tasks"][0]
+        assert edited_task["is_manual"] is True
+        assert edited_task["start_at"] == "2026-01-05T08:00:00"
+
+
+def test_validated_planning_rejects_direct_edit_without_mutating() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project = client.post("/projects", json={"name": "Validated acceptance"}, headers=headers)
+        assert project.status_code == 201
+        project_id = cast(int, project.json()["id"])
+        _import_xml(client, headers, project_id, IMPORT_XML, "validated.xml")
+        planning = cast(
+            list[dict[str, Any]],
+            client.get(f"/projects/{project_id}/plannings", headers=headers).json(),
+        )[0]
+        planning_id = cast(int, planning["id"])
+        assert (
+            client.post(
+                f"/projects/{project_id}/plannings/{planning_id}/validate", headers=headers
+            ).status_code
+            == 200
+        )
+
+        update_response = client.patch(
+            f"/projects/{project_id}/plannings/{planning_id}/tasks/1",
+            json={
+                "is_manual": True,
+                "start_at": "2026-01-05T08:00:00Z",
+                "expected_revision": 0,
+            },
+            headers=headers,
+        )
+
+        assert update_response.status_code == 409
+        current = client.get(f"/projects/{project_id}/plannings/{planning_id}", headers=headers)
+        assert current.status_code == 200
+        assert current.json()["revision"] == 0
+
+
+@pytest.mark.parametrize("project_status", ["perdu", "termine", "abandonne"])
+def test_read_only_project_rejects_direct_edit_without_mutating(project_status: str) -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project = client.post("/projects", json={"name": "Read-only acceptance"}, headers=headers)
+        assert project.status_code == 201
+        project_id = cast(int, project.json()["id"])
+        _import_xml(client, headers, project_id, IMPORT_XML, f"{project_status}.xml")
+        planning = cast(
+            list[dict[str, Any]],
+            client.get(f"/projects/{project_id}/plannings", headers=headers).json(),
+        )[0]
+        planning_id = cast(int, planning["id"])
+
+        with get_session_factory()() as session:
+            session.execute(
+                update(MsProject).where(MsProject.id == project_id).values(status=project_status)
+            )
+            session.commit()
+
+        update_response = client.patch(
+            f"/projects/{project_id}/plannings/{planning_id}/tasks/1",
+            json={
+                "is_manual": True,
+                "start_at": "2026-01-05T08:00:00Z",
+                "expected_revision": 0,
+            },
+            headers=headers,
+        )
+
+        assert update_response.status_code == 409
+        current = client.get(f"/projects/{project_id}/plannings/{planning_id}", headers=headers)
+        assert current.status_code == 200
+        assert current.json()["revision"] == 0
