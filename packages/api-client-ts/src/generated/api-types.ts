@@ -502,6 +502,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{projectId}/plannings/{planningId}/tasks/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Restaurer l'etat exact des taches/liens d'un brouillon de planning (undo/redo) */
+        put: operations["restorePlanningSnapshot"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/projects/{projectId}/plannings/{planningId}/validate": {
         parameters: {
             query?: never;
@@ -1412,6 +1429,46 @@ export interface components {
             confirm_cascade: boolean;
             expected_revision: number;
         };
+        PlanningTaskSnapshotWrite: {
+            uid: number;
+            id_display: number | null;
+            structure_key: string | null;
+            /** @enum {string|null} */
+            structure_kind: "poste" | "lot" | "livrable" | "milestone" | "task" | null;
+            parent_uid: number | null;
+            position: number | null;
+            name: string;
+            outline_number: string | null;
+            outline_level: number | null;
+            wbs: string | null;
+            /** Format: date-time */
+            start_at: string | null;
+            /** Format: date-time */
+            finish_at: string | null;
+            duration_minutes: number | null;
+            duration_format: number | null;
+            work_minutes: number | null;
+            task_type: number | null;
+            percent_complete: number | null;
+            is_summary: boolean;
+            is_milestone: boolean;
+            is_manual: boolean | null;
+            calendar_uid: number | null;
+            notes: string | null;
+        };
+        PlanningLinkSnapshotWrite: {
+            task_uid: number;
+            predecessor_uid: number;
+            link_type: number;
+            /** Format: int32 */
+            lag_tenth_minute: number | null;
+            lag_format: number | null;
+        };
+        PlanningSnapshotRestore: {
+            tasks: components["schemas"]["PlanningTaskSnapshotWrite"][];
+            links: components["schemas"]["PlanningLinkSnapshotWrite"][];
+            expected_revision: number;
+        };
         PlanningDetailRead: components["schemas"]["PlanningRead"] & {
             tasks: components["schemas"]["TaskRead"][];
             links: components["schemas"]["PlanningLinkRead"][];
@@ -1429,15 +1486,20 @@ export interface components {
             name: string;
             outline_number?: string | null;
             outline_level?: number | null;
+            wbs?: string | null;
             /** Format: date-time */
             start_at?: string | null;
             /** Format: date-time */
             finish_at?: string | null;
             duration_minutes?: number | null;
+            duration_format?: number | null;
+            work_minutes?: number | null;
+            task_type?: number | null;
             percent_complete?: number | null;
             is_summary: boolean;
             is_milestone: boolean;
             is_manual?: boolean | null;
+            calendar_uid?: number | null;
             description?: string | null;
             predecessor_links?: components["schemas"]["TaskLinkRead"][];
         };
@@ -2042,6 +2104,33 @@ export interface components {
          *     ne correspond plus a la revision persistee (code `PLANNING_REVISION_CONFLICT`).
          */
         ReplaceTaskLinksConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
+            };
+        };
+        /** @description Snapshot de restauration invalide (uid/cle dupliques, lien inconnu) */
+        RestorePlanningSnapshotBadRequest: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
+            };
+        };
+        /** @description Projet ou planning introuvable */
+        RestorePlanningSnapshotNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
+            };
+        };
+        /** @description Le snapshot entre en conflit avec le planning (cycle, parent orphelin, milestone avec enfants), ou `expected_revision` ne correspond plus a la revision persistee (code `PLANNING_REVISION_CONFLICT`). */
+        RestorePlanningSnapshotConflict: {
             headers: {
                 [name: string]: unknown;
             };
@@ -3056,6 +3145,39 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["ReplaceTaskLinksNotFound"];
             409: components["responses"]["ReplaceTaskLinksConflict"];
+        };
+    };
+    restorePlanningSnapshot: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de planning */
+                planningId: components["parameters"]["PlanningId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlanningSnapshotRestore"];
+            };
+        };
+        responses: {
+            /** @description Arbre complet du brouillon mis a jour */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanningDetailRead"];
+                };
+            };
+            400: components["responses"]["RestorePlanningSnapshotBadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["RestorePlanningSnapshotNotFound"];
+            409: components["responses"]["RestorePlanningSnapshotConflict"];
         };
     };
     validatePlanning: {

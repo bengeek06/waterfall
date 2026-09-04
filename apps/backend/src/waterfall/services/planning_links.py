@@ -21,7 +21,7 @@ class PlanningLinkInvariantError(PlanningLinkError):
     """The planning predecessor links would violate a structural invariant."""
 
 
-def _validate_no_cycles(edges: dict[int, list[int]]) -> None:
+def validate_no_cycles(edges: dict[int, list[int]]) -> None:
     # Iterative DFS with an explicit stack: a recursive version would raise
     # RecursionError -- an uncaught 500 -- on a long but valid dependency
     # chain near Python's recursion limit, which a large imported planning
@@ -93,7 +93,7 @@ def replace_task_predecessor_links(
     ):
         edges[link.task_uid].append(link.predecessor_uid)
     edges[task_uid] = [link.predecessor_uid for link in links]
-    _validate_no_cycles(edges)
+    validate_no_cycles(edges)
 
     db.query(WfPlanningLinkSnapshot).filter(
         WfPlanningLinkSnapshot.planning_id == planning.id,

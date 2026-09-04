@@ -1,0 +1,17 @@
+type: object
+required:
+- tasks
+- links
+- expected_revision
+properties:
+  tasks:
+    type: array
+    items:
+      $ref: PlanningTaskSnapshotWrite.yaml
+  links:
+    type: array
+    items:
+      $ref: PlanningLinkSnapshotWrite.yaml
+  expected_revision:
+    type: integer
+    minimum: 0

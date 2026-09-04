@@ -36,6 +36,7 @@ from waterfall.services.planning_tree import (
     create_planning_task,
     delete_planning_tasks,
     move_planning_tasks,
+    restore_planning_snapshot,
     update_planning_task_schedule,
 )
 
@@ -63,6 +64,7 @@ __all__ = [
     "move_planning_tasks",
     "create_planning_task",
     "delete_planning_tasks",
+    "restore_planning_snapshot",
     "update_planning_task_schedule",
     "PlanningLinkError",
     "PlanningLinkInvariantError",

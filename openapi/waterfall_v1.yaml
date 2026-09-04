@@ -932,6 +932,38 @@ paths:
           $ref: '#/components/responses/ReplaceTaskLinksNotFound'
         '409':
           $ref: '#/components/responses/ReplaceTaskLinksConflict'
+  /projects/{projectId}/plannings/{planningId}/tasks/restore:
+    put:
+      tags:
+        - projects
+      summary: Restaurer l'etat exact des taches/liens d'un brouillon de planning (undo/redo)
+      operationId: restorePlanningSnapshot
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/PlanningId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlanningSnapshotRestore'
+      responses:
+        '200':
+          description: Arbre complet du brouillon mis a jour
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanningDetailRead'
+        '400':
+          $ref: '#/components/responses/RestorePlanningSnapshotBadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/RestorePlanningSnapshotNotFound'
+        '409':
+          $ref: '#/components/responses/RestorePlanningSnapshotConflict'
   /projects/{projectId}/plannings/{planningId}/validate:
     post:
       tags:
@@ -3058,6 +3090,181 @@ components:
         expected_revision:
           type: integer
           minimum: 0
+    PlanningTaskSnapshotWrite:
+      type: object
+      required:
+        - uid
+        - id_display
+        - structure_key
+        - structure_kind
+        - parent_uid
+        - position
+        - name
+        - outline_number
+        - outline_level
+        - wbs
+        - start_at
+        - finish_at
+        - duration_minutes
+        - duration_format
+        - work_minutes
+        - task_type
+        - percent_complete
+        - is_summary
+        - is_milestone
+        - is_manual
+        - calendar_uid
+        - notes
+      properties:
+        uid:
+          type: integer
+          minimum: 1
+        id_display:
+          type:
+            - integer
+            - 'null'
+        structure_key:
+          type:
+            - string
+            - 'null'
+          maxLength: 128
+        structure_kind:
+          type:
+            - string
+            - 'null'
+          enum:
+            - poste
+            - lot
+            - livrable
+            - milestone
+            - task
+            - null
+        parent_uid:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
+        position:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
+        name:
+          type: string
+          minLength: 1
+          maxLength: 512
+        outline_number:
+          type:
+            - string
+            - 'null'
+          maxLength: 512
+        outline_level:
+          type:
+            - integer
+            - 'null'
+        wbs:
+          type:
+            - string
+            - 'null'
+          maxLength: 255
+        start_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        finish_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        duration_minutes:
+          type:
+            - integer
+            - 'null'
+          minimum: 0
+        duration_format:
+          type:
+            - integer
+            - 'null'
+        work_minutes:
+          type:
+            - integer
+            - 'null'
+          minimum: 0
+        task_type:
+          type:
+            - integer
+            - 'null'
+          minimum: 0
+          maximum: 2
+        percent_complete:
+          type:
+            - integer
+            - 'null'
+          minimum: 0
+          maximum: 100
+        is_summary:
+          type: boolean
+        is_milestone:
+          type: boolean
+        is_manual:
+          type:
+            - boolean
+            - 'null'
+        calendar_uid:
+          type:
+            - integer
+            - 'null'
+        notes:
+          type:
+            - string
+            - 'null'
+    PlanningLinkSnapshotWrite:
+      type: object
+      required:
+        - task_uid
+        - predecessor_uid
+        - link_type
+        - lag_tenth_minute
+        - lag_format
+      properties:
+        task_uid:
+          type: integer
+          minimum: 1
+        predecessor_uid:
+          type: integer
+          minimum: 1
+        link_type:
+          type: integer
+          minimum: 0
+          maximum: 3
+        lag_tenth_minute:
+          type:
+            - integer
+            - 'null'
+          format: int32
+        lag_format:
+          type:
+            - integer
+            - 'null'
+    PlanningSnapshotRestore:
+      type: object
+      required:
+        - tasks
+        - links
+        - expected_revision
+      properties:
+        tasks:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlanningTaskSnapshotWrite'
+        links:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlanningLinkSnapshotWrite'
+        expected_revision:
+          type: integer
+          minimum: 0
     PlanningDetailRead:
       allOf:
         - $ref: '#/components/schemas/PlanningRead'
@@ -3130,6 +3337,10 @@ components:
           type:
             - integer
             - 'null'
+        wbs:
+          type:
+            - string
+            - 'null'
         start_at:
           type:
             - string
@@ -3144,6 +3355,18 @@ components:
           type:
             - integer
             - 'null'
+        duration_format:
+          type:
+            - integer
+            - 'null'
+        work_minutes:
+          type:
+            - integer
+            - 'null'
+        task_type:
+          type:
+            - integer
+            - 'null'
         percent_complete:
           type:
             - integer
@@ -3155,6 +3378,10 @@ components:
         is_manual:
           type:
             - boolean
+            - 'null'
+        calendar_uid:
+          type:
+            - integer
             - 'null'
         description:
           type:
@@ -4577,6 +4804,24 @@ components:
       description: |-
         La mise a jour des liens entre en conflit avec le planning, ou `expected_revision`
         ne correspond plus a la revision persistee (code `PLANNING_REVISION_CONFLICT`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/FastAPIErrorResponse'
+    RestorePlanningSnapshotBadRequest:
+      description: Snapshot de restauration invalide (uid/cle dupliques, lien inconnu)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/FastAPIErrorResponse'
+    RestorePlanningSnapshotNotFound:
+      description: Projet ou planning introuvable
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/FastAPIErrorResponse'
+    RestorePlanningSnapshotConflict:
+      description: Le snapshot entre en conflit avec le planning (cycle, parent orphelin, milestone avec enfants), ou `expected_revision` ne correspond plus a la revision persistee (code `PLANNING_REVISION_CONFLICT`).
       content:
         application/json:
           schema:

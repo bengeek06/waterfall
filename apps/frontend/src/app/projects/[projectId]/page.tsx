@@ -44,6 +44,7 @@ import {
   getPlanning,
   getPlanningStructureDraft,
   getPlanningTaskDeleteConflict,
+  getPlanningRevisionConflict,
   getProject,
   listPlannings,
   listEstimateCostLines,
@@ -55,6 +56,7 @@ import {
   movePlanningTasks,
   ProjectEstimate,
   replaceTaskPredecessorLinks,
+  restorePlanningSnapshot,
   runImportBatch,
   savePlanningStructureDraft,
   SessionExpiredError,
@@ -81,6 +83,23 @@ import {
 } from "@/lib/planning-structure";
 import { PlanningTreeTable } from "@/components/planning-tree-table";
 import type { PlanningMoveCommand } from "@/lib/planning-tree";
+import {
+  canRedo,
+  canUndo,
+  commitRedo,
+  commitUndo,
+  getPlanningHistory,
+  nextPlanningCommandId,
+  peekRedo,
+  peekUndo,
+  pushCommand,
+  resetPlanningHistory,
+  setPlanningHistory,
+  snapshotFromPlanningDetail,
+  type PlanningCommand,
+  type PlanningCommandKind,
+  type PlanningHistoryByPlanningId,
+} from "@/lib/planning-history";
 import { ReadOnlyGantt } from "@/components/read-only-gantt";
 import { ProjectTabs, type ProjectTab } from "@/components/project-tabs";
 
@@ -151,6 +170,7 @@ export default function ProjectDetailsPage() {
   const [plannings, setPlannings] = useState<Planning[]>([]);
   const [selectedPlanningId, setSelectedPlanningId] = useState<number | null>(null);
   const selectedPlanningIdRef = useRef(selectedPlanningId);
+  const planningLoadGenerationRef = useRef(0);
   // Updated synchronously (not via effect) so an in-flight move can never observe a stale ID:
   // an effect only runs after commit, leaving a window where a race could still slip through.
   function updateSelectedPlanningId(next: number | null) {
@@ -161,6 +181,26 @@ export default function ProjectDetailsPage() {
   const [planningBusy, setPlanningBusy] = useState(false);
   const [planningDetailBusy, setPlanningDetailBusy] = useState(false);
   const [planningMutationBusy, setPlanningMutationBusy] = useState(false);
+  // Per-planning_id undo/redo stacks (E4-01): isolated by construction, since each key is its
+  // own independent history. A revision conflict never replaces planningDetail/history itself;
+  // it sets planningConflict instead, and only a confirmed reload clears the stale history.
+  const [historyByPlanningId, setHistoryByPlanningId] = useState<PlanningHistoryByPlanningId>({});
+  const historyByPlanningIdRef = useRef(historyByPlanningId);
+  historyByPlanningIdRef.current = historyByPlanningId;
+  // Per-planning conflict tracking (E4-02): a conflict on planning A survives if user switches
+  // to B; undo/redo is disabled until the conflict is explicitly cleared by a successful reload.
+  const [planningConflictByPlanningId, setPlanningConflictByPlanningId] = useState<
+    Record<
+      number,
+      { projectId: number; expectedRevision: number; currentRevision: number; message: string }
+    >
+  >({});
+  // A network/unclassified failure (not a session expiry, not a revision conflict) keeps the
+  // just-attempted mutation retryable instead of silently dropping it (E4-01).
+  const [retryableAction, setRetryableAction] = useState<{
+    message: string;
+    retry: () => void;
+  } | null>(null);
   const [structureOpen, setStructureOpen] = useState(false);
   const [editingProjectInfo, setEditingProjectInfo] = useState(false);
   const [projectInfoDraft, setProjectInfoDraft] = useState({ name: "", shortDescription: "" });
@@ -195,6 +235,11 @@ export default function ProjectDetailsPage() {
   const [structureBusy, setStructureBusy] = useState(false);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  function setRetryableError(message: string, retry: () => void) {
+    setError(message);
+    setRetryableAction({ message, retry });
+  }
 
   const onSessionRefresh = useMemo(
     () => (next: SessionTokens) => {
@@ -276,6 +321,7 @@ export default function ProjectDetailsPage() {
     let cancelled = false;
 
     async function loadPlanningDetail() {
+      const loadGeneration = ++planningLoadGenerationRef.current;
       if (!session || selectedPlanningId === null) {
         setPlanningDetail(null);
         setPlanningDetailBusy(false);
@@ -286,7 +332,24 @@ export default function ProjectDetailsPage() {
       try {
         const detail = await getPlanning(projectId, selectedPlanningId, session, onSessionRefresh);
         const savedDraft = await getPlanningStructureDraft(projectId, session, onSessionRefresh);
-        if (!cancelled) {
+        if (
+          !cancelled &&
+          loadGeneration === planningLoadGenerationRef.current &&
+          selectedPlanningIdRef.current === selectedPlanningId
+        ) {
+          const history = getPlanningHistory(historyByPlanningIdRef.current, selectedPlanningId);
+          const historyRevision = history.revision;
+          if (historyRevision !== null && historyRevision !== detail.revision) {
+            setPlanningConflictByPlanningId((previous) => ({
+              ...previous,
+              [selectedPlanningId]: {
+                projectId,
+                expectedRevision: historyRevision,
+                currentRevision: detail.revision,
+                message: "Ce planning a été modifié entre-temps : recharge-le avant de continuer.",
+              },
+            }));
+          }
           setPlanningDetail(detail);
           const rows = savedDraft
             ? structureToDraftRows(savedDraft.structure)
@@ -306,7 +369,7 @@ export default function ProjectDetailsPage() {
           }
         }
       } catch (cause) {
-        if (cancelled) {
+        if (cancelled || loadGeneration !== planningLoadGenerationRef.current) {
           return;
         }
         if (cause instanceof SessionExpiredError) {
@@ -316,7 +379,7 @@ export default function ProjectDetailsPage() {
         }
         setError(cause instanceof ApiError ? cause.message : "Impossible de charger le planning.");
       } finally {
-        if (!cancelled) {
+        if (!cancelled && loadGeneration === planningLoadGenerationRef.current) {
           setPlanningDetailBusy(false);
         }
       }
@@ -420,6 +483,9 @@ export default function ProjectDetailsPage() {
   const isReadOnlyProject = project?.status === "perdu" || project?.status === "termine" || project?.status === "abandonne";
   const canEditEstimate = selectedEstimate?.status === "draft" && !isReadOnlyProject;
   const selectedPlanning = plannings.find((planning) => planning.id === selectedPlanningId) ?? null;
+  const selectedPlanningHasConflict = selectedPlanning
+    ? !!planningConflictByPlanningId[selectedPlanning.id]
+    : false;
 
   async function selectPlanning(planningId: number) {
     if (!session || planningId === selectedPlanningId) {
@@ -453,7 +519,13 @@ export default function ProjectDetailsPage() {
   }
 
   async function validateSelectedPlanning() {
-    if (!session || !selectedPlanning || selectedPlanning.status !== "draft" || isReadOnlyProject) {
+    if (
+      !session ||
+      !selectedPlanning ||
+      selectedPlanning.status !== "draft" ||
+      isReadOnlyProject ||
+      selectedPlanningHasConflict
+    ) {
       return;
     }
     setPlanningBusy(true);
@@ -478,6 +550,28 @@ export default function ProjectDetailsPage() {
     }
   }
 
+  function recordPlanningCommand(
+    planningId: number,
+    kind: PlanningCommandKind,
+    label: string,
+    before: PlanningDetail,
+    after: PlanningDetail,
+  ) {
+    const command: PlanningCommand = {
+      id: nextPlanningCommandId(),
+      kind,
+      label,
+      before: snapshotFromPlanningDetail(before),
+      after: snapshotFromPlanningDetail(after),
+    };
+    setHistoryByPlanningId((current) =>
+      setPlanningHistory(current, planningId, {
+        ...pushCommand(getPlanningHistory(current, planningId), command),
+        revision: after.revision,
+      }),
+    );
+  }
+
   async function movePlanningTaskSelection(command: PlanningMoveCommand) {
     if (
       !session ||
@@ -493,6 +587,7 @@ export default function ProjectDetailsPage() {
     const expectedRevision = planningDetail.revision;
     setPlanningMutationBusy(true);
     setError(null);
+    setRetryableAction(null);
     try {
       const updated = await movePlanningTasks(
         projectId,
@@ -502,9 +597,133 @@ export default function ProjectDetailsPage() {
         onSessionRefresh,
       );
       // The user may have switched to another planning version while this request was in flight;
-      // applying it now would silently replace that version's tree with a stale one.
+      // applying it now would silently replace that version's tree with a stale one. The
+      // history bookkeeping below is unconditional though: the mutation genuinely succeeded
+      // for requestedPlanningId, and history is isolated per planning_id, so recording it
+      // never affects whatever planning is currently displayed.
       if (selectedPlanningIdRef.current === requestedPlanningId) {
         setPlanningDetail(updated);
+      }
+      recordPlanningCommand(requestedPlanningId, "move", "Déplacement de tâches", planningDetail, updated);
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      const revisionConflict = getPlanningRevisionConflict(cause);
+      if (revisionConflict) {
+        setPlanningConflictByPlanningId((prev) => ({
+          ...prev,
+          [requestedPlanningId]: {
+            projectId: revisionConflict.projectId,
+            expectedRevision: revisionConflict.expectedRevision,
+            currentRevision: revisionConflict.currentRevision,
+            message: "Ce planning a été modifié entre-temps : recharge-le avant de continuer.",
+          },
+        }));
+        return;
+      }
+      if (selectedPlanningIdRef.current === requestedPlanningId) {
+        const message = cause instanceof ApiError ? cause.message : "Impossible de déplacer les tâches sélectionnées.";
+        setRetryableError(message, () => void movePlanningTaskSelection(command));
+      }
+    } finally {
+      setPlanningMutationBusy(false);
+    }
+  }
+
+  async function applyPlanningHistoryCommand(direction: "undo" | "redo") {
+    if (
+      !session ||
+      !selectedPlanning ||
+      selectedPlanning.status !== "draft" ||
+      isReadOnlyProject ||
+      !planningDetail ||
+      planningDetail.id !== selectedPlanning.id
+    ) {
+      return;
+    }
+    const planningId = selectedPlanning.id;
+    const history = getPlanningHistory(historyByPlanningId, planningId);
+    const command = direction === "undo" ? peekUndo(history) : peekRedo(history);
+    if (!command) {
+      return;
+    }
+    const delta = direction === "undo" ? command.before : command.after;
+    setPlanningMutationBusy(true);
+    setError(null);
+    setRetryableAction(null);
+    try {
+      const updated = await restorePlanningSnapshot(
+        projectId,
+        planningId,
+        { ...delta, expected_revision: planningDetail.revision },
+        session,
+        onSessionRefresh,
+      );
+      // The stack transition is unconditional: the undo/redo genuinely succeeded server-side
+      // for this planning_id, so the command must move between stacks regardless of which
+      // planning is currently displayed -- only the visible detail update is guarded.
+      if (selectedPlanningIdRef.current === planningId) {
+        setPlanningDetail(updated);
+      }
+      setHistoryByPlanningId((current) => {
+        const currentHistory = getPlanningHistory(current, planningId);
+        const nextHistory = direction === "undo" ? commitUndo(currentHistory) : commitRedo(currentHistory);
+        return setPlanningHistory(current, planningId, { ...nextHistory, revision: updated.revision });
+      });
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      const revisionConflict = getPlanningRevisionConflict(cause);
+      if (revisionConflict) {
+        setPlanningConflictByPlanningId((prev) => ({
+          ...prev,
+          [planningId]: {
+            projectId: revisionConflict.projectId,
+            expectedRevision: revisionConflict.expectedRevision,
+            currentRevision: revisionConflict.currentRevision,
+            message: "Ce planning a été modifié entre-temps : recharge-le avant de continuer.",
+          },
+        }));
+        return;
+      }
+      if (selectedPlanningIdRef.current === planningId) {
+        const message =
+          cause instanceof ApiError
+            ? cause.message
+            : direction === "undo"
+              ? "Impossible d'annuler la dernière modification."
+              : "Impossible de rétablir la modification annulée.";
+        setRetryableError(message, () => void applyPlanningHistoryCommand(direction));
+      }
+    } finally {
+      setPlanningMutationBusy(false);
+    }
+  }
+
+  async function reloadPlanningAfterConflict() {
+    if (!selectedPlanning || !session || !planningConflictByPlanningId[selectedPlanning.id]) {
+      return;
+    }
+    const planningId = selectedPlanning.id;
+    setPlanningDetailBusy(true);
+    try {
+      const detail = await getPlanning(projectId, planningId, session, onSessionRefresh);
+      // Only clear the conflict banner and the stale history once the reload actually
+      // succeeded: if getPlanning fails, the user still needs both to retry the reload.
+      setPlanningConflictByPlanningId((prev) => {
+        const next = { ...prev };
+        delete next[planningId];
+        return next;
+      });
+      setHistoryByPlanningId((current) => resetPlanningHistory(current, planningId));
+      if (selectedPlanningIdRef.current === planningId) {
+        setPlanningDetail(detail);
       }
     } catch (cause) {
       if (cause instanceof SessionExpiredError) {
@@ -512,11 +731,9 @@ export default function ProjectDetailsPage() {
         router.push("/login");
         return;
       }
-      if (selectedPlanningIdRef.current === requestedPlanningId) {
-        setError(cause instanceof ApiError ? cause.message : "Impossible de déplacer les tâches sélectionnées.");
-      }
+      setError(cause instanceof ApiError ? cause.message : "Impossible de recharger le planning.");
     } finally {
-      setPlanningMutationBusy(false);
+      setPlanningDetailBusy(false);
     }
   }
 
@@ -540,6 +757,7 @@ export default function ProjectDetailsPage() {
     const expectedRevision = planningDetail.revision;
     setPlanningMutationBusy(true);
     setError(null);
+    setRetryableAction(null);
     try {
       const updated = await updatePlanningTaskSchedule(
         projectId,
@@ -552,10 +770,12 @@ export default function ProjectDetailsPage() {
       // The user may have switched to another planning version while this request was in flight;
       // applying it now would silently replace that version's tree with a stale one. The update
       // itself did succeed server-side though (only its local rendering is skipped here), so this
-      // still reports success to the caller.
+      // still reports success to the caller. History bookkeeping is unconditional: it never
+      // affects whatever planning is currently displayed (isolated per planning_id).
       if (selectedPlanningIdRef.current === requestedPlanningId) {
         setPlanningDetail(updated);
       }
+      recordPlanningCommand(requestedPlanningId, "schedule", "Modification de la planification", planningDetail, updated);
       return true;
     } catch (cause) {
       if (cause instanceof SessionExpiredError) {
@@ -563,8 +783,22 @@ export default function ProjectDetailsPage() {
         router.push("/login");
         return false;
       }
+      const revisionConflict = getPlanningRevisionConflict(cause);
+      if (revisionConflict) {
+        setPlanningConflictByPlanningId((prev) => ({
+          ...prev,
+          [requestedPlanningId]: {
+            projectId: revisionConflict.projectId,
+            expectedRevision: revisionConflict.expectedRevision,
+            currentRevision: revisionConflict.currentRevision,
+            message: "Ce planning a été modifié entre-temps : recharge-le avant de continuer.",
+          },
+        }));
+        return false;
+      }
       if (selectedPlanningIdRef.current === requestedPlanningId) {
-        setError(cause instanceof ApiError ? cause.message : "Impossible de mettre à jour la planification de la tâche.");
+        const message = cause instanceof ApiError ? cause.message : "Impossible de mettre à jour la planification de la tâche.";
+        setRetryableError(message, () => void updateTaskScheduleSelection(taskUid, payload));
       }
       return false;
     } finally {
@@ -590,6 +824,7 @@ export default function ProjectDetailsPage() {
     const expectedRevision = planningDetail.revision;
     setPlanningMutationBusy(true);
     setError(null);
+    setRetryableAction(null);
     try {
       const updated = await replaceTaskPredecessorLinks(
         projectId,
@@ -600,19 +835,34 @@ export default function ProjectDetailsPage() {
         onSessionRefresh,
       );
       // The user may have switched to another planning version while this request was in flight;
-      // applying it now would silently replace that version's tree with a stale one.
+      // applying it now would silently replace that version's tree with a stale one. History
+      // bookkeeping is unconditional (isolated per planning_id, never affects what's displayed).
       if (selectedPlanningIdRef.current === requestedPlanningId) {
         setPlanningDetail(updated);
       }
+      recordPlanningCommand(requestedPlanningId, "links", "Modification des prédécesseurs", planningDetail, updated);
     } catch (cause) {
       if (cause instanceof SessionExpiredError) {
         clearSession();
         router.push("/login");
         throw cause;
       }
+      const revisionConflict = getPlanningRevisionConflict(cause);
+      if (revisionConflict) {
+        setPlanningConflictByPlanningId((prev) => ({
+          ...prev,
+          [requestedPlanningId]: {
+            projectId: revisionConflict.projectId,
+            expectedRevision: revisionConflict.expectedRevision,
+            currentRevision: revisionConflict.currentRevision,
+            message: "Ce planning a été modifié entre-temps : recharge-le avant de continuer.",
+          },
+        }));
+        throw cause;
+      }
       const message = describePredecessorLinksError(cause);
       if (selectedPlanningIdRef.current === requestedPlanningId) {
-        setError(message);
+        setRetryableError(message, () => void editTaskPredecessorLinksSelection(taskUid, links));
       }
       // Rethrown so the dialog itself can also surface a targeted, actionable error message.
       throw new Error(message);
@@ -637,6 +887,7 @@ export default function ProjectDetailsPage() {
     const expectedRevision = planningDetail.revision;
     setPlanningMutationBusy(true);
     setError(null);
+    setRetryableAction(null);
     try {
       const updated = await createPlanningTask(
         projectId,
@@ -652,18 +903,34 @@ export default function ProjectDetailsPage() {
         onSessionRefresh,
       );
       // The user may have switched to another planning version while this request was in flight;
-      // applying it now would silently replace that version's tree with a stale one.
+      // applying it now would silently replace that version's tree with a stale one. History
+      // bookkeeping is unconditional (isolated per planning_id, never affects what's displayed).
       if (selectedPlanningIdRef.current === requestedPlanningId) {
         setPlanningDetail(updated);
       }
+      recordPlanningCommand(requestedPlanningId, "create", "Création d'une tâche", planningDetail, updated);
     } catch (cause) {
       if (cause instanceof SessionExpiredError) {
         clearSession();
         router.push("/login");
         return;
       }
+      const revisionConflict = getPlanningRevisionConflict(cause);
+      if (revisionConflict) {
+        setPlanningConflictByPlanningId((prev) => ({
+          ...prev,
+          [requestedPlanningId]: {
+            projectId: revisionConflict.projectId,
+            expectedRevision: revisionConflict.expectedRevision,
+            currentRevision: revisionConflict.currentRevision,
+            message: "Ce planning a été modifié entre-temps : recharge-le avant de continuer.",
+          },
+        }));
+        return;
+      }
       if (selectedPlanningIdRef.current === requestedPlanningId) {
-        setError(cause instanceof ApiError ? cause.message : "Impossible de créer la tâche.");
+        const message = cause instanceof ApiError ? cause.message : "Impossible de créer la tâche.";
+        setRetryableError(message, () => void createPlanningTaskSelection(command));
       }
     } finally {
       setPlanningMutationBusy(false);
@@ -710,6 +977,7 @@ export default function ProjectDetailsPage() {
     const expectedRevision = planningDetail.revision;
     setPlanningMutationBusy(true);
     setError(null);
+    setRetryableAction(null);
     try {
       const updated = await deletePlanningTasks(
         projectId,
@@ -718,13 +986,29 @@ export default function ProjectDetailsPage() {
         session,
         onSessionRefresh,
       );
+      // History bookkeeping is unconditional (isolated per planning_id, never affects what's
+      // currently displayed); only the visible detail update is guarded against a stale response.
       if (selectedPlanningIdRef.current === requestedPlanningId) {
         setPlanningDetail(updated);
       }
+      recordPlanningCommand(requestedPlanningId, "delete", "Suppression de tâches", planningDetail, updated);
     } catch (cause) {
       if (cause instanceof SessionExpiredError) {
         clearSession();
         router.push("/login");
+        throw cause;
+      }
+      const revisionConflict = getPlanningRevisionConflict(cause);
+      if (revisionConflict) {
+        setPlanningConflictByPlanningId((prev) => ({
+          ...prev,
+          [requestedPlanningId]: {
+            projectId: revisionConflict.projectId,
+            expectedRevision: revisionConflict.expectedRevision,
+            currentRevision: revisionConflict.currentRevision,
+            message: "Ce planning a été modifié entre-temps : recharge-le avant de continuer.",
+          },
+        }));
         throw cause;
       }
       const conflict = getPlanningTaskDeleteConflict(cause);
@@ -732,7 +1016,11 @@ export default function ProjectDetailsPage() {
         conflict?.code !== "CASCADE_CONFIRMATION_REQUIRED" &&
         selectedPlanningIdRef.current === requestedPlanningId
       ) {
-        setError(describeDeleteTasksError(cause));
+        const message = describeDeleteTasksError(cause);
+        setRetryableError(
+          message,
+          () => void deletePlanningTasksSelection(taskUids, confirmCascade, requestedVersionKey),
+        );
       }
       // Rethrown so PlanningTreeTable can also react: open its cascade dialog on
       // CASCADE_CONFIRMATION_REQUIRED, or otherwise just close it -- the failure message itself
@@ -1412,7 +1700,20 @@ export default function ProjectDetailsPage() {
 
       <div className="space-y-4">
         {busy ? <p className="text-sm text-muted-foreground" role="status">Chargement...</p> : null}
-        {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
+        {error ? (
+          <Alert variant="destructive">
+            <AlertDescription>
+              {error}
+              {retryableAction?.message === error ? (
+                <div className="mt-2">
+                  <Button size="sm" onClick={() => retryableAction.retry()}>
+                    Réessayer
+                  </Button>
+                </div>
+              ) : null}
+            </AlertDescription>
+          </Alert>
+        ) : null}
         {importFeedback ? <Alert><AlertDescription>{importFeedback}</AlertDescription></Alert> : null}
 
         {activeTab === "planning" && project?.status === "initialise" ? (
@@ -1631,7 +1932,7 @@ export default function ProjectDetailsPage() {
                   <Button
                     variant="outline"
                     type="button"
-                    disabled={planningBusy || isReadOnlyProject}
+                    disabled={planningBusy || isReadOnlyProject || selectedPlanningHasConflict}
                     onClick={() => void validateSelectedPlanning()}
                   >
                     Valider le planning
@@ -1657,8 +1958,62 @@ export default function ProjectDetailsPage() {
                     Rouvrir la structure
                   </Button>
                 ) : null}
+                {selectedPlanning ? (
+                  <>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      type="button"
+                      disabled={
+                        planningMutationBusy ||
+                        isReadOnlyProject ||
+                        !selectedPlanning ||
+                        selectedPlanning.status !== "draft" ||
+                        !!planningConflictByPlanningId[selectedPlanning.id] ||
+                        !canUndo(getPlanningHistory(historyByPlanningId, selectedPlanning?.id ?? -1))
+                      }
+                      onClick={() => void applyPlanningHistoryCommand("undo")}
+                    >
+                      Annuler
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      type="button"
+                      disabled={
+                        planningMutationBusy ||
+                        isReadOnlyProject ||
+                        !selectedPlanning ||
+                        selectedPlanning.status !== "draft" ||
+                        !!planningConflictByPlanningId[selectedPlanning.id] ||
+                        !canRedo(getPlanningHistory(historyByPlanningId, selectedPlanning?.id ?? -1))
+                      }
+                      onClick={() => void applyPlanningHistoryCommand("redo")}
+                    >
+                      Rétablir
+                    </Button>
+                  </>
+                ) : null}
               </div>
             </div>
+            {selectedPlanning && planningConflictByPlanningId[selectedPlanning.id] ? (
+              <Alert variant="destructive">
+                <AlertTitle>Planning modifié</AlertTitle>
+                <AlertDescription>
+                  {planningConflictByPlanningId[selectedPlanning!.id]!.message}
+                  <div className="text-xs text-muted-foreground">
+                    Projet {planningConflictByPlanningId[selectedPlanning!.id]!.projectId}, planning {selectedPlanning!.id} :
+                    révision attendue {planningConflictByPlanningId[selectedPlanning!.id]!.expectedRevision}, révision actuelle{" "}
+                    {planningConflictByPlanningId[selectedPlanning!.id]!.currentRevision}.
+                  </div>
+                  <div className="mt-2">
+                    <Button size="sm" onClick={() => void reloadPlanningAfterConflict()}>
+                      Recharger le planning
+                    </Button>
+                  </div>
+                </AlertDescription>
+              </Alert>
+            ) : null}
             {planningDetailBusy ? <p className="text-sm text-muted-foreground" role="status">Chargement du planning...</p> : null}
             {!planningDetailBusy && !planningDetail ? <p className="py-6 text-sm text-muted-foreground">Aucun planning sélectionné.</p> : null}
             {planningDetail?.tasks.length ? <ReadOnlyGantt tasks={planningDetail.tasks} /> : null}
@@ -1666,7 +2021,11 @@ export default function ProjectDetailsPage() {
               <PlanningTreeTable
                 tasks={planningDetail.tasks}
                 versionKey={selectedPlanning?.id ?? null}
-                readOnly={isReadOnlyProject || (selectedPlanning ? selectedPlanning.status !== "draft" : false)}
+                readOnly={
+                  isReadOnlyProject ||
+                  selectedPlanningHasConflict ||
+                  (selectedPlanning ? selectedPlanning.status !== "draft" : false)
+                }
                 onMove={(command) => void movePlanningTaskSelection(command)}
                 onScheduleUpdate={(taskUid, payload) => updateTaskScheduleSelection(taskUid, payload)}
                 onEditLinks={(payload) => editTaskPredecessorLinksSelection(payload.taskUid, payload.links)}

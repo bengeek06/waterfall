@@ -407,6 +407,38 @@
         $ref: ../components/responses/ReplaceTaskLinksNotFound.yaml
       '409':
         $ref: ../components/responses/ReplaceTaskLinksConflict.yaml
+/projects/{projectId}/plannings/{planningId}/tasks/restore:
+  put:
+    tags:
+    - projects
+    summary: Restaurer l'etat exact des taches/liens d'un brouillon de planning (undo/redo)
+    operationId: restorePlanningSnapshot
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/PlanningId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/PlanningSnapshotRestore.yaml
+    responses:
+      '200':
+        description: Arbre complet du brouillon mis a jour
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/PlanningDetailRead.yaml
+      '400':
+        $ref: ../components/responses/RestorePlanningSnapshotBadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/RestorePlanningSnapshotNotFound.yaml
+      '409':
+        $ref: ../components/responses/RestorePlanningSnapshotConflict.yaml
 /projects/{projectId}/plannings/{planningId}/validate:
   post:
     tags:

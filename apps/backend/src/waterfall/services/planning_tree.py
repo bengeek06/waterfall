@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from waterfall.models.ms_core import MsTask
 from waterfall.models.planning import WfPlanning, WfPlanningLinkSnapshot, WfPlanningTaskSnapshot
 from waterfall.schemas.projects import (
+    PlanningSnapshotRestore,
     PlanningTaskCreate,
     PlanningTaskDelete,
     PlanningTaskMove,
@@ -25,6 +26,7 @@ from waterfall.services.calendar_schedule import (
     compute_working_minutes_between,
     resolve_calendars_for_tasks,
 )
+from waterfall.services.planning_links import PlanningLinkInvariantError, validate_no_cycles
 from waterfall.services.task_references import find_referenced_task_uids
 
 
@@ -587,6 +589,147 @@ def delete_planning_tasks(
         raise PlanningTreeMoveError(str(exc)) from exc
 
 
+def restore_planning_snapshot(
+    db: Session,
+    planning: WfPlanning,
+    payload: PlanningSnapshotRestore,
+) -> None:
+    """Replace every task/link of a draft planning with an exact prior snapshot (E4-01).
+
+    Drives the undo/redo command history: ``payload`` is always a complete
+    ``tasks``/``links`` list the client already received from a previous
+    response (the planning's state right before or right after the mutation
+    being undone/redone), so this never recomputes positions, outlines, or
+    calendar-derived fields -- it restores the raw values verbatim, exactly
+    like they were when the server first validated and returned them.
+
+    Still re-validates structural invariants against the submitted tree
+    (unique uid/structure_key, no orphan parent, no cycle, no milestone with
+    children, links only between existing tasks) rather than trusting the
+    payload blindly: it is replayed by the client, which could resubmit a
+    tampered or stale copy.
+    """
+    tasks_by_uid: dict[int, WfPlanningTaskSnapshot] = {}
+    seen_structure_keys: set[str] = set()
+    for item in payload.tasks:
+        if item.uid in tasks_by_uid:
+            raise PlanningTreeMoveError(f"Duplicate task uid in restore payload: {item.uid}")
+        if item.structure_key is not None:
+            if item.structure_key in seen_structure_keys:
+                raise PlanningTreeMoveError(
+                    f"Duplicate structure_key in restore payload: {item.structure_key}"
+                )
+            seen_structure_keys.add(item.structure_key)
+        tasks_by_uid[item.uid] = WfPlanningTaskSnapshot(
+            planning_id=planning.id,
+            uid=item.uid,
+            id_display=item.id_display,
+            structure_key=item.structure_key,
+            structure_kind=item.structure_kind,
+            parent_uid=item.parent_uid,
+            position=item.position,
+            name=item.name,
+            notes=item.notes,
+            outline_number=item.outline_number,
+            outline_level=item.outline_level,
+            wbs=item.wbs,
+            start_at=item.start_at,
+            finish_at=item.finish_at,
+            duration_minutes=item.duration_minutes,
+            duration_format=item.duration_format,
+            work_minutes=item.work_minutes,
+            task_type=item.task_type,
+            percent_complete=item.percent_complete,
+            is_summary=item.is_summary,
+            is_milestone=item.is_milestone,
+            is_manual=item.is_manual,
+            calendar_uid=item.calendar_uid,
+        )
+
+    parent_uids = {task.parent_uid for task in tasks_by_uid.values() if task.parent_uid is not None}
+    for task in tasks_by_uid.values():
+        if task.is_milestone and task.uid in parent_uids:
+            raise PlanningTreeInvariantError("A milestone cannot contain children")
+
+    _validate_tree(tasks_by_uid)
+
+    seen_links: set[tuple[int, int, int]] = set()
+    links: list[WfPlanningLinkSnapshot] = []
+    link_edges: dict[int, list[int]] = defaultdict(list)
+    for link in payload.links:
+        if link.task_uid not in tasks_by_uid:
+            raise PlanningTreeMoveError(f"Link references unknown task: {link.task_uid}")
+        if link.predecessor_uid not in tasks_by_uid:
+            raise PlanningTreeMoveError(
+                f"Link references unknown predecessor: {link.predecessor_uid}"
+            )
+        if link.task_uid == link.predecessor_uid:
+            raise PlanningTreeMoveError("A task cannot be its own predecessor")
+        key = (link.task_uid, link.predecessor_uid, link.link_type)
+        if key in seen_links:
+            raise PlanningTreeMoveError("Duplicate predecessor link in restore payload")
+        seen_links.add(key)
+        link_edges[link.task_uid].append(link.predecessor_uid)
+        links.append(
+            WfPlanningLinkSnapshot(
+                planning_id=planning.id,
+                task_uid=link.task_uid,
+                predecessor_uid=link.predecessor_uid,
+                link_type=link.link_type,
+                lag_tenth_minute=link.lag_tenth_minute,
+                lag_format=link.lag_format,
+            )
+        )
+    try:
+        validate_no_cycles(link_edges)
+    except PlanningLinkInvariantError as exc:
+        raise PlanningTreeInvariantError(str(exc)) from exc
+
+    current_tasks = (
+        db.query(WfPlanningTaskSnapshot)
+        .filter(WfPlanningTaskSnapshot.planning_id == planning.id)
+        .all()
+    )
+    removed_uids = {task.uid for task in current_tasks} - set(tasks_by_uid)
+    legacy_tasks_by_uid = {
+        task.uid: task
+        for task in db.query(MsTask)
+        .filter(MsTask.project_id == planning.project_id)
+        .filter(MsTask.uid.in_(removed_uids))
+        .all()
+    }
+    referenced_uids = sorted(
+        find_referenced_task_uids(
+            db,
+            project_id=planning.project_id,
+            task_id_by_uid={
+                task_uid: (
+                    legacy_tasks_by_uid[task_uid].id if task_uid in legacy_tasks_by_uid else None
+                )
+                for task_uid in removed_uids
+            },
+        )
+    )
+    if referenced_uids:
+        raise PlanningTreeTaskReferencedError(referenced_uids)
+
+    # Nothing else references wf_planning_task_snapshot.id (only composite
+    # (planning_id, uid) FKs onto it), so a full delete+reinsert for this
+    # planning is safe.
+    db.query(WfPlanningLinkSnapshot).filter(
+        WfPlanningLinkSnapshot.planning_id == planning.id
+    ).delete(synchronize_session=False)
+    db.query(WfPlanningTaskSnapshot).filter(
+        WfPlanningTaskSnapshot.planning_id == planning.id
+    ).delete(synchronize_session=False)
+    db.flush()
+
+    db.add_all(tasks_by_uid.values())
+    db.flush()
+    db.add_all(links)
+    db.flush()
+
+
 def _check_milestone_duration_and_finish_consistency(
     payload: PlanningTaskScheduleUpdate, start_at: datetime
 ) -> None:
@@ -1022,7 +1165,7 @@ def _topological_cascade_order(
     affected set never needs to be waited for, because that predecessor's
     stored value has not changed and is already correct in ``tasks_by_uid``.
 
-    ``waterfall.services.planning_links._validate_no_cycles`` already
+    ``waterfall.services.planning_links.validate_no_cycles`` already
     rejects a cyclic predecessor graph at link-write time, but this function
     does not trust that blindly: if Kahn's algorithm terminates with
     candidates that were never dequeued (their in-degree never reached
