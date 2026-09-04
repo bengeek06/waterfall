@@ -70,10 +70,13 @@ class Settings(BaseSettings):
         return []
 
 
-@lru_cache(maxsize=1)
-def get_settings() -> Settings:
-    settings = Settings()
+def _validate_settings(settings: Settings) -> Settings:
     secret_key = settings.secret_key.strip()
     if not secret_key or secret_key == "change-me":
         raise ValueError("SECRET_KEY must be set")
     return settings
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    return _validate_settings(Settings())
