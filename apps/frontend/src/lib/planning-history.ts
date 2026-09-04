@@ -63,6 +63,8 @@ export type PlanningHistoryState = {
   redoStack: PlanningCommand[];
 };
 
+export const MAX_PLANNING_HISTORY_DEPTH = 100;
+
 export function createEmptyPlanningHistory(): PlanningHistoryState {
   return { undoStack: [], redoStack: [] };
 }
@@ -73,7 +75,10 @@ export function pushCommand(
   history: PlanningHistoryState,
   command: PlanningCommand,
 ): PlanningHistoryState {
-  return { undoStack: [...history.undoStack, command], redoStack: [] };
+  return {
+    undoStack: [...history.undoStack, command].slice(-MAX_PLANNING_HISTORY_DEPTH),
+    redoStack: [],
+  };
 }
 
 export function canUndo(history: PlanningHistoryState): boolean {

@@ -194,7 +194,10 @@ export default function ProjectDetailsPage() {
   >({});
   // A network/unclassified failure (not a session expiry, not a revision conflict) keeps the
   // just-attempted mutation retryable instead of silently dropping it (E4-01).
-  const [retryableAction, setRetryableAction] = useState<{ retry: () => void } | null>(null);
+  const [retryableAction, setRetryableAction] = useState<{
+    message: string;
+    retry: () => void;
+  } | null>(null);
   const [structureOpen, setStructureOpen] = useState(false);
   const [editingProjectInfo, setEditingProjectInfo] = useState(false);
   const [projectInfoDraft, setProjectInfoDraft] = useState({ name: "", shortDescription: "" });
@@ -229,6 +232,11 @@ export default function ProjectDetailsPage() {
   const [structureBusy, setStructureBusy] = useState(false);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  function setRetryableError(message: string, retry: () => void) {
+    setError(message);
+    setRetryableAction({ message, retry });
+  }
 
   const onSessionRefresh = useMemo(
     () => (next: SessionTokens) => {
@@ -584,8 +592,8 @@ export default function ProjectDetailsPage() {
         return;
       }
       if (selectedPlanningIdRef.current === requestedPlanningId) {
-        setError(cause instanceof ApiError ? cause.message : "Impossible de déplacer les tâches sélectionnées.");
-        setRetryableAction({ retry: () => void movePlanningTaskSelection(command) });
+        const message = cause instanceof ApiError ? cause.message : "Impossible de déplacer les tâches sélectionnées.";
+        setRetryableError(message, () => void movePlanningTaskSelection(command));
       }
     } finally {
       setPlanningMutationBusy(false);
@@ -654,14 +662,13 @@ export default function ProjectDetailsPage() {
         return;
       }
       if (selectedPlanningIdRef.current === planningId) {
-        setError(
+        const message =
           cause instanceof ApiError
             ? cause.message
             : direction === "undo"
               ? "Impossible d'annuler la dernière modification."
-              : "Impossible de rétablir la modification annulée.",
-        );
-        setRetryableAction({ retry: () => void applyPlanningHistoryCommand(direction) });
+              : "Impossible de rétablir la modification annulée.";
+        setRetryableError(message, () => void applyPlanningHistoryCommand(direction));
       }
     } finally {
       setPlanningMutationBusy(false);
@@ -759,8 +766,8 @@ export default function ProjectDetailsPage() {
         return false;
       }
       if (selectedPlanningIdRef.current === requestedPlanningId) {
-        setError(cause instanceof ApiError ? cause.message : "Impossible de mettre à jour la planification de la tâche.");
-        setRetryableAction({ retry: () => void updateTaskScheduleSelection(taskUid, payload) });
+        const message = cause instanceof ApiError ? cause.message : "Impossible de mettre à jour la planification de la tâche.";
+        setRetryableError(message, () => void updateTaskScheduleSelection(taskUid, payload));
       }
       return false;
     } finally {
@@ -826,8 +833,7 @@ export default function ProjectDetailsPage() {
       }
       const message = describePredecessorLinksError(cause);
       if (selectedPlanningIdRef.current === requestedPlanningId) {
-        setError(message);
-        setRetryableAction({ retry: () => void editTaskPredecessorLinksSelection(taskUid, links) });
+        setRetryableError(message, () => void editTaskPredecessorLinksSelection(taskUid, links));
       }
       // Rethrown so the dialog itself can also surface a targeted, actionable error message.
       throw new Error(message);
@@ -894,8 +900,8 @@ export default function ProjectDetailsPage() {
         return;
       }
       if (selectedPlanningIdRef.current === requestedPlanningId) {
-        setError(cause instanceof ApiError ? cause.message : "Impossible de créer la tâche.");
-        setRetryableAction({ retry: () => void createPlanningTaskSelection(command) });
+        const message = cause instanceof ApiError ? cause.message : "Impossible de créer la tâche.";
+        setRetryableError(message, () => void createPlanningTaskSelection(command));
       }
     } finally {
       setPlanningMutationBusy(false);
@@ -983,11 +989,11 @@ export default function ProjectDetailsPage() {
         conflict?.code !== "CASCADE_CONFIRMATION_REQUIRED" &&
         selectedPlanningIdRef.current === requestedPlanningId
       ) {
-        setError(describeDeleteTasksError(cause));
-        setRetryableAction({
-          retry: () =>
-            void deletePlanningTasksSelection(taskUids, confirmCascade, requestedVersionKey),
-        });
+        const message = describeDeleteTasksError(cause);
+        setRetryableError(
+          message,
+          () => void deletePlanningTasksSelection(taskUids, confirmCascade, requestedVersionKey),
+        );
       }
       // Rethrown so PlanningTreeTable can also react: open its cascade dialog on
       // CASCADE_CONFIRMATION_REQUIRED, or otherwise just close it -- the failure message itself
@@ -1671,7 +1677,7 @@ export default function ProjectDetailsPage() {
           <Alert variant="destructive">
             <AlertDescription>
               {error}
-              {retryableAction ? (
+              {retryableAction?.message === error ? (
                 <div className="mt-2">
                   <Button size="sm" onClick={() => retryableAction.retry()}>
                     Réessayer

@@ -10,6 +10,7 @@ import {
   peekRedo,
   peekUndo,
   pushCommand,
+  MAX_PLANNING_HISTORY_DEPTH,
   resetPlanningHistory,
   setPlanningHistory,
   snapshotFromPlanningDetail,
@@ -79,6 +80,17 @@ describe("planning-history stacks", () => {
 
     byPlanning = resetPlanningHistory(byPlanning, 2);
     expect(canUndo(getPlanningHistory(byPlanning, 2))).toBe(false);
+  });
+
+  it("keeps only the newest commands when the history exceeds its depth limit", () => {
+    let history = createEmptyPlanningHistory();
+    for (let index = 0; index <= MAX_PLANNING_HISTORY_DEPTH; index += 1) {
+      history = pushCommand(history, makeCommand(String(index)));
+    }
+
+    expect(history.undoStack).toHaveLength(MAX_PLANNING_HISTORY_DEPTH);
+    expect(history.undoStack[0].id).toBe("1");
+    expect(peekUndo(history)?.id).toBe(String(MAX_PLANNING_HISTORY_DEPTH));
   });
 });
 
