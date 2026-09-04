@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   replaceTaskPredecessorLinks: vi.fn(),
   createPlanningTask: vi.fn(),
   deletePlanningTasks: vi.fn(),
+  restorePlanningSnapshot: vi.fn(),
   savePlanningStructureDraft: vi.fn(),
   getPlanningStructureDraft: vi.fn(),
   createPlanningStructure: vi.fn(),
@@ -58,6 +59,7 @@ vi.mock("@/lib/backend", async () => {
     replaceTaskPredecessorLinks: mocks.replaceTaskPredecessorLinks,
     createPlanningTask: mocks.createPlanningTask,
     deletePlanningTasks: mocks.deletePlanningTasks,
+    restorePlanningSnapshot: mocks.restorePlanningSnapshot,
     savePlanningStructureDraft: mocks.savePlanningStructureDraft,
     getPlanningStructureDraft: mocks.getPlanningStructureDraft,
     createPlanningStructure: mocks.createPlanningStructure,
@@ -146,6 +148,7 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     mocks.replaceTaskPredecessorLinks.mockReset();
     mocks.createPlanningTask.mockReset();
     mocks.deletePlanningTasks.mockReset();
+    mocks.restorePlanningSnapshot.mockReset();
     mocks.savePlanningStructureDraft.mockReset();
     mocks.getPlanningStructureDraft.mockReset();
     mocks.createPlanningStructure.mockReset();
@@ -702,6 +705,125 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     rejectMove(new Error("move failed"));
     await waitFor(() => expect(screen.queryByText("Impossible de déplacer les tâches sélectionnées.")).not.toBeInTheDocument());
     expect(screen.getByText("Tâche 2")).toBeInTheDocument();
+  });
+
+  it("restores the pre-move layout when clicking Annuler after a move", async () => {
+    const draft = planning({ id: 2, status: "draft" });
+    const siblingsDetail: PlanningDetail = {
+      ...draft,
+      tasks: [
+        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second", position: 2, parent_uid: null },
+      ],
+      links: [],
+    };
+    const movedDetail: PlanningDetail = {
+      ...draft,
+      revision: 1,
+      tasks: [
+        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 2, parent_uid: null },
+      ],
+      links: [],
+    };
+    const restoredDetail: PlanningDetail = {
+      ...draft,
+      revision: 2,
+      tasks: [
+        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second", position: 2, parent_uid: null },
+      ],
+      links: [],
+    };
+    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draft.id }));
+    mocks.listPlannings.mockResolvedValue([draft]);
+    mocks.getPlanning.mockResolvedValue(siblingsDetail);
+    mocks.movePlanningTasks.mockResolvedValue(movedDetail);
+    mocks.restorePlanningSnapshot.mockResolvedValue(restoredDetail);
+
+    render(<ProjectDetailsPage />);
+
+    await screen.findByText("Second");
+    fireEvent.click(screen.getByText("Second"));
+    fireEvent.click(screen.getByRole("button", { name: "Monter" }));
+
+    await waitFor(() => expect(mocks.movePlanningTasks).toHaveResolved());
+    await waitFor(() => {
+      const rows = screen.getAllByRole("row");
+      expect(rows[1]).toHaveTextContent("Second");
+      expect(rows[2]).toHaveTextContent("Premier");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Annuler" }));
+
+    await waitFor(() => expect(mocks.restorePlanningSnapshot).toHaveBeenCalledTimes(1));
+    const [calledProjectId, calledPlanningId, payload] = mocks.restorePlanningSnapshot.mock.calls[0];
+    expect(calledProjectId).toBe(1);
+    expect(calledPlanningId).toBe(draft.id);
+    expect(payload.expected_revision).toBe(1);
+    expect(payload.tasks.find((task: { uid: number }) => task.uid === 10)).toMatchObject({
+      parent_uid: null,
+      position: 1,
+    });
+    expect(payload.tasks.find((task: { uid: number }) => task.uid === 11)).toMatchObject({
+      parent_uid: null,
+      position: 2,
+    });
+
+    const restoredRows = await screen.findAllByRole("row");
+    expect(restoredRows[1]).toHaveTextContent("Premier");
+    expect(restoredRows[2]).toHaveTextContent("Second");
+  });
+
+  it("shows a reload banner on a revision conflict and only reloads once confirmed", async () => {
+    const draft = planning({ id: 2, status: "draft" });
+    const siblingsDetail: PlanningDetail = {
+      ...draft,
+      tasks: [
+        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second", position: 2, parent_uid: null },
+      ],
+      links: [],
+    };
+    const freshDetail: PlanningDetail = {
+      ...draft,
+      revision: 1,
+      tasks: [
+        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier rechargé", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second rechargé", position: 2, parent_uid: null },
+      ],
+      links: [],
+    };
+    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draft.id }));
+    mocks.listPlannings.mockResolvedValue([draft]);
+    mocks.getPlanning.mockResolvedValueOnce(siblingsDetail).mockResolvedValueOnce(freshDetail);
+    mocks.movePlanningTasks.mockRejectedValue(
+      new ApiError(409, "Planning was modified concurrently", {
+        code: "PLANNING_REVISION_CONFLICT",
+        project_id: 1,
+        planning_id: draft.id,
+        expected_revision: 0,
+        current_revision: 1,
+      }),
+    );
+
+    render(<ProjectDetailsPage />);
+
+    await screen.findByText("Second");
+    fireEvent.click(screen.getByText("Second"));
+    fireEvent.click(screen.getByRole("button", { name: "Monter" }));
+
+    expect(await screen.findByText("Planning modifié")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Recharger le planning" })).toBeInTheDocument();
+    expect(mocks.getPlanning).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Premier")).toBeInTheDocument();
+    expect(screen.queryByText("Premier rechargé")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Recharger le planning" }));
+
+    await waitFor(() => expect(mocks.getPlanning).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText("Premier rechargé")).toBeInTheDocument();
+    expect(screen.queryByText("Planning modifié")).not.toBeInTheDocument();
   });
 
   it("sends a schedule update and replaces the planning detail with the full server response", async () => {

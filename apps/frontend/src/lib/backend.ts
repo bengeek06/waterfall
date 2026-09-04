@@ -26,6 +26,9 @@ export type PlanningDetail = components["schemas"]["PlanningDetailRead"];
 export type PlanningTaskMove = components["schemas"]["PlanningTaskMove"];
 export type PlanningTaskCreate = components["schemas"]["PlanningTaskCreate"];
 export type PlanningTaskDelete = components["schemas"]["PlanningTaskDelete"];
+export type PlanningTaskSnapshotWrite = components["schemas"]["PlanningTaskSnapshotWrite"];
+export type PlanningLinkSnapshotWrite = components["schemas"]["PlanningLinkSnapshotWrite"];
+export type PlanningSnapshotRestore = components["schemas"]["PlanningSnapshotRestore"];
 type PlanningTaskDeleteConflictDetail = components["schemas"]["PlanningTaskDeleteConflict"]["detail"];
 export type PlanningTaskScheduleUpdate = components["schemas"]["PlanningTaskScheduleUpdate"];
 export type TaskLinkWrite = components["schemas"]["TaskLinkWrite"];
@@ -212,6 +215,38 @@ export function getPlanningTaskDeleteConflict(cause: unknown): {
     code: detail.code,
     descendantUids: detail.descendant_uids,
     taskUids: detail.task_uids,
+  };
+}
+
+// Inspects an error thrown by any versioned planning mutation (move/create/delete/schedule/
+// links/restore) for the structured PLANNING_REVISION_CONFLICT 409 body (E4-01). Returns null
+// for anything else, so callers can fall back to a generic error message.
+export function getPlanningRevisionConflict(cause: unknown): {
+  projectId: number;
+  planningId: number;
+  expectedRevision: number;
+  currentRevision: number;
+} | null {
+  if (!(cause instanceof ApiError) || cause.status !== 409) {
+    return null;
+  }
+  const detail = cause.detail as
+    | {
+        code?: string;
+        project_id?: number;
+        planning_id?: number;
+        expected_revision?: number;
+        current_revision?: number;
+      }
+    | undefined;
+  if (!detail || detail.code !== "PLANNING_REVISION_CONFLICT") {
+    return null;
+  }
+  return {
+    projectId: detail.project_id ?? 0,
+    planningId: detail.planning_id ?? 0,
+    expectedRevision: detail.expected_revision ?? 0,
+    currentRevision: detail.current_revision ?? 0,
   };
 }
 
@@ -1239,6 +1274,27 @@ export function replaceTaskPredecessorLinks(
 ) {
   return authRequest<PlanningDetail>(
     `/projects/${projectId}/plannings/${planningId}/tasks/${taskUid}/links`,
+    tokens,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    onSessionRefresh,
+  );
+}
+
+// Drives undo/redo (E4-01): replaces every task/link of a draft planning with an exact
+// prior snapshot the caller already received from a previous response.
+export function restorePlanningSnapshot(
+  projectId: number,
+  planningId: number,
+  payload: PlanningSnapshotRestore,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<PlanningDetail>(
+    `/projects/${projectId}/plannings/${planningId}/tasks/restore`,
     tokens,
     {
       method: "PUT",
