@@ -483,6 +483,9 @@ export default function ProjectDetailsPage() {
   const isReadOnlyProject = project?.status === "perdu" || project?.status === "termine" || project?.status === "abandonne";
   const canEditEstimate = selectedEstimate?.status === "draft" && !isReadOnlyProject;
   const selectedPlanning = plannings.find((planning) => planning.id === selectedPlanningId) ?? null;
+  const selectedPlanningHasConflict = selectedPlanning
+    ? !!planningConflictByPlanningId[selectedPlanning.id]
+    : false;
 
   async function selectPlanning(planningId: number) {
     if (!session || planningId === selectedPlanningId) {
@@ -516,7 +519,13 @@ export default function ProjectDetailsPage() {
   }
 
   async function validateSelectedPlanning() {
-    if (!session || !selectedPlanning || selectedPlanning.status !== "draft" || isReadOnlyProject) {
+    if (
+      !session ||
+      !selectedPlanning ||
+      selectedPlanning.status !== "draft" ||
+      isReadOnlyProject ||
+      selectedPlanningHasConflict
+    ) {
       return;
     }
     setPlanningBusy(true);
@@ -1923,7 +1932,7 @@ export default function ProjectDetailsPage() {
                   <Button
                     variant="outline"
                     type="button"
-                    disabled={planningBusy || isReadOnlyProject}
+                    disabled={planningBusy || isReadOnlyProject || selectedPlanningHasConflict}
                     onClick={() => void validateSelectedPlanning()}
                   >
                     Valider le planning
@@ -2012,7 +2021,11 @@ export default function ProjectDetailsPage() {
               <PlanningTreeTable
                 tasks={planningDetail.tasks}
                 versionKey={selectedPlanning?.id ?? null}
-                readOnly={isReadOnlyProject || (selectedPlanning ? selectedPlanning.status !== "draft" : false)}
+                readOnly={
+                  isReadOnlyProject ||
+                  selectedPlanningHasConflict ||
+                  (selectedPlanning ? selectedPlanning.status !== "draft" : false)
+                }
                 onMove={(command) => void movePlanningTaskSelection(command)}
                 onScheduleUpdate={(taskUid, payload) => updateTaskScheduleSelection(taskUid, payload)}
                 onEditLinks={(payload) => editTaskPredecessorLinksSelection(payload.taskUid, payload.links)}

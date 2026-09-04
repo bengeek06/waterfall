@@ -818,6 +818,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     expect(mocks.getPlanning).toHaveBeenCalledTimes(1);
     expect(screen.getByText("Premier")).toBeInTheDocument();
     expect(screen.queryByText("Premier rechargé")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Valider le planning" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Monter" })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Recharger le planning" }));
 
