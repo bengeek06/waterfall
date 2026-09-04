@@ -184,13 +184,14 @@ export default function ProjectDetailsPage() {
   // own independent history. A revision conflict never replaces planningDetail/history itself;
   // it sets planningConflict instead, and only a confirmed reload clears the stale history.
   const [historyByPlanningId, setHistoryByPlanningId] = useState<PlanningHistoryByPlanningId>({});
-  const [planningConflict, setPlanningConflict] = useState<{
-    projectId: number;
-    planningId: number;
-    expectedRevision: number;
-    currentRevision: number;
-    message: string;
-  } | null>(null);
+  // Per-planning conflict tracking (E4-02): a conflict on planning A survives if user switches
+  // to B; undo/redo is disabled until the conflict is explicitly cleared by a successful reload.
+  const [planningConflictByPlanningId, setPlanningConflictByPlanningId] = useState<
+    Record<
+      number,
+      { projectId: number; expectedRevision: number; currentRevision: number; message: string }
+    >
+  >({});
   // A network/unclassified failure (not a session expiry, not a revision conflict) keeps the
   // just-attempted mutation retryable instead of silently dropping it (E4-01).
   const [retryableAction, setRetryableAction] = useState<{ retry: () => void } | null>(null);
@@ -571,15 +572,15 @@ export default function ProjectDetailsPage() {
       }
       const revisionConflict = getPlanningRevisionConflict(cause);
       if (revisionConflict) {
-        if (selectedPlanningIdRef.current === requestedPlanningId) {
-          setPlanningConflict({
+        setPlanningConflictByPlanningId((prev) => ({
+          ...prev,
+          [requestedPlanningId]: {
             projectId: revisionConflict.projectId,
-            planningId: requestedPlanningId,
             expectedRevision: revisionConflict.expectedRevision,
             currentRevision: revisionConflict.currentRevision,
             message: "Ce planning a été modifié entre-temps : recharge-le avant de continuer.",
-          });
-        }
+          },
+        }));
         return;
       }
       if (selectedPlanningIdRef.current === requestedPlanningId) {
@@ -640,13 +641,15 @@ export default function ProjectDetailsPage() {
       const revisionConflict = getPlanningRevisionConflict(cause);
       if (revisionConflict) {
         if (selectedPlanningIdRef.current === planningId) {
-          setPlanningConflict({
+          setPlanningConflictByPlanningId((prev) => ({
+          ...prev,
+          [planningId]: {
             projectId: revisionConflict.projectId,
-            planningId,
             expectedRevision: revisionConflict.expectedRevision,
             currentRevision: revisionConflict.currentRevision,
             message: "Ce planning a été modifié entre-temps : recharge-le avant de continuer.",
-          });
+          },
+        }));
         }
         return;
       }
@@ -666,20 +669,22 @@ export default function ProjectDetailsPage() {
   }
 
   async function reloadPlanningAfterConflict() {
-    if (!planningConflict || !session) {
+    if (!selectedPlanning || !session || !planningConflictByPlanningId[selectedPlanning.id]) {
       return;
     }
-    const { planningId } = planningConflict;
+    const planningId = selectedPlanning.id;
     setPlanningDetailBusy(true);
     try {
       const detail = await getPlanning(projectId, planningId, session, onSessionRefresh);
       // Only clear the conflict banner and the stale history once the reload actually
       // succeeded: if getPlanning fails, the user still needs both to retry the reload.
-      setPlanningConflict(null);
+      setPlanningConflictByPlanningId((prev) => {
+        const next = { ...prev };
+        delete next[planningId];
+        return next;
+      });
       setHistoryByPlanningId((current) => resetPlanningHistory(current, planningId));
-      if (selectedPlanningIdRef.current === planningId) {
-        setPlanningDetail(detail);
-      }
+      setPlanningDetail(detail);
     } catch (cause) {
       if (cause instanceof SessionExpiredError) {
         clearSession();
@@ -741,13 +746,15 @@ export default function ProjectDetailsPage() {
       const revisionConflict = getPlanningRevisionConflict(cause);
       if (revisionConflict) {
         if (selectedPlanningIdRef.current === requestedPlanningId) {
-          setPlanningConflict({
+          setPlanningConflictByPlanningId((prev) => ({
+          ...prev,
+          [requestedPlanningId]: {
             projectId: revisionConflict.projectId,
-            planningId: requestedPlanningId,
             expectedRevision: revisionConflict.expectedRevision,
             currentRevision: revisionConflict.currentRevision,
             message: "Ce planning a été modifié entre-temps : recharge-le avant de continuer.",
-          });
+          },
+        }));
         }
         return false;
       }
@@ -805,13 +812,15 @@ export default function ProjectDetailsPage() {
       const revisionConflict = getPlanningRevisionConflict(cause);
       if (revisionConflict) {
         if (selectedPlanningIdRef.current === requestedPlanningId) {
-          setPlanningConflict({
+          setPlanningConflictByPlanningId((prev) => ({
+          ...prev,
+          [requestedPlanningId]: {
             projectId: revisionConflict.projectId,
-            planningId: requestedPlanningId,
             expectedRevision: revisionConflict.expectedRevision,
             currentRevision: revisionConflict.currentRevision,
             message: "Ce planning a été modifié entre-temps : recharge-le avant de continuer.",
-          });
+          },
+        }));
         }
         throw cause;
       }
@@ -873,15 +882,15 @@ export default function ProjectDetailsPage() {
       }
       const revisionConflict = getPlanningRevisionConflict(cause);
       if (revisionConflict) {
-        if (selectedPlanningIdRef.current === requestedPlanningId) {
-          setPlanningConflict({
+        setPlanningConflictByPlanningId((prev) => ({
+          ...prev,
+          [requestedPlanningId]: {
             projectId: revisionConflict.projectId,
-            planningId: requestedPlanningId,
             expectedRevision: revisionConflict.expectedRevision,
             currentRevision: revisionConflict.currentRevision,
             message: "Ce planning a été modifié entre-temps : recharge-le avant de continuer.",
-          });
-        }
+          },
+        }));
         return;
       }
       if (selectedPlanningIdRef.current === requestedPlanningId) {
@@ -957,13 +966,15 @@ export default function ProjectDetailsPage() {
       const revisionConflict = getPlanningRevisionConflict(cause);
       if (revisionConflict) {
         if (selectedPlanningIdRef.current === requestedPlanningId) {
-          setPlanningConflict({
+          setPlanningConflictByPlanningId((prev) => ({
+          ...prev,
+          [requestedPlanningId]: {
             projectId: revisionConflict.projectId,
-            planningId: requestedPlanningId,
             expectedRevision: revisionConflict.expectedRevision,
             currentRevision: revisionConflict.currentRevision,
             message: "Ce planning a été modifié entre-temps : recharge-le avant de continuer.",
-          });
+          },
+        }));
         }
         throw cause;
       }
@@ -1925,6 +1936,7 @@ export default function ProjectDetailsPage() {
                         isReadOnlyProject ||
                         !selectedPlanning ||
                         selectedPlanning.status !== "draft" ||
+                        !!planningConflictByPlanningId[selectedPlanning.id] ||
                         !canUndo(getPlanningHistory(historyByPlanningId, selectedPlanning?.id ?? -1))
                       }
                       onClick={() => void applyPlanningHistoryCommand("undo")}
@@ -1940,6 +1952,7 @@ export default function ProjectDetailsPage() {
                         isReadOnlyProject ||
                         !selectedPlanning ||
                         selectedPlanning.status !== "draft" ||
+                        !!planningConflictByPlanningId[selectedPlanning.id] ||
                         !canRedo(getPlanningHistory(historyByPlanningId, selectedPlanning?.id ?? -1))
                       }
                       onClick={() => void applyPlanningHistoryCommand("redo")}
@@ -1950,15 +1963,15 @@ export default function ProjectDetailsPage() {
                 ) : null}
               </div>
             </div>
-            {planningConflict && planningConflict.planningId === selectedPlanning?.id ? (
+            {selectedPlanning && planningConflictByPlanningId[selectedPlanning.id] ? (
               <Alert variant="destructive">
                 <AlertTitle>Planning modifié</AlertTitle>
                 <AlertDescription>
-                  {planningConflict.message}
+                  {planningConflictByPlanningId[selectedPlanning!.id]!.message}
                   <div className="text-xs text-muted-foreground">
-                    Projet {planningConflict.projectId}, planning {planningConflict.planningId} :
-                    révision attendue {planningConflict.expectedRevision}, révision actuelle{" "}
-                    {planningConflict.currentRevision}.
+                    Projet {planningConflictByPlanningId[selectedPlanning!.id]!.projectId}, planning {selectedPlanning!.id} :
+                    révision attendue {planningConflictByPlanningId[selectedPlanning!.id]!.expectedRevision}, révision actuelle{" "}
+                    {planningConflictByPlanningId[selectedPlanning!.id]!.currentRevision}.
                   </div>
                   <div className="mt-2">
                     <Button size="sm" onClick={() => void reloadPlanningAfterConflict()}>
