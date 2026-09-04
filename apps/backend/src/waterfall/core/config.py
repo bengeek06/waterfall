@@ -73,6 +73,7 @@ class Settings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     settings = Settings()
-    if not settings.secret_key.strip() or settings.secret_key == "change-me":
+    secret_key = settings.secret_key.strip()
+    if not secret_key or secret_key == "change-me":
         raise ValueError("SECRET_KEY must be set")
     return settings
