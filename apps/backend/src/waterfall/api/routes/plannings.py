@@ -598,6 +598,12 @@ def restore_planning_snapshot_route(
     except PlanningTreeInvariantError as exc:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except PlanningTreeTaskReferencedError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "TASK_REFERENCED", "task_uids": exc.task_uids},
+        ) from exc
     except PlanningTreeMoveError as exc:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

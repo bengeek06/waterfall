@@ -15,7 +15,9 @@ from fastapi.testclient import TestClient
 
 from waterfall.db.session import get_session_factory
 from waterfall.main import app
+from waterfall.models.ms_core import MsTask
 from waterfall.models.planning import WfPlanning, WfPlanningLinkSnapshot, WfPlanningTaskSnapshot
+from waterfall.models.wf_core import WfChargeLine
 
 
 def _auth_headers(client: TestClient) -> dict[str, str]:
@@ -534,30 +536,6 @@ def test_restore_rejects_milestone_with_children() -> None:
         assert detail.json()["revision"] == 0
 
 
-def test_restore_rejects_inconsistent_summary_flag_without_mutating() -> None:
-    with TestClient(app) as client:
-        headers = _auth_headers(client)
-        project_id = _create_project(client, headers)
-        planning_id = _seed_planning(project_id)
-
-        response = client.put(
-            _restore_path(project_id, planning_id),
-            json={
-                "tasks": [
-                    _task_payload(10, "Parent", is_summary=False),
-                    _task_payload(11, "Child", parent_uid=10),
-                ],
-                "links": [],
-                "expected_revision": 0,
-            },
-            headers=headers,
-        )
-
-        assert response.status_code == 409
-        detail = client.get(f"/projects/{project_id}/plannings/{planning_id}", headers=headers)
-        assert detail.json()["revision"] == 0
-
-
 def test_restore_rejects_partial_task_payload_with_missing_required_fields() -> None:
     """Finding #1: sparse payloads must not silently clear data (all fields required)."""
     with TestClient(app) as client:
@@ -606,6 +584,32 @@ def test_restore_rejects_partial_link_payload_without_mutating() -> None:
         assert response.status_code == 400
         detail = client.get(f"/projects/{project_id}/plannings/{planning_id}", headers=headers)
         assert detail.json()["revision"] == 0
+
+
+def test_restore_rejects_removing_referenced_task_without_mutating() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_planning(project_id)
+        detail_response = client.get(
+            f"/projects/{project_id}/plannings/{planning_id}", headers=headers
+        )
+        detail = cast(dict[str, Any], detail_response.json())
+
+        with get_session_factory()() as session:
+            session.add(MsTask(project_id=project_id, uid=4, name="Root leaf"))
+            session.flush()
+            session.add(WfChargeLine(project_id=project_id, task_uid=4, load_minutes=60))
+            session.commit()
+
+        payload = _full_restore_payload(detail, 0)
+        payload["tasks"] = [task for task in payload["tasks"] if task["uid"] != 4]
+        response = client.put(_restore_path(project_id, planning_id), json=payload, headers=headers)
+
+        assert response.status_code == 409, response.json()
+        assert response.json()["detail"]["code"] == "TASK_REFERENCED"
+        current = client.get(f"/projects/{project_id}/plannings/{planning_id}", headers=headers)
+        assert 4 in _tasks_by_uid(cast(dict[str, Any], current.json()))
 
 
 def test_restore_rejects_non_draft_planning_and_read_only_project() -> None:

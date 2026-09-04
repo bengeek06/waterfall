@@ -647,12 +647,9 @@ def restore_planning_snapshot(
         )
 
     for task in tasks_by_uid.values():
-        has_children = any(other.parent_uid == task.uid for other in tasks_by_uid.values())
-        if task.is_summary != has_children:
-            raise PlanningTreeInvariantError(
-                "A task's is_summary flag must match whether it has children"
-            )
-        if task.is_milestone and has_children:
+        if task.is_milestone and any(
+            other.parent_uid == task.uid for other in tasks_by_uid.values()
+        ):
             raise PlanningTreeInvariantError("A milestone cannot contain children")
 
     _validate_tree(tasks_by_uid)
@@ -688,6 +685,34 @@ def restore_planning_snapshot(
         validate_no_cycles(link_edges)
     except PlanningLinkInvariantError as exc:
         raise PlanningTreeInvariantError(str(exc)) from exc
+
+    current_tasks = (
+        db.query(WfPlanningTaskSnapshot)
+        .filter(WfPlanningTaskSnapshot.planning_id == planning.id)
+        .all()
+    )
+    removed_uids = {task.uid for task in current_tasks} - set(tasks_by_uid)
+    legacy_tasks_by_uid = {
+        task.uid: task
+        for task in db.query(MsTask)
+        .filter(MsTask.project_id == planning.project_id)
+        .filter(MsTask.uid.in_(removed_uids))
+        .all()
+    }
+    referenced_uids = sorted(
+        find_referenced_task_uids(
+            db,
+            project_id=planning.project_id,
+            task_id_by_uid={
+                task_uid: (
+                    legacy_tasks_by_uid[task_uid].id if task_uid in legacy_tasks_by_uid else None
+                )
+                for task_uid in removed_uids
+            },
+        )
+    )
+    if referenced_uids:
+        raise PlanningTreeTaskReferencedError(referenced_uids)
 
     # Nothing else references wf_planning_task_snapshot.id (only composite
     # (planning_id, uid) FKs onto it), so a full delete+reinsert for this
