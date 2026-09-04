@@ -308,8 +308,8 @@ def test_restore_rejects_duplicate_uid_without_mutating() -> None:
             _restore_path(project_id, planning_id),
             json={
                 "tasks": [
-                    {"uid": 10, "name": "A"},
-                    {"uid": 10, "name": "B"},
+                    _task_payload(10, "A"),
+                    _task_payload(10, "B"),
                 ],
                 "links": [],
                 "expected_revision": 0,
@@ -357,8 +357,16 @@ def test_restore_rejects_link_referencing_unknown_task() -> None:
         response = client.put(
             _restore_path(project_id, planning_id),
             json={
-                "tasks": [{"uid": 10, "name": "A"}],
-                "links": [{"task_uid": 10, "predecessor_uid": 999, "link_type": 1}],
+                "tasks": [_task_payload(10, "A")],
+                "links": [
+                    {
+                        "task_uid": 10,
+                        "predecessor_uid": 999,
+                        "link_type": 1,
+                        "lag_tenth_minute": None,
+                        "lag_format": None,
+                    }
+                ],
                 "expected_revision": 0,
             },
             headers=headers,
