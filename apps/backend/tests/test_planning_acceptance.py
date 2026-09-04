@@ -178,6 +178,8 @@ def test_import_diff_confirmation_and_export_lifecycle() -> None:
             headers=headers,
         )
         assert without_confirmation.status_code == 409
+        assert client.get(f"/projects/{project_id}/tasks", headers=headers).json() == []
+        assert client.get(f"/projects/{project_id}/plannings", headers=headers).json() == []
 
         confirmed = client.post(
             f"/imports/v1/batches/{batch_id}/run",

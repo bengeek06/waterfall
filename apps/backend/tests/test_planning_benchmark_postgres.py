@@ -121,7 +121,7 @@ def test_planning_1000_task_postgres_baseline(postgres_benchmark_database: str) 
                     PlanningTaskMove(
                         task_uids=[1000],
                         target_parent_uid=None,
-                        position=1,
+                        position=1 if revision % 2 == 0 else 1000,
                         expected_revision=revision,
                     ),
                     db=session,
@@ -136,7 +136,7 @@ def test_planning_1000_task_postgres_baseline(postgres_benchmark_database: str) 
                     PlanningTaskMove(
                         task_uids=[1000],
                         target_parent_uid=None,
-                        position=1,
+                        position=1 if revision % 2 == 0 else 1000,
                         expected_revision=revision,
                     ),
                     db=session,
