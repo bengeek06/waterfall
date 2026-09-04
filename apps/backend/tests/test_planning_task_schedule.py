@@ -2028,7 +2028,7 @@ def test_topological_cascade_order_detects_residual_cycle_without_hanging() -> N
     """Focused unit test of the Kahn's-algorithm helper extracted for issue
     #73's cascade (``_topological_cascade_order``), bypassing the public API
     -- which can never itself produce a cyclic predecessor graph, since
-    ``planning_links._validate_no_cycles`` already rejects that at
+    ``planning_links.validate_no_cycles`` already rejects that at
     link-write time. Feeds a synthetic 2-cycle directly to confirm the
     helper terminates (rather than hanging) and raises a
     ``PlanningTaskScheduleError`` naming the unresolved tasks, instead of

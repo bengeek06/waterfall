@@ -93,6 +93,7 @@ class TaskRead(BaseModel):
     duration_minutes: int | None
     duration_format: int | None
     work_minutes: int | None
+    task_type: int | None
     percent_complete: int | None
     is_summary: bool
     is_milestone: bool
@@ -269,12 +270,17 @@ class PlanningTaskSnapshotWrite(BaseModel):
     duration_minutes: int | None = Field(default=None, ge=0)
     duration_format: int | None = None
     work_minutes: int | None = Field(default=None, ge=0)
+    task_type: int | None = Field(default=None, ge=0, le=2)
     percent_complete: int | None = Field(default=None, ge=0, le=100)
     is_summary: bool = False
     is_milestone: bool = False
     is_manual: bool | None = None
     calendar_uid: int | None = None
-    notes: str | None = Field(default=None, max_length=10000)
+    # Unbounded, unlike most other free-text fields here: imported MSPDI Notes are stored
+    # in an unbounded Text column (wf_planning_task_snapshot.notes), so a snapshot captured
+    # from a legitimately imported planning can already exceed a smaller limit -- this must
+    # round-trip whatever the server can already return, not impose a stricter one.
+    notes: str | None = None
 
 
 class PlanningLinkSnapshotWrite(BaseModel):
@@ -282,7 +288,11 @@ class PlanningLinkSnapshotWrite(BaseModel):
     predecessor_uid: int = Field(ge=1)
     link_type: int = Field(ge=0, le=3)
     lag_tenth_minute: int | None = Field(default=None, ge=-2_147_483_648, le=2_147_483_647)
-    lag_format: MspdiLagFormat | None = None
+    # Unlike TaskLinkWrite (validated MSPDI import), this must round-trip whatever
+    # PlanningLinkRead can already return, including a legacy-imported value outside
+    # the MspdiLagFormat enum (TaskLinkRead itself exposes lag_format as a plain
+    # integer for exactly that reason).
+    lag_format: int | None = None
 
 
 class PlanningSnapshotRestore(BaseModel):
@@ -291,10 +301,14 @@ class PlanningSnapshotRestore(BaseModel):
     ``tasks``/``links`` shape the client already received from a previous response
     (either before or after the mutation being undone/redone), so replaying it back
     restores that exact prior state instead of recomputing an approximation.
+
+    Both lists are required (no default): since this endpoint replaces the *entire*
+    planning, an omitted list cannot mean "leave unchanged" -- it must be an explicit,
+    deliberate empty list instead, so a caller can never wipe a planning by mistake.
     """
 
-    tasks: list[PlanningTaskSnapshotWrite] = Field(default_factory=list)
-    links: list[PlanningLinkSnapshotWrite] = Field(default_factory=list)
+    tasks: list[PlanningTaskSnapshotWrite]
+    links: list[PlanningLinkSnapshotWrite]
     expected_revision: int = Field(ge=0)
 
 

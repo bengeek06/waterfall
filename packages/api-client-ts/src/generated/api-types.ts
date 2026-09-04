@@ -1448,6 +1448,7 @@ export interface components {
             duration_minutes?: number | null;
             duration_format?: number | null;
             work_minutes?: number | null;
+            task_type?: number | null;
             percent_complete?: number | null;
             /** @default false */
             is_summary: boolean;
@@ -1463,13 +1464,10 @@ export interface components {
             link_type: number;
             /** Format: int32 */
             lag_tenth_minute?: number | null;
-            /** @enum {integer|null} */
-            lag_format?: 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 19 | 20 | 35 | 36 | 37 | 38 | 39 | 40 | 41 | 42 | 43 | 44 | 51 | 52 | null;
+            lag_format?: number | null;
         };
         PlanningSnapshotRestore: {
-            /** @default [] */
             tasks: components["schemas"]["PlanningTaskSnapshotWrite"][];
-            /** @default [] */
             links: components["schemas"]["PlanningLinkSnapshotWrite"][];
             expected_revision: number;
         };
@@ -1498,6 +1496,7 @@ export interface components {
             duration_minutes?: number | null;
             duration_format?: number | null;
             work_minutes?: number | null;
+            task_type?: number | null;
             percent_complete?: number | null;
             is_summary: boolean;
             is_milestone: boolean;

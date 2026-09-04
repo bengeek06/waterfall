@@ -277,6 +277,102 @@ def test_restore_rejects_link_referencing_unknown_task() -> None:
         assert detail.json()["revision"] == 0
 
 
+def test_restore_rejects_link_dependency_cycle_without_mutating() -> None:
+    """Reviewer finding: per-link checks alone don't catch a cycle across the link graph."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_planning(project_id)
+
+        response = client.put(
+            _restore_path(project_id, planning_id),
+            json={
+                "tasks": [{"uid": 10, "name": "A"}, {"uid": 11, "name": "B"}],
+                "links": [
+                    {"task_uid": 10, "predecessor_uid": 11, "link_type": 1},
+                    {"task_uid": 11, "predecessor_uid": 10, "link_type": 1},
+                ],
+                "expected_revision": 0,
+            },
+            headers=headers,
+        )
+
+        assert response.status_code == 409
+        detail = client.get(f"/projects/{project_id}/plannings/{planning_id}", headers=headers)
+        assert detail.json()["revision"] == 0
+        assert 10 not in _tasks_by_uid(cast(dict[str, Any], detail.json()))
+
+
+def test_restore_preserves_task_type() -> None:
+    """Reviewer finding: task_type was silently dropped to NULL by every restore."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_planning(project_id)
+
+        response = client.put(
+            _restore_path(project_id, planning_id),
+            json={
+                "tasks": [{"uid": 10, "name": "A", "task_type": 2}],
+                "links": [],
+                "expected_revision": 0,
+            },
+            headers=headers,
+        )
+
+        assert response.status_code == 200
+        assert _tasks_by_uid(cast(dict[str, Any], response.json()))[10]["task_type"] == 2
+
+
+def test_restore_rejects_missing_tasks_or_links_instead_of_defaulting_to_empty() -> None:
+    """Reviewer finding: omitting tasks/links must not silently wipe the planning."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_planning(project_id)
+
+        missing_tasks = client.put(
+            _restore_path(project_id, planning_id),
+            json={"links": [], "expected_revision": 0},
+            headers=headers,
+        )
+        missing_links = client.put(
+            _restore_path(project_id, planning_id),
+            json={"tasks": [], "expected_revision": 0},
+            headers=headers,
+        )
+
+        assert missing_tasks.status_code == 400
+        assert missing_links.status_code == 400
+        detail = client.get(f"/projects/{project_id}/plannings/{planning_id}", headers=headers)
+        assert detail.json()["revision"] == 0
+        assert 1 in _tasks_by_uid(cast(dict[str, Any], detail.json()))
+
+
+def test_restore_round_trips_notes_longer_than_ten_thousand_characters() -> None:
+    """Reviewer finding: imported Notes are an unbounded Text column; restore must not
+    impose a stricter bound than ingestion, or a legitimately large planning could never
+    be undone/redone."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_planning(project_id)
+        long_notes = "x" * 10_500
+
+        response = client.put(
+            _restore_path(project_id, planning_id),
+            json={
+                "tasks": [{"uid": 10, "name": "A", "notes": long_notes}],
+                "links": [],
+                "expected_revision": 0,
+            },
+            headers=headers,
+        )
+
+        assert response.status_code == 200
+        assert _tasks_by_uid(cast(dict[str, Any], response.json()))[10]["description"] == long_notes
+
+
 def test_restore_rejects_milestone_with_children() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)

@@ -195,6 +195,7 @@ def to_task_read(
         duration_minutes=task.duration_minutes,
         duration_format=task.duration_format,
         work_minutes=task.work_minutes,
+        task_type=task.task_type,
         percent_complete=task.percent_complete,
         is_summary=task.is_summary,
         is_milestone=task.is_milestone,

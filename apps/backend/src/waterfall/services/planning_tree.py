@@ -26,6 +26,7 @@ from waterfall.services.calendar_schedule import (
     compute_working_minutes_between,
     resolve_calendars_for_tasks,
 )
+from waterfall.services.planning_links import PlanningLinkInvariantError, validate_no_cycles
 from waterfall.services.task_references import find_referenced_task_uids
 
 
@@ -637,6 +638,7 @@ def restore_planning_snapshot(
             duration_minutes=item.duration_minutes,
             duration_format=item.duration_format,
             work_minutes=item.work_minutes,
+            task_type=item.task_type,
             percent_complete=item.percent_complete,
             is_summary=item.is_summary,
             is_milestone=item.is_milestone,
@@ -654,6 +656,7 @@ def restore_planning_snapshot(
 
     seen_links: set[tuple[int, int, int]] = set()
     links: list[WfPlanningLinkSnapshot] = []
+    link_edges: dict[int, list[int]] = defaultdict(list)
     for link in payload.links:
         if link.task_uid not in tasks_by_uid:
             raise PlanningTreeMoveError(f"Link references unknown task: {link.task_uid}")
@@ -667,6 +670,7 @@ def restore_planning_snapshot(
         if key in seen_links:
             raise PlanningTreeMoveError("Duplicate predecessor link in restore payload")
         seen_links.add(key)
+        link_edges[link.task_uid].append(link.predecessor_uid)
         links.append(
             WfPlanningLinkSnapshot(
                 planning_id=planning.id,
@@ -677,6 +681,10 @@ def restore_planning_snapshot(
                 lag_format=link.lag_format,
             )
         )
+    try:
+        validate_no_cycles(link_edges)
+    except PlanningLinkInvariantError as exc:
+        raise PlanningTreeInvariantError(str(exc)) from exc
 
     # Nothing else references wf_planning_task_snapshot.id (only composite
     # (planning_id, uid) FKs onto it), so a full delete+reinsert for this
@@ -1130,7 +1138,7 @@ def _topological_cascade_order(
     affected set never needs to be waited for, because that predecessor's
     stored value has not changed and is already correct in ``tasks_by_uid``.
 
-    ``waterfall.services.planning_links._validate_no_cycles`` already
+    ``waterfall.services.planning_links.validate_no_cycles`` already
     rejects a cyclic predecessor graph at link-write time, but this function
     does not trust that blindly: if Kahn's algorithm terminates with
     candidates that were never dequeued (their in-degree never reached

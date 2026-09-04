@@ -28,6 +28,7 @@ export function snapshotFromPlanningDetail(
       duration_minutes: task.duration_minutes,
       duration_format: task.duration_format,
       work_minutes: task.work_minutes,
+      task_type: task.task_type,
       percent_complete: task.percent_complete,
       is_summary: task.is_summary,
       is_milestone: task.is_milestone,
@@ -40,10 +41,7 @@ export function snapshotFromPlanningDetail(
       predecessor_uid: link.predecessor_uid,
       link_type: link.link_type,
       lag_tenth_minute: link.lag_tenth_minute,
-      // TaskLinkRead.lag_format is a plain number (also covers legacy-imported values
-      // outside the enum); a link read back off the planning was necessarily written
-      // through TaskLinkWrite's own enum validation, so this always holds at runtime.
-      lag_format: link.lag_format as PlanningLinkSnapshotWrite["lag_format"],
+      lag_format: link.lag_format,
     })),
   };
 }
