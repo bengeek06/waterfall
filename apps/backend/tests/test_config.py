@@ -1,17 +1,20 @@
 import pytest
 
-from waterfall.core.config import Settings, _validate_settings
+from waterfall.core.config import get_settings
 
 
 @pytest.mark.parametrize("secret_key", ["", "   ", "change-me", " change-me "])
-def test_settings_reject_missing_or_placeholder_secret(secret_key: str) -> None:
-    settings = Settings(_env_file=None, APP_ENV="dev", SECRET_KEY=secret_key)
-
+def test_settings_reject_missing_or_placeholder_secret(
+    monkeypatch: pytest.MonkeyPatch, secret_key: str
+) -> None:
+    monkeypatch.setenv("SECRET_KEY", secret_key)
+    get_settings.cache_clear()
     with pytest.raises(ValueError, match="SECRET_KEY must be set"):
-        _validate_settings(settings)
+        get_settings()
 
 
-def test_settings_accepts_configured_secret() -> None:
-    settings = Settings(_env_file=None, APP_ENV="dev", SECRET_KEY="test-secret")
+def test_settings_accepts_configured_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SECRET_KEY", "test-secret")
+    get_settings.cache_clear()
 
-    assert _validate_settings(settings) is settings
+    assert get_settings().secret_key == "test-secret"
