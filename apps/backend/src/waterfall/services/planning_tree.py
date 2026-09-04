@@ -647,9 +647,12 @@ def restore_planning_snapshot(
         )
 
     for task in tasks_by_uid.values():
-        if task.is_milestone and any(
-            other.parent_uid == task.uid for other in tasks_by_uid.values()
-        ):
+        has_children = any(other.parent_uid == task.uid for other in tasks_by_uid.values())
+        if task.is_summary != has_children:
+            raise PlanningTreeInvariantError(
+                "A task's is_summary flag must match whether it has children"
+            )
+        if task.is_milestone and has_children:
             raise PlanningTreeInvariantError("A milestone cannot contain children")
 
     _validate_tree(tasks_by_uid)

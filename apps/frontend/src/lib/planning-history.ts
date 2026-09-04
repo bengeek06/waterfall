@@ -14,34 +14,34 @@ export function snapshotFromPlanningDetail(
   return {
     tasks: detail.tasks.map((task) => ({
       uid: task.uid,
-      id_display: task.id_display,
-      structure_key: task.structure_key,
-      structure_kind: task.structure_kind,
-      parent_uid: task.parent_uid,
-      position: task.position,
+      id_display: task.id_display ?? null,
+      structure_key: task.structure_key ?? null,
+      structure_kind: task.structure_kind ?? null,
+      parent_uid: task.parent_uid ?? null,
+      position: task.position ?? null,
       name: task.name,
-      outline_number: task.outline_number,
-      outline_level: task.outline_level,
-      wbs: task.wbs,
-      start_at: task.start_at,
-      finish_at: task.finish_at,
-      duration_minutes: task.duration_minutes,
-      duration_format: task.duration_format,
-      work_minutes: task.work_minutes,
-      task_type: task.task_type,
-      percent_complete: task.percent_complete,
+      outline_number: task.outline_number ?? null,
+      outline_level: task.outline_level ?? null,
+      wbs: task.wbs ?? null,
+      start_at: task.start_at ?? null,
+      finish_at: task.finish_at ?? null,
+      duration_minutes: task.duration_minutes ?? null,
+      duration_format: task.duration_format ?? null,
+      work_minutes: task.work_minutes ?? null,
+      task_type: task.task_type ?? null,
+      percent_complete: task.percent_complete ?? null,
       is_summary: task.is_summary,
       is_milestone: task.is_milestone,
-      is_manual: task.is_manual,
-      calendar_uid: task.calendar_uid,
-      notes: task.description,
+      is_manual: task.is_manual ?? null,
+      calendar_uid: task.calendar_uid ?? null,
+      notes: task.description ?? null,
     })),
     links: detail.links.map((link) => ({
       task_uid: link.task_uid,
       predecessor_uid: link.predecessor_uid,
       link_type: link.link_type,
-      lag_tenth_minute: link.lag_tenth_minute,
-      lag_format: link.lag_format,
+      lag_tenth_minute: link.lag_tenth_minute ?? null,
+      lag_format: link.lag_format ?? null,
     })),
   };
 }
@@ -61,12 +61,13 @@ export type PlanningCommand = {
 export type PlanningHistoryState = {
   undoStack: PlanningCommand[];
   redoStack: PlanningCommand[];
+  revision: number | null;
 };
 
 export const MAX_PLANNING_HISTORY_DEPTH = 100;
 
 export function createEmptyPlanningHistory(): PlanningHistoryState {
-  return { undoStack: [], redoStack: [] };
+  return { undoStack: [], redoStack: [], revision: null };
 }
 
 /** Records a newly-succeeded command: pushed on the undo stack, clearing any redo stack
@@ -78,6 +79,7 @@ export function pushCommand(
   return {
     undoStack: [...history.undoStack, command].slice(-MAX_PLANNING_HISTORY_DEPTH),
     redoStack: [],
+    revision: history.revision,
   };
 }
 
@@ -99,6 +101,7 @@ export function commitUndo(history: PlanningHistoryState): PlanningHistoryState 
   return {
     undoStack: history.undoStack.slice(0, -1),
     redoStack: [...history.redoStack, command],
+    revision: history.revision,
   };
 }
 
@@ -112,6 +115,7 @@ export function commitRedo(history: PlanningHistoryState): PlanningHistoryState 
   return {
     undoStack: [...history.undoStack, command],
     redoStack: history.redoStack.slice(0, -1),
+    revision: history.revision,
   };
 }
 

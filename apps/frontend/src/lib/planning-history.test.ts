@@ -147,6 +147,7 @@ describe("snapshotFromPlanningDetail", () => {
         duration_minutes: 480,
         duration_format: 7,
         work_minutes: 480,
+        task_type: null,
         percent_complete: 0,
         is_summary: false,
         is_milestone: false,

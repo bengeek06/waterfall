@@ -534,6 +534,30 @@ def test_restore_rejects_milestone_with_children() -> None:
         assert detail.json()["revision"] == 0
 
 
+def test_restore_rejects_inconsistent_summary_flag_without_mutating() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_planning(project_id)
+
+        response = client.put(
+            _restore_path(project_id, planning_id),
+            json={
+                "tasks": [
+                    _task_payload(10, "Parent", is_summary=False),
+                    _task_payload(11, "Child", parent_uid=10),
+                ],
+                "links": [],
+                "expected_revision": 0,
+            },
+            headers=headers,
+        )
+
+        assert response.status_code == 409
+        detail = client.get(f"/projects/{project_id}/plannings/{planning_id}", headers=headers)
+        assert detail.json()["revision"] == 0
+
+
 def test_restore_rejects_partial_task_payload_with_missing_required_fields() -> None:
     """Finding #1: sparse payloads must not silently clear data (all fields required)."""
     with TestClient(app) as client:

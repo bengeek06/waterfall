@@ -1431,40 +1431,38 @@ export interface components {
         };
         PlanningTaskSnapshotWrite: {
             uid: number;
-            id_display?: number | null;
-            structure_key?: string | null;
+            id_display: number | null;
+            structure_key: string | null;
             /** @enum {string|null} */
-            structure_kind?: "poste" | "lot" | "livrable" | "milestone" | "task" | null;
-            parent_uid?: number | null;
-            position?: number | null;
+            structure_kind: "poste" | "lot" | "livrable" | "milestone" | "task" | null;
+            parent_uid: number | null;
+            position: number | null;
             name: string;
-            outline_number?: string | null;
-            outline_level?: number | null;
-            wbs?: string | null;
+            outline_number: string | null;
+            outline_level: number | null;
+            wbs: string | null;
             /** Format: date-time */
-            start_at?: string | null;
+            start_at: string | null;
             /** Format: date-time */
-            finish_at?: string | null;
-            duration_minutes?: number | null;
-            duration_format?: number | null;
-            work_minutes?: number | null;
-            task_type?: number | null;
-            percent_complete?: number | null;
-            /** @default false */
+            finish_at: string | null;
+            duration_minutes: number | null;
+            duration_format: number | null;
+            work_minutes: number | null;
+            task_type: number | null;
+            percent_complete: number | null;
             is_summary: boolean;
-            /** @default false */
             is_milestone: boolean;
-            is_manual?: boolean | null;
-            calendar_uid?: number | null;
-            notes?: string | null;
+            is_manual: boolean | null;
+            calendar_uid: number | null;
+            notes: string | null;
         };
         PlanningLinkSnapshotWrite: {
             task_uid: number;
             predecessor_uid: number;
             link_type: number;
             /** Format: int32 */
-            lag_tenth_minute?: number | null;
-            lag_format?: number | null;
+            lag_tenth_minute: number | null;
+            lag_format: number | null;
         };
         PlanningSnapshotRestore: {
             tasks: components["schemas"]["PlanningTaskSnapshotWrite"][];

@@ -184,6 +184,8 @@ export default function ProjectDetailsPage() {
   // own independent history. A revision conflict never replaces planningDetail/history itself;
   // it sets planningConflict instead, and only a confirmed reload clears the stale history.
   const [historyByPlanningId, setHistoryByPlanningId] = useState<PlanningHistoryByPlanningId>({});
+  const historyByPlanningIdRef = useRef(historyByPlanningId);
+  historyByPlanningIdRef.current = historyByPlanningId;
   // Per-planning conflict tracking (E4-02): a conflict on planning A survives if user switches
   // to B; undo/redo is disabled until the conflict is explicitly cleared by a successful reload.
   const [planningConflictByPlanningId, setPlanningConflictByPlanningId] = useState<
@@ -329,6 +331,19 @@ export default function ProjectDetailsPage() {
         const detail = await getPlanning(projectId, selectedPlanningId, session, onSessionRefresh);
         const savedDraft = await getPlanningStructureDraft(projectId, session, onSessionRefresh);
         if (!cancelled) {
+          const history = getPlanningHistory(historyByPlanningIdRef.current, selectedPlanningId);
+          const historyRevision = history.revision;
+          if (historyRevision !== null && historyRevision !== detail.revision) {
+            setPlanningConflictByPlanningId((previous) => ({
+              ...previous,
+              [selectedPlanningId]: {
+                projectId,
+                expectedRevision: historyRevision,
+                currentRevision: detail.revision,
+                message: "Ce planning a été modifié entre-temps : recharge-le avant de continuer.",
+              },
+            }));
+          }
           setPlanningDetail(detail);
           const rows = savedDraft
             ? structureToDraftRows(savedDraft.structure)
@@ -535,7 +550,10 @@ export default function ProjectDetailsPage() {
       after: snapshotFromPlanningDetail(after),
     };
     setHistoryByPlanningId((current) =>
-      setPlanningHistory(current, planningId, pushCommand(getPlanningHistory(current, planningId), command)),
+      setPlanningHistory(current, planningId, {
+        ...pushCommand(getPlanningHistory(current, planningId), command),
+        revision: after.revision,
+      }),
     );
   }
 
@@ -638,7 +656,7 @@ export default function ProjectDetailsPage() {
       setHistoryByPlanningId((current) => {
         const currentHistory = getPlanningHistory(current, planningId);
         const nextHistory = direction === "undo" ? commitUndo(currentHistory) : commitRedo(currentHistory);
-        return setPlanningHistory(current, planningId, nextHistory);
+        return setPlanningHistory(current, planningId, { ...nextHistory, revision: updated.revision });
       });
     } catch (cause) {
       if (cause instanceof SessionExpiredError) {
@@ -648,8 +666,7 @@ export default function ProjectDetailsPage() {
       }
       const revisionConflict = getPlanningRevisionConflict(cause);
       if (revisionConflict) {
-        if (selectedPlanningIdRef.current === planningId) {
-          setPlanningConflictByPlanningId((prev) => ({
+        setPlanningConflictByPlanningId((prev) => ({
           ...prev,
           [planningId]: {
             projectId: revisionConflict.projectId,
@@ -658,7 +675,6 @@ export default function ProjectDetailsPage() {
             message: "Ce planning a été modifié entre-temps : recharge-le avant de continuer.",
           },
         }));
-        }
         return;
       }
       if (selectedPlanningIdRef.current === planningId) {
@@ -691,7 +707,9 @@ export default function ProjectDetailsPage() {
         return next;
       });
       setHistoryByPlanningId((current) => resetPlanningHistory(current, planningId));
-      setPlanningDetail(detail);
+      if (selectedPlanningIdRef.current === planningId) {
+        setPlanningDetail(detail);
+      }
     } catch (cause) {
       if (cause instanceof SessionExpiredError) {
         clearSession();
@@ -752,8 +770,7 @@ export default function ProjectDetailsPage() {
       }
       const revisionConflict = getPlanningRevisionConflict(cause);
       if (revisionConflict) {
-        if (selectedPlanningIdRef.current === requestedPlanningId) {
-          setPlanningConflictByPlanningId((prev) => ({
+        setPlanningConflictByPlanningId((prev) => ({
           ...prev,
           [requestedPlanningId]: {
             projectId: revisionConflict.projectId,
@@ -762,7 +779,6 @@ export default function ProjectDetailsPage() {
             message: "Ce planning a été modifié entre-temps : recharge-le avant de continuer.",
           },
         }));
-        }
         return false;
       }
       if (selectedPlanningIdRef.current === requestedPlanningId) {
@@ -818,8 +834,7 @@ export default function ProjectDetailsPage() {
       }
       const revisionConflict = getPlanningRevisionConflict(cause);
       if (revisionConflict) {
-        if (selectedPlanningIdRef.current === requestedPlanningId) {
-          setPlanningConflictByPlanningId((prev) => ({
+        setPlanningConflictByPlanningId((prev) => ({
           ...prev,
           [requestedPlanningId]: {
             projectId: revisionConflict.projectId,
@@ -828,7 +843,6 @@ export default function ProjectDetailsPage() {
             message: "Ce planning a été modifié entre-temps : recharge-le avant de continuer.",
           },
         }));
-        }
         throw cause;
       }
       const message = describePredecessorLinksError(cause);
@@ -971,8 +985,7 @@ export default function ProjectDetailsPage() {
       }
       const revisionConflict = getPlanningRevisionConflict(cause);
       if (revisionConflict) {
-        if (selectedPlanningIdRef.current === requestedPlanningId) {
-          setPlanningConflictByPlanningId((prev) => ({
+        setPlanningConflictByPlanningId((prev) => ({
           ...prev,
           [requestedPlanningId]: {
             projectId: revisionConflict.projectId,
@@ -981,7 +994,6 @@ export default function ProjectDetailsPage() {
             message: "Ce planning a été modifié entre-temps : recharge-le avant de continuer.",
           },
         }));
-        }
         throw cause;
       }
       const conflict = getPlanningTaskDeleteConflict(cause);
