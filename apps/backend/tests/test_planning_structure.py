@@ -348,6 +348,53 @@ def test_reopen_without_draft_or_reference_creates_empty_planning() -> None:
         assert planning_detail.json()["tasks"] == []
 
 
+def test_reopen_after_validating_sole_draft_without_setting_reference() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+
+        generated = client.post(
+            f"/projects/{project_id}/planning-structure", json=_payload(), headers=headers
+        )
+        assert generated.status_code == 201
+        project = client.get(f"/projects/{project_id}", headers=headers).json()
+        planning_id = project["displayed_planning_id"]
+        assert planning_id is not None
+
+        validate_response = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/validate",
+            headers=headers,
+        )
+        assert validate_response.status_code == 200
+        # Deliberately never call the /reference endpoint: the sole draft is
+        # validated but never set as the project's reference planning.
+
+        project_after_validate = client.get(f"/projects/{project_id}", headers=headers).json()
+        assert project_after_validate["planning_reference_id"] is None
+
+        reopened = client.post(f"/projects/{project_id}/planning-structure/reopen", headers=headers)
+
+        assert reopened.status_code == 200
+        reopened_payload = cast(dict[str, Any], reopened.json())
+        new_planning_id = reopened_payload["displayed_planning_id"]
+        assert new_planning_id is not None
+        assert new_planning_id != planning_id
+
+        new_planning = client.get(
+            f"/projects/{project_id}/plannings/{new_planning_id}", headers=headers
+        )
+        assert new_planning.status_code == 200
+        assert new_planning.json()["tasks"] == []
+
+        original_planning = client.get(
+            f"/projects/{project_id}/plannings/{planning_id}", headers=headers
+        )
+        assert original_planning.status_code == 200
+        original_payload = cast(dict[str, Any], original_planning.json())
+        assert original_payload["status"] == "validated"
+        assert len(cast(list[dict[str, Any]], original_payload["tasks"])) == 8
+
+
 def test_create_planning_structure_generates_hierarchy_and_links() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)
