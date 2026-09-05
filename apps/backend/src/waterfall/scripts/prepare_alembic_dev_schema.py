@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Any, cast
 
 from alembic.autogenerate import compare_metadata
 from alembic.config import Config
@@ -52,10 +53,7 @@ def _has_application_tables(connection: Connection) -> bool:
 
 
 def _only_missing_planning_revision(connection: Connection) -> bool:
-    migration_context = MigrationContext.configure(
-        connection, opts={"compare_type": True, "compare_server_default": True}
-    )
-    diffs = compare_metadata(migration_context, Base.metadata)
+    diffs = _metadata_diffs(connection)
     return (
         len(diffs) == 1
         and diffs[0][0] == "add_column"
@@ -64,11 +62,23 @@ def _only_missing_planning_revision(connection: Connection) -> bool:
     )
 
 
-def _schema_matches_head(connection: Connection) -> bool:
+def _metadata_diffs(connection: Connection) -> list[Any]:
     migration_context = MigrationContext.configure(
         connection, opts={"compare_type": True, "compare_server_default": True}
     )
-    return compare_metadata(migration_context, Base.metadata) == []
+    diffs = compare_metadata(migration_context, Base.metadata)
+    return [diff for diff in diffs if not _is_sqlite_use_alter_fk_diff(connection, diff)]
+
+
+def _is_sqlite_use_alter_fk_diff(connection: Connection, diff: Any) -> bool:
+    if connection.dialect.name != "sqlite" or not isinstance(diff, tuple) or diff[0] != "add_fk":
+        return False
+    constraint = cast(object, diff[1])
+    return getattr(constraint, "use_alter", False) is True
+
+
+def _schema_matches_head(connection: Connection) -> bool:
+    return _metadata_diffs(connection) == []
 
 
 def _ensure_standard_calendar(connection: Connection) -> tuple[int, bool]:
@@ -185,6 +195,12 @@ def prepare_legacy_create_all_schema(engine: Engine) -> str | None:
             _repair_calendar_invariants(connection)
             _stamp_revision(connection, REVISION_BEFORE_PLANNING_REVISION)
             return REVISION_BEFORE_PLANNING_REVISION
+
+        raise RuntimeError(
+            "Unversioned legacy database schema has unsupported structural drift and "
+            "cannot be recovered automatically. Restore a backup or stamp the known "
+            "matching Alembic revision manually before running `alembic upgrade head`."
+        )
 
     return None
 

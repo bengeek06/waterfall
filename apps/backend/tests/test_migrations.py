@@ -788,7 +788,10 @@ def _run_alembic_current(database_url: str) -> subprocess.CompletedProcess[str]:
 
 def _assert_create_all_schema_can_be_stamped_by_migrate_up(database_url: str) -> None:
     from waterfall.db.base import Base
-    from waterfall.scripts.prepare_alembic_dev_schema import STANDARD_WEEKDAY_HOURS
+    from waterfall.scripts.prepare_alembic_dev_schema import (
+        STANDARD_WEEKDAY_HOURS,
+        _metadata_diffs,  # pyright: ignore[reportPrivateUsage]
+    )
 
     _create_orm_schema_without_alembic_version(database_url)
     _run_prepare_legacy_schema(database_url)
@@ -813,10 +816,8 @@ def _assert_create_all_schema_can_be_stamped_by_migrate_up(database_url: str) ->
         assert [float(row[1]) for row in weekdays] == [
             float(hours) for hours in STANDARD_WEEKDAY_HOURS.values()
         ]
-        migration_context = MigrationContext.configure(
-            connection, opts={"compare_type": True, "compare_server_default": True}
-        )
-        assert compare_metadata(migration_context, Base.metadata) == []
+        _ = Base.metadata
+        assert _metadata_diffs(connection) == []
 
 
 def test_alembic_current_does_not_stamp_create_all_schema() -> None:
@@ -856,6 +857,20 @@ def test_legacy_prepare_rejects_incomplete_unversioned_schema() -> None:
 
         assert result.returncode != 0
         assert "Unversioned legacy database schema is incomplete" in result.stderr
+
+
+def test_legacy_prepare_rejects_complete_unsupported_schema_drift() -> None:
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "unsupported_drift.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        _create_orm_schema_without_alembic_version(database_url)
+        with _disposable_engine(database_url) as engine, engine.begin() as connection:
+            connection.execute(text("ALTER TABLE wf_planning DROP COLUMN note"))
+
+        result = _run_prepare_legacy_schema_unchecked(database_url)
+
+        assert result.returncode != 0
+        assert "unsupported structural drift" in result.stderr
 
 
 def test_create_all_schema_before_planning_revision_is_repaired_then_migrated() -> None:
