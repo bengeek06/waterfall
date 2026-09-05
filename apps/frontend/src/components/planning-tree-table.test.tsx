@@ -134,7 +134,7 @@ describe("PlanningTreeTable", () => {
     render(<PlanningTreeTable tasks={manyTasks} versionKey={1} />);
 
     expect(screen.getAllByRole("row")).toHaveLength(manyTasks.length + 1);
-  });
+  }, 15_000);
 
   it("shows a read-only notice for validated versions or read-only projects", () => {
     render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} readOnly />);

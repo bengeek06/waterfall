@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import subprocess
 import sys
@@ -13,6 +14,7 @@ from tempfile import TemporaryDirectory
 import pytest
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
+from fastapi import FastAPI
 from sqlalchemy import Engine, String, create_engine, inspect, text
 from sqlalchemy.engine import make_url
 
@@ -734,6 +736,352 @@ def test_migration_schema_matches_orm_metadata() -> None:
 def test_postgres_migration_schema_matches_orm_metadata(postgres_database_url: str) -> None:
     """PostgreSQL variant: the production-representative schema-drift guard for #45."""
     _assert_schema_matches_orm_metadata(postgres_database_url)
+
+
+def _create_orm_schema_without_alembic_version(database_url: str) -> None:
+    environment = os.environ.copy()
+    environment["DATABASE_URL"] = database_url
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from waterfall.db.base import Base; "
+            "from waterfall.db.session import get_engine; "
+            "from waterfall.models import User; "
+            "_ = User.__tablename__; "
+            "Base.metadata.create_all(get_engine())",
+        ],
+        cwd=BACKEND_DIR,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _run_prepare_legacy_schema(database_url: str) -> subprocess.CompletedProcess[str]:
+    environment = os.environ.copy()
+    environment["DATABASE_URL"] = database_url
+    return subprocess.run(
+        [sys.executable, "-m", "waterfall.scripts.prepare_alembic_dev_schema"],
+        cwd=BACKEND_DIR,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _run_prepare_legacy_schema_unchecked(database_url: str) -> subprocess.CompletedProcess[str]:
+    environment = os.environ.copy()
+    environment["DATABASE_URL"] = database_url
+    return subprocess.run(
+        [sys.executable, "-m", "waterfall.scripts.prepare_alembic_dev_schema"],
+        cwd=BACKEND_DIR,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _run_alembic_current(database_url: str) -> subprocess.CompletedProcess[str]:
+    environment = os.environ.copy()
+    environment["DATABASE_URL"] = database_url
+    return subprocess.run(
+        [sys.executable, "-m", "alembic", "current"],
+        cwd=BACKEND_DIR,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _assert_create_all_schema_can_be_stamped_by_migrate_up(database_url: str) -> None:
+    from waterfall.db.base import Base
+    from waterfall.scripts.prepare_alembic_dev_schema import (
+        STANDARD_WEEKDAY_HOURS,
+        _metadata_diffs,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    _create_orm_schema_without_alembic_version(database_url)
+    _run_prepare_legacy_schema(database_url)
+    _run_alembic(database_url, "head")
+    _run_alembic(database_url, "head")
+
+    with _disposable_engine(database_url) as engine, engine.connect() as connection:
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260903_0006"
+        standard = connection.execute(
+            text("SELECT id, is_active, is_default FROM wf_calendar WHERE code = 'STANDARD'")
+        ).one()
+        assert standard[1] == 1
+        assert standard[2] == 1
+        weekdays = connection.execute(
+            text(
+                "SELECT day_type, hours_per_day FROM wf_calendar_weekday "
+                "WHERE calendar_id = :calendar_id ORDER BY day_type"
+            ),
+            {"calendar_id": standard[0]},
+        ).all()
+        assert [row[0] for row in weekdays] == list(STANDARD_WEEKDAY_HOURS)
+        assert [float(row[1]) for row in weekdays] == [
+            float(hours) for hours in STANDARD_WEEKDAY_HOURS.values()
+        ]
+        _ = Base.metadata
+        assert _metadata_diffs(connection) == []
+
+
+def test_alembic_current_does_not_stamp_create_all_schema() -> None:
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "create_all.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        _create_orm_schema_without_alembic_version(database_url)
+        _run_alembic_current(database_url)
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            assert not inspect(connection).has_table("alembic_version")
+
+
+def test_legacy_prepare_returns_early_for_empty_database_when_head_constant_lags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from waterfall.scripts import prepare_alembic_dev_schema as prepare_module
+
+    monkeypatch.setattr(prepare_module, "HEAD_REVISION", "future-head")
+
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "empty.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        with _disposable_engine(database_url) as engine:
+            assert prepare_module.prepare_legacy_create_all_schema(engine) is None
+
+
+def test_legacy_prepare_rejects_incomplete_unversioned_schema() -> None:
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "partial_legacy.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        _run_alembic(database_url, "20260823_0001")
+        with _disposable_engine(database_url) as engine, engine.begin() as connection:
+            connection.execute(text("DROP TABLE alembic_version"))
+
+        result = _run_prepare_legacy_schema_unchecked(database_url)
+
+        assert result.returncode != 0
+        assert "Unversioned legacy database schema is incomplete" in result.stderr
+
+
+def test_legacy_prepare_rejects_complete_unsupported_schema_drift() -> None:
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "unsupported_drift.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        _create_orm_schema_without_alembic_version(database_url)
+        with _disposable_engine(database_url) as engine, engine.begin() as connection:
+            connection.execute(text("ALTER TABLE wf_planning DROP COLUMN note"))
+
+        result = _run_prepare_legacy_schema_unchecked(database_url)
+
+        assert result.returncode != 0
+        assert "unsupported structural drift" in result.stderr
+
+
+def test_legacy_prepare_rejects_missing_sqlite_use_alter_foreign_key() -> None:
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "missing_fk.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        _create_orm_schema_without_alembic_version(database_url)
+        with _disposable_engine(database_url) as engine, engine.begin() as connection:
+            create_sql = connection.scalar(
+                text("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ms_project'")
+            )
+            assert isinstance(create_sql, str)
+            without_reference_estimate_fk = "\n".join(
+                line
+                for line in create_sql.splitlines()
+                if "fk_ms_project_reference_estimate" not in line
+            )
+            connection.execute(text("ALTER TABLE ms_project RENAME TO ms_project_old"))
+            connection.execute(text(without_reference_estimate_fk))
+            connection.execute(text("DROP TABLE ms_project_old"))
+
+        result = _run_prepare_legacy_schema_unchecked(database_url)
+
+        assert result.returncode != 0
+        assert "unsupported structural drift" in result.stderr
+
+
+def test_legacy_prepare_reuses_empty_alembic_version_table() -> None:
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "empty_version.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        _create_orm_schema_without_alembic_version(database_url)
+        with _disposable_engine(database_url) as engine, engine.begin() as connection:
+            connection.execute(
+                text(
+                    "CREATE TABLE alembic_version ("
+                    "version_num VARCHAR(32) NOT NULL, "
+                    "CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)"
+                    ")"
+                )
+            )
+
+        _run_prepare_legacy_schema(database_url)
+        _run_alembic(database_url, "head")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            assert (
+                connection.scalar(text("SELECT version_num FROM alembic_version"))
+                == "20260903_0006"
+            )
+
+
+def test_create_all_schema_before_planning_revision_is_repaired_then_migrated() -> None:
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "create_all_before_revision.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        _create_orm_schema_without_alembic_version(database_url)
+        with _disposable_engine(database_url) as engine, engine.begin() as connection:
+            connection.execute(text("ALTER TABLE wf_planning DROP COLUMN revision"))
+
+        _run_prepare_legacy_schema(database_url)
+        _run_alembic(database_url, "head")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            assert (
+                connection.scalar(text("SELECT version_num FROM alembic_version"))
+                == "20260903_0006"
+            )
+            planning_columns = {
+                column["name"] for column in inspect(connection).get_columns("wf_planning")
+            }
+            assert "revision" in planning_columns
+            assert (
+                connection.scalar(
+                    text(
+                        "SELECT COUNT(*) FROM wf_calendar "
+                        "WHERE code = 'STANDARD' AND is_default = true"
+                    )
+                )
+                == 1
+            )
+
+
+def test_create_all_recovery_does_not_assign_roles_to_inactive_standard_calendar() -> None:
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "inactive_standard.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        _create_orm_schema_without_alembic_version(database_url)
+        with _disposable_engine(database_url) as engine, engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO wf_calendar "
+                    "(id, code, name, weeks_per_year, is_active, is_default, "
+                    "created_at, updated_at) "
+                    "VALUES (1, 'STANDARD', 'Standard', 47, false, false, "
+                    "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO wf_cost_type "
+                    "(id, code, name, kind, is_active, created_at, updated_at) "
+                    "VALUES (1, 'MO', 'Main d''oeuvre', 'labor', true, "
+                    "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO wf_cost_category "
+                    "(id, cost_type_id, accounting_code, name, is_active, created_at, updated_at) "
+                    "VALUES (1, 1, 'DEV', 'Developpement', true, "
+                    "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO wf_resource_node "
+                    "(id, code, name, is_active, created_at, updated_at) "
+                    "VALUES (1, 'IT', 'Informatique', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO wf_resource_role "
+                    "(id, node_id, cost_category_id, name, is_active, created_at, updated_at) "
+                    "VALUES (1, 1, 1, 'Developpeur', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                )
+            )
+
+        _run_prepare_legacy_schema(database_url)
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            standard = connection.execute(
+                text("SELECT id, is_default FROM wf_calendar WHERE code = 'STANDARD'")
+            ).one()
+            assert standard[1] == 0
+            assert (
+                connection.scalar(text("SELECT calendar_id FROM wf_resource_role WHERE id = 1"))
+                is None
+            )
+
+
+def test_create_all_schema_can_be_stamped_by_migrate_up() -> None:
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "create_all.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        _assert_create_all_schema_can_be_stamped_by_migrate_up(database_url)
+
+
+def test_postgres_create_all_schema_can_be_stamped_by_migrate_up(
+    postgres_database_url: str,
+) -> None:
+    _assert_create_all_schema_can_be_stamped_by_migrate_up(postgres_database_url)
+
+
+def test_schema_revision_check_rejects_database_behind_head() -> None:
+    from waterfall.db.schema_revision import (
+        DatabaseSchemaRevisionError,
+        assert_database_schema_current,
+    )
+
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "behind-head.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        _run_alembic(database_url, "20260901_0005")
+
+        with (
+            _disposable_engine(database_url) as engine,
+            pytest.raises(DatabaseSchemaRevisionError) as error,
+        ):
+            assert_database_schema_current(engine)
+
+    assert error.value.current_revision == "20260901_0005"
+    assert error.value.expected_revision == "20260903_0006"
+    assert "Run `make migrate-up`" in str(error.value)
+
+
+def test_api_startup_rejects_database_behind_head(monkeypatch: pytest.MonkeyPatch) -> None:
+    from waterfall import main as main_module
+    from waterfall.core.config import get_settings
+    from waterfall.db.schema_revision import DatabaseSchemaRevisionError
+
+    startup_error = DatabaseSchemaRevisionError("20260901_0005", "20260903_0006")
+
+    def reject_schema_revision(_engine: object) -> None:
+        raise startup_error
+
+    async def run_lifespan() -> None:
+        async with main_module.lifespan(FastAPI()):
+            pass
+
+    monkeypatch.setenv("APP_ENV", "dev")
+    get_settings.cache_clear()
+    monkeypatch.setattr(main_module, "assert_database_schema_current", reject_schema_revision)
+
+    with pytest.raises(DatabaseSchemaRevisionError, match="Run `make migrate-up`"):
+        asyncio.run(run_lifespan())
+
+    get_settings.cache_clear()
 
 
 def test_postgres_migration_upgrade_head_succeeds(postgres_database_url: str) -> None:

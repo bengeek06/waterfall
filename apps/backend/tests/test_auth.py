@@ -1,8 +1,10 @@
 import os
 from typing import Any, cast
 
+import pytest
 from fastapi.testclient import TestClient
 from httpx import Response
+from sqlalchemy.engine import Engine
 
 from waterfall.api.routes.auth import login_rate_limiter
 from waterfall.core.config import get_settings
@@ -328,11 +330,17 @@ def test_non_admin_cannot_manage_users() -> None:
         assert users_response.status_code == 403
 
 
-def test_registration_can_be_disabled_outside_dev() -> None:
+def test_registration_can_be_disabled_outside_dev(monkeypatch: pytest.MonkeyPatch) -> None:
+    from waterfall import main as main_module
+
+    def accept_schema_revision(_engine: Engine) -> None:
+        return None
+
     login_rate_limiter.clear()
     os.environ["APP_ENV"] = "prod"
     os.environ["AUTH_ALLOW_PUBLIC_REGISTER"] = "false"
     os.environ["SECRET_KEY"] = "prod-secret-for-tests"
+    monkeypatch.setattr(main_module, "assert_database_schema_current", accept_schema_revision)
     _clear_settings_cache()
 
     try:

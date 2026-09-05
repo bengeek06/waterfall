@@ -177,9 +177,11 @@ Toutes les tâches courantes passent par le `Makefile` (`make help` liste l'ense
 ```bash
 make venv                   # crée l'environnement Python à la racine du dépôt
 source .venv/bin/activate
-make install                # backend (editable + dev) + workspaces npm
-make hooks                  # installe les hooks git (pre-commit + pre-push)
+make install                # backend (editable + dev) + workspaces npm + hooks git
 ```
+
+`make install` installe les hooks Git `pre-commit` et `pre-push` quand il est lancé
+depuis un checkout Git. Pour les réinstaller seuls, utilisez `make hooks`.
 
 ### 3) Configuration A : développement natif
 
@@ -188,8 +190,25 @@ Le backend démarre aussi le seed admin en mode `dev`; `WF_ADMIN_PASSWORD` doit 
 
 ```bash
 make db-up                  # Postgres dans Docker, pour le dev natif
+make migrate-up             # applique les migrations Alembic sur la base de dev
 make dev                    # backend (uvicorn) + frontend (next dev) — Ctrl-C arrête les deux
 ```
+
+Si une base de développement a été créée avant cette étape par l'ancien démarrage
+automatique, lancez `make migrate-up` une fois. La commande détecte les anciens schémas
+créés par `create_all`, restaure les invariants de données portés par les migrations
+initiales (calendrier `STANDARD`, jours ouvrés, calendrier par défaut et, si
+`STANDARD` est actif, rôles existants sans calendrier propre),
+puis renseigne `alembic_version` avant d'appliquer les migrations restantes.
+
+```bash
+make migrate-up
+```
+
+Au démarrage, l'API vérifie que la révision Alembic courante correspond à la tête
+attendue. En cas d'écart, elle refuse de démarrer avec un message explicite demandant
+d'exécuter `make migrate-up`, afin d'éviter une erreur SQL tardive dans un parcours
+utilisateur.
 
 Adresses par défaut :
 
@@ -236,6 +255,10 @@ make up-full                # API + DB + frontend + observabilité
 make down                   # arrêt (volumes conservés) — alias : make stop
 make logs                   # suivre les logs
 ```
+
+Le conteneur API applique `alembic upgrade head` avant de démarrer Uvicorn. Un volume
+PostgreSQL neuf est donc initialisé par Alembic, et un échec de migration arrête le
+démarrage de l'API au lieu de servir une application sur un schéma incomplet.
 
 Si Compose ne charge pas automatiquement le `.env` de la racine, utilisez explicitement :
 
