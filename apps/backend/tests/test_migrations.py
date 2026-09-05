@@ -786,9 +786,10 @@ def test_schema_revision_check_rejects_database_behind_head() -> None:
         database_url = f"sqlite+pysqlite:///{database_path}"
         _run_alembic(database_url, "20260901_0005")
 
-        with _disposable_engine(database_url) as engine, pytest.raises(
-            DatabaseSchemaRevisionError
-        ) as error:
+        with (
+            _disposable_engine(database_url) as engine,
+            pytest.raises(DatabaseSchemaRevisionError) as error,
+        ):
             assert_database_schema_current(engine)
 
     assert error.value.current_revision == "20260901_0005"

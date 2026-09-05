@@ -177,9 +177,11 @@ Toutes les tâches courantes passent par le `Makefile` (`make help` liste l'ense
 ```bash
 make venv                   # crée l'environnement Python à la racine du dépôt
 source .venv/bin/activate
-make install                # backend (editable + dev) + workspaces npm
-make hooks                  # installe les hooks git (pre-commit + pre-push)
+make install                # backend (editable + dev) + workspaces npm + hooks git
 ```
+
+`make install` installe les hooks Git `pre-commit` et `pre-push` quand il est lancé
+depuis un checkout Git. Pour les réinstaller seuls, utilisez `make hooks`.
 
 ### 3) Configuration A : développement natif
 
@@ -255,6 +257,10 @@ make up-full                # API + DB + frontend + observabilité
 make down                   # arrêt (volumes conservés) — alias : make stop
 make logs                   # suivre les logs
 ```
+
+Le conteneur API applique `alembic upgrade head` avant de démarrer Uvicorn. Un volume
+PostgreSQL neuf est donc initialisé par Alembic, et un échec de migration arrête le
+démarrage de l'API au lieu de servir une application sur un schéma incomplet.
 
 Si Compose ne charge pas automatiquement le `.env` de la racine, utilisez explicitement :
 

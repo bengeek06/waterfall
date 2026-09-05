@@ -17,6 +17,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    command: >-
+      sh -c "alembic upgrade head && uvicorn waterfall.main:app --host 0.0.0.0 --port 8000 --app-dir src"
     volumes:
       - import_data:/data/imports
 

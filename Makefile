@@ -23,7 +23,7 @@ help:  ## Show this help
 # ---- Install ----
 venv:  ## Create the root Python virtualenv if it does not exist
 	@test -x .venv/bin/python || python3 -m venv .venv
-install: install-backend install-frontend  ## Install backend + frontend deps
+install: install-backend install-frontend hooks  ## Install backend + frontend deps + Git hooks
 install-backend: venv  ## Install backend (editable + dev extras)
 	$(PYTHON) -m pip install -e './apps/backend[dev]'
 install-frontend:  ## Install JS workspace deps
@@ -87,7 +87,11 @@ migrate-up:  ## Apply Alembic migrations
 seed-admin:  ## Seed the admin user
 	cd $(BACKEND) && $(PYTHON) -m waterfall.scripts.seed_admin
 hooks:  ## Install pre-commit hooks (pre-commit + pre-push)
-	pre-commit install
+	@if git rev-parse --git-dir >/dev/null 2>&1; then \
+		$(PYTHON) -m pre_commit install --hook-type pre-commit --hook-type pre-push; \
+	else \
+		echo "Not a Git checkout; skipping hook installation."; \
+	fi
 
 # ---- Clean ----
 clean:  ## Remove Python/Next caches and build outputs
