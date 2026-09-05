@@ -8,7 +8,7 @@ from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
-from sqlalchemy import Engine, create_engine, inspect, text
+from sqlalchemy import Engine, ForeignKeyConstraint, create_engine, inspect, text
 from sqlalchemy.engine import Connection
 
 from waterfall.core.config import get_settings
@@ -38,8 +38,11 @@ def _expected_head_revision() -> str:
     return head_revision
 
 
-def _alembic_version_exists(connection: Connection) -> bool:
-    return inspect(connection).has_table("alembic_version")
+def _alembic_revision_exists(connection: Connection) -> bool:
+    if not inspect(connection).has_table("alembic_version"):
+        return False
+    version_count = connection.scalar(text("SELECT COUNT(*) FROM alembic_version"))
+    return bool(version_count)
 
 
 def _all_application_tables_exist(connection: Connection) -> bool:
@@ -73,8 +76,30 @@ def _metadata_diffs(connection: Connection) -> list[Any]:
 def _is_sqlite_use_alter_fk_diff(connection: Connection, diff: Any) -> bool:
     if connection.dialect.name != "sqlite" or not isinstance(diff, tuple) or diff[0] != "add_fk":
         return False
-    constraint = cast(object, diff[1])
-    return getattr(constraint, "use_alter", False) is True
+    constraint = cast(ForeignKeyConstraint, diff[1])
+    return constraint.use_alter is True and _sqlite_foreign_key_exists(connection, constraint)
+
+
+def _sqlite_foreign_key_exists(connection: Connection, constraint: ForeignKeyConstraint) -> bool:
+    table_name = constraint.table.name
+    quoted_table_name = connection.dialect.identifier_preparer.quote(table_name)
+    rows = connection.exec_driver_sql(f"PRAGMA foreign_key_list({quoted_table_name})").mappings()
+    expected_columns = [column.name for column in constraint.columns]
+    expected_referred_table = constraint.elements[0].column.table.name
+    expected_referred_columns = [element.column.name for element in constraint.elements]
+    grouped_rows: dict[int, list[Any]] = {}
+    for row in rows:
+        grouped_rows.setdefault(row["id"], []).append(row)
+
+    for group in grouped_rows.values():
+        ordered_group = sorted(group, key=lambda row: row["seq"])
+        if [row["from"] for row in ordered_group] != expected_columns:
+            continue
+        if ordered_group[0]["table"] != expected_referred_table:
+            continue
+        if [row["to"] for row in ordered_group] == expected_referred_columns:
+            return True
+    return False
 
 
 def _schema_matches_head(connection: Connection) -> bool:
@@ -153,14 +178,15 @@ def _repair_calendar_invariants(connection: Connection) -> None:
 
 
 def _stamp_revision(connection: Connection, revision: str) -> None:
-    connection.execute(
-        text(
-            "CREATE TABLE alembic_version ("
-            "version_num VARCHAR(32) NOT NULL, "
-            "CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)"
-            ")"
+    if not inspect(connection).has_table("alembic_version"):
+        connection.execute(
+            text(
+                "CREATE TABLE alembic_version ("
+                "version_num VARCHAR(32) NOT NULL, "
+                "CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)"
+                ")"
+            )
         )
-    )
     connection.execute(
         text("INSERT INTO alembic_version (version_num) VALUES (:revision)"),
         {"revision": revision},
@@ -170,7 +196,7 @@ def _stamp_revision(connection: Connection, revision: str) -> None:
 def prepare_legacy_create_all_schema(engine: Engine) -> str | None:
     _ = User.__tablename__
     with engine.begin() as connection:
-        if _alembic_version_exists(connection) or not _has_application_tables(connection):
+        if _alembic_revision_exists(connection) or not _has_application_tables(connection):
             return None
 
         if not _all_application_tables_exist(connection):

@@ -739,12 +739,24 @@ def test_postgres_migration_schema_matches_orm_metadata(postgres_database_url: s
 
 
 def _create_orm_schema_without_alembic_version(database_url: str) -> None:
-    from waterfall.db.base import Base
-    from waterfall.models import User
-
-    _ = User.__tablename__
-    with _disposable_engine(database_url) as engine:
-        Base.metadata.create_all(engine)
+    environment = os.environ.copy()
+    environment["DATABASE_URL"] = database_url
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from waterfall.db.base import Base; "
+            "from waterfall.db.session import get_engine; "
+            "from waterfall.models import User; "
+            "_ = User.__tablename__; "
+            "Base.metadata.create_all(get_engine())",
+        ],
+        cwd=BACKEND_DIR,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
 
 def _run_prepare_legacy_schema(database_url: str) -> subprocess.CompletedProcess[str]:
@@ -871,6 +883,56 @@ def test_legacy_prepare_rejects_complete_unsupported_schema_drift() -> None:
 
         assert result.returncode != 0
         assert "unsupported structural drift" in result.stderr
+
+
+def test_legacy_prepare_rejects_missing_sqlite_use_alter_foreign_key() -> None:
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "missing_fk.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        _create_orm_schema_without_alembic_version(database_url)
+        with _disposable_engine(database_url) as engine, engine.begin() as connection:
+            create_sql = connection.scalar(
+                text("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ms_project'")
+            )
+            assert isinstance(create_sql, str)
+            without_reference_estimate_fk = "\n".join(
+                line
+                for line in create_sql.splitlines()
+                if "fk_ms_project_reference_estimate" not in line
+            )
+            connection.execute(text("ALTER TABLE ms_project RENAME TO ms_project_old"))
+            connection.execute(text(without_reference_estimate_fk))
+            connection.execute(text("DROP TABLE ms_project_old"))
+
+        result = _run_prepare_legacy_schema_unchecked(database_url)
+
+        assert result.returncode != 0
+        assert "unsupported structural drift" in result.stderr
+
+
+def test_legacy_prepare_reuses_empty_alembic_version_table() -> None:
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "empty_version.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        _create_orm_schema_without_alembic_version(database_url)
+        with _disposable_engine(database_url) as engine, engine.begin() as connection:
+            connection.execute(
+                text(
+                    "CREATE TABLE alembic_version ("
+                    "version_num VARCHAR(32) NOT NULL, "
+                    "CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)"
+                    ")"
+                )
+            )
+
+        _run_prepare_legacy_schema(database_url)
+        _run_alembic(database_url, "head")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            assert (
+                connection.scalar(text("SELECT version_num FROM alembic_version"))
+                == "20260903_0006"
+            )
 
 
 def test_create_all_schema_before_planning_revision_is_repaired_then_migrated() -> None:
