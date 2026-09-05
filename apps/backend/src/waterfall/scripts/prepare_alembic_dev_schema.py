@@ -46,6 +46,11 @@ def _all_application_tables_exist(connection: Connection) -> bool:
     return set(Base.metadata.tables).issubset(existing_tables)
 
 
+def _has_application_tables(connection: Connection) -> bool:
+    existing_tables = set(inspect(connection).get_table_names())
+    return bool(set(Base.metadata.tables) & existing_tables)
+
+
 def _only_missing_planning_revision(connection: Connection) -> bool:
     migration_context = MigrationContext.configure(
         connection, opts={"compare_type": True, "compare_server_default": True}
@@ -155,8 +160,15 @@ def _stamp_revision(connection: Connection, revision: str) -> None:
 def prepare_legacy_create_all_schema(engine: Engine) -> str | None:
     _ = User.__tablename__
     with engine.begin() as connection:
-        if _alembic_version_exists(connection) or not _all_application_tables_exist(connection):
+        if _alembic_version_exists(connection) or not _has_application_tables(connection):
             return None
+
+        if not _all_application_tables_exist(connection):
+            raise RuntimeError(
+                "Unversioned legacy database schema is incomplete and cannot be "
+                "recovered automatically. Restore a backup or stamp the known "
+                "matching Alembic revision manually before running `alembic upgrade head`."
+            )
 
         expected_head = _expected_head_revision()
         if expected_head != HEAD_REVISION:

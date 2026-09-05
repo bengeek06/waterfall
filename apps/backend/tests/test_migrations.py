@@ -760,6 +760,19 @@ def _run_prepare_legacy_schema(database_url: str) -> subprocess.CompletedProcess
     )
 
 
+def _run_prepare_legacy_schema_unchecked(database_url: str) -> subprocess.CompletedProcess[str]:
+    environment = os.environ.copy()
+    environment["DATABASE_URL"] = database_url
+    return subprocess.run(
+        [sys.executable, "-m", "waterfall.scripts.prepare_alembic_dev_schema"],
+        cwd=BACKEND_DIR,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
 def _run_alembic_current(database_url: str) -> subprocess.CompletedProcess[str]:
     environment = os.environ.copy()
     environment["DATABASE_URL"] = database_url
@@ -778,8 +791,7 @@ def _assert_create_all_schema_can_be_stamped_by_migrate_up(database_url: str) ->
     from waterfall.scripts.prepare_alembic_dev_schema import STANDARD_WEEKDAY_HOURS
 
     _create_orm_schema_without_alembic_version(database_url)
-    result = _run_prepare_legacy_schema(database_url)
-    assert "Stamped legacy create_all schema at Alembic revision 20260903_0006" in result.stdout
+    _run_prepare_legacy_schema(database_url)
     _run_alembic(database_url, "head")
     _run_alembic(database_url, "head")
 
@@ -832,6 +844,20 @@ def test_legacy_prepare_returns_early_for_empty_database_when_head_constant_lags
             assert prepare_module.prepare_legacy_create_all_schema(engine) is None
 
 
+def test_legacy_prepare_rejects_incomplete_unversioned_schema() -> None:
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "partial_legacy.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        _run_alembic(database_url, "20260823_0001")
+        with _disposable_engine(database_url) as engine, engine.begin() as connection:
+            connection.execute(text("DROP TABLE alembic_version"))
+
+        result = _run_prepare_legacy_schema_unchecked(database_url)
+
+        assert result.returncode != 0
+        assert "Unversioned legacy database schema is incomplete" in result.stderr
+
+
 def test_create_all_schema_before_planning_revision_is_repaired_then_migrated() -> None:
     with TemporaryDirectory() as temporary_directory:
         database_path = Path(temporary_directory) / "create_all_before_revision.db"
@@ -840,8 +866,7 @@ def test_create_all_schema_before_planning_revision_is_repaired_then_migrated() 
         with _disposable_engine(database_url) as engine, engine.begin() as connection:
             connection.execute(text("ALTER TABLE wf_planning DROP COLUMN revision"))
 
-        result = _run_prepare_legacy_schema(database_url)
-        assert "Stamped legacy create_all schema at Alembic revision 20260901_0005" in result.stdout
+        _run_prepare_legacy_schema(database_url)
         _run_alembic(database_url, "head")
 
         with _disposable_engine(database_url) as engine, engine.connect() as connection:

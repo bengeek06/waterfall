@@ -23,7 +23,8 @@ help:  ## Show this help
 # ---- Install ----
 venv:  ## Create the root Python virtualenv if it does not exist
 	@test -x .venv/bin/python || python3 -m venv .venv
-install: install-backend install-frontend hooks  ## Install backend + frontend deps + Git hooks
+install: install-backend install-frontend  ## Install backend + frontend deps + Git hooks
+	$(MAKE) hooks
 install-backend: venv  ## Install backend (editable + dev extras)
 	$(PYTHON) -m pip install -e './apps/backend[dev]'
 install-frontend:  ## Install JS workspace deps
