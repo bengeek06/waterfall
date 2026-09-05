@@ -936,7 +936,82 @@ def test_project_can_enter_in_progress_after_both_references_are_set() -> None:
             headers=headers,
         )
         assert response.status_code == 200
-        assert response.json()["status"] == "en_cours"
+
+
+def test_en_cours_transition_rejects_project_initialised_without_structure_via_skip() -> None:
+    """Regression test for the second review round on #130.
+
+    Since the ``cree -> initialise`` structure gate was removed, a project
+    can reach ``initialise`` with zero tasks by skipping the poste/lot/
+    livrable step. Before this fix, the remaining ``en_cours`` structure
+    check was dead code: ``project.status in {"cree", "initialise"}`` is
+    always false by the time the transition is evaluated, since the only
+    legal source status for ``en_cours`` is ``en_reponse_appel_offre``. A
+    project could therefore reach ``en_cours`` without ever having a
+    planning structure or any task.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        create = client.post("/projects", json={"name": "Skip then en_cours"}, headers=headers)
+        assert create.status_code == 201
+        project_id = create.json()["id"]
+
+        skip = client.post(f"/projects/{project_id}/planning-structure/skip", headers=headers)
+        assert skip.status_code == 200
+        assert skip.json()["status"] == "initialise"
+        planning_id = skip.json()["displayed_planning_id"]
+        assert planning_id is not None
+
+        assert (
+            client.post(
+                f"/projects/{project_id}/plannings/{planning_id}/validate", headers=headers
+            ).status_code
+            == 200
+        )
+        assert (
+            client.post(
+                f"/projects/{project_id}/plannings/{planning_id}/reference", headers=headers
+            ).status_code
+            == 200
+        )
+        assert client.get(f"/projects/{project_id}/tasks", headers=headers).json() == []
+
+        estimate = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate.status_code == 201
+        estimate_id = estimate.json()["id"]
+        assert (
+            client.post(
+                f"/projects/{project_id}/estimates/{estimate_id}/validate", headers=headers
+            ).status_code
+            == 200
+        )
+        assert (
+            client.post(
+                f"/projects/{project_id}/estimates/{estimate_id}/reference", headers=headers
+            ).status_code
+            == 200
+        )
+
+        assert (
+            client.patch(
+                f"/projects/{project_id}/status",
+                json={"status": "en_reponse_appel_offre"},
+                headers=headers,
+            ).status_code
+            == 200
+        )
+
+        response = client.patch(
+            f"/projects/{project_id}/status",
+            json={"status": "en_cours"},
+            headers=headers,
+        )
+        assert response.status_code == 409
+        assert response.json()["detail"] == "Project requires a planning structure before en_cours"
 
 
 def test_project_can_initialise_without_a_planning_structure() -> None:

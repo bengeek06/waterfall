@@ -59,7 +59,7 @@ def validate_project_status_transition(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Project requires planning and estimate references before en_cours",
             )
-        if project.status in {"cree", "initialise"} and not _project_has_structure(db, project.id):
+        if not _project_has_structure(db, project.id):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Project requires a planning structure before en_cours",
