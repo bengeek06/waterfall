@@ -164,7 +164,7 @@ function describeDeleteTasksError(cause: unknown): string {
 function describeInitialProjectLoadError(cause: unknown): string {
   if (cause instanceof ApiError) {
     if (cause.status >= 500) {
-      return "Le projet n'a pas pu être chargé à cause d'une erreur serveur. Vérifie que la base est migrée, puis réessaie.";
+      return "Le projet est temporairement indisponible. L'application doit être remise à jour avant de réessayer.";
     }
     return cause.message || "Impossible de charger le projet.";
   }
