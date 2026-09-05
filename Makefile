@@ -83,7 +83,7 @@ logs:  ## Follow stack logs
 
 # ---- DB / tooling ----
 migrate-up:  ## Apply Alembic migrations
-	cd $(BACKEND) && $(ALEMBIC) upgrade head
+	cd $(BACKEND) && $(PYTHON) -m waterfall.scripts.prepare_alembic_dev_schema && $(ALEMBIC) upgrade head
 seed-admin:  ## Seed the admin user
 	cd $(BACKEND) && $(PYTHON) -m waterfall.scripts.seed_admin
 hooks:  ## Install pre-commit hooks (pre-commit + pre-push)

@@ -747,19 +747,107 @@ def _create_orm_schema_without_alembic_version(database_url: str) -> None:
         Base.metadata.create_all(engine)
 
 
+def _run_prepare_legacy_schema(database_url: str) -> subprocess.CompletedProcess[str]:
+    environment = os.environ.copy()
+    environment["DATABASE_URL"] = database_url
+    return subprocess.run(
+        [sys.executable, "-m", "waterfall.scripts.prepare_alembic_dev_schema"],
+        cwd=BACKEND_DIR,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _run_alembic_current(database_url: str) -> subprocess.CompletedProcess[str]:
+    environment = os.environ.copy()
+    environment["DATABASE_URL"] = database_url
+    return subprocess.run(
+        [sys.executable, "-m", "alembic", "current"],
+        cwd=BACKEND_DIR,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def _assert_create_all_schema_can_be_stamped_by_migrate_up(database_url: str) -> None:
     from waterfall.db.base import Base
+    from waterfall.scripts.prepare_alembic_dev_schema import STANDARD_WEEKDAY_HOURS
 
     _create_orm_schema_without_alembic_version(database_url)
+    result = _run_prepare_legacy_schema(database_url)
+    assert "Stamped legacy create_all schema at Alembic revision 20260903_0006" in result.stdout
     _run_alembic(database_url, "head")
     _run_alembic(database_url, "head")
 
     with _disposable_engine(database_url) as engine, engine.connect() as connection:
         assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260903_0006"
+        standard = connection.execute(
+            text("SELECT id, is_active, is_default FROM wf_calendar WHERE code = 'STANDARD'")
+        ).one()
+        assert standard[1] == 1
+        assert standard[2] == 1
+        weekdays = connection.execute(
+            text(
+                "SELECT day_type, hours_per_day FROM wf_calendar_weekday "
+                "WHERE calendar_id = :calendar_id ORDER BY day_type"
+            ),
+            {"calendar_id": standard[0]},
+        ).all()
+        assert [row[0] for row in weekdays] == list(STANDARD_WEEKDAY_HOURS)
+        assert [float(row[1]) for row in weekdays] == [
+            float(hours) for hours in STANDARD_WEEKDAY_HOURS.values()
+        ]
         migration_context = MigrationContext.configure(
             connection, opts={"compare_type": True, "compare_server_default": True}
         )
         assert compare_metadata(migration_context, Base.metadata) == []
+
+
+def test_alembic_current_does_not_stamp_create_all_schema() -> None:
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "create_all.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        _create_orm_schema_without_alembic_version(database_url)
+        _run_alembic_current(database_url)
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            assert not inspect(connection).has_table("alembic_version")
+
+
+def test_create_all_schema_before_planning_revision_is_repaired_then_migrated() -> None:
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "create_all_before_revision.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        _create_orm_schema_without_alembic_version(database_url)
+        with _disposable_engine(database_url) as engine, engine.begin() as connection:
+            connection.execute(text("ALTER TABLE wf_planning DROP COLUMN revision"))
+
+        result = _run_prepare_legacy_schema(database_url)
+        assert "Stamped legacy create_all schema at Alembic revision 20260901_0005" in result.stdout
+        _run_alembic(database_url, "head")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            assert (
+                connection.scalar(text("SELECT version_num FROM alembic_version"))
+                == "20260903_0006"
+            )
+            planning_columns = {
+                column["name"] for column in inspect(connection).get_columns("wf_planning")
+            }
+            assert "revision" in planning_columns
+            assert (
+                connection.scalar(
+                    text(
+                        "SELECT COUNT(*) FROM wf_calendar "
+                        "WHERE code = 'STANDARD' AND is_default = true"
+                    )
+                )
+                == 1
+            )
 
 
 def test_create_all_schema_can_be_stamped_by_migrate_up() -> None:

@@ -20,9 +20,17 @@ class DatabaseSchemaRevisionError(RuntimeError):
         )
 
 
+def get_alembic_config_path() -> Path:
+    candidates = [Path.cwd(), *Path(__file__).resolve().parents]
+    for directory in candidates:
+        candidate = directory / "alembic.ini"
+        if candidate.exists():
+            return candidate
+    raise RuntimeError("alembic.ini could not be resolved from the current runtime context.")
+
+
 def get_expected_schema_revision() -> str:
-    backend_dir = Path(__file__).resolve().parents[3]
-    alembic_config = Config(str(backend_dir / "alembic.ini"))
+    alembic_config = Config(str(get_alembic_config_path()))
     head_revision = ScriptDirectory.from_config(alembic_config).get_current_head()
     if head_revision is None:
         raise RuntimeError("Alembic head revision could not be resolved.")

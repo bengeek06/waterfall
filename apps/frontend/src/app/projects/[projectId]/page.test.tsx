@@ -193,9 +193,10 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     render(<ProjectDetailsPage />);
 
     expect(await screen.findByText("Projet indisponible")).toBeInTheDocument();
-    expect(screen.getByText(/L'application doit être remise à jour/)).toBeInTheDocument();
+    expect(screen.getByText(/Réessaie dans quelques instants/)).toBeInTheDocument();
     expect(screen.queryByText(/sqlalchemy/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/base est migrée/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/remise à jour/i)).not.toBeInTheDocument();
     expect(screen.queryByText("Planning affiché")).not.toBeInTheDocument();
     expect(mocks.getPlanning).not.toHaveBeenCalled();
   });

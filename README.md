@@ -195,16 +195,13 @@ make dev                    # backend (uvicorn) + frontend (next dev) — Ctrl-C
 ```
 
 Si une base de développement a été créée avant cette étape par l'ancien démarrage
-automatique, lancez `make migrate-up` une fois : si son schéma correspond déjà à la tête
-Alembic, la commande renseigne `alembic_version` et se termine sans recréer les tables.
-Si la base est plus ancienne et échoue sur une colonne manquante, stamppez la révision
-connue du schéma local, puis relancez la migration. Par exemple, pour une base créée
-avant l'ajout de `wf_planning.revision` :
+automatique, lancez `make migrate-up` une fois. La commande détecte les anciens schémas
+créés par `create_all`, restaure les invariants de données portés par les migrations
+initiales (calendrier `STANDARD`, jours ouvrés, calendrier par défaut, rôles existants),
+puis renseigne `alembic_version` avant d'appliquer les migrations restantes.
 
 ```bash
-cd apps/backend
-DATABASE_URL=<url-de-la-base-dev> alembic stamp 20260901_0005
-DATABASE_URL=<url-de-la-base-dev> alembic upgrade head
+make migrate-up
 ```
 
 Au démarrage, l'API vérifie que la révision Alembic courante correspond à la tête
