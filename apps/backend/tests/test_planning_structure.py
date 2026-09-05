@@ -612,6 +612,121 @@ def test_regenerate_structure_preserves_manual_tasks() -> None:
             assert regenerated_uid_by_key[key] == uid
 
 
+def test_regenerate_structure_preserves_nested_manual_task_hierarchy() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        path = f"/projects/{project_id}/planning-structure"
+        tasks_url = f"/projects/{project_id}/tasks"
+
+        assert client.post(path, json=_payload(), headers=headers).status_code == 201
+        planning_id = client.get(f"/projects/{project_id}", headers=headers).json()[
+            "displayed_planning_id"
+        ]
+
+        parent_created = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/tasks",
+            json={"name": "Manual parent", "expected_revision": 0},
+            headers=headers,
+        )
+        assert parent_created.status_code == 200
+        parent_payload = cast(dict[str, Any], parent_created.json())
+        manual_parent = next(
+            task
+            for task in cast(list[dict[str, Any]], parent_payload["tasks"])
+            if task["name"] == "Manual parent"
+        )
+        parent_uid = manual_parent["uid"]
+
+        child_created = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/tasks",
+            json={
+                "name": "Manual child",
+                "target_parent_uid": parent_uid,
+                "expected_revision": parent_payload["revision"],
+            },
+            headers=headers,
+        )
+        assert child_created.status_code == 200
+        child_payload = cast(dict[str, Any], child_created.json())
+        manual_child = next(
+            task
+            for task in cast(list[dict[str, Any]], child_payload["tasks"])
+            if task["name"] == "Manual child"
+        )
+        child_uid = manual_child["uid"]
+        assert manual_child["parent_uid"] == parent_uid
+
+        before_regeneration = cast(
+            list[dict[str, Any]], client.get(tasks_url, headers=headers).json()
+        )
+        manual_child_before = next(task for task in before_regeneration if task["uid"] == child_uid)
+        assert manual_child_before["parent_uid"] == parent_uid
+
+        # Regenerate the skeleton over the same structure: this must not disturb the
+        # nested manual hierarchy created above (Copilot review finding, issue #130).
+        assert client.post(path, json=_payload(), headers=headers).status_code == 201
+
+        after_regeneration = cast(
+            list[dict[str, Any]], client.get(tasks_url, headers=headers).json()
+        )
+        manual_parent_after = next(task for task in after_regeneration if task["uid"] == parent_uid)
+        manual_child_after = next(task for task in after_regeneration if task["uid"] == child_uid)
+        assert manual_parent_after["parent_uid"] is None
+        assert manual_child_after["parent_uid"] == parent_uid
+
+
+def test_regenerate_structure_still_orphans_manual_task_under_removed_deliverable() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        path = f"/projects/{project_id}/planning-structure"
+        tasks_url = f"/projects/{project_id}/tasks"
+
+        assert client.post(path, json=_payload(), headers=headers).status_code == 201
+        planning_id = client.get(f"/projects/{project_id}", headers=headers).json()[
+            "displayed_planning_id"
+        ]
+        structured_tasks = cast(list[dict[str, Any]], client.get(tasks_url, headers=headers).json())
+        uid_by_key = {
+            task["structure_key"]: task["uid"]
+            for task in structured_tasks
+            if task["structure_key"] is not None
+        }
+        removed_deliverable_uid = uid_by_key["design/specification/architecture"]
+
+        manual_created = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/tasks",
+            json={
+                "name": "Manual note",
+                "target_parent_uid": removed_deliverable_uid,
+                "expected_revision": 0,
+            },
+            headers=headers,
+        )
+        assert manual_created.status_code == 200
+        manual_payload = cast(dict[str, Any], manual_created.json())
+        manual_task = next(
+            task
+            for task in cast(list[dict[str, Any]], manual_payload["tasks"])
+            if task["name"] == "Manual note"
+        )
+        manual_uid = manual_task["uid"]
+        assert manual_task["parent_uid"] == removed_deliverable_uid
+
+        payload_without_architecture = _payload()
+        payload_without_architecture["posts"][0]["lots"][0]["deliverables"] = [
+            {"key": "requirements", "name": "Requirements"}
+        ]
+        assert (
+            client.post(path, json=payload_without_architecture, headers=headers).status_code == 201
+        )
+
+        regenerated = cast(list[dict[str, Any]], client.get(tasks_url, headers=headers).json())
+        manual_after = next(task for task in regenerated if task["uid"] == manual_uid)
+        assert manual_after["parent_uid"] is None
+
+
 def test_structure_versions_validated_planning_is_immutable_and_reopenable() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)
