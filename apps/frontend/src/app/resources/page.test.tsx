@@ -365,4 +365,37 @@ describe("ResourcesPage default calendar warning", () => {
       screen.queryByText("Aucun calendrier par défaut n'est défini. Désignez un calendrier par défaut dans l'onglet Ressources."),
     ).not.toBeInTheDocument();
   });
+
+  it("does not show the warning when a later reload (triggered by a session refresh) fails after an initial successful load", async () => {
+    let nodeCallCount = 0;
+    mocks.getResourceNodes.mockImplementation((_tokens: unknown, onSessionRefresh: (next: { accessToken: string }) => void) => {
+      nodeCallCount += 1;
+      if (nodeCallCount === 1) {
+        // Simulate a token refresh happening mid-request during the first, successful load,
+        // which re-triggers the load effect (session changes) for a second, failing load.
+        return Promise.resolve([]).then((result) => {
+          onSessionRefresh({ accessToken: "refreshed-token" });
+          return result;
+        });
+      }
+      return Promise.reject(new ApiError(500, "Rechargement impossible"));
+    });
+    mocks.getResourceRoles.mockResolvedValue([]);
+    mocks.getCalendars.mockResolvedValue([activeCalendar]);
+    mocks.getCostTypes.mockResolvedValue([]);
+    mocks.getCostCategories.mockResolvedValue([]);
+    mocks.getCostRates.mockResolvedValue([]);
+    mocks.getInflationRates.mockResolvedValue([]);
+    mocks.getRoleCapacities.mockResolvedValue([]);
+    mocks.getUsers.mockResolvedValue([]);
+
+    render(<ResourcesPage />);
+
+    await waitFor(() => expect(mocks.getResourceNodes).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByText("Rechargement impossible")).toBeInTheDocument());
+
+    expect(
+      screen.queryByText("Aucun calendrier par défaut n'est défini. Désignez un calendrier par défaut dans l'onglet Ressources."),
+    ).not.toBeInTheDocument();
+  });
 });

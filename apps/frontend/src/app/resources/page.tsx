@@ -214,6 +214,7 @@ export default function ResourcesPage() {
         setUsers(usersData);
         setLoadSucceeded(true);
       } catch (cause) {
+        setLoadSucceeded(false);
         if (cause instanceof SessionExpiredError) {
           clearSession();
           router.push("/login");
