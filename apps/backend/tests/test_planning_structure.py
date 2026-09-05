@@ -283,6 +283,57 @@ def test_skip_planning_structure_does_not_overwrite_validated_reference() -> Non
         assert len(cast(list[dict[str, Any]], planning_detail.json()["tasks"])) == 8
 
 
+def test_skip_planning_structure_rejects_displayed_planning_reached_while_still_cree() -> None:
+    """Regression test for the second review round on #130.
+
+    A project can reach a validated + referenced planning while its status
+    stays "cree", by going through the raw /plannings endpoints directly
+    instead of /planning-structure: create_planning never touches
+    displayed_planning_id, and neither validate nor set_planning_reference
+    touch project.status. set_planning_reference does set
+    displayed_planning_id (since it was still None), leaving the project in
+    "cree" with a real, validated, displayed/referenced planning. Before the
+    fix, the status-only guard on skip missed this trap door entirely and
+    let skip silently overwrite it with a new empty draft.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+
+        created = client.post(f"/projects/{project_id}/plannings", json={}, headers=headers)
+        assert created.status_code == 201
+        planning_id = cast(int, created.json()["id"])
+
+        assert (
+            client.post(
+                f"/projects/{project_id}/plannings/{planning_id}/validate", headers=headers
+            ).status_code
+            == 200
+        )
+        assert (
+            client.post(
+                f"/projects/{project_id}/plannings/{planning_id}/reference", headers=headers
+            ).status_code
+            == 200
+        )
+
+        trapped = client.get(f"/projects/{project_id}", headers=headers).json()
+        assert trapped["status"] == "cree"
+        assert trapped["displayed_planning_id"] == planning_id
+        assert trapped["planning_reference_id"] == planning_id
+
+        skip_response = client.post(
+            f"/projects/{project_id}/planning-structure/skip", headers=headers
+        )
+
+        assert skip_response.status_code == 409
+
+        project_after = client.get(f"/projects/{project_id}", headers=headers).json()
+        assert project_after["status"] == "cree"
+        assert project_after["displayed_planning_id"] == planning_id
+        assert project_after["planning_reference_id"] == planning_id
+
+
 def test_skip_then_generate_structure_reuses_same_empty_planning() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)

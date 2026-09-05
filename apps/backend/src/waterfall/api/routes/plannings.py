@@ -970,11 +970,15 @@ def skip_planning_structure(
         note="Structure step skipped (empty planning)",
     )
     assert planning is not None
-    if project.status != "cree":
+    if (
+        project.status != "cree"
+        or project.planning_reference_id is not None
+        or project.displayed_planning_id is not None
+    ):
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Project has already left the 'cree' status",
+            detail="Project already has a planning; skip is only valid before any planning exists",
         )
     project.displayed_planning_id = planning.id
     validate_project_status_transition(db, project, "initialise")
