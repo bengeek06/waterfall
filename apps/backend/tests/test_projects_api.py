@@ -936,6 +936,7 @@ def test_project_can_enter_in_progress_after_both_references_are_set() -> None:
             headers=headers,
         )
         assert response.status_code == 200
+        assert response.json()["status"] == "en_cours"
 
 
 def test_en_cours_transition_rejects_project_initialised_without_structure_via_skip() -> None:
@@ -975,6 +976,95 @@ def test_en_cours_transition_rejects_project_initialised_without_structure_via_s
             == 200
         )
         assert client.get(f"/projects/{project_id}/tasks", headers=headers).json() == []
+
+        estimate = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate.status_code == 201
+        estimate_id = estimate.json()["id"]
+        assert (
+            client.post(
+                f"/projects/{project_id}/estimates/{estimate_id}/validate", headers=headers
+            ).status_code
+            == 200
+        )
+        assert (
+            client.post(
+                f"/projects/{project_id}/estimates/{estimate_id}/reference", headers=headers
+            ).status_code
+            == 200
+        )
+
+        assert (
+            client.patch(
+                f"/projects/{project_id}/status",
+                json={"status": "en_reponse_appel_offre"},
+                headers=headers,
+            ).status_code
+            == 200
+        )
+
+        response = client.patch(
+            f"/projects/{project_id}/status",
+            json={"status": "en_cours"},
+            headers=headers,
+        )
+        assert response.status_code == 409
+        assert response.json()["detail"] == "Project requires a planning structure before en_cours"
+
+
+def test_en_cours_transition_rejects_structure_in_unrelated_draft_not_referenced() -> None:
+    """Regression test for the third review round on #130.
+
+    ``_project_has_structure`` searched every planning version of the
+    project, so a project could satisfy the ``en_cours`` structure
+    requirement via an unrelated/historical draft while the actually
+    referenced planning was empty. Build exactly that trap: an empty
+    referenced planning (v1) coexists with a second, unreferenced draft
+    (v2) that does have a task, and the transition must still be rejected.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        create = client.post(
+            "/projects", json={"name": "Structure in wrong draft"}, headers=headers
+        )
+        assert create.status_code == 201
+        project_id = create.json()["id"]
+
+        skip = client.post(f"/projects/{project_id}/planning-structure/skip", headers=headers)
+        assert skip.status_code == 200
+        assert skip.json()["status"] == "initialise"
+        v1_id = skip.json()["displayed_planning_id"]
+        assert v1_id is not None
+
+        v2 = client.post(f"/projects/{project_id}/plannings", json={}, headers=headers)
+        assert v2.status_code == 201
+        v2_id = v2.json()["id"]
+        task_created = client.post(
+            f"/projects/{project_id}/plannings/{v2_id}/tasks",
+            json={"name": "Structure elsewhere", "expected_revision": 0},
+            headers=headers,
+        )
+        assert task_created.status_code == 200
+
+        assert (
+            client.post(
+                f"/projects/{project_id}/plannings/{v1_id}/validate", headers=headers
+            ).status_code
+            == 200
+        )
+        assert (
+            client.post(
+                f"/projects/{project_id}/plannings/{v1_id}/reference", headers=headers
+            ).status_code
+            == 200
+        )
+        assert (
+            client.get(f"/projects/{project_id}", headers=headers).json()["planning_reference_id"]
+            == v1_id
+        )
 
         estimate = client.post(
             f"/projects/{project_id}/estimates",
