@@ -293,6 +293,27 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     expect(await screen.findByLabelText("Importer un planning MS Project (.xml)")).toBeInTheDocument();
   });
 
+  it("closes the structure screen and reports a distinct error when the post-skip refresh fails", async () => {
+    mocks.getProject.mockResolvedValue(project());
+    mocks.listPlannings.mockResolvedValueOnce([]).mockRejectedValueOnce(new Error("network"));
+    mocks.skipPlanningStructure.mockResolvedValue(
+      project({ status: "initialise", displayed_planning_id: 3 }),
+    );
+
+    render(<ProjectDetailsPage />);
+
+    await screen.findByRole("heading", { name: "Structure initiale" });
+    fireEvent.click(screen.getByRole("button", { name: "Passer cette étape" }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("heading", { name: "Structure initiale" })).not.toBeInTheDocument(),
+    );
+    expect(
+      await screen.findByText("Passage effectué, mais impossible de recharger le planning. Recharge la page."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Impossible de passer cette étape.")).not.toBeInTheDocument();
+  });
+
   it("hides the skip button after reopening a structure that has already left status cree", async () => {
     const draftAfterSkip = planning({ id: 3, status: "draft" });
     mocks.getProject.mockResolvedValue(project());
@@ -463,6 +484,19 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     );
     mocks.listPlannings.mockResolvedValue([reference]);
     mocks.getPlanning.mockResolvedValue(detail(reference));
+
+    render(<ProjectDetailsPage />);
+
+    expect(await screen.findByRole("button", { name: "Rouvrir la structure" })).toBeInTheDocument();
+  });
+
+  it("allows reopening a validated planning that was never set as reference", async () => {
+    const validated = planning({ id: 4, status: "validated" });
+    mocks.getProject.mockResolvedValue(
+      project({ status: "initialise", displayed_planning_id: validated.id, planning_reference_id: null }),
+    );
+    mocks.listPlannings.mockResolvedValue([validated]);
+    mocks.getPlanning.mockResolvedValue(detail(validated));
 
     render(<ProjectDetailsPage />);
 
