@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   getPlanningStructureDraft: vi.fn(),
   createPlanningStructure: vi.fn(),
   reopenPlanningStructure: vi.fn(),
+  skipPlanningStructure: vi.fn(),
   router: { push: vi.fn() },
 }));
 
@@ -64,6 +65,7 @@ vi.mock("@/lib/backend", async () => {
     getPlanningStructureDraft: mocks.getPlanningStructureDraft,
     createPlanningStructure: mocks.createPlanningStructure,
     reopenPlanningStructure: mocks.reopenPlanningStructure,
+    skipPlanningStructure: mocks.skipPlanningStructure,
     getCostCategories: vi.fn().mockResolvedValue([]),
     getCostTypes: vi.fn().mockResolvedValue([]),
   };
@@ -153,12 +155,14 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     mocks.getPlanningStructureDraft.mockReset();
     mocks.createPlanningStructure.mockReset();
     mocks.reopenPlanningStructure.mockReset();
+    mocks.skipPlanningStructure.mockReset();
     mocks.listProjectEstimates.mockResolvedValue([]);
     mocks.listPlannings.mockResolvedValue([]);
     mocks.createPlanningStructure.mockResolvedValue({ tasks: [] });
     mocks.savePlanningStructureDraft.mockResolvedValue({ planning_id: 2, structure: { posts: [] } });
     mocks.getPlanningStructureDraft.mockResolvedValue(null);
     mocks.reopenPlanningStructure.mockResolvedValue(project({ status: "initialise", displayed_planning_id: 3 }));
+    mocks.skipPlanningStructure.mockResolvedValue(project({ status: "initialise", displayed_planning_id: 3 }));
     mocks.createImportBatch.mockResolvedValue({ id: 42 });
     mocks.uploadImportSourceXml.mockResolvedValue({ id: 42 });
     mocks.runImportBatch.mockResolvedValue({ batchId: 42 });
@@ -249,6 +253,119 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     await waitFor(() =>
       expect(screen.queryByRole("heading", { name: "Structure initiale" })).not.toBeInTheDocument(),
     );
+  });
+
+  it("allows skipping the structure step even with empty post/lot/deliverable fields", async () => {
+    mocks.getProject.mockResolvedValue(project());
+    mocks.listPlannings.mockResolvedValue([]);
+    mocks.skipPlanningStructure.mockResolvedValue(
+      project({ status: "initialise", displayed_planning_id: 3 }),
+    );
+    mocks.getPlanning.mockResolvedValue(detail(planning({ id: 3, status: "draft" })));
+
+    render(<ProjectDetailsPage />);
+
+    await screen.findByRole("heading", { name: "Structure initiale" });
+    fireEvent.click(screen.getByRole("button", { name: "Passer cette étape" }));
+
+    await waitFor(() => expect(mocks.skipPlanningStructure).toHaveBeenCalledTimes(1));
+    expect(mocks.skipPlanningStructure).toHaveBeenCalledWith(1, expect.anything(), expect.anything());
+    expect(mocks.createPlanningStructure).not.toHaveBeenCalled();
+    expect(mocks.savePlanningStructureDraft).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(screen.queryByRole("heading", { name: "Structure initiale" })).not.toBeInTheDocument(),
+    );
+  });
+
+  it("reveals the MS Project import once the structure step has been skipped", async () => {
+    mocks.getProject.mockResolvedValue(project());
+    mocks.listPlannings.mockResolvedValue([]);
+    mocks.skipPlanningStructure.mockResolvedValue(
+      project({ status: "initialise", displayed_planning_id: 3 }),
+    );
+    mocks.getPlanning.mockResolvedValue(detail(planning({ id: 3, status: "draft" })));
+
+    render(<ProjectDetailsPage />);
+
+    await screen.findByRole("heading", { name: "Structure initiale" });
+    fireEvent.click(screen.getByRole("button", { name: "Passer cette étape" }));
+
+    expect(await screen.findByLabelText("Importer un planning MS Project (.xml)")).toBeInTheDocument();
+  });
+
+  it("hides the skip button after reopening a structure that has already left status cree", async () => {
+    const draftAfterSkip = planning({ id: 3, status: "draft" });
+    mocks.getProject.mockResolvedValue(project());
+    mocks.listPlannings.mockResolvedValueOnce([]).mockResolvedValue([draftAfterSkip]);
+    mocks.skipPlanningStructure.mockResolvedValue(
+      project({ status: "initialise", displayed_planning_id: 3 }),
+    );
+    mocks.reopenPlanningStructure.mockResolvedValue(
+      project({ status: "initialise", displayed_planning_id: 3 }),
+    );
+    mocks.getPlanning.mockResolvedValue(detail(draftAfterSkip));
+
+    render(<ProjectDetailsPage />);
+
+    await screen.findByRole("heading", { name: "Structure initiale" });
+    expect(screen.getByRole("button", { name: "Passer cette étape" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Passer cette étape" }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("heading", { name: "Structure initiale" })).not.toBeInTheDocument(),
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Rouvrir la structure" }));
+
+    expect(await screen.findByRole("heading", { name: "Structure initiale" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Passer cette étape" })).not.toBeInTheDocument();
+  });
+
+  it("allows creating a task manually in the empty planning right after skipping the structure step", async () => {
+    const draftAfterSkip = planning({ id: 3, status: "draft" });
+    const emptyDetail: PlanningDetail = { ...draftAfterSkip, tasks: [], links: [] };
+    const updatedDetail: PlanningDetail = {
+      ...draftAfterSkip,
+      tasks: [{ ...detail(draftAfterSkip).tasks[0], uid: 11, id_display: 11, name: "Première tâche", position: 1 }],
+      links: [],
+    };
+    mocks.getProject.mockResolvedValue(project());
+    mocks.listPlannings.mockResolvedValueOnce([]).mockResolvedValue([draftAfterSkip]);
+    mocks.skipPlanningStructure.mockResolvedValue(
+      project({ status: "initialise", displayed_planning_id: 3 }),
+    );
+    mocks.getPlanning.mockResolvedValue(emptyDetail);
+    mocks.createPlanningTask.mockResolvedValue(updatedDetail);
+
+    render(<ProjectDetailsPage />);
+
+    await screen.findByRole("heading", { name: "Structure initiale" });
+    fireEvent.click(screen.getByRole("button", { name: "Passer cette étape" }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("heading", { name: "Structure initiale" })).not.toBeInTheDocument(),
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Ajouter une tâche" }));
+    fireEvent.change(screen.getByLabelText("Nom de la nouvelle tâche"), { target: { value: "Première tâche" } });
+    fireEvent.click(screen.getByRole("button", { name: "Ajouter" }));
+
+    await waitFor(() =>
+      expect(mocks.createPlanningTask).toHaveBeenCalledWith(
+        1,
+        3,
+        {
+          name: "Première tâche",
+          is_milestone: false,
+          target_parent_uid: undefined,
+          insert_after_uid: undefined,
+          expected_revision: 0,
+        },
+        expect.anything(),
+        expect.anything(),
+      ),
+    );
+    expect(await screen.findByText("Première tâche")).toBeInTheDocument();
   });
 
   it("renders the refetched planning tasks after generation, including manual ones", async () => {

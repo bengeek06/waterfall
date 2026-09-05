@@ -67,6 +67,7 @@ import {
   reopenPlanningStructure,
   setDisplayedPlanning,
   setPlanningReference,
+  skipPlanningStructure,
   updateEstimateCostLine,
   updatePlanningTaskSchedule,
   updateProject,
@@ -1456,6 +1457,36 @@ export default function ProjectDetailsPage() {
     }
   }
 
+  async function skipStructure() {
+    if (!session || isReadOnlyProject) {
+      return;
+    }
+    setStructureBusy(true);
+    setError(null);
+    try {
+      const updatedProject = await skipPlanningStructure(projectId, session, onSessionRefresh);
+      const planningMetadata = await listPlannings(projectId, session, onSessionRefresh);
+      const nextPlanningId = updatedProject.displayed_planning_id ?? planningMetadata.at(-1)?.id ?? null;
+      const nextDetail = nextPlanningId
+        ? await getPlanning(projectId, nextPlanningId, session, onSessionRefresh)
+        : null;
+      setProject(updatedProject);
+      setPlannings(planningMetadata);
+      updateSelectedPlanningId(nextPlanningId);
+      setPlanningDetail(nextDetail);
+      setStructureOpen(false);
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      setError(cause instanceof ApiError ? cause.message : "Impossible de passer cette étape.");
+    } finally {
+      setStructureBusy(false);
+    }
+  }
+
   function startEditProjectInfo() {
     if (!project) {
       return;
@@ -1930,6 +1961,16 @@ export default function ProjectDetailsPage() {
               >
                 {structureBusy ? "Génération..." : "Générer le squelette"}
               </Button>
+              {project?.status === "cree" ? (
+                <Button
+                  variant="outline"
+                  type="button"
+                  disabled={structureBusy}
+                  onClick={() => void skipStructure()}
+                >
+                  {structureBusy ? "Passage en cours..." : "Passer cette étape"}
+                </Button>
+              ) : null}
             </div>
             </CardContent>
           </Card>
