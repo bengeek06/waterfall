@@ -399,3 +399,75 @@ describe("ResourcesPage default calendar warning", () => {
     ).not.toBeInTheDocument();
   });
 });
+
+describe("ResourcesPage reload race", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("keeps the most recently triggered reload's data even when an older, obsolete reload resolves later", async () => {
+    const genOneNode: ResourceNode = { id: 1, code: "GEN1", name: "Génération 1", parent_id: null } as never;
+    const genTwoNode: ResourceNode = { id: 2, code: "GEN2", name: "Génération 2", parent_id: null } as never;
+
+    let resolveFirstNodes!: (nodes: ResourceNode[]) => void;
+    const firstNodesPromise = new Promise<ResourceNode[]>((resolve) => {
+      resolveFirstNodes = resolve;
+    });
+
+    let nodeCallCount = 0;
+    mocks.getResourceNodes.mockImplementation(() => {
+      nodeCallCount += 1;
+      // First call: the initial (mount) reload. Stays pending until the test
+      // explicitly releases it below, once the second reload has committed --
+      // simulating an older reload that resolves after a newer one.
+      if (nodeCallCount === 1) return firstNodesPromise;
+      // Second call: the reload triggered by the mid-flight session refresh
+      // below. Resolves immediately, well before the first call is released.
+      return Promise.resolve([genTwoNode]);
+    });
+
+    let rolesCallCount = 0;
+    mocks.getResourceRoles.mockImplementation(
+      (_tokens: unknown, onSessionRefresh: (next: { accessToken: string }) => void) => {
+        rolesCallCount += 1;
+        if (rolesCallCount === 1) {
+          // Fires mid-flight during the first reload's still-pending Promise.all,
+          // mirroring `authFetch` calling `onSessionRefresh` before a retried
+          // request settles. This starts a second, more recently triggered reload.
+          onSessionRefresh({ accessToken: "refreshed-token" });
+        }
+        return Promise.resolve([]);
+      },
+    );
+
+    mocks.getCalendars.mockResolvedValue([]);
+    mocks.getCostTypes.mockResolvedValue([]);
+    mocks.getCostCategories.mockResolvedValue([]);
+    mocks.getCostRates.mockResolvedValue([]);
+    mocks.getInflationRates.mockResolvedValue([]);
+    mocks.getRoleCapacities.mockResolvedValue([]);
+    mocks.getUsers.mockResolvedValue([]);
+
+    render(<ResourcesPage />);
+
+    // The second (more recently triggered) reload completes first: its own
+    // getResourceNodes call resolves immediately.
+    await waitFor(() => expect(nodeCallCount).toBe(2));
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("tab", { name: "Ressources" }));
+    await waitFor(() => expect(screen.getByText("GEN2")).toBeInTheDocument());
+
+    // Now release the first (obsolete) reload's stale data, after the second
+    // reload has already committed its own.
+    resolveFirstNodes([genOneNode]);
+
+    // The obsolete first reload must not overwrite the more recently triggered
+    // second reload's committed state.
+    await waitFor(() => expect(screen.queryByText("GEN1")).not.toBeInTheDocument());
+    expect(screen.getByText("GEN2")).toBeInTheDocument();
+  });
+});

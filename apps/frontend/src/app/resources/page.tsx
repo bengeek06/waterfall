@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -161,14 +161,26 @@ export default function ResourcesPage() {
     [],
   );
 
+  // Guards against out-of-order reloads: a token refresh (see `onSessionRefresh`
+  // above) changes `session`, which re-runs this effect. If an older reload is
+  // still in flight when a newer one starts (or finishes) and later resolves,
+  // its now-stale results must not overwrite state a more recent reload (or a
+  // local optimistic update racing against it) has already committed.
+  const loadGenerationRef = useRef(0);
+
   useEffect(() => {
+    const generation = ++loadGenerationRef.current;
+    const isCurrentGeneration = () => loadGenerationRef.current === generation;
+
     async function load() {
       if (!session) {
         try {
           const restoredSession = await restoreSession();
+          if (!isCurrentGeneration()) return;
           setSession(restoredSession);
           setSessionState(restoredSession);
         } catch {
+          if (!isCurrentGeneration()) return;
           clearSession();
           router.push("/login");
         }
@@ -197,6 +209,7 @@ export default function ResourcesPage() {
           getRoleCapacities(session, onSessionRefresh),
           getUsers(session, onSessionRefresh),
         ]);
+        if (!isCurrentGeneration()) return;
         setNodes(nodeData);
         setSelectedNodeId((previous) => previous ?? nodeData[0]?.id ?? null);
         setRoleNodeId((previous) => previous || (nodeData[0] ? String(nodeData[0].id) : ""));
@@ -214,6 +227,7 @@ export default function ResourcesPage() {
         setUsers(usersData);
         setLoadSucceeded(true);
       } catch (cause) {
+        if (!isCurrentGeneration()) return;
         setLoadSucceeded(false);
         if (cause instanceof SessionExpiredError) {
           clearSession();
@@ -230,7 +244,9 @@ export default function ResourcesPage() {
           message: cause instanceof ApiError ? cause.message : "Chargement impossible",
         });
       } finally {
-        setBusy(false);
+        // A more recent reload may still be in flight: don't flip `busy` back to
+        // false on its behalf, or the UI would flash "loaded" with stale data.
+        if (isCurrentGeneration()) setBusy(false);
       }
     }
 

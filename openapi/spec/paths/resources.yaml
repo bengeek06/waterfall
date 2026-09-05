@@ -28,6 +28,9 @@
     tags:
     - resources
     summary: Creer un calendrier de travail
+    description: Si la base ne compte encore aucun calendrier, le calendrier cree
+      est automatiquement promu calendrier par defaut (is_default=true dans la
+      reponse) ; ce champ n'est pas pilotable depuis le payload de la requete.
     operationId: createCalendar
     security:
     - bearerAuth: []

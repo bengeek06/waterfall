@@ -892,7 +892,10 @@ export interface paths {
         /** Lister les calendriers de travail */
         get: operations["listCalendars"];
         put?: never;
-        /** Creer un calendrier de travail */
+        /**
+         * Creer un calendrier de travail
+         * @description Si la base ne compte encore aucun calendrier, le calendrier cree est automatiquement promu calendrier par defaut (is_default=true dans la reponse) ; ce champ n'est pas pilotable depuis le payload de la requete.
+         */
         post: operations["createCalendar"];
         delete?: never;
         options?: never;
