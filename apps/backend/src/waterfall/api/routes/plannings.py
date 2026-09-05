@@ -970,10 +970,17 @@ def skip_planning_structure(
         note="Structure step skipped (empty planning)",
     )
     assert planning is not None
+    has_tasks = (
+        db.query(WfPlanningTaskSnapshot.id)
+        .filter(WfPlanningTaskSnapshot.planning_id == planning.id)
+        .first()
+        is not None
+    )
     if (
         project.status != "cree"
         or project.planning_reference_id is not None
         or project.displayed_planning_id is not None
+        or has_tasks
     ):
         db.rollback()
         raise HTTPException(

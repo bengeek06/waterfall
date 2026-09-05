@@ -334,6 +334,47 @@ def test_skip_planning_structure_rejects_displayed_planning_reached_while_still_
         assert project_after["planning_reference_id"] == planning_id
 
 
+def test_skip_planning_structure_rejects_non_empty_reused_draft() -> None:
+    """Regression test for the third review round on #130.
+
+    A "cree" project can create a raw draft planning via POST /plannings
+    (which never touches displayed_planning_id/planning_reference_id) and
+    add a manual task to it via POST /plannings/{id}/tasks (which accepts
+    any draft planning of the project, not just the "displayed" one).
+    Neither call sets either project pointer, so the status/pointer guard on
+    skip alone still passes; skip must additionally reject because the draft
+    it would reuse and display already contains a task.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+
+        created = client.post(f"/projects/{project_id}/plannings", json={}, headers=headers)
+        assert created.status_code == 201
+        planning_id = cast(int, created.json()["id"])
+
+        task_created = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/tasks",
+            json={"name": "Manual task", "expected_revision": 0},
+            headers=headers,
+        )
+        assert task_created.status_code == 200
+
+        trapped = client.get(f"/projects/{project_id}", headers=headers).json()
+        assert trapped["status"] == "cree"
+        assert trapped["displayed_planning_id"] is None
+        assert trapped["planning_reference_id"] is None
+
+        skip_response = client.post(
+            f"/projects/{project_id}/planning-structure/skip", headers=headers
+        )
+
+        assert skip_response.status_code == 409
+
+        project_after = client.get(f"/projects/{project_id}", headers=headers).json()
+        assert project_after["status"] == "cree"
+
+
 def test_skip_then_generate_structure_reuses_same_empty_planning() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)
