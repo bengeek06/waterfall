@@ -205,6 +205,11 @@ DATABASE_URL=<url-de-la-base-dev> alembic stamp 20260901_0005
 DATABASE_URL=<url-de-la-base-dev> alembic upgrade head
 ```
 
+Au démarrage, l'API vérifie que la révision Alembic courante correspond à la tête
+attendue. En cas d'écart, elle refuse de démarrer avec un message explicite demandant
+d'exécuter `make migrate-up`, afin d'éviter une erreur SQL tardive dans un parcours
+utilisateur.
+
 Adresses par défaut :
 
 - frontend : `http://localhost:3000`

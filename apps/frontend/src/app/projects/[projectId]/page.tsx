@@ -160,6 +160,17 @@ function describeDeleteTasksError(cause: unknown): string {
   }
   return cause.message || "Impossible de supprimer les tâches sélectionnées.";
 }
+
+function describeInitialProjectLoadError(cause: unknown): string {
+  if (cause instanceof ApiError) {
+    if (cause.status >= 500) {
+      return "Le projet n'a pas pu être chargé à cause d'une erreur serveur. Vérifie que la base est migrée, puis réessaie.";
+    }
+    return cause.message || "Impossible de charger le projet.";
+  }
+  return "Erreur inattendue lors du chargement du projet.";
+}
+
 export default function ProjectDetailsPage() {
   const router = useRouter();
   const params = useParams<{ projectId: string }>();
@@ -300,9 +311,9 @@ export default function ProjectDetailsPage() {
             router.push("/login");
             return;
           }
-          setError(cause.message);
+          setError(describeInitialProjectLoadError(cause));
         } else {
-          setError("Erreur inattendue lors du chargement du projet.");
+          setError(describeInitialProjectLoadError(cause));
         }
       } finally {
         if (!cancelled) {
@@ -486,6 +497,7 @@ export default function ProjectDetailsPage() {
   const selectedPlanningHasConflict = selectedPlanning
     ? !!planningConflictByPlanningId[selectedPlanning.id]
     : false;
+  const initialLoadFailed = !busy && project === null && error !== null;
 
   async function selectPlanning(planningId: number) {
     if (!session || planningId === selectedPlanningId) {
@@ -1626,6 +1638,31 @@ export default function ProjectDetailsPage() {
     } finally {
       setImportBusy(false);
     }
+  }
+
+  if (initialLoadFailed) {
+    return (
+      <>
+        <Card>
+          <CardContent className="flex flex-wrap items-start justify-between gap-4">
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <h1 className="text-2xl font-bold">Projet #{projectId}</h1>
+              </div>
+              <p className="mt-1 text-sm text-muted-foreground italic">
+                Le projet est indisponible tant que son chargement initial échoue.
+              </p>
+            </div>
+            <Button variant="outline" nativeButton={false} render={<Link href="/projects" />}>Retour projets</Button>
+          </CardContent>
+        </Card>
+
+        <Alert className="mt-4" variant="destructive">
+          <AlertTitle>Projet indisponible</AlertTitle>
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      </>
+    );
   }
 
   return (

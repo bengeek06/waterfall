@@ -184,6 +184,21 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     expect(screen.getByRole("button", { name: "Générer le squelette" })).toBeInTheDocument();
   });
 
+  it("shows a blocking non technical error when initial planning metadata fails", async () => {
+    mocks.getProject.mockResolvedValue(project({ status: "initialise" }));
+    mocks.listPlannings.mockRejectedValue(
+      new ApiError(500, "sqlalchemy.exc.ProgrammingError: SELECT wf_planning.revision"),
+    );
+
+    render(<ProjectDetailsPage />);
+
+    expect(await screen.findByText("Projet indisponible")).toBeInTheDocument();
+    expect(screen.getByText(/Vérifie que la base est migrée/)).toBeInTheDocument();
+    expect(screen.queryByText(/sqlalchemy/i)).not.toBeInTheDocument();
+    expect(screen.queryByText("Planning affiché")).not.toBeInTheDocument();
+    expect(mocks.getPlanning).not.toHaveBeenCalled();
+  });
+
   it("saves the structure draft without closing the form or generating a planning", async () => {
     mocks.getProject.mockResolvedValue(project());
     mocks.listPlannings.mockResolvedValue([]);

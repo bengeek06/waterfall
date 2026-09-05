@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import subprocess
 import sys
@@ -13,6 +14,7 @@ from tempfile import TemporaryDirectory
 import pytest
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
+from fastapi import FastAPI
 from sqlalchemy import Engine, String, create_engine, inspect, text
 from sqlalchemy.engine import make_url
 
@@ -771,6 +773,51 @@ def test_postgres_create_all_schema_can_be_stamped_by_migrate_up(
     postgres_database_url: str,
 ) -> None:
     _assert_create_all_schema_can_be_stamped_by_migrate_up(postgres_database_url)
+
+
+def test_schema_revision_check_rejects_database_behind_head() -> None:
+    from waterfall.db.schema_revision import (
+        DatabaseSchemaRevisionError,
+        assert_database_schema_current,
+    )
+
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "behind-head.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        _run_alembic(database_url, "20260901_0005")
+
+        with _disposable_engine(database_url) as engine, pytest.raises(
+            DatabaseSchemaRevisionError
+        ) as error:
+            assert_database_schema_current(engine)
+
+    assert error.value.current_revision == "20260901_0005"
+    assert error.value.expected_revision == "20260903_0006"
+    assert "Run `make migrate-up`" in str(error.value)
+
+
+def test_api_startup_rejects_database_behind_head(monkeypatch: pytest.MonkeyPatch) -> None:
+    from waterfall import main as main_module
+    from waterfall.core.config import get_settings
+    from waterfall.db.schema_revision import DatabaseSchemaRevisionError
+
+    startup_error = DatabaseSchemaRevisionError("20260901_0005", "20260903_0006")
+
+    def reject_schema_revision(_engine: object) -> None:
+        raise startup_error
+
+    async def run_lifespan() -> None:
+        async with main_module.lifespan(FastAPI()):
+            pass
+
+    monkeypatch.setenv("APP_ENV", "dev")
+    get_settings.cache_clear()
+    monkeypatch.setattr(main_module, "assert_database_schema_current", reject_schema_revision)
+
+    with pytest.raises(DatabaseSchemaRevisionError, match="Run `make migrate-up`"):
+        asyncio.run(run_lifespan())
+
+    get_settings.cache_clear()
 
 
 def test_postgres_migration_upgrade_head_succeeds(postgres_database_url: str) -> None:

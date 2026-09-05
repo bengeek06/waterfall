@@ -7,6 +7,7 @@ from waterfall.api.router import api_router
 from waterfall.core.config import get_settings
 from waterfall.core.logging import configure_logging
 from waterfall.core.observability import request_metrics_middleware
+from waterfall.db.schema_revision import assert_database_schema_current
 from waterfall.db.session import get_engine
 
 
@@ -20,6 +21,8 @@ async def lifespan(_: FastAPI):
 
         _ = User.__tablename__
         Base.metadata.create_all(bind=get_engine())
+    else:
+        assert_database_schema_current(get_engine())
     if settings.app_env == "dev":
         from waterfall.scripts.seed_admin import main as seed_admin
 
