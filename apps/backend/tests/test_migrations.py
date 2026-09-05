@@ -736,6 +736,43 @@ def test_postgres_migration_schema_matches_orm_metadata(postgres_database_url: s
     _assert_schema_matches_orm_metadata(postgres_database_url)
 
 
+def _create_orm_schema_without_alembic_version(database_url: str) -> None:
+    from waterfall.db.base import Base
+    from waterfall.models import User
+
+    _ = User.__tablename__
+    with _disposable_engine(database_url) as engine:
+        Base.metadata.create_all(engine)
+
+
+def _assert_create_all_schema_can_be_stamped_by_migrate_up(database_url: str) -> None:
+    from waterfall.db.base import Base
+
+    _create_orm_schema_without_alembic_version(database_url)
+    _run_alembic(database_url, "head")
+    _run_alembic(database_url, "head")
+
+    with _disposable_engine(database_url) as engine, engine.connect() as connection:
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260903_0006"
+        migration_context = MigrationContext.configure(
+            connection, opts={"compare_type": True, "compare_server_default": True}
+        )
+        assert compare_metadata(migration_context, Base.metadata) == []
+
+
+def test_create_all_schema_can_be_stamped_by_migrate_up() -> None:
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "create_all.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        _assert_create_all_schema_can_be_stamped_by_migrate_up(database_url)
+
+
+def test_postgres_create_all_schema_can_be_stamped_by_migrate_up(
+    postgres_database_url: str,
+) -> None:
+    _assert_create_all_schema_can_be_stamped_by_migrate_up(postgres_database_url)
+
+
 def test_postgres_migration_upgrade_head_succeeds(postgres_database_url: str) -> None:
     # Regression test for the original bug: ms_project's FKs to wf_planning/wf_estimate
     # were emitted before those tables existed. SQLite tolerates forward references at

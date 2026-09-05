@@ -7,7 +7,6 @@ from waterfall.api.router import api_router
 from waterfall.core.config import get_settings
 from waterfall.core.logging import configure_logging
 from waterfall.core.observability import request_metrics_middleware
-from waterfall.db.base import Base
 from waterfall.db.session import get_engine
 
 
@@ -15,7 +14,8 @@ from waterfall.db.session import get_engine
 async def lifespan(_: FastAPI):
     settings = get_settings()
     configure_logging(settings.app_log_level)
-    if settings.app_env in {"dev", "test"}:
+    if settings.app_env == "test":
+        from waterfall.db.base import Base
         from waterfall.models import User
 
         _ = User.__tablename__

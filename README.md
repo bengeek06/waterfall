@@ -188,7 +188,21 @@ Le backend démarre aussi le seed admin en mode `dev`; `WF_ADMIN_PASSWORD` doit 
 
 ```bash
 make db-up                  # Postgres dans Docker, pour le dev natif
+make migrate-up             # applique les migrations Alembic sur la base de dev
 make dev                    # backend (uvicorn) + frontend (next dev) — Ctrl-C arrête les deux
+```
+
+Si une base de développement a été créée avant cette étape par l'ancien démarrage
+automatique, lancez `make migrate-up` une fois : si son schéma correspond déjà à la tête
+Alembic, la commande renseigne `alembic_version` et se termine sans recréer les tables.
+Si la base est plus ancienne et échoue sur une colonne manquante, stamppez la révision
+connue du schéma local, puis relancez la migration. Par exemple, pour une base créée
+avant l'ajout de `wf_planning.revision` :
+
+```bash
+cd apps/backend
+DATABASE_URL=<url-de-la-base-dev> alembic stamp 20260901_0005
+DATABASE_URL=<url-de-la-base-dev> alembic upgrade head
 ```
 
 Adresses par défaut :
