@@ -132,6 +132,10 @@ def test_direct_planning_structure_writers_use_project_lock(
         draft_path = f"/projects/{project_id}/planning-structure/draft"
 
         saved = client.put(draft_path, json=_payload(), headers=headers)
+        # Called while the project is still "cree" (before /planning-structure
+        # flips it to "initialise") so it succeeds and reuses the draft just
+        # saved above, exercising the same lock path as the other direct writers.
+        skipped = client.post(f"/projects/{project_id}/planning-structure/skip", headers=headers)
         generated = client.post(f"/projects/{project_id}/planning-structure", headers=headers)
         updated = client.patch(
             f"/projects/{project_id}/tasks/{generated.json()['tasks'][0]['uid']}",
@@ -141,11 +145,12 @@ def test_direct_planning_structure_writers_use_project_lock(
         reopened = client.post(f"/projects/{project_id}/planning-structure/reopen", headers=headers)
 
     assert saved.status_code == 200
+    assert skipped.status_code == 200
     assert generated.status_code == 201
     assert updated.status_code == 200
     assert reopened.status_code == 200
-    assert calls == [project_id] * 4
-    assert latest_draft_calls == [project_id] * 3
+    assert calls == [project_id] * 5
+    assert latest_draft_calls == [project_id] * 4
     assert displayed_planning_calls == [project_id]
 
 
@@ -166,6 +171,320 @@ def test_save_planning_structure_draft_rejects_read_only_project() -> None:
         )
 
         assert response.status_code == 409
+
+
+def test_skip_planning_structure_creates_empty_planning_and_initialises_project() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+
+        response = client.post(f"/projects/{project_id}/planning-structure/skip", headers=headers)
+
+        assert response.status_code == 200
+        payload = cast(dict[str, Any], response.json())
+        assert payload["status"] == "initialise"
+        displayed_planning_id = payload["displayed_planning_id"]
+        assert displayed_planning_id is not None
+
+        plannings = client.get(f"/projects/{project_id}/plannings", headers=headers)
+        assert plannings.status_code == 200
+        planning_items = cast(list[dict[str, Any]], plannings.json())
+        assert len(planning_items) == 1
+        assert planning_items[0]["status"] == "draft"
+
+        planning_detail = client.get(
+            f"/projects/{project_id}/plannings/{displayed_planning_id}", headers=headers
+        )
+        assert planning_detail.status_code == 200
+        assert planning_detail.json()["tasks"] == []
+
+
+def test_skip_planning_structure_rejects_call_once_project_left_cree() -> None:
+    """Skip is a "cree" -> "initialise" shortcut, not a repeatable reset.
+
+    Calling it again once the project has left "cree" must be rejected
+    instead of silently reusing/creating a draft planning, since that is
+    exactly the path that could otherwise overwrite a validated reference
+    (see the critical-bug regression test below).
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        path = f"/projects/{project_id}/planning-structure/skip"
+
+        first = client.post(path, headers=headers)
+        second = client.post(path, headers=headers)
+
+        assert first.status_code == 200
+        assert second.status_code == 409
+        assert (
+            client.get(f"/projects/{project_id}", headers=headers).json()["displayed_planning_id"]
+            == first.json()["displayed_planning_id"]
+        )
+
+        plannings = client.get(f"/projects/{project_id}/plannings", headers=headers)
+        assert plannings.status_code == 200
+        assert len(cast(list[dict[str, Any]], plannings.json())) == 1
+
+
+def test_skip_planning_structure_does_not_overwrite_validated_reference() -> None:
+    """Regression test for the critical bug reported during review of #130.
+
+    Reproduction: generate the full skeleton, validate the planning, set it
+    as the project reference, then call skip. Before the fix this returned
+    200 and silently overwrote displayed_planning_id with a new empty draft
+    even though project.status stayed "initialise". It must now be rejected
+    with 409 and leave the project untouched.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        structure_path = f"/projects/{project_id}/planning-structure"
+
+        generated = client.post(structure_path, json=_payload(), headers=headers)
+        assert generated.status_code == 201
+        assert len(cast(list[dict[str, Any]], generated.json()["tasks"])) == 8
+
+        project_before = client.get(f"/projects/{project_id}", headers=headers).json()
+        planning_id = project_before["displayed_planning_id"]
+        assert planning_id is not None
+
+        assert (
+            client.post(
+                f"/projects/{project_id}/plannings/{planning_id}/validate", headers=headers
+            ).status_code
+            == 200
+        )
+        assert (
+            client.post(
+                f"/projects/{project_id}/plannings/{planning_id}/reference", headers=headers
+            ).status_code
+            == 200
+        )
+
+        project_referenced = client.get(f"/projects/{project_id}", headers=headers).json()
+        assert project_referenced["planning_reference_id"] == planning_id
+        assert project_referenced["displayed_planning_id"] == planning_id
+
+        skip_response = client.post(
+            f"/projects/{project_id}/planning-structure/skip", headers=headers
+        )
+
+        assert skip_response.status_code == 409
+
+        project_after = client.get(f"/projects/{project_id}", headers=headers).json()
+        assert project_after["planning_reference_id"] == planning_id
+        assert project_after["displayed_planning_id"] == planning_id
+
+        planning_detail = client.get(
+            f"/projects/{project_id}/plannings/{planning_id}", headers=headers
+        )
+        assert planning_detail.status_code == 200
+        assert len(cast(list[dict[str, Any]], planning_detail.json()["tasks"])) == 8
+
+
+def test_skip_planning_structure_rejects_displayed_planning_reached_while_still_cree() -> None:
+    """Regression test for the second review round on #130.
+
+    A project can reach a validated + referenced planning while its status
+    stays "cree", by going through the raw /plannings endpoints directly
+    instead of /planning-structure: create_planning never touches
+    displayed_planning_id, and neither validate nor set_planning_reference
+    touch project.status. set_planning_reference does set
+    displayed_planning_id (since it was still None), leaving the project in
+    "cree" with a real, validated, displayed/referenced planning. Before the
+    fix, the status-only guard on skip missed this trap door entirely and
+    let skip silently overwrite it with a new empty draft.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+
+        created = client.post(f"/projects/{project_id}/plannings", json={}, headers=headers)
+        assert created.status_code == 201
+        planning_id = cast(int, created.json()["id"])
+
+        assert (
+            client.post(
+                f"/projects/{project_id}/plannings/{planning_id}/validate", headers=headers
+            ).status_code
+            == 200
+        )
+        assert (
+            client.post(
+                f"/projects/{project_id}/plannings/{planning_id}/reference", headers=headers
+            ).status_code
+            == 200
+        )
+
+        trapped = client.get(f"/projects/{project_id}", headers=headers).json()
+        assert trapped["status"] == "cree"
+        assert trapped["displayed_planning_id"] == planning_id
+        assert trapped["planning_reference_id"] == planning_id
+
+        skip_response = client.post(
+            f"/projects/{project_id}/planning-structure/skip", headers=headers
+        )
+
+        assert skip_response.status_code == 409
+
+        project_after = client.get(f"/projects/{project_id}", headers=headers).json()
+        assert project_after["status"] == "cree"
+        assert project_after["displayed_planning_id"] == planning_id
+        assert project_after["planning_reference_id"] == planning_id
+
+
+def test_skip_planning_structure_rejects_non_empty_reused_draft() -> None:
+    """Regression test for the third review round on #130.
+
+    A "cree" project can create a raw draft planning via POST /plannings
+    (which never touches displayed_planning_id/planning_reference_id) and
+    add a manual task to it via POST /plannings/{id}/tasks (which accepts
+    any draft planning of the project, not just the "displayed" one).
+    Neither call sets either project pointer, so the status/pointer guard on
+    skip alone still passes; skip must additionally reject because the draft
+    it would reuse and display already contains a task.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+
+        created = client.post(f"/projects/{project_id}/plannings", json={}, headers=headers)
+        assert created.status_code == 201
+        planning_id = cast(int, created.json()["id"])
+
+        task_created = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/tasks",
+            json={"name": "Manual task", "expected_revision": 0},
+            headers=headers,
+        )
+        assert task_created.status_code == 200
+
+        trapped = client.get(f"/projects/{project_id}", headers=headers).json()
+        assert trapped["status"] == "cree"
+        assert trapped["displayed_planning_id"] is None
+        assert trapped["planning_reference_id"] is None
+
+        skip_response = client.post(
+            f"/projects/{project_id}/planning-structure/skip", headers=headers
+        )
+
+        assert skip_response.status_code == 409
+
+        project_after = client.get(f"/projects/{project_id}", headers=headers).json()
+        assert project_after["status"] == "cree"
+
+
+def test_skip_then_generate_structure_reuses_same_empty_planning() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+
+        skip_response = client.post(
+            f"/projects/{project_id}/planning-structure/skip", headers=headers
+        )
+        assert skip_response.status_code == 200
+        skip_payload = cast(dict[str, Any], skip_response.json())
+        assert skip_payload["status"] == "initialise"
+        skip_planning_id = skip_payload["displayed_planning_id"]
+        assert skip_planning_id is not None
+
+        generated = client.post(
+            f"/projects/{project_id}/planning-structure", json=_payload(), headers=headers
+        )
+
+        assert generated.status_code == 201
+        generated_tasks = cast(list[dict[str, Any]], generated.json()["tasks"])
+        assert len(generated_tasks) == 8
+
+        project_after = client.get(f"/projects/{project_id}", headers=headers).json()
+        assert project_after["displayed_planning_id"] == skip_planning_id
+
+        plannings = client.get(f"/projects/{project_id}/plannings", headers=headers)
+        assert plannings.status_code == 200
+        assert len(cast(list[dict[str, Any]], plannings.json())) == 1
+
+
+def test_skip_planning_structure_rejects_read_only_project() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        with get_session_factory()() as session:
+            project = session.get(MsProject, project_id)
+            assert project is not None
+            project.status = "perdu"
+            session.commit()
+
+        response = client.post(f"/projects/{project_id}/planning-structure/skip", headers=headers)
+
+        assert response.status_code == 409
+
+
+def test_reopen_without_draft_or_reference_creates_empty_planning() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+
+        response = client.post(f"/projects/{project_id}/planning-structure/reopen", headers=headers)
+
+        assert response.status_code == 200
+        payload = cast(dict[str, Any], response.json())
+        assert payload["status"] == "initialise"
+        displayed_planning_id = payload["displayed_planning_id"]
+        assert displayed_planning_id is not None
+
+        planning_detail = client.get(
+            f"/projects/{project_id}/plannings/{displayed_planning_id}", headers=headers
+        )
+        assert planning_detail.status_code == 200
+        assert planning_detail.json()["tasks"] == []
+
+
+def test_reopen_after_validating_sole_draft_without_setting_reference() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+
+        generated = client.post(
+            f"/projects/{project_id}/planning-structure", json=_payload(), headers=headers
+        )
+        assert generated.status_code == 201
+        project = client.get(f"/projects/{project_id}", headers=headers).json()
+        planning_id = project["displayed_planning_id"]
+        assert planning_id is not None
+
+        validate_response = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/validate",
+            headers=headers,
+        )
+        assert validate_response.status_code == 200
+        # Deliberately never call the /reference endpoint: the sole draft is
+        # validated but never set as the project's reference planning.
+
+        project_after_validate = client.get(f"/projects/{project_id}", headers=headers).json()
+        assert project_after_validate["planning_reference_id"] is None
+
+        reopened = client.post(f"/projects/{project_id}/planning-structure/reopen", headers=headers)
+
+        assert reopened.status_code == 200
+        reopened_payload = cast(dict[str, Any], reopened.json())
+        new_planning_id = reopened_payload["displayed_planning_id"]
+        assert new_planning_id is not None
+        assert new_planning_id != planning_id
+
+        new_planning = client.get(
+            f"/projects/{project_id}/plannings/{new_planning_id}", headers=headers
+        )
+        assert new_planning.status_code == 200
+        assert new_planning.json()["tasks"] == []
+
+        original_planning = client.get(
+            f"/projects/{project_id}/plannings/{planning_id}", headers=headers
+        )
+        assert original_planning.status_code == 200
+        original_payload = cast(dict[str, Any], original_planning.json())
+        assert original_payload["status"] == "validated"
+        assert len(cast(list[dict[str, Any]], original_payload["tasks"])) == 8
 
 
 def test_create_planning_structure_generates_hierarchy_and_links() -> None:
@@ -430,6 +749,121 @@ def test_regenerate_structure_preserves_manual_tasks() -> None:
         }
         for key, uid in uid_by_key.items():
             assert regenerated_uid_by_key[key] == uid
+
+
+def test_regenerate_structure_preserves_nested_manual_task_hierarchy() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        path = f"/projects/{project_id}/planning-structure"
+        tasks_url = f"/projects/{project_id}/tasks"
+
+        assert client.post(path, json=_payload(), headers=headers).status_code == 201
+        planning_id = client.get(f"/projects/{project_id}", headers=headers).json()[
+            "displayed_planning_id"
+        ]
+
+        parent_created = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/tasks",
+            json={"name": "Manual parent", "expected_revision": 0},
+            headers=headers,
+        )
+        assert parent_created.status_code == 200
+        parent_payload = cast(dict[str, Any], parent_created.json())
+        manual_parent = next(
+            task
+            for task in cast(list[dict[str, Any]], parent_payload["tasks"])
+            if task["name"] == "Manual parent"
+        )
+        parent_uid = manual_parent["uid"]
+
+        child_created = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/tasks",
+            json={
+                "name": "Manual child",
+                "target_parent_uid": parent_uid,
+                "expected_revision": parent_payload["revision"],
+            },
+            headers=headers,
+        )
+        assert child_created.status_code == 200
+        child_payload = cast(dict[str, Any], child_created.json())
+        manual_child = next(
+            task
+            for task in cast(list[dict[str, Any]], child_payload["tasks"])
+            if task["name"] == "Manual child"
+        )
+        child_uid = manual_child["uid"]
+        assert manual_child["parent_uid"] == parent_uid
+
+        before_regeneration = cast(
+            list[dict[str, Any]], client.get(tasks_url, headers=headers).json()
+        )
+        manual_child_before = next(task for task in before_regeneration if task["uid"] == child_uid)
+        assert manual_child_before["parent_uid"] == parent_uid
+
+        # Regenerate the skeleton over the same structure: this must not disturb the
+        # nested manual hierarchy created above (Copilot review finding, issue #130).
+        assert client.post(path, json=_payload(), headers=headers).status_code == 201
+
+        after_regeneration = cast(
+            list[dict[str, Any]], client.get(tasks_url, headers=headers).json()
+        )
+        manual_parent_after = next(task for task in after_regeneration if task["uid"] == parent_uid)
+        manual_child_after = next(task for task in after_regeneration if task["uid"] == child_uid)
+        assert manual_parent_after["parent_uid"] is None
+        assert manual_child_after["parent_uid"] == parent_uid
+
+
+def test_regenerate_structure_still_orphans_manual_task_under_removed_deliverable() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        path = f"/projects/{project_id}/planning-structure"
+        tasks_url = f"/projects/{project_id}/tasks"
+
+        assert client.post(path, json=_payload(), headers=headers).status_code == 201
+        planning_id = client.get(f"/projects/{project_id}", headers=headers).json()[
+            "displayed_planning_id"
+        ]
+        structured_tasks = cast(list[dict[str, Any]], client.get(tasks_url, headers=headers).json())
+        uid_by_key = {
+            task["structure_key"]: task["uid"]
+            for task in structured_tasks
+            if task["structure_key"] is not None
+        }
+        removed_deliverable_uid = uid_by_key["design/specification/architecture"]
+
+        manual_created = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/tasks",
+            json={
+                "name": "Manual note",
+                "target_parent_uid": removed_deliverable_uid,
+                "expected_revision": 0,
+            },
+            headers=headers,
+        )
+        assert manual_created.status_code == 200
+        manual_payload = cast(dict[str, Any], manual_created.json())
+        manual_task = next(
+            task
+            for task in cast(list[dict[str, Any]], manual_payload["tasks"])
+            if task["name"] == "Manual note"
+        )
+        manual_uid = manual_task["uid"]
+        assert manual_task["parent_uid"] == removed_deliverable_uid
+
+        payload_without_architecture = _payload()
+        payload_without_architecture["posts"][0]["lots"][0]["deliverables"] = [
+            {"key": "requirements", "name": "Requirements"}
+        ]
+        assert (
+            client.post(path, json=payload_without_architecture, headers=headers).status_code == 201
+        )
+
+        regenerated = cast(list[dict[str, Any]], client.get(tasks_url, headers=headers).json())
+        manual_after = next(task for task in regenerated if task["uid"] == manual_uid)
+        assert manual_after["parent_uid"] is None
 
 
 def test_structure_versions_validated_planning_is_immutable_and_reopenable() -> None:

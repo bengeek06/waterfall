@@ -3,8 +3,8 @@ from __future__ import annotations
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from waterfall.models.ms_core import MsProject, MsTask
-from waterfall.models.planning import WfPlanning, WfPlanningTaskSnapshot
+from waterfall.models.ms_core import MsProject
+from waterfall.models.planning import WfPlanningTaskSnapshot
 
 READ_ONLY_PROJECT_STATUSES = frozenset({"perdu", "termine", "abandonne"})
 
@@ -17,17 +17,21 @@ def ensure_project_mutable(project: MsProject) -> None:
         )
 
 
-def _project_has_structure(db: Session, project_id: int) -> bool:
-    has_snapshot = (
+def _referenced_planning_has_structure(db: Session, project: MsProject) -> bool:
+    """Whether the project's currently referenced planning has any task.
+
+    Scoped to ``project.planning_reference_id`` specifically (not "any
+    planning the project ever had"), since that is the planning that will
+    actually become active when the project reaches ``en_cours``.
+    """
+    if project.planning_reference_id is None:
+        return False
+    return (
         db.query(WfPlanningTaskSnapshot.id)
-        .join(WfPlanning, WfPlanning.id == WfPlanningTaskSnapshot.planning_id)
-        .filter(WfPlanning.project_id == project_id)
+        .filter(WfPlanningTaskSnapshot.planning_id == project.planning_reference_id)
         .first()
         is not None
     )
-    if has_snapshot:
-        return True
-    return db.query(MsTask.id).filter(MsTask.project_id == project_id).first() is not None
 
 
 def validate_project_status_transition(
@@ -53,22 +57,13 @@ def validate_project_status_transition(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Invalid project status transition: {project.status} -> {new_status}",
         )
-    if (
-        new_status == "initialise"
-        and project.status == "cree"
-        and not _project_has_structure(db, project.id)
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Project requires a planning structure before initialise",
-        )
     if new_status == "en_cours":
         if project.planning_reference_id is None or project.reference_estimate_id is None:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Project requires planning and estimate references before en_cours",
             )
-        if project.status in {"cree", "initialise"} and not _project_has_structure(db, project.id):
+        if not _referenced_planning_has_structure(db, project):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Project requires a planning structure before en_cours",

@@ -1347,6 +1347,19 @@ export function reopenPlanningStructure(
   );
 }
 
+export function skipPlanningStructure(
+  projectId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<Project>(
+    `/projects/${projectId}/planning-structure/skip`,
+    tokens,
+    { method: "POST" },
+    onSessionRefresh,
+  );
+}
+
 export function updateTaskDescription(
   projectId: number,
   taskUid: number,

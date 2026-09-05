@@ -67,6 +67,7 @@ import {
   reopenPlanningStructure,
   setDisplayedPlanning,
   setPlanningReference,
+  skipPlanningStructure,
   updateEstimateCostLine,
   updatePlanningTaskSchedule,
   updateProject,
@@ -1456,6 +1457,45 @@ export default function ProjectDetailsPage() {
     }
   }
 
+  async function skipStructure() {
+    if (!session || isReadOnlyProject) {
+      return;
+    }
+    setStructureBusy(true);
+    setError(null);
+    try {
+      const updatedProject = await skipPlanningStructure(projectId, session, onSessionRefresh);
+      setProject(updatedProject);
+      setStructureOpen(false);
+      try {
+        const planningMetadata = await listPlannings(projectId, session, onSessionRefresh);
+        const nextPlanningId = updatedProject.displayed_planning_id ?? planningMetadata.at(-1)?.id ?? null;
+        const nextDetail = nextPlanningId
+          ? await getPlanning(projectId, nextPlanningId, session, onSessionRefresh)
+          : null;
+        setPlannings(planningMetadata);
+        updateSelectedPlanningId(nextPlanningId);
+        setPlanningDetail(nextDetail);
+      } catch (refreshCause) {
+        if (refreshCause instanceof SessionExpiredError) {
+          clearSession();
+          router.push("/login");
+          return;
+        }
+        setError("Passage effectué, mais impossible de recharger le planning. Recharge la page.");
+      }
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      setError(cause instanceof ApiError ? cause.message : "Impossible de passer cette étape.");
+    } finally {
+      setStructureBusy(false);
+    }
+  }
+
   function startEditProjectInfo() {
     if (!project) {
       return;
@@ -1930,6 +1970,18 @@ export default function ProjectDetailsPage() {
               >
                 {structureBusy ? "Génération..." : "Générer le squelette"}
               </Button>
+              {project?.status === "cree" &&
+              project?.displayed_planning_id == null &&
+              project?.planning_reference_id == null ? (
+                <Button
+                  variant="outline"
+                  type="button"
+                  disabled={structureBusy}
+                  onClick={() => void skipStructure()}
+                >
+                  {structureBusy ? "Passage en cours..." : "Passer cette étape"}
+                </Button>
+              ) : null}
             </div>
             </CardContent>
           </Card>
@@ -1985,7 +2037,7 @@ export default function ProjectDetailsPage() {
                     Définir comme référence
                   </Button>
                 ) : null}
-                {(plannings.some((planning) => planning.status === "draft") || project?.planning_reference_id !== null) && !isReadOnlyProject ? (
+                {!isReadOnlyProject && project?.status !== "cree" ? (
                   <Button
                     variant="outline"
                     type="button"

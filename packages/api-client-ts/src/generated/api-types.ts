@@ -613,7 +613,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Generer le squelette de planning depuis une structure metier */
+        /** Generer le squelette de planning depuis une structure metier (fusion non destructive, les taches importees ou saisies manuellement sont toujours preservees) */
         post: operations["createPlanningStructure"];
         delete?: never;
         options?: never;
@@ -650,6 +650,23 @@ export interface paths {
         put?: never;
         /** Rouvrir la structure de planning dans un nouveau brouillon */
         post: operations["reopenPlanningStructure"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{projectId}/planning-structure/skip": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Quitter le lotissement sans generer de squelette (planning vide) */
+        post: operations["skipPlanningStructure"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3421,6 +3438,32 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Projet rouvert dans un brouillon */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    skipPlanningStructure: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Projet initialise avec un planning vide */
             200: {
                 headers: {
                     [name: string]: unknown;
