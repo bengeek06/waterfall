@@ -113,4 +113,107 @@ describe("RoleCalendarsTable", () => {
     expect(screen.getByLabelText("Calendrier de Développeur — IT (#5)")).toBeInTheDocument();
     expect(screen.getByLabelText("Calendrier de Développeur — IT (#6)")).toBeInTheDocument();
   });
+
+  it("names the effective default calendar in the empty option when an active default calendar exists", () => {
+    render(
+      <RoleCalendarsTable
+        roles={[{ id: 1, name: "Développeur", node_id: 1, calendar_id: null } as never]}
+        calendars={[
+          { id: 2, code: "PARTTIME", name: "Temps partiel", is_active: true, is_default: false } as never,
+          {
+            id: 3,
+            code: "STANDARD",
+            name: "Calendrier standard",
+            is_active: true,
+            is_default: true,
+            weekdays: [{ day_type: 2, hours_per_day: "7.00" }],
+          } as never,
+        ]}
+        drafts={{}}
+        actionBusy={false}
+        nodeCodeById={nodeCodeById}
+        onDraftChange={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("option", { name: "Calendrier par défaut (STANDARD - Calendrier standard)" })).toBeInTheDocument();
+  });
+
+  it("signals the implicit wall-clock fallback in the empty option when the active default calendar has no working day", () => {
+    render(
+      <RoleCalendarsTable
+        roles={[{ id: 1, name: "Développeur", node_id: 1, calendar_id: null } as never]}
+        calendars={[
+          {
+            id: 3,
+            code: "STANDARD",
+            name: "Calendrier standard",
+            is_active: true,
+            is_default: true,
+            weekdays: [],
+          } as never,
+        ]}
+        drafts={{}}
+        actionBusy={false}
+        nodeCodeById={nodeCodeById}
+        onDraftChange={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("option", {
+        name: "Calendrier implicite (24h/24, 7j/7) — le calendrier par défaut configuré n'a aucun jour travaillé",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("also signals the implicit wall-clock fallback when the active default calendar's weekdays are all at zero hours", () => {
+    render(
+      <RoleCalendarsTable
+        roles={[{ id: 1, name: "Développeur", node_id: 1, calendar_id: null } as never]}
+        calendars={[
+          {
+            id: 3,
+            code: "STANDARD",
+            name: "Calendrier standard",
+            is_active: true,
+            is_default: true,
+            weekdays: [
+              { day_type: 2, hours_per_day: "0.00" },
+              { day_type: 3, hours_per_day: "0" },
+            ],
+          } as never,
+        ]}
+        drafts={{}}
+        actionBusy={false}
+        nodeCodeById={nodeCodeById}
+        onDraftChange={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("option", {
+        name: "Calendrier implicite (24h/24, 7j/7) — le calendrier par défaut configuré n'a aucun jour travaillé",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("signals the absence of a default calendar in the empty option when none is active and flagged as default", () => {
+    render(
+      <RoleCalendarsTable
+        roles={[{ id: 1, name: "Développeur", node_id: 1, calendar_id: null } as never]}
+        calendars={[{ id: 2, code: "PARTTIME", name: "Temps partiel", is_active: true, is_default: false } as never]}
+        drafts={{}}
+        actionBusy={false}
+        nodeCodeById={nodeCodeById}
+        onDraftChange={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("option", { name: "Aucun calendrier par défaut défini" })).toBeInTheDocument();
+  });
 });

@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -105,6 +105,7 @@ export default function ResourcesPage() {
   const [users, setUsers] = useState<AuthUserAdmin[]>([]);
   const [busy, setBusy] = useState(true);
   const [actionBusy, setActionBusy] = useState(false);
+  const [loadSucceeded, setLoadSucceeded] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
   const [usersError, setUsersError] = useState<string | null>(null);
   const [pendingUserAction, setPendingUserAction] = useState<PendingUserAction>(null);
@@ -160,14 +161,26 @@ export default function ResourcesPage() {
     [],
   );
 
+  // Guards against out-of-order reloads: a token refresh (see `onSessionRefresh`
+  // above) changes `session`, which re-runs this effect. If an older reload is
+  // still in flight when a newer one starts (or finishes) and later resolves,
+  // its now-stale results must not overwrite state a more recent reload (or a
+  // local optimistic update racing against it) has already committed.
+  const loadGenerationRef = useRef(0);
+
   useEffect(() => {
+    const generation = ++loadGenerationRef.current;
+    const isCurrentGeneration = () => loadGenerationRef.current === generation;
+
     async function load() {
       if (!session) {
         try {
           const restoredSession = await restoreSession();
+          if (!isCurrentGeneration()) return;
           setSession(restoredSession);
           setSessionState(restoredSession);
         } catch {
+          if (!isCurrentGeneration()) return;
           clearSession();
           router.push("/login");
         }
@@ -196,6 +209,7 @@ export default function ResourcesPage() {
           getRoleCapacities(session, onSessionRefresh),
           getUsers(session, onSessionRefresh),
         ]);
+        if (!isCurrentGeneration()) return;
         setNodes(nodeData);
         setSelectedNodeId((previous) => previous ?? nodeData[0]?.id ?? null);
         setRoleNodeId((previous) => previous || (nodeData[0] ? String(nodeData[0].id) : ""));
@@ -211,7 +225,10 @@ export default function ResourcesPage() {
         setCapacities(capacityData);
         setCapacityDrafts(Object.fromEntries(capacityData.map((capacity) => [capacity.role_id, { personCount: String(capacity.person_count), availableHours: String(capacity.available_hours) }])))
         setUsers(usersData);
+        setLoadSucceeded(true);
       } catch (cause) {
+        if (!isCurrentGeneration()) return;
+        setLoadSucceeded(false);
         if (cause instanceof SessionExpiredError) {
           clearSession();
           router.push("/login");
@@ -227,7 +244,9 @@ export default function ResourcesPage() {
           message: cause instanceof ApiError ? cause.message : "Chargement impossible",
         });
       } finally {
-        setBusy(false);
+        // A more recent reload may still be in flight: don't flip `busy` back to
+        // false on its behalf, or the UI would flash "loaded" with stale data.
+        if (isCurrentGeneration()) setBusy(false);
       }
     }
 
@@ -481,6 +500,17 @@ export default function ResourcesPage() {
     }, calendar.is_active ? "Calendrier désactivé." : "Calendrier réactivé.");
   }
 
+  async function setDefaultCalendar(calendar: Calendar) {
+    if (!session) return;
+    await submitAction(async () => {
+      const updated = await updateCalendar(calendar.id, { is_default: true }, session, onSessionRefresh);
+      setCalendars((prev) => prev.map((item) => {
+        if (item.id === updated.id) return updated;
+        return item.is_default ? { ...item, is_default: false } : item;
+      }));
+    }, "Calendrier par défaut mis à jour.");
+  }
+
   async function saveRoleCalendar(roleId: number) {
     if (!session) return;
     const draft = roleCalendarDrafts[roleId] ?? "";
@@ -708,6 +738,9 @@ export default function ResourcesPage() {
       {notice ? (
         <Alert variant={notice.kind === "error" ? "destructive" : "default"}><AlertDescription>{notice.message}</AlertDescription></Alert>
       ) : null}
+      {loadSucceeded && !busy && !calendars.some((calendar) => calendar.is_active && calendar.is_default) ? (
+        <Alert variant="default"><AlertDescription>Aucun calendrier par défaut n&apos;est défini. Désignez un calendrier par défaut dans l&apos;onglet Ressources.</AlertDescription></Alert>
+      ) : null}
       {busy ? (
         <Card><CardContent className="pt-6"><p className="text-sm text-muted-foreground" role="status">Chargement...</p></CardContent></Card>
       ) : null}
@@ -762,6 +795,7 @@ export default function ResourcesPage() {
             onSave={(item) => void saveCalendar(item)}
             onCancel={() => setEditingCalendarId(null)}
             onToggle={(item) => void toggleCalendarActive(item)}
+            onSetDefault={(item) => void setDefaultCalendar(item)}
           />
         </>
       ) : null}

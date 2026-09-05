@@ -51,6 +51,7 @@ export type CalendarsTableProps = {
   onSave: (item: Calendar) => void;
   onCancel: () => void;
   onToggle: (item: Calendar) => void;
+  onSetDefault: (item: Calendar) => void;
 };
 
 export function CalendarsTable(props: CalendarsTableProps) {
@@ -133,7 +134,11 @@ export function CalendarsTable(props: CalendarsTableProps) {
                           <Button size="sm" variant="outline" type="button" onClick={() => props.onStartEdit(item)}>Modifier</Button>
                         )}
                         <Button size="sm" variant="outline" type="button" disabled={props.busy || inUseByActiveRole || (item.is_active && item.is_default)} onClick={() => props.onToggle(item)}>{item.is_active ? "Désactiver" : "Réactiver"}</Button>
+                        {!item.is_default ? (
+                          <Button size="sm" variant="outline" type="button" disabled={props.busy || !item.is_active} onClick={() => props.onSetDefault(item)}>Définir par défaut</Button>
+                        ) : null}
                         {inUseByActiveRole ? <span className="text-xs text-muted-foreground">Assigné à un rôle actif</span> : null}
+                        {!item.is_default && !item.is_active ? <span className="text-xs text-muted-foreground">Seul un calendrier actif peut être défini par défaut</span> : null}
                         {item.is_default ? <span className="text-xs text-muted-foreground">{item.is_active ? "Calendrier par défaut" : "Calendrier par défaut (inactif)"}</span> : null}
                       </div>
                     </TableCell>

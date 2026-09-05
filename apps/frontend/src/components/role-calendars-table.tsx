@@ -15,8 +15,25 @@ type RoleCalendarsTableProps = {
   onSave: (roleId: number) => void;
 };
 
+// Mirrors the backend's `_has_any_working_day` (calendar_schedule.py): a calendar
+// only has working capacity if at least one of its weekdays has hours_per_day > 0.
+// A calendar with no configured weekday (or every weekday at 0) has no capacity,
+// even when flagged `is_default` -- the scheduling cascade falls through to the
+// implicit wall-clock (24h/24, 7j/7) fallback in that case instead of using it.
+function hasWorkingDay(calendar: Calendar): boolean {
+  return (calendar.weekdays ?? []).some((weekday) => Number(weekday.hours_per_day) > 0);
+}
+
+function getDefaultOptionLabel(defaultCalendar: Calendar | undefined): string {
+  if (!defaultCalendar) return "Aucun calendrier par défaut défini";
+  if (hasWorkingDay(defaultCalendar)) return `Calendrier par défaut (${defaultCalendar.code} - ${defaultCalendar.name})`;
+  return "Calendrier implicite (24h/24, 7j/7) — le calendrier par défaut configuré n'a aucun jour travaillé";
+}
+
 export function RoleCalendarsTable(props: RoleCalendarsTableProps) {
   const activeCalendars = props.calendars.filter((calendar) => calendar.is_active);
+  const defaultCalendar = activeCalendars.find((calendar) => calendar.is_default);
+  const defaultOptionLabel = getDefaultOptionLabel(defaultCalendar);
 
   return (
     <Card className="mt-4">
@@ -43,7 +60,7 @@ export function RoleCalendarsTable(props: RoleCalendarsTableProps) {
                       disabled={props.actionBusy}
                       onChange={(event) => props.onDraftChange(role.id, event.target.value)}
                     >
-                      <option value="">Calendrier par défaut</option>
+                      <option value="">{defaultOptionLabel}</option>
                       {assignedInactiveCalendar ? (
                         <option value={assignedInactiveCalendar.id}>{assignedInactiveCalendar.code} - {assignedInactiveCalendar.name} (inactif)</option>
                       ) : null}

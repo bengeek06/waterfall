@@ -262,4 +262,212 @@ describe("ResourcesPage calendar mutations", () => {
 
     await waitFor(() => expect(select).toHaveValue(String(otherCalendar.id)));
   });
+
+  it("promotes a calendar as default and locally demotes the previous default without a reload", async () => {
+    const previousDefault: Calendar = { ...activeCalendar, id: 1, code: "STANDARD", is_default: true };
+    const candidate: Calendar = {
+      id: 3,
+      code: "OTHER",
+      name: "Autre calendrier",
+      weeks_per_year: 44,
+      is_active: true,
+      is_default: false,
+      created_at: "2026-08-01T00:00:00Z",
+      updated_at: "2026-08-01T00:00:00Z",
+      weekdays: [],
+    };
+    const promoted: Calendar = { ...candidate, is_default: true };
+    mocks.updateCalendar.mockResolvedValue(promoted);
+    await renderResourcesTab([previousDefault, candidate]);
+
+    const otherRow = screen.getByText("OTHER").closest("tr");
+    if (!otherRow) throw new Error("row not found");
+    fireEvent.click(within(otherRow).getByRole("button", { name: "Définir par défaut" }));
+
+    await waitFor(() =>
+      expect(mocks.updateCalendar).toHaveBeenCalledWith(3, { is_default: true }, expect.anything(), expect.anything()),
+    );
+
+    await waitFor(() => expect(screen.getAllByText("Par défaut")).toHaveLength(1));
+    const standardRow = screen.getByText("STANDARD").closest("tr");
+    if (!standardRow) throw new Error("row not found");
+    expect(within(standardRow).queryByText("Par défaut")).not.toBeInTheDocument();
+    expect(within(otherRow).getByText("Par défaut")).toBeInTheDocument();
+  });
+});
+
+describe("ResourcesPage default calendar warning", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("shows a warning when no active calendar is flagged as default", async () => {
+    await renderResourcesTab([activeCalendar]);
+
+    expect(
+      screen.getByText("Aucun calendrier par défaut n'est défini. Désignez un calendrier par défaut dans l'onglet Ressources."),
+    ).toBeInTheDocument();
+  });
+
+  it("shows the warning on initial render, before switching to the Ressources tab", async () => {
+    mocks.getResourceNodes.mockResolvedValue([]);
+    mocks.getResourceRoles.mockResolvedValue([]);
+    mocks.getCalendars.mockResolvedValue([activeCalendar]);
+    mocks.getCostTypes.mockResolvedValue([]);
+    mocks.getCostCategories.mockResolvedValue([]);
+    mocks.getCostRates.mockResolvedValue([]);
+    mocks.getInflationRates.mockResolvedValue([]);
+    mocks.getRoleCapacities.mockResolvedValue([]);
+    mocks.getUsers.mockResolvedValue([]);
+
+    render(<ResourcesPage />);
+
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+
+    // Stays on the default tab (not "Ressources") to prove the warning is not
+    // scoped to a tab-specific conditional render.
+    expect(screen.getByRole("tab", { name: "Ressources" })).toHaveAttribute("aria-selected", "false");
+    expect(
+      screen.getByText("Aucun calendrier par défaut n'est défini. Désignez un calendrier par défaut dans l'onglet Ressources."),
+    ).toBeInTheDocument();
+  });
+
+  it("does not show the warning once an active calendar is flagged as default", async () => {
+    const defaultCalendar: Calendar = { ...activeCalendar, is_default: true };
+    await renderResourcesTab([defaultCalendar]);
+
+    expect(
+      screen.queryByText("Aucun calendrier par défaut n'est défini. Désignez un calendrier par défaut dans l'onglet Ressources."),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not show the warning when the initial load fails, and surfaces the load error instead", async () => {
+    mocks.getResourceNodes.mockRejectedValue(new ApiError(500, "Chargement impossible"));
+    mocks.getResourceRoles.mockResolvedValue([]);
+    mocks.getCalendars.mockResolvedValue([]);
+    mocks.getCostTypes.mockResolvedValue([]);
+    mocks.getCostCategories.mockResolvedValue([]);
+    mocks.getCostRates.mockResolvedValue([]);
+    mocks.getInflationRates.mockResolvedValue([]);
+    mocks.getRoleCapacities.mockResolvedValue([]);
+    mocks.getUsers.mockResolvedValue([]);
+
+    render(<ResourcesPage />);
+
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+
+    expect(screen.getByText("Chargement impossible")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Aucun calendrier par défaut n'est défini. Désignez un calendrier par défaut dans l'onglet Ressources."),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not show the warning when a later reload (triggered by a session refresh) fails after an initial successful load", async () => {
+    let nodeCallCount = 0;
+    mocks.getResourceNodes.mockImplementation((_tokens: unknown, onSessionRefresh: (next: { accessToken: string }) => void) => {
+      nodeCallCount += 1;
+      if (nodeCallCount === 1) {
+        // Simulate a token refresh happening mid-request during the first, successful load,
+        // which re-triggers the load effect (session changes) for a second, failing load.
+        return Promise.resolve([]).then((result) => {
+          onSessionRefresh({ accessToken: "refreshed-token" });
+          return result;
+        });
+      }
+      return Promise.reject(new ApiError(500, "Rechargement impossible"));
+    });
+    mocks.getResourceRoles.mockResolvedValue([]);
+    mocks.getCalendars.mockResolvedValue([activeCalendar]);
+    mocks.getCostTypes.mockResolvedValue([]);
+    mocks.getCostCategories.mockResolvedValue([]);
+    mocks.getCostRates.mockResolvedValue([]);
+    mocks.getInflationRates.mockResolvedValue([]);
+    mocks.getRoleCapacities.mockResolvedValue([]);
+    mocks.getUsers.mockResolvedValue([]);
+
+    render(<ResourcesPage />);
+
+    await waitFor(() => expect(mocks.getResourceNodes).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByText("Rechargement impossible")).toBeInTheDocument());
+
+    expect(
+      screen.queryByText("Aucun calendrier par défaut n'est défini. Désignez un calendrier par défaut dans l'onglet Ressources."),
+    ).not.toBeInTheDocument();
+  });
+});
+
+describe("ResourcesPage reload race", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("keeps the most recently triggered reload's data even when an older, obsolete reload resolves later", async () => {
+    const genOneNode: ResourceNode = { id: 1, code: "GEN1", name: "Génération 1", parent_id: null } as never;
+    const genTwoNode: ResourceNode = { id: 2, code: "GEN2", name: "Génération 2", parent_id: null } as never;
+
+    let resolveFirstNodes!: (nodes: ResourceNode[]) => void;
+    const firstNodesPromise = new Promise<ResourceNode[]>((resolve) => {
+      resolveFirstNodes = resolve;
+    });
+
+    let nodeCallCount = 0;
+    mocks.getResourceNodes.mockImplementation(() => {
+      nodeCallCount += 1;
+      // First call: the initial (mount) reload. Stays pending until the test
+      // explicitly releases it below, once the second reload has committed --
+      // simulating an older reload that resolves after a newer one.
+      if (nodeCallCount === 1) return firstNodesPromise;
+      // Second call: the reload triggered by the mid-flight session refresh
+      // below. Resolves immediately, well before the first call is released.
+      return Promise.resolve([genTwoNode]);
+    });
+
+    let rolesCallCount = 0;
+    mocks.getResourceRoles.mockImplementation(
+      (_tokens: unknown, onSessionRefresh: (next: { accessToken: string }) => void) => {
+        rolesCallCount += 1;
+        if (rolesCallCount === 1) {
+          // Fires mid-flight during the first reload's still-pending Promise.all,
+          // mirroring `authFetch` calling `onSessionRefresh` before a retried
+          // request settles. This starts a second, more recently triggered reload.
+          onSessionRefresh({ accessToken: "refreshed-token" });
+        }
+        return Promise.resolve([]);
+      },
+    );
+
+    mocks.getCalendars.mockResolvedValue([]);
+    mocks.getCostTypes.mockResolvedValue([]);
+    mocks.getCostCategories.mockResolvedValue([]);
+    mocks.getCostRates.mockResolvedValue([]);
+    mocks.getInflationRates.mockResolvedValue([]);
+    mocks.getRoleCapacities.mockResolvedValue([]);
+    mocks.getUsers.mockResolvedValue([]);
+
+    render(<ResourcesPage />);
+
+    // The second (more recently triggered) reload completes first: its own
+    // getResourceNodes call resolves immediately.
+    await waitFor(() => expect(nodeCallCount).toBe(2));
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("tab", { name: "Ressources" }));
+    await waitFor(() => expect(screen.getByText("GEN2")).toBeInTheDocument());
+
+    // Now release the first (obsolete) reload's stale data, after the second
+    // reload has already committed its own.
+    resolveFirstNodes([genOneNode]);
+
+    // The obsolete first reload must not overwrite the more recently triggered
+    // second reload's committed state.
+    await waitFor(() => expect(screen.queryByText("GEN1")).not.toBeInTheDocument());
+    expect(screen.getByText("GEN2")).toBeInTheDocument();
+  });
 });

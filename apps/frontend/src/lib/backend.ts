@@ -473,6 +473,7 @@ export function updateCalendar(
     name?: string;
     weeks_per_year?: number;
     is_active?: boolean;
+    is_default?: boolean;
     weekdays?: { day_type: number; hours_per_day: string }[];
   },
   tokens: SessionTokens,

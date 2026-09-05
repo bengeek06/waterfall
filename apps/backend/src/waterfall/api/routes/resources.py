@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TypeVar
+from typing import Any, TypeVar, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import exists, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -247,6 +249,53 @@ def _replace_calendar_weekdays(
         )
 
 
+def _promote_as_default_if_unclaimed(db: Session, calendar: Calendar) -> None:
+    """Atomically promote `calendar` to the system default if -- and only if -- it is
+    the only calendar row in the table. This is the bootstrap case from issue #110:
+    the very first calendar ever created in an empty database becomes the default
+    automatically so a fresh install is never left without one.
+
+    Deliberately narrower than "no calendar is currently flagged default": a
+    database that already has calendars but none of them is default (e.g.
+    incomplete setup) must NOT have its next, unrelated calendar silently promoted
+    -- that gap is a frontend warning, not an auto-promotion (see issue #109). The
+    condition below only ever fires when this calendar is the sole row, i.e. no
+    other calendar existed before this insert.
+
+    A prior read-then-write (`db.query(Calendar).count() == 0` decided before the
+    insert) is a TOCTOU race: two concurrent create_calendar requests can both
+    observe an empty table before either commits, and the loser's INSERT then trips
+    the partial unique index with a misleading "code already exists" conflict. A
+    single conditional UPDATE run *after* the insert closes that window at the SQL
+    level instead -- is_default is never pre-computed.
+
+    The narrower corner case -- both transactions' NOT EXISTS checks passing before
+    either has committed, because under READ COMMITTED neither sees the other's
+    uncommitted row -- still surfaces as a unique-index violation on the losing
+    transaction's own UPDATE. That UPDATE runs inside a SAVEPOINT so the violation
+    can be swallowed without discarding the calendar row itself: losing the race
+    simply means this calendar stays non-default, which is the correct concurrent
+    outcome, not an error.
+    """
+    savepoint = db.begin_nested()
+    try:
+        result = cast(
+            CursorResult[Any],
+            db.execute(
+                update(Calendar)
+                .where(Calendar.id == calendar.id)
+                .where(~exists().where(Calendar.id != calendar.id))
+                .values(is_default=True)
+            ),
+        )
+    except IntegrityError:
+        savepoint.rollback()
+        return
+    savepoint.commit()
+    if result.rowcount == 1:
+        calendar.is_default = True
+
+
 @router.get("/calendars", response_model=list[CalendarRead])
 def list_calendars(
     include_inactive: bool = Query(default=False),
@@ -267,6 +316,17 @@ def create_calendar(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_admin_user),
 ) -> CalendarRead:
+    # Bootstrap case (issue #110): on a database with no calendar at all yet, the
+    # very first calendar created automatically becomes the system default so a
+    # fresh install is never left without one. This only fires when no other
+    # calendar row existed before this insert -- if calendars already exist but none
+    # is default (e.g. incomplete setup), that gap is a frontend warning, not an
+    # auto-promotion (see issue #109), and creating another, unrelated calendar must
+    # not silently resolve it. is_default is not user-settable on create
+    # (CalendarCreate deliberately omits it); promotion afterward still goes through
+    # PATCH. See _promote_as_default_if_unclaimed for why this is decided with a
+    # conditional UPDATE after the insert rather than pre-computed from a
+    # `count() == 0` read.
     calendar = Calendar(
         code=payload.code,
         name=payload.name,
@@ -274,6 +334,7 @@ def create_calendar(
     )
     db.add(calendar)
     _flush(db, "Calendar code already exists")
+    _promote_as_default_if_unclaimed(db, calendar)
     _replace_calendar_weekdays(db, calendar.id, payload.weekdays)
     return _snapshot_and_commit(
         db,
