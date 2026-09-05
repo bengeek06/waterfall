@@ -1108,7 +1108,7 @@ paths:
     post:
       tags:
         - projects
-      summary: Generer le squelette de planning depuis une structure metier
+      summary: Generer le squelette de planning depuis une structure metier (fusion non destructive, les taches importees ou saisies manuellement sont toujours preservees)
       operationId: createPlanningStructure
       security:
         - bearerAuth: []
@@ -1195,6 +1195,29 @@ paths:
       responses:
         '200':
           description: Projet rouvert dans un brouillon
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /projects/{projectId}/planning-structure/skip:
+    post:
+      tags:
+        - projects
+      summary: Quitter le lotissement sans generer de squelette (planning vide)
+      operationId: skipPlanningStructure
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      responses:
+        '200':
+          description: Projet initialise avec un planning vide
           content:
             application/json:
               schema:

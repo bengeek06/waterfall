@@ -939,6 +939,24 @@ def test_project_can_enter_in_progress_after_both_references_are_set() -> None:
         assert response.json()["status"] == "en_cours"
 
 
+def test_project_can_initialise_without_a_planning_structure() -> None:
+    """Issue #130: the poste/lot/livrable skeleton is optional before ``initialise``."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        create = client.post("/projects", json={"name": "No skeleton"}, headers=headers)
+        assert create.status_code == 201
+        project_id = create.json()["id"]
+
+        response = client.patch(
+            f"/projects/{project_id}/status",
+            json={"status": "initialise"},
+            headers=headers,
+        )
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "initialise"
+
+
 def test_estimate_cost_lines_support_non_labor_costs_and_draft_locking() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)

@@ -106,6 +106,8 @@ paths:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1planning-structure~1draft
   /projects/{projectId}/planning-structure/reopen:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1planning-structure~1reopen
+  /projects/{projectId}/planning-structure/skip:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1planning-structure~1skip
   /projects/{projectId}/planning-tree:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1planning-tree
   /projects/{projectId}/tasks/{taskUid}:
