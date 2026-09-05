@@ -344,4 +344,25 @@ describe("ResourcesPage default calendar warning", () => {
       screen.queryByText("Aucun calendrier par défaut n'est défini. Désignez un calendrier par défaut dans l'onglet Ressources."),
     ).not.toBeInTheDocument();
   });
+
+  it("does not show the warning when the initial load fails, and surfaces the load error instead", async () => {
+    mocks.getResourceNodes.mockRejectedValue(new ApiError(500, "Chargement impossible"));
+    mocks.getResourceRoles.mockResolvedValue([]);
+    mocks.getCalendars.mockResolvedValue([]);
+    mocks.getCostTypes.mockResolvedValue([]);
+    mocks.getCostCategories.mockResolvedValue([]);
+    mocks.getCostRates.mockResolvedValue([]);
+    mocks.getInflationRates.mockResolvedValue([]);
+    mocks.getRoleCapacities.mockResolvedValue([]);
+    mocks.getUsers.mockResolvedValue([]);
+
+    render(<ResourcesPage />);
+
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+
+    expect(screen.getByText("Chargement impossible")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Aucun calendrier par défaut n'est défini. Désignez un calendrier par défaut dans l'onglet Ressources."),
+    ).not.toBeInTheDocument();
+  });
 });

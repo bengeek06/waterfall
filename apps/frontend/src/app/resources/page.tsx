@@ -105,6 +105,7 @@ export default function ResourcesPage() {
   const [users, setUsers] = useState<AuthUserAdmin[]>([]);
   const [busy, setBusy] = useState(true);
   const [actionBusy, setActionBusy] = useState(false);
+  const [loadSucceeded, setLoadSucceeded] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
   const [usersError, setUsersError] = useState<string | null>(null);
   const [pendingUserAction, setPendingUserAction] = useState<PendingUserAction>(null);
@@ -211,6 +212,7 @@ export default function ResourcesPage() {
         setCapacities(capacityData);
         setCapacityDrafts(Object.fromEntries(capacityData.map((capacity) => [capacity.role_id, { personCount: String(capacity.person_count), availableHours: String(capacity.available_hours) }])))
         setUsers(usersData);
+        setLoadSucceeded(true);
       } catch (cause) {
         if (cause instanceof SessionExpiredError) {
           clearSession();
@@ -719,7 +721,7 @@ export default function ResourcesPage() {
       {notice ? (
         <Alert variant={notice.kind === "error" ? "destructive" : "default"}><AlertDescription>{notice.message}</AlertDescription></Alert>
       ) : null}
-      {!busy && !calendars.some((calendar) => calendar.is_active && calendar.is_default) ? (
+      {loadSucceeded && !busy && !calendars.some((calendar) => calendar.is_active && calendar.is_default) ? (
         <Alert variant="default"><AlertDescription>Aucun calendrier par défaut n&apos;est défini. Désignez un calendrier par défaut dans l&apos;onglet Ressources.</AlertDescription></Alert>
       ) : null}
       {busy ? (
