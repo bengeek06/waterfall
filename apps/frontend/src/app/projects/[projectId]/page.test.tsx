@@ -342,6 +342,19 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     expect(screen.queryByRole("button", { name: "Passer cette étape" })).not.toBeInTheDocument();
   });
 
+  it("hides the skip button for a cree project that already has a displayed/reference planning", async () => {
+    mocks.getProject.mockResolvedValue(
+      project({ status: "cree", displayed_planning_id: 3, planning_reference_id: 3 }),
+    );
+    mocks.listPlannings.mockResolvedValue([planning({ id: 3, status: "draft" })]);
+    mocks.getPlanning.mockResolvedValue(detail(planning({ id: 3, status: "draft" })));
+
+    render(<ProjectDetailsPage />);
+
+    await screen.findByRole("heading", { name: "Structure initiale" });
+    expect(screen.queryByRole("button", { name: "Passer cette étape" })).not.toBeInTheDocument();
+  });
+
   it("allows creating a task manually in the empty planning right after skipping the structure step", async () => {
     const draftAfterSkip = planning({ id: 3, status: "draft" });
     const emptyDetail: PlanningDetail = { ...draftAfterSkip, tasks: [], links: [] };

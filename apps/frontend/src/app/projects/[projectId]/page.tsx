@@ -1970,7 +1970,9 @@ export default function ProjectDetailsPage() {
               >
                 {structureBusy ? "Génération..." : "Générer le squelette"}
               </Button>
-              {project?.status === "cree" ? (
+              {project?.status === "cree" &&
+              project?.displayed_planning_id == null &&
+              project?.planning_reference_id == null ? (
                 <Button
                   variant="outline"
                   type="button"
