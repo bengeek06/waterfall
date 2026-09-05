@@ -66,13 +66,13 @@ def _schema_matches_head(connection: Connection) -> bool:
     return compare_metadata(migration_context, Base.metadata) == []
 
 
-def _ensure_standard_calendar(connection: Connection) -> int:
+def _ensure_standard_calendar(connection: Connection) -> tuple[int, bool]:
     now = datetime.now(UTC)
-    standard_id = connection.scalar(
-        text("SELECT id FROM wf_calendar WHERE code = :code"),
+    standard = connection.execute(
+        text("SELECT id, is_active FROM wf_calendar WHERE code = :code"),
         {"code": STANDARD_CALENDAR_CODE},
-    )
-    if standard_id is None:
+    ).one_or_none()
+    if standard is None:
         connection.execute(
             text(
                 "INSERT INTO wf_calendar "
@@ -81,17 +81,17 @@ def _ensure_standard_calendar(connection: Connection) -> int:
             ),
             {"code": STANDARD_CALENDAR_CODE, "now": now},
         )
-        standard_id = connection.scalar(
-            text("SELECT id FROM wf_calendar WHERE code = :code"),
+        standard = connection.execute(
+            text("SELECT id, is_active FROM wf_calendar WHERE code = :code"),
             {"code": STANDARD_CALENDAR_CODE},
-        )
-    if standard_id is None:
+        ).one_or_none()
+    if standard is None:
         raise RuntimeError("Could not create or resolve the STANDARD calendar.")
-    return int(standard_id)
+    return int(standard[0]), bool(standard[1])
 
 
 def _repair_calendar_invariants(connection: Connection) -> None:
-    standard_id = _ensure_standard_calendar(connection)
+    standard_id, standard_is_active = _ensure_standard_calendar(connection)
     now = datetime.now(UTC)
     for day_type, hours in STANDARD_WEEKDAY_HOURS.items():
         existing_id = connection.scalar(
@@ -128,10 +128,13 @@ def _repair_calendar_invariants(connection: Connection) -> None:
             {"calendar_id": standard_id},
         )
 
-    connection.execute(
-        text("UPDATE wf_resource_role SET calendar_id = :calendar_id WHERE calendar_id IS NULL"),
-        {"calendar_id": standard_id},
-    )
+    if standard_is_active:
+        connection.execute(
+            text(
+                "UPDATE wf_resource_role SET calendar_id = :calendar_id WHERE calendar_id IS NULL"
+            ),
+            {"calendar_id": standard_id},
+        )
 
 
 def _stamp_revision(connection: Connection, revision: str) -> None:
@@ -151,15 +154,15 @@ def _stamp_revision(connection: Connection, revision: str) -> None:
 
 def prepare_legacy_create_all_schema(engine: Engine) -> str | None:
     _ = User.__tablename__
-    expected_head = _expected_head_revision()
-    if expected_head != HEAD_REVISION:
-        raise RuntimeError(
-            f"Update prepare_alembic_dev_schema.py for Alembic head {expected_head}."
-        )
-
     with engine.begin() as connection:
         if _alembic_version_exists(connection) or not _all_application_tables_exist(connection):
             return None
+
+        expected_head = _expected_head_revision()
+        if expected_head != HEAD_REVISION:
+            raise RuntimeError(
+                f"Update prepare_alembic_dev_schema.py for Alembic head {expected_head}."
+            )
 
         if _schema_matches_head(connection):
             _repair_calendar_invariants(connection)

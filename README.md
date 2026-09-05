@@ -197,7 +197,8 @@ make dev                    # backend (uvicorn) + frontend (next dev) — Ctrl-C
 Si une base de développement a été créée avant cette étape par l'ancien démarrage
 automatique, lancez `make migrate-up` une fois. La commande détecte les anciens schémas
 créés par `create_all`, restaure les invariants de données portés par les migrations
-initiales (calendrier `STANDARD`, jours ouvrés, calendrier par défaut, rôles existants),
+initiales (calendrier `STANDARD`, jours ouvrés, calendrier par défaut et, si
+`STANDARD` est actif, rôles existants sans calendrier propre),
 puis renseigne `alembic_version` avant d'appliquer les migrations restantes.
 
 ```bash

@@ -818,6 +818,20 @@ def test_alembic_current_does_not_stamp_create_all_schema() -> None:
             assert not inspect(connection).has_table("alembic_version")
 
 
+def test_legacy_prepare_returns_early_for_empty_database_when_head_constant_lags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from waterfall.scripts import prepare_alembic_dev_schema as prepare_module
+
+    monkeypatch.setattr(prepare_module, "HEAD_REVISION", "future-head")
+
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "empty.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        with _disposable_engine(database_url) as engine:
+            assert prepare_module.prepare_legacy_create_all_schema(engine) is None
+
+
 def test_create_all_schema_before_planning_revision_is_repaired_then_migrated() -> None:
     with TemporaryDirectory() as temporary_directory:
         database_path = Path(temporary_directory) / "create_all_before_revision.db"
@@ -847,6 +861,65 @@ def test_create_all_schema_before_planning_revision_is_repaired_then_migrated() 
                     )
                 )
                 == 1
+            )
+
+
+def test_create_all_recovery_does_not_assign_roles_to_inactive_standard_calendar() -> None:
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "inactive_standard.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        _create_orm_schema_without_alembic_version(database_url)
+        with _disposable_engine(database_url) as engine, engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO wf_calendar "
+                    "(id, code, name, weeks_per_year, is_active, is_default, "
+                    "created_at, updated_at) "
+                    "VALUES (1, 'STANDARD', 'Standard', 47, false, false, "
+                    "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO wf_cost_type "
+                    "(id, code, name, kind, is_active, created_at, updated_at) "
+                    "VALUES (1, 'MO', 'Main d''oeuvre', 'labor', true, "
+                    "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO wf_cost_category "
+                    "(id, cost_type_id, accounting_code, name, is_active, created_at, updated_at) "
+                    "VALUES (1, 1, 'DEV', 'Developpement', true, "
+                    "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO wf_resource_node "
+                    "(id, code, name, is_active, created_at, updated_at) "
+                    "VALUES (1, 'IT', 'Informatique', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO wf_resource_role "
+                    "(id, node_id, cost_category_id, name, is_active, created_at, updated_at) "
+                    "VALUES (1, 1, 1, 'Developpeur', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                )
+            )
+
+        _run_prepare_legacy_schema(database_url)
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            standard = connection.execute(
+                text("SELECT id, is_default FROM wf_calendar WHERE code = 'STANDARD'")
+            ).one()
+            assert standard[1] == 0
+            assert (
+                connection.scalar(text("SELECT calendar_id FROM wf_resource_role WHERE id = 1"))
+                is None
             )
 
 
