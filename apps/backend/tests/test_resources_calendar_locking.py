@@ -425,6 +425,105 @@ def test_concurrent_default_promotions_serialize_to_one_default_and_a_409(
         engine.dispose()
 
 
+def test_concurrent_first_calendar_creations_serialize_to_one_default(
+    postgres_app_database_url: str,
+) -> None:
+    """Issue #110 review follow-up: the bootstrap "first calendar in an empty
+    database becomes the default" promotion must not be decided by a read-then-write
+    `count() == 0` check, which is a TOCTOU race under concurrent creation -- two
+    requests can both observe an empty table before either commits. The fix
+    (`_promote_as_default_if_unclaimed`) instead runs a conditional `UPDATE ...
+    WHERE NOT EXISTS (...)` after the insert, inside its own SAVEPOINT so a losing
+    transaction's unique-index violation can be swallowed without discarding the
+    calendar row itself.
+
+    Session A replicates `create_calendar`'s own sequence up to (but not including)
+    its commit: insert calendar A, flush, then call the real
+    `_promote_as_default_if_unclaimed` helper, which writes `is_default=True` but
+    leaves it uncommitted since session A does not commit yet.
+
+    Session B then runs the *real* `create_calendar` route function on its own
+    thread. Session A's uncommitted write is invisible to session B's own `NOT
+    EXISTS` check under READ COMMITTED, so session B also attempts to promote its
+    own calendar (B) to default. PostgreSQL detects the emerging conflict between
+    the two uncommitted `is_default=True` writes on the partial unique index and
+    blocks session B's `UPDATE` until session A resolves the ambiguity.
+
+    Once session A commits (calendar A wins the race and keeps `is_default=True`),
+    session B's blocked `UPDATE` resumes, discovers the now-committed conflict, and
+    that violation is caught by the promotion's own SAVEPOINT: calendar B is still
+    created successfully (a normal `CalendarRead`, not an `HTTPException`), just
+    not as the default. Exactly one calendar ends up flagged `is_default` -- proof
+    that the conditional UPDATE, not a pre-computed flag, is what decided the
+    outcome, and that losing the race is not surfaced as an error."""
+    from waterfall.api.routes.resources import (
+        _promote_as_default_if_unclaimed,  # pyright: ignore[reportPrivateUsage]
+        create_calendar,
+    )
+    from waterfall.models.resources import Calendar
+    from waterfall.models.user import User
+    from waterfall.schemas.resources import CalendarCreate
+
+    engine = create_engine(postgres_app_database_url, future=True)
+    session_factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    try:
+        session_a = session_factory()
+        session_b = session_factory()
+        try:
+            # Session A: the early half of create_calendar's own sequence, held
+            # open (no commit) so its is_default=True write stays uncommitted.
+            calendar_a = Calendar(code="RACE-A", name="Race A", weeks_per_year=47)
+            session_a.add(calendar_a)
+            session_a.flush()
+            _promote_as_default_if_unclaimed(session_a, calendar_a)
+            assert calendar_a.is_default is True
+
+            # Capture session B's backend pid *before* starting the thread that
+            # will block it -- a Session/connection cannot safely be driven from
+            # two threads at once, so this quick roundtrip must happen first.
+            backend_pid_b = session_b.execute(text("SELECT pg_backend_pid()")).scalar()
+            assert backend_pid_b is not None
+
+            results: dict[str, Any] = {}
+
+            def _run_session_b() -> None:
+                results["response"] = create_calendar(
+                    CalendarCreate(code="RACE-B", name="Race B", weeks_per_year=47),
+                    db=session_b,
+                    _=cast(User, None),
+                )
+
+            thread = threading.Thread(target=_run_session_b)
+            thread.start()
+            try:
+                _wait_until_backend_blocked_on_lock(engine, backend_pid_b)
+
+                # Session A completes, releasing the lock session B is queued on.
+                session_a.commit()
+
+                thread.join(timeout=5)
+                assert not thread.is_alive(), (
+                    "session B's create_calendar never returned -- looks like a deadlock/hang"
+                )
+            finally:
+                thread.join(timeout=5)
+
+            assert "response" in results, (
+                f"expected session B's create_calendar to return a CalendarRead, got: {results}"
+            )
+            assert results["response"].is_default is False
+        finally:
+            session_a.close()
+            session_b.close()
+
+        # Exactly one calendar ends up flagged is_default -- session A's winner.
+        with session_factory() as verify_session:
+            defaults = verify_session.query(Calendar).filter(Calendar.is_default.is_(True)).all()
+            assert [calendar.code for calendar in defaults] == ["RACE-A"]
+    finally:
+        engine.dispose()
+
+
 def test_resource_update_response_ignores_write_committed_after_its_transaction(
     postgres_app_database_url: str,
     monkeypatch: pytest.MonkeyPatch,

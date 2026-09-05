@@ -113,4 +113,39 @@ describe("RoleCalendarsTable", () => {
     expect(screen.getByLabelText("Calendrier de Développeur — IT (#5)")).toBeInTheDocument();
     expect(screen.getByLabelText("Calendrier de Développeur — IT (#6)")).toBeInTheDocument();
   });
+
+  it("names the effective default calendar in the empty option when an active default calendar exists", () => {
+    render(
+      <RoleCalendarsTable
+        roles={[{ id: 1, name: "Développeur", node_id: 1, calendar_id: null } as never]}
+        calendars={[
+          { id: 2, code: "PARTTIME", name: "Temps partiel", is_active: true, is_default: false } as never,
+          { id: 3, code: "STANDARD", name: "Calendrier standard", is_active: true, is_default: true } as never,
+        ]}
+        drafts={{}}
+        actionBusy={false}
+        nodeCodeById={nodeCodeById}
+        onDraftChange={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("option", { name: "Calendrier par défaut (STANDARD - Calendrier standard)" })).toBeInTheDocument();
+  });
+
+  it("signals the absence of a default calendar in the empty option when none is active and flagged as default", () => {
+    render(
+      <RoleCalendarsTable
+        roles={[{ id: 1, name: "Développeur", node_id: 1, calendar_id: null } as never]}
+        calendars={[{ id: 2, code: "PARTTIME", name: "Temps partiel", is_active: true, is_default: false } as never]}
+        drafts={{}}
+        actionBusy={false}
+        nodeCodeById={nodeCodeById}
+        onDraftChange={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("option", { name: "Aucun calendrier par défaut défini" })).toBeInTheDocument();
+  });
 });

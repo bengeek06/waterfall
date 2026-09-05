@@ -39,6 +39,7 @@ describe("CalendarsTable", () => {
         onSave={vi.fn()}
         onCancel={vi.fn()}
         onToggle={vi.fn()}
+        onSetDefault={vi.fn()}
       />,
     );
 
@@ -76,6 +77,7 @@ describe("CalendarsTable", () => {
         onSave={onSave}
         onCancel={vi.fn()}
         onToggle={vi.fn()}
+        onSetDefault={vi.fn()}
       />,
     );
 
@@ -108,6 +110,7 @@ describe("CalendarsTable", () => {
         onSave={vi.fn()}
         onCancel={vi.fn()}
         onToggle={onToggle}
+        onSetDefault={vi.fn()}
       />,
     );
 
@@ -140,6 +143,7 @@ describe("CalendarsTable", () => {
         onSave={vi.fn()}
         onCancel={vi.fn()}
         onToggle={onToggle}
+        onSetDefault={vi.fn()}
       />,
     );
 
@@ -171,6 +175,7 @@ describe("CalendarsTable", () => {
         onSave={vi.fn()}
         onCancel={vi.fn()}
         onToggle={vi.fn()}
+        onSetDefault={vi.fn()}
       />,
     );
 
@@ -203,6 +208,7 @@ describe("CalendarsTable", () => {
         onSave={vi.fn()}
         onCancel={vi.fn()}
         onToggle={onToggle}
+        onSetDefault={vi.fn()}
       />,
     );
 
@@ -237,6 +243,7 @@ describe("CalendarsTable", () => {
         onSave={vi.fn()}
         onCancel={vi.fn()}
         onToggle={vi.fn()}
+        onSetDefault={vi.fn()}
       />,
     );
 
@@ -269,6 +276,7 @@ describe("CalendarsTable", () => {
         onSave={vi.fn()}
         onCancel={vi.fn()}
         onToggle={vi.fn()}
+        onSetDefault={vi.fn()}
       />,
     );
 
@@ -303,6 +311,7 @@ describe("CalendarsTable", () => {
         onSave={vi.fn()}
         onCancel={vi.fn()}
         onToggle={onToggle}
+        onSetDefault={vi.fn()}
       />,
     );
 
@@ -337,11 +346,112 @@ describe("CalendarsTable", () => {
         onSave={vi.fn()}
         onCancel={vi.fn()}
         onToggle={vi.fn()}
+        onSetDefault={vi.fn()}
       />,
     );
 
     expect(screen.getByRole("button", { name: "Désactiver" })).not.toBeDisabled();
     expect(screen.queryByText("Calendrier par défaut")).not.toBeInTheDocument();
     expect(screen.queryByText("Par défaut")).not.toBeInTheDocument();
+  });
+
+  it("reports the set-default action with the targeted calendar for an active non-default calendar", () => {
+    const onSetDefault = vi.fn();
+    const calendar = { id: 1, code: "STANDARD", name: "Calendrier standard", weeks_per_year: 47, is_active: true, is_default: false, weekdays: [] } as never;
+    render(
+      <CalendarsTable
+        items={[calendar]}
+        code=""
+        name=""
+        weeksPerYear="47"
+        weekdays={defaultWeekdays()}
+        draft={{ code: "", name: "", weeksPerYear: "47", weekdays: defaultWeekdays() }}
+        editingId={null}
+        busy={false}
+        calendarIdsInUseByActiveRoles={new Set()}
+        onSubmit={(event) => event.preventDefault()}
+        onCodeChange={vi.fn()}
+        onNameChange={vi.fn()}
+        onWeeksPerYearChange={vi.fn()}
+        onWeekdayChange={vi.fn()}
+        onStartEdit={vi.fn()}
+        onDraftChange={vi.fn()}
+        onDraftWeekdayChange={vi.fn()}
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+        onToggle={vi.fn()}
+        onSetDefault={onSetDefault}
+      />,
+    );
+
+    const button = screen.getByRole("button", { name: "Définir par défaut" });
+    expect(button).not.toBeDisabled();
+    fireEvent.click(button);
+    expect(onSetDefault).toHaveBeenCalledWith(calendar);
+  });
+
+  it("disables the set-default action and shows a hint when the calendar is inactive", () => {
+    const onSetDefault = vi.fn();
+    const calendar = { id: 1, code: "REDUIT", name: "Calendrier réduit", weeks_per_year: 40, is_active: false, is_default: false, weekdays: [] } as never;
+    render(
+      <CalendarsTable
+        items={[calendar]}
+        code=""
+        name=""
+        weeksPerYear="47"
+        weekdays={defaultWeekdays()}
+        draft={{ code: "", name: "", weeksPerYear: "47", weekdays: defaultWeekdays() }}
+        editingId={null}
+        busy={false}
+        calendarIdsInUseByActiveRoles={new Set()}
+        onSubmit={(event) => event.preventDefault()}
+        onCodeChange={vi.fn()}
+        onNameChange={vi.fn()}
+        onWeeksPerYearChange={vi.fn()}
+        onWeekdayChange={vi.fn()}
+        onStartEdit={vi.fn()}
+        onDraftChange={vi.fn()}
+        onDraftWeekdayChange={vi.fn()}
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+        onToggle={vi.fn()}
+        onSetDefault={onSetDefault}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Définir par défaut" })).toBeDisabled();
+    expect(screen.getByText("Seul un calendrier actif peut être défini par défaut")).toBeInTheDocument();
+  });
+
+  it("does not show the set-default action for a calendar that is already the default", () => {
+    const calendar = { id: 1, code: "STANDARD", name: "Calendrier standard", weeks_per_year: 47, is_active: true, is_default: true, weekdays: [] } as never;
+    render(
+      <CalendarsTable
+        items={[calendar]}
+        code=""
+        name=""
+        weeksPerYear="47"
+        weekdays={defaultWeekdays()}
+        draft={{ code: "", name: "", weeksPerYear: "47", weekdays: defaultWeekdays() }}
+        editingId={null}
+        busy={false}
+        calendarIdsInUseByActiveRoles={new Set()}
+        onSubmit={(event) => event.preventDefault()}
+        onCodeChange={vi.fn()}
+        onNameChange={vi.fn()}
+        onWeeksPerYearChange={vi.fn()}
+        onWeekdayChange={vi.fn()}
+        onStartEdit={vi.fn()}
+        onDraftChange={vi.fn()}
+        onDraftWeekdayChange={vi.fn()}
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+        onToggle={vi.fn()}
+        onSetDefault={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Définir par défaut" })).not.toBeInTheDocument();
+    expect(screen.getByText("Par défaut")).toBeInTheDocument();
   });
 });

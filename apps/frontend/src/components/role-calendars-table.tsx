@@ -17,6 +17,10 @@ type RoleCalendarsTableProps = {
 
 export function RoleCalendarsTable(props: RoleCalendarsTableProps) {
   const activeCalendars = props.calendars.filter((calendar) => calendar.is_active);
+  const defaultCalendar = activeCalendars.find((calendar) => calendar.is_default);
+  const defaultOptionLabel = defaultCalendar
+    ? `Calendrier par défaut (${defaultCalendar.code} - ${defaultCalendar.name})`
+    : "Aucun calendrier par défaut défini";
 
   return (
     <Card className="mt-4">
@@ -43,7 +47,7 @@ export function RoleCalendarsTable(props: RoleCalendarsTableProps) {
                       disabled={props.actionBusy}
                       onChange={(event) => props.onDraftChange(role.id, event.target.value)}
                     >
-                      <option value="">Calendrier par défaut</option>
+                      <option value="">{defaultOptionLabel}</option>
                       {assignedInactiveCalendar ? (
                         <option value={assignedInactiveCalendar.id}>{assignedInactiveCalendar.code} - {assignedInactiveCalendar.name} (inactif)</option>
                       ) : null}

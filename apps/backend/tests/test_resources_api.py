@@ -441,6 +441,83 @@ def test_calendar_duplicate_code_conflicts() -> None:
         assert duplicate.json()["detail"] == "Calendar code already exists"
 
 
+def test_first_calendar_created_becomes_default_automatically() -> None:
+    """Issue #110: on a database with no calendar at all yet, the first calendar
+    created via POST /resources/calendars is automatically flagged is_default, so
+    a fresh install is never left without a default calendar."""
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        assert client.get("/resources/calendars", headers=headers).json() == []
+
+        created: Response = client.post(
+            "/resources/calendars",
+            json={"code": "FIRST", "name": "Premier calendrier", "weeks_per_year": 47},
+            headers=headers,
+        )
+        assert created.status_code == 201
+        assert cast(dict[str, Any], created.json())["is_default"] is True
+
+
+def test_second_calendar_created_is_not_default() -> None:
+    """The auto-default bootstrap (issue #110) only fires when the table is
+    completely empty: a second calendar created afterward is not automatically
+    promoted, and the first calendar keeps its default flag -- no double
+    promotion, no violation of the partial unique index."""
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        first: Response = client.post(
+            "/resources/calendars",
+            json={"code": "FIRST", "name": "Premier calendrier", "weeks_per_year": 47},
+            headers=headers,
+        )
+        assert first.status_code == 201
+        first_payload = cast(dict[str, Any], first.json())
+        assert first_payload["is_default"] is True
+        first_id = first_payload["id"]
+
+        second: Response = client.post(
+            "/resources/calendars",
+            json={"code": "SECOND", "name": "Second calendrier", "weeks_per_year": 47},
+            headers=headers,
+        )
+        assert second.status_code == 201
+        assert cast(dict[str, Any], second.json())["is_default"] is False
+
+        unchanged_first: Response = client.get(f"/resources/calendars/{first_id}", headers=headers)
+        assert cast(dict[str, Any], unchanged_first.json())["is_default"] is True
+
+
+def test_new_calendar_is_not_auto_promoted_when_legacy_rows_have_no_default() -> None:
+    """The auto-default bootstrap (issue #110) is scoped to a table that is
+    completely empty before the insert, not merely to "no calendar is currently
+    flagged default". A legacy/historical database can end up with calendars that
+    exist but where none is default (an incomplete-setup gap flagged by issue #109
+    as a frontend warning, never auto-resolved). Simulate that state by inserting
+    calendars directly through the session -- bypassing the API, which never lets
+    is_default drop to false on every row -- then verify that creating another,
+    unrelated calendar through the API does NOT get silently promoted to default."""
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            session.add_all(
+                [
+                    Calendar(code="LEGACY-A", name="Legacy A", weeks_per_year=47, is_default=False),
+                    Calendar(code="LEGACY-B", name="Legacy B", weeks_per_year=47, is_default=False),
+                ]
+            )
+            session.commit()
+
+        created: Response = client.post(
+            "/resources/calendars",
+            json={"code": "THIRD", "name": "Troisieme calendrier", "weeks_per_year": 47},
+            headers=headers,
+        )
+        assert created.status_code == 201
+        assert cast(dict[str, Any], created.json())["is_default"] is False
+
+
 def test_calendar_payload_bounds_are_rejected() -> None:
     with TestClient(app) as client:
         headers = _admin_headers(client)
@@ -535,6 +612,10 @@ def test_calendar_patch_replaces_weekdays() -> None:
 def test_calendar_delete_deactivates_and_blocks_when_assigned() -> None:
     with TestClient(app) as client:
         headers = _admin_headers(client)
+        # Absorbs the "first calendar in an empty DB becomes default" bootstrap
+        # (issue #110) so STANDARD below is not itself the system default and
+        # stays freely deactivatable, which is what this test exercises.
+        _create_calendar_via_api(client, headers, "BOOTSTRAP-CAL")
         context = _create_role_context(client, headers, "CAL")
         calendar_id = cast(
             dict[str, Any],
@@ -589,6 +670,9 @@ def test_calendar_delete_deactivates_and_blocks_when_assigned() -> None:
 def test_calendar_patch_deactivate_blocks_when_assigned() -> None:
     with TestClient(app) as client:
         headers = _admin_headers(client)
+        # See test_calendar_delete_deactivates_and_blocks_when_assigned: absorbs the
+        # bootstrap default (issue #110) so STANDARD-PATCH is not itself the default.
+        _create_calendar_via_api(client, headers, "BOOTSTRAP-CALPATCH")
         context = _create_role_context(client, headers, "CALPATCH")
         calendar_id = cast(
             dict[str, Any],
@@ -642,6 +726,10 @@ def test_calendar_patch_deactivate_blocks_when_assigned() -> None:
 def test_role_rejects_unknown_or_inactive_calendar() -> None:
     with TestClient(app) as client:
         headers = _admin_headers(client)
+        # Absorbs the "first calendar in an empty DB becomes default" bootstrap
+        # (issue #110) so OLD below is not itself the default and stays freely
+        # deactivatable, which is what this test exercises.
+        _create_calendar_via_api(client, headers, "BOOTSTRAP-ROLECAL")
         context = _create_role_context(client, headers, "ROLECAL")
 
         unknown: Response = client.post(
@@ -716,6 +804,10 @@ def test_role_reactivation_revalidates_effective_calendar() -> None:
     """
     with TestClient(app) as client:
         headers = _admin_headers(client)
+        # Absorbs the "first calendar in an empty DB becomes default" bootstrap
+        # (issue #110) so STANDARD-REACT below is not itself the default and stays
+        # freely deactivatable, which is what this test exercises.
+        _create_calendar_via_api(client, headers, "BOOTSTRAP-REACT")
         context = _create_role_context(client, headers, "REACT")
         calendar_id = cast(
             dict[str, Any],
@@ -857,6 +949,9 @@ def test_calendar_patch_cannot_unset_default_without_promoting_replacement() -> 
 def test_calendar_patch_is_default_false_on_non_default_is_a_noop() -> None:
     with TestClient(app) as client:
         headers = _admin_headers(client)
+        # Absorbs the "first calendar in an empty DB becomes default" bootstrap
+        # (issue #110) so NOT-DEFAULT below is actually not the default.
+        _create_calendar_via_api(client, headers, "BOOTSTRAP-NOT-DEFAULT")
         calendar_id = _create_calendar_via_api(client, headers, "NOT-DEFAULT")
 
         response: Response = client.patch(
@@ -939,6 +1034,10 @@ def test_calendar_patch_promotes_default_with_lower_id_than_current_default() ->
 def test_calendar_patch_promote_requires_active_calendar() -> None:
     with TestClient(app) as client:
         headers = _admin_headers(client)
+        # Absorbs the "first calendar in an empty DB becomes default" bootstrap
+        # (issue #110) so INACTIVE-PROMOTE below is not itself the default and
+        # stays freely deactivatable, which is what this test exercises.
+        _create_calendar_via_api(client, headers, "BOOTSTRAP-INACTIVE-PROMOTE")
         calendar_id = _create_calendar_via_api(client, headers, "INACTIVE-PROMOTE")
         deactivate: Response = client.patch(
             f"/resources/calendars/{calendar_id}",
@@ -955,12 +1054,18 @@ def test_calendar_patch_promote_requires_active_calendar() -> None:
 def test_calendar_patch_promote_allows_activating_and_promoting_in_same_request() -> None:
     with TestClient(app) as client:
         headers = _admin_headers(client)
+        # Absorbs the "first calendar in an empty DB becomes default" bootstrap
+        # (issue #110) so ACTIVATE-AND-PROMOTE below is not itself the default and
+        # the intermediate deactivation below actually succeeds instead of tripping
+        # the "default calendar cannot be deactivated" guard.
+        _create_calendar_via_api(client, headers, "BOOTSTRAP-ACTIVATE-AND-PROMOTE")
         calendar_id = _create_calendar_via_api(client, headers, "ACTIVATE-AND-PROMOTE")
-        client.patch(
+        deactivate_response = client.patch(
             f"/resources/calendars/{calendar_id}",
             json={"is_active": False},
             headers=headers,
         )
+        assert deactivate_response.status_code == 200
 
         promote: Response = client.patch(
             f"/resources/calendars/{calendar_id}",
@@ -1003,6 +1108,9 @@ def test_calendar_patch_deactivate_and_promote_in_one_request_on_non_default() -
     calendar isn't the default."""
     with TestClient(app) as client:
         headers = _admin_headers(client)
+        # Absorbs the "first calendar in an empty DB becomes default" bootstrap
+        # (issue #110) so NON-DEFAULT-COMBO below is actually not the default.
+        _create_calendar_via_api(client, headers, "BOOTSTRAP-NON-DEFAULT-COMBO")
         calendar_id = _create_calendar_via_api(client, headers, "NON-DEFAULT-COMBO")
 
         response: Response = client.patch(

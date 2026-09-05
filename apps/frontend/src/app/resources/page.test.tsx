@@ -262,4 +262,86 @@ describe("ResourcesPage calendar mutations", () => {
 
     await waitFor(() => expect(select).toHaveValue(String(otherCalendar.id)));
   });
+
+  it("promotes a calendar as default and locally demotes the previous default without a reload", async () => {
+    const previousDefault: Calendar = { ...activeCalendar, id: 1, code: "STANDARD", is_default: true };
+    const candidate: Calendar = {
+      id: 3,
+      code: "OTHER",
+      name: "Autre calendrier",
+      weeks_per_year: 44,
+      is_active: true,
+      is_default: false,
+      created_at: "2026-08-01T00:00:00Z",
+      updated_at: "2026-08-01T00:00:00Z",
+      weekdays: [],
+    };
+    const promoted: Calendar = { ...candidate, is_default: true };
+    mocks.updateCalendar.mockResolvedValue(promoted);
+    await renderResourcesTab([previousDefault, candidate]);
+
+    const otherRow = screen.getByText("OTHER").closest("tr");
+    if (!otherRow) throw new Error("row not found");
+    fireEvent.click(within(otherRow).getByRole("button", { name: "Définir par défaut" }));
+
+    await waitFor(() =>
+      expect(mocks.updateCalendar).toHaveBeenCalledWith(3, { is_default: true }, expect.anything(), expect.anything()),
+    );
+
+    await waitFor(() => expect(screen.getAllByText("Par défaut")).toHaveLength(1));
+    const standardRow = screen.getByText("STANDARD").closest("tr");
+    if (!standardRow) throw new Error("row not found");
+    expect(within(standardRow).queryByText("Par défaut")).not.toBeInTheDocument();
+    expect(within(otherRow).getByText("Par défaut")).toBeInTheDocument();
+  });
+});
+
+describe("ResourcesPage default calendar warning", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("shows a warning when no active calendar is flagged as default", async () => {
+    await renderResourcesTab([activeCalendar]);
+
+    expect(
+      screen.getByText("Aucun calendrier par défaut n'est défini. Désignez un calendrier par défaut dans l'onglet Ressources."),
+    ).toBeInTheDocument();
+  });
+
+  it("shows the warning on initial render, before switching to the Ressources tab", async () => {
+    mocks.getResourceNodes.mockResolvedValue([]);
+    mocks.getResourceRoles.mockResolvedValue([]);
+    mocks.getCalendars.mockResolvedValue([activeCalendar]);
+    mocks.getCostTypes.mockResolvedValue([]);
+    mocks.getCostCategories.mockResolvedValue([]);
+    mocks.getCostRates.mockResolvedValue([]);
+    mocks.getInflationRates.mockResolvedValue([]);
+    mocks.getRoleCapacities.mockResolvedValue([]);
+    mocks.getUsers.mockResolvedValue([]);
+
+    render(<ResourcesPage />);
+
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+
+    // Stays on the default tab (not "Ressources") to prove the warning is not
+    // scoped to a tab-specific conditional render.
+    expect(screen.getByRole("tab", { name: "Ressources" })).toHaveAttribute("aria-selected", "false");
+    expect(
+      screen.getByText("Aucun calendrier par défaut n'est défini. Désignez un calendrier par défaut dans l'onglet Ressources."),
+    ).toBeInTheDocument();
+  });
+
+  it("does not show the warning once an active calendar is flagged as default", async () => {
+    const defaultCalendar: Calendar = { ...activeCalendar, is_default: true };
+    await renderResourcesTab([defaultCalendar]);
+
+    expect(
+      screen.queryByText("Aucun calendrier par défaut n'est défini. Désignez un calendrier par défaut dans l'onglet Ressources."),
+    ).not.toBeInTheDocument();
+  });
 });

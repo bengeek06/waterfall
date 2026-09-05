@@ -481,6 +481,17 @@ export default function ResourcesPage() {
     }, calendar.is_active ? "Calendrier désactivé." : "Calendrier réactivé.");
   }
 
+  async function setDefaultCalendar(calendar: Calendar) {
+    if (!session) return;
+    await submitAction(async () => {
+      const updated = await updateCalendar(calendar.id, { is_default: true }, session, onSessionRefresh);
+      setCalendars((prev) => prev.map((item) => {
+        if (item.id === updated.id) return updated;
+        return item.is_default ? { ...item, is_default: false } : item;
+      }));
+    }, "Calendrier par défaut mis à jour.");
+  }
+
   async function saveRoleCalendar(roleId: number) {
     if (!session) return;
     const draft = roleCalendarDrafts[roleId] ?? "";
@@ -708,6 +719,9 @@ export default function ResourcesPage() {
       {notice ? (
         <Alert variant={notice.kind === "error" ? "destructive" : "default"}><AlertDescription>{notice.message}</AlertDescription></Alert>
       ) : null}
+      {!busy && !calendars.some((calendar) => calendar.is_active && calendar.is_default) ? (
+        <Alert variant="default"><AlertDescription>Aucun calendrier par défaut n&apos;est défini. Désignez un calendrier par défaut dans l&apos;onglet Ressources.</AlertDescription></Alert>
+      ) : null}
       {busy ? (
         <Card><CardContent className="pt-6"><p className="text-sm text-muted-foreground" role="status">Chargement...</p></CardContent></Card>
       ) : null}
@@ -762,6 +776,7 @@ export default function ResourcesPage() {
             onSave={(item) => void saveCalendar(item)}
             onCancel={() => setEditingCalendarId(null)}
             onToggle={(item) => void toggleCalendarActive(item)}
+            onSetDefault={(item) => void setDefaultCalendar(item)}
           />
         </>
       ) : null}

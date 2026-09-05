@@ -109,8 +109,10 @@ def _create_calendar(
     assert response.status_code == 201
     calendar_id = cast(int, cast(dict[str, Any], response.json())["id"])
     if is_default:
-        # is_default cannot be set on create (issue #51): a calendar is always
-        # created as non-default and promoted afterward via PATCH.
+        # is_default is never user-settable in the create payload (issue #51): the
+        # server may auto-promote the very first calendar in an empty database
+        # (issue #110), but callers always promote explicitly via PATCH, which is a
+        # no-op if the calendar happens to already be the default.
         promote_response: Response = client.patch(
             f"/resources/calendars/{calendar_id}",
             json={"is_default": True},
