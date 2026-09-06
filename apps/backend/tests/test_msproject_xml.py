@@ -153,7 +153,11 @@ def test_parser_drops_project_summary_task_with_outline_zero() -> None:
     assert [task.outline_number for task in parsed.tasks] == ["1"]
 
 
-def test_parser_keeps_summary_uid_registered_for_link_validation() -> None:
+def test_validator_rejects_link_to_excluded_summary_task() -> None:
+    # UID 0 is excluded from persistence (it's not a real schedulable task),
+    # so a predecessor link pointing at it must be reported as an orphan
+    # link rather than silently reaching `wf_planning_link_snapshot` with a
+    # predecessor that will never exist as a snapshot row.
     task = """
     <Task><UID>0</UID><ID>0</ID><Name>Project</Name>
       <OutlineNumber>0</OutlineNumber><OutlineLevel>0</OutlineLevel><Summary>1</Summary>
@@ -163,9 +167,23 @@ def test_parser_keeps_summary_uid_registered_for_link_validation() -> None:
       <PredecessorLink><PredecessorUID>0</PredecessorUID><Type>1</Type></PredecessorLink>
     </Task>
     """
-    parsed = parse_msproject_xml(_xml_with_schedule(task))
-    assert [task.outline_number for task in parsed.tasks] == ["1"]
-    assert parsed.links[0].predecessor_uid == 0
+    with pytest.raises(MsProjectValidationError) as error:
+        parse_msproject_xml(_xml_with_schedule(task))
+    assert {issue["code"] for issue in error.value.issues} == {"ORPHAN_LINK"}
+
+
+def test_validator_rejects_malformed_uid_zero_outline_on_ordinary_task() -> None:
+    # Only the reserved UID 0 gets the "OutlineNumber 0" exemption. An
+    # ordinary task (any other UID) with a literal "0" outline is a
+    # malformed file and must still be rejected, not silently dropped.
+    task = """
+    <Task><UID>1</UID><ID>1</ID><Name>A</Name>
+      <OutlineNumber>0</OutlineNumber><OutlineLevel>0</OutlineLevel>
+    </Task>
+    """
+    with pytest.raises(MsProjectValidationError) as error:
+        parse_msproject_xml(_xml_with_schedule(task))
+    assert {issue["code"] for issue in error.value.issues} == {"INVALID_OUTLINE"}
 
 
 def test_validator_still_rejects_zero_segment_in_real_outline() -> None:
