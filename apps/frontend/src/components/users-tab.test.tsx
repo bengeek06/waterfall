@@ -20,6 +20,7 @@ const user = (overrides: Partial<AuthUserAdmin>): AuthUserAdmin =>
 function renderTab(overrides: Partial<UsersTabProps> = {}) {
   const props: UsersTabProps = {
     items: [user({})],
+    currentUserId: null,
     pagination: { total: 1, limit: 20, offset: 0 },
     onPaginationChange: vi.fn(),
     sort: null,

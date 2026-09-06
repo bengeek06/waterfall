@@ -13,6 +13,12 @@ import {
 import { defaultWeekdays } from "@/components/calendars-table";
 
 const mocks = vi.hoisted(() => ({
+  // Given a persistent default resolved value here (not just `vi.fn()`), since
+  // `vi.clearAllMocks()` (used throughout this file) clears call history but not
+  // mock implementations -- every describe block's initial page load calls this
+  // once, and most don't care about its result, so a single sensible default
+  // (an id no test's user fixtures use) avoids needing to mock it everywhere.
+  getMe: vi.fn().mockResolvedValue({ id: 999, email: "admin@example.com", is_active: true }),
   getResourceNodes: vi.fn(),
   getResourceRoles: vi.fn(),
   getCalendars: vi.fn(),
@@ -48,6 +54,7 @@ vi.mock("@/lib/backend", async () => {
   const actual = await vi.importActual<typeof import("@/lib/backend")>("@/lib/backend");
   return {
     ...actual,
+    getMe: mocks.getMe,
     getResourceNodes: mocks.getResourceNodes,
     getResourceRoles: mocks.getResourceRoles,
     getCalendars: mocks.getCalendars,
@@ -903,13 +910,15 @@ describe("ResourcesPage users table (E8-09)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Désactiver" }));
     await screen.findByRole("alertdialog");
 
-    // The background content (including the DataTable's own controls) is made
-    // `inert` by the modal alert dialog itself -- `{ hidden: true }` is needed here
-    // purely to still be able to query past that for the assertion below; in a real
-    // browser this content is entirely unreachable while the dialog is open, which
-    // is the primary guarantee. `isEditing` is the defense-in-depth layer for
-    // whatever remains reachable (e.g. keyboard users tabbing before the dialog
-    // gains focus, or a future change that renders the confirmation differently).
+    // The background content is marked `aria-hidden` (assistive tech only) and
+    // sits under the alert dialog's full-viewport backdrop, which blocks pointer
+    // input but does not make the DOM `inert` -- `{ hidden: true }` is needed
+    // here purely to still be able to query past `aria-hidden` for the
+    // assertion below. `isEditing`'s own `disabled` attribute (applied
+    // synchronously in the same render that opens the dialog, before the
+    // backdrop/aria-hidden marking even paints) is the guard this assertion
+    // actually verifies, not a redundant defense-in-depth layer on top of
+    // something already inert.
     expect(screen.getByLabelText("Rechercher un utilisateur")).toBeDisabled();
     expect(screen.getByRole("button", { name: "Suivant", hidden: true })).toBeDisabled();
   });
@@ -991,5 +1000,61 @@ describe("ResourcesPage users table (E8-09)", () => {
     fireEvent.click(within(alertDialog).getByRole("button", { name: "Supprimer" }));
 
     await waitFor(() => expect(mocks.deleteUser).toHaveBeenCalledExactlyOnceWith(2, expect.anything(), expect.anything()));
+  });
+
+  it("surfaces feedback when a user action succeeds but the follow-up list refresh fails, instead of leaving the page silently stale", async () => {
+    // Unlike cost types (where `costTypes` is patched locally and other panels
+    // keep working off it even if the table's own paginated reload fails), users
+    // has no such local copy: `usersPage` is the only source of truth, and none
+    // of the mutation handlers show their own success notice. Silently
+    // swallowing a reload failure here would leave the user with *no* feedback
+    // at all -- the deletion succeeded server-side, but the row would just
+    // never disappear, indistinguishable from the deletion having silently
+    // failed.
+    const userA = userFixture({ id: 1, email: "alice@example.com" });
+    mocks.getUsers.mockResolvedValueOnce({ items: [userA], total: 1 });
+    mocks.getUsers.mockRejectedValueOnce(new ApiError(500, "Actualisation impossible"));
+    mocks.deleteUser.mockResolvedValue(undefined);
+
+    await openUsersTab();
+    await waitFor(() => expect(screen.getByText("alice@example.com")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "Supprimer" }));
+    const alertDialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(alertDialog).getByRole("button", { name: "Supprimer" }));
+
+    await waitFor(() => expect(mocks.deleteUser).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(
+        screen.getByText("L'action a réussi, mais l'actualisation de la liste a échoué. Rechargez la page pour la voir à jour."),
+      ).toBeInTheDocument(),
+    );
+  });
+
+  it("disables deleting, deactivating, or demoting your own account, matching the backend's own rejection rules", async () => {
+    // The backend hard-rejects all three for your own account (auth.py: "Cannot
+    // deactivate self"/"Cannot remove own admin role"/"Cannot delete self", each
+    // a 400) -- without disabling them here, clicking would surface a raw,
+    // untranslated English error string into this otherwise fully French page.
+    mocks.getMe.mockResolvedValueOnce({ id: 1, email: "me@example.com", is_active: true });
+    const self = userFixture({ id: 1, email: "me@example.com", is_active: true, is_admin: true });
+    const other = userFixture({ id: 2, email: "bob@example.com", is_active: true, is_admin: false });
+    mocks.getUsers.mockResolvedValue({ items: [self, other], total: 2 });
+
+    await openUsersTab();
+    await waitFor(() => expect(screen.getByText("me@example.com")).toBeInTheDocument());
+
+    const selfRow = screen.getByText("me@example.com").closest("tr");
+    if (!selfRow) throw new Error("row not found");
+    expect(within(selfRow).getByRole("button", { name: "Désactiver" })).toBeDisabled();
+    expect(within(selfRow).getByRole("button", { name: "Retirer admin" })).toBeDisabled();
+    expect(within(selfRow).getByRole("button", { name: "Supprimer" })).toBeDisabled();
+
+    // Not self: none of the three should be disabled by this rule.
+    const otherRow = screen.getByText("bob@example.com").closest("tr");
+    if (!otherRow) throw new Error("row not found");
+    expect(within(otherRow).getByRole("button", { name: "Désactiver" })).toBeEnabled();
+    expect(within(otherRow).getByRole("button", { name: "Promouvoir admin" })).toBeEnabled();
+    expect(within(otherRow).getByRole("button", { name: "Supprimer" })).toBeEnabled();
   });
 });

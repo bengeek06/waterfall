@@ -21,6 +21,13 @@ import type { AuthUserAdmin } from "@/lib/backend";
 
 export type UsersTabProps = {
   items: AuthUserAdmin[];
+  // The logged-in admin's own id. The backend hard-rejects deactivating your own
+  // account, removing your own admin role, or deleting yourself (`auth.py`:
+  // "Cannot deactivate self"/"Cannot remove own admin role"/"Cannot delete
+  // self", each a 400) -- disabling the corresponding action here mirrors that
+  // rule in the UI instead of letting the click reach the API and surface a raw,
+  // untranslated English error string into this otherwise fully French page.
+  currentUserId: number | null;
   pagination: DataTablePaginationState;
   onPaginationChange: (next: { offset: number; limit: number }) => void;
   sort: string | null;
@@ -31,9 +38,13 @@ export type UsersTabProps = {
   // True while a destructive-action confirmation (activate/deactivate, grant/revoke
   // admin, delete) is open for a specific user. Freezes the DataTable's own
   // search/pagination controls so the row a confirmation was opened for can't be
-  // paged or filtered out from under it -- defense in depth on top of the page-level
-  // fix (the confirmation always carries the exact user object it was opened with,
-  // never re-derives "the user at this row" from current data).
+  // paged or filtered out from under it. This is the primary, load-bearing guard
+  // for that reachability, applied synchronously in the same render that opens
+  // the confirmation -- the alert dialog's own backdrop/`aria-hidden` marking
+  // (which blocks pointer input but does not make the DOM `inert`) only takes
+  // effect once painted, one render later. The confirmation also always carries
+  // the exact user object it was opened with, never re-deriving "the user at
+  // this row" from current data, as a second, independent guard.
   isActionPending: boolean;
   usersError: string | null;
   createUserMode: boolean;
@@ -85,6 +96,14 @@ export function UsersTab(props: UsersTabProps) {
       header: "Actions",
       cell: ({ row }) => {
         const user = row.original;
+        const isSelf = user.id === props.currentUserId;
+        // Matches the backend's own rules exactly (see the comment on
+        // `currentUserId` above): only the specific action that would trip the
+        // backend's rejection is disabled for your own row, not every action --
+        // e.g. promoting yourself to admin, or reactivating yourself, are both
+        // still allowed server-side.
+        const statusBlocked = isSelf && user.is_active;
+        const adminBlocked = isSelf && user.is_admin;
         return (
           <div className="flex flex-wrap gap-2">
             <Button
@@ -92,7 +111,8 @@ export function UsersTab(props: UsersTabProps) {
               size="sm"
               type="button"
               onClick={() => props.onToggleStatus(user)}
-              disabled={props.actionBusy || props.isActionPending}
+              disabled={props.actionBusy || props.isActionPending || statusBlocked}
+              title={statusBlocked ? "Vous ne pouvez pas désactiver votre propre compte." : undefined}
             >
               {user.is_active ? "Désactiver" : "Activer"}
             </Button>
@@ -101,7 +121,8 @@ export function UsersTab(props: UsersTabProps) {
               size="sm"
               type="button"
               onClick={() => props.onToggleAdmin(user)}
-              disabled={props.actionBusy || props.isActionPending}
+              disabled={props.actionBusy || props.isActionPending || adminBlocked}
+              title={adminBlocked ? "Vous ne pouvez pas retirer votre propre rôle administrateur." : undefined}
             >
               {user.is_admin ? "Retirer admin" : "Promouvoir admin"}
             </Button>
@@ -110,7 +131,8 @@ export function UsersTab(props: UsersTabProps) {
               size="sm"
               type="button"
               onClick={() => props.onRemove(user)}
-              disabled={props.actionBusy || props.isActionPending}
+              disabled={props.actionBusy || props.isActionPending || isSelf}
+              title={isSelf ? "Vous ne pouvez pas supprimer votre propre compte." : undefined}
             >
               Supprimer
             </Button>
