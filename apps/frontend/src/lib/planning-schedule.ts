@@ -21,24 +21,6 @@ export function formatDate(value: string | null | undefined): string {
   return new Date(asUtcIsoString(value)).toLocaleDateString("fr-FR", { timeZone: "UTC" });
 }
 
-export function formatDurationMinutes(minutes: number | null | undefined): string {
-  if (minutes === null || minutes === undefined) {
-    return "-";
-  }
-  if (minutes === 0) {
-    return "0";
-  }
-  const hours = Math.floor(minutes / 60);
-  const remainderMinutes = minutes % 60;
-  if (hours === 0) {
-    return `${remainderMinutes}min`;
-  }
-  if (remainderMinutes === 0) {
-    return `${hours}h`;
-  }
-  return `${hours}h${remainderMinutes}min`;
-}
-
 // The backend stores/returns naive-UTC datetimes (no offset, e.g. "2026-01-09T08:00:00"). A
 // string with no trailing "Z"/numeric offset is otherwise interpreted by `new Date(...)` as
 // *local* time (standard JS behaviour), which silently shifts every value by the browser's UTC

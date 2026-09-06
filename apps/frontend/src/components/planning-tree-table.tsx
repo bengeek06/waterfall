@@ -17,6 +17,7 @@ import { usePlanningScheduleDrafts } from "@/hooks/use-planning-schedule-drafts"
 import { usePlanningTaskLinks } from "@/hooks/use-planning-task-links";
 import { usePlanningTreeSelection } from "@/hooks/use-planning-tree-selection";
 import type { PlanningTaskScheduleUpdate, Task, TaskLinkWrite } from "@/lib/backend";
+import { DEFAULT_PROJECT_CALENDAR, type ProjectCalendar } from "@/lib/planning-calendar";
 import { predecessorsLabel } from "@/lib/planning-links";
 import {
   computeIndentCommand,
@@ -46,6 +47,14 @@ type PlanningTreeTableProps = Readonly<{
   tasks: Task[];
   /** Any value identifying the loaded planning version; changing it resets local expand/selection state. */
   versionKey: number | string | null;
+  /**
+   * The owning project's working calendar, used to format/parse the Duration cell and the
+   * Prédécesseurs column's lag in MS-Project-like units (day/week/month) instead of raw minutes.
+   * Optional (defaulting to DEFAULT_PROJECT_CALENDAR) so call sites that don't care about this
+   * formatting -- most of this component's own tests -- don't need to thread it through, mirroring
+   * readOnly/mutationBusy's own optional-with-default pattern below.
+   */
+  calendar?: ProjectCalendar;
   readOnly?: boolean;
   onMove?: (command: PlanningMoveCommand) => void;
   onScheduleUpdate?: (
@@ -86,6 +95,7 @@ type PlanningTreeTableProps = Readonly<{
 export function PlanningTreeTable({
   tasks,
   versionKey,
+  calendar = DEFAULT_PROJECT_CALENDAR,
   readOnly = false,
   onMove,
   onScheduleUpdate,
@@ -101,7 +111,7 @@ export function PlanningTreeTable({
   const tasksByUid = useMemo(() => new Map(tasks.map((task) => [task.uid, task])), [tasks]);
 
   const selection = usePlanningTreeSelection(tasks);
-  const scheduleDrafts = usePlanningScheduleDrafts({ onScheduleUpdate, mutationBusy });
+  const scheduleDrafts = usePlanningScheduleDrafts({ onScheduleUpdate, mutationBusy, calendar });
   const taskLinks = usePlanningTaskLinks({ tasks, onEditLinks });
   const singleSelectedTask = getSingleSelectedTask(selection.selectedUids, tasksByUid);
   const createTaskDialog = usePlanningCreateTaskDialog({ onCreateTask, singleSelectedTask });
@@ -236,6 +246,8 @@ export function PlanningTreeTable({
                       readOnly={readOnly}
                       hasScheduleUpdate={Boolean(onScheduleUpdate)}
                       mutationBusy={mutationBusy}
+                      calendar={calendar}
+                      durationError={scheduleDrafts.durationErrorFor(row)}
                       tasksByUid={tasksByUid}
                       onUpdateDraft={(field, value) => scheduleDrafts.updateScheduleDraft(row, field, value)}
                       onCommit={() => void scheduleDrafts.commitScheduleEdit(row)}
@@ -244,7 +256,7 @@ export function PlanningTreeTable({
                     />
                     <TableCell>
                       <div className="flex items-center gap-2">
-                        <span>{predecessorsLabel(row)}</span>
+                        <span>{predecessorsLabel(row, calendar)}</span>
                         {!readOnly && onEditLinks ? (
                           <Button
                             type="button"

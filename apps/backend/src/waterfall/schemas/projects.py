@@ -42,6 +42,9 @@ class ProjectRead(BaseModel):
     schedule_from_start: bool
     start_date: datetime | None
     finish_date: datetime | None
+    minutes_per_day: int
+    minutes_per_week: int
+    days_per_month: int
     currency_code: str | None
     planning_reference_id: int | None
     displayed_planning_id: int | None

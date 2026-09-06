@@ -537,7 +537,9 @@ describe("PlanningTreeTable", () => {
     render(<PlanningTreeTable tasks={tasks} versionKey={1} onScheduleUpdate={onScheduleUpdate} />);
 
     const durationInput = screen.getByLabelText("Durée de Tâche auto");
-    expect(durationInput).toHaveAttribute("min", "1");
+    // A text input has no browser-level min/step guard of its own -- commitScheduleEdit
+    // (buildAutomaticPayload) is the only guard against a duration <= 0, asserted below.
+    expect(durationInput).toHaveAttribute("type", "text");
 
     fireEvent.change(durationInput, { target: { value: "0" } });
     fireEvent.blur(durationInput);
@@ -546,6 +548,150 @@ describe("PlanningTreeTable", () => {
     fireEvent.change(durationInput, { target: { value: "" } });
     fireEvent.blur(durationInput);
     expect(onScheduleUpdate).not.toHaveBeenCalled();
+  });
+
+  it("accepts an MS-Project-like unit duration (e.g. '3j') and converts it to minutes using the project's calendar", () => {
+    const onScheduleUpdate = vi.fn().mockResolvedValue(true);
+    const tasks: Task[] = [
+      task({
+        uid: 1,
+        name: "Tâche manuelle",
+        parent_uid: null,
+        position: 1,
+        is_manual: true,
+        start_at: "2026-01-05T09:00:00Z",
+        finish_at: "2026-01-06T17:00:00Z",
+        duration_minutes: 480,
+      }),
+    ];
+    const customCalendar = { minutes_per_day: 360, minutes_per_week: 1440, days_per_month: 18 };
+    render(
+      <PlanningTreeTable tasks={tasks} versionKey={1} calendar={customCalendar} onScheduleUpdate={onScheduleUpdate} />,
+    );
+
+    const durationInput = screen.getByLabelText<HTMLInputElement>("Durée de Tâche manuelle");
+    fireEvent.change(durationInput, { target: { value: "2j" } });
+    fireEvent.blur(durationInput);
+
+    expect(onScheduleUpdate).toHaveBeenCalledTimes(1);
+    // 2 days * 360 min/day (this project's own calendar, not the 480 default) = 720.
+    expect(onScheduleUpdate.mock.calls[0][1].duration_minutes).toBe(720);
+  });
+
+  it("still accepts a bare number of minutes with no suffix (backward compatible)", () => {
+    const onScheduleUpdate = vi.fn().mockResolvedValue(true);
+    const tasks: Task[] = [
+      task({
+        uid: 1,
+        name: "Tâche manuelle",
+        parent_uid: null,
+        position: 1,
+        is_manual: true,
+        start_at: "2026-01-05T09:00:00Z",
+        finish_at: "2026-01-06T17:00:00Z",
+        duration_minutes: 480,
+      }),
+    ];
+    render(<PlanningTreeTable tasks={tasks} versionKey={1} onScheduleUpdate={onScheduleUpdate} />);
+
+    const durationInput = screen.getByLabelText<HTMLInputElement>("Durée de Tâche manuelle");
+    fireEvent.change(durationInput, { target: { value: "600" } });
+    fireEvent.blur(durationInput);
+
+    expect(onScheduleUpdate).toHaveBeenCalledTimes(1);
+    expect(onScheduleUpdate.mock.calls[0][1].duration_minutes).toBe(600);
+  });
+
+  it("displays the default duration formatted per the project's calendar when it round-trips exactly", () => {
+    const tasks: Task[] = [
+      task({
+        uid: 1,
+        name: "Tâche manuelle",
+        parent_uid: null,
+        position: 1,
+        is_manual: true,
+        duration_minutes: 480,
+      }),
+    ];
+    render(<PlanningTreeTable tasks={tasks} versionKey={1} onScheduleUpdate={vi.fn().mockResolvedValue(true)} />);
+
+    expect(screen.getByLabelText<HTMLInputElement>("Durée de Tâche manuelle").value).toBe("1j");
+  });
+
+  it("falls back to the plain minute count for the default duration display when calendar formatting would be lossy", () => {
+    const tasks: Task[] = [
+      task({
+        uid: 1,
+        name: "Tâche manuelle",
+        parent_uid: null,
+        position: 1,
+        is_manual: true,
+        // 1 day (480) + 20 minutes: not expressible as two adjacent units, so the plain minute
+        // count must be shown instead of a misleading "1j".
+        duration_minutes: 500,
+      }),
+    ];
+    render(<PlanningTreeTable tasks={tasks} versionKey={1} onScheduleUpdate={vi.fn().mockResolvedValue(true)} />);
+
+    expect(screen.getByLabelText<HTMLInputElement>("Durée de Tâche manuelle").value).toBe("500");
+  });
+
+  it("rejects an unrecognized duration format, shows an inline error and does not commit", () => {
+    const onScheduleUpdate = vi.fn().mockResolvedValue(true);
+    const tasks: Task[] = [
+      task({
+        uid: 1,
+        name: "Tâche manuelle",
+        parent_uid: null,
+        position: 1,
+        is_manual: true,
+        start_at: "2026-01-05T09:00:00Z",
+        finish_at: "2026-01-06T17:00:00Z",
+        duration_minutes: 480,
+      }),
+    ];
+    render(<PlanningTreeTable tasks={tasks} versionKey={1} onScheduleUpdate={onScheduleUpdate} />);
+
+    const durationInput = screen.getByLabelText<HTMLInputElement>("Durée de Tâche manuelle");
+    fireEvent.change(durationInput, { target: { value: "3xyz" } });
+    fireEvent.blur(durationInput);
+
+    expect(onScheduleUpdate).not.toHaveBeenCalled();
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent("Format de durée non reconnu");
+    expect(durationInput).toHaveAttribute("aria-invalid", "true");
+    expect(durationInput).toHaveAttribute("aria-describedby", alert.id);
+
+    // Editing the field again implicitly retracts the stale error.
+    fireEvent.change(durationInput, { target: { value: "600" } });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("formats a predecessor's lag using the project's own calendar instead of raw minutes", () => {
+    const tasks: Task[] = [
+      task({ uid: 1, name: "Prédécesseur", parent_uid: null, position: 1, predecessor_links: [] }),
+      task({
+        uid: 2,
+        name: "Successeur",
+        parent_uid: null,
+        position: 2,
+        // 4800 tenths of a minute = 480 minutes = 1 day with the default 480 min/day calendar.
+        predecessor_links: [{ predecessor_uid: 1, link_type: 1, lag_tenth_minute: 4800 }],
+      }),
+      task({
+        uid: 3,
+        name: "Successeur négatif",
+        parent_uid: null,
+        position: 3,
+        // -4800 tenths of a minute = -480 minutes = -1 day: the sign must be re-applied around
+        // formatCalendarDuration's (always non-negative) result, not lost on the way there.
+        predecessor_links: [{ predecessor_uid: 1, link_type: 0, lag_tenth_minute: -4800 }],
+      }),
+    ];
+    render(<PlanningTreeTable tasks={tasks} versionKey={1} />);
+
+    expect(screen.getByText("1 (FS +1j)")).toBeInTheDocument();
+    expect(screen.getByText("1 (FF -1j)")).toBeInTheDocument();
   });
 
   it("does not commit a schedule edit on blur when nothing was typed", () => {

@@ -88,6 +88,9 @@ const project = (overrides: Partial<Project> = {}): Project => ({
   planning_reference_id: null,
   displayed_planning_id: null,
   reference_estimate_id: null,
+  minutes_per_day: 480,
+  minutes_per_week: 2400,
+  days_per_month: 20,
   ...overrides,
 });
 
