@@ -132,6 +132,50 @@ def test_canonical_schema_accepts_minimal_project() -> None:
     validate_canonical_xml(xml)
 
 
+def _xml_with_schedule(tasks: str) -> bytes:
+    return (
+        '<Project xmlns="http://schemas.microsoft.com/project"><SaveVersion>16</SaveVersion>'
+        "<ScheduleFromStart>true</ScheduleFromStart><StartDate>2026-01-01T08:00:00</StartDate>"
+        f"<MinutesPerDay>480</MinutesPerDay><Tasks>{tasks}</Tasks></Project>"
+    ).encode()
+
+
+def test_parser_accepts_project_summary_task_with_outline_zero() -> None:
+    task = """
+    <Task><UID>0</UID><ID>0</ID><Name>Project</Name>
+      <OutlineNumber>0</OutlineNumber><OutlineLevel>0</OutlineLevel><Summary>1</Summary>
+    </Task>
+    <Task><UID>1</UID><ID>1</ID><Name>A</Name>
+      <OutlineNumber>1</OutlineNumber><OutlineLevel>1</OutlineLevel>
+    </Task>
+    """
+    parsed = parse_msproject_xml(_xml_with_schedule(task))
+    assert [task.outline_number for task in parsed.tasks] == ["0", "1"]
+
+
+def test_validator_still_rejects_zero_segment_in_real_outline() -> None:
+    task = """
+    <Task><UID>1</UID><ID>1</ID><Name>A</Name>
+      <OutlineNumber>1.0</OutlineNumber><OutlineLevel>2</OutlineLevel>
+    </Task>
+    """
+    with pytest.raises(MsProjectValidationError) as error:
+        parse_msproject_xml(_xml_with_schedule(task))
+    assert {issue["code"] for issue in error.value.issues} == {"INVALID_OUTLINE"}
+
+
+def test_canonical_schema_accepts_project_summary_task_with_outline_zero() -> None:
+    xml = (
+        b'<Project xmlns="http://schemas.microsoft.com/project/2007">'
+        b"<SaveVersion>16</SaveVersion><ScheduleFromStart>true</ScheduleFromStart>"
+        b"<StartDate>2026-01-01T08:00:00</StartDate><Tasks>"
+        b"<Task><UID>0</UID><ID>0</ID><Name>Project</Name>"
+        b"<OutlineNumber>0</OutlineNumber><OutlineLevel>0</OutlineLevel><Summary>1</Summary></Task>"
+        b"</Tasks></Project>"
+    )
+    validate_canonical_xml(xml)
+
+
 def test_parser_reports_non_blocking_warning_for_custom_calendars() -> None:
     task = "<Task><UID>1</UID><ID>1</ID><Name>A</Name></Task>"
     xml = (

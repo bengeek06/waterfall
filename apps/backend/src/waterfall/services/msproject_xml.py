@@ -203,6 +203,10 @@ def _validate_outline(
 ) -> None:
     if outline is None:
         return
+    if outline == "0" and (level is None or level == 0):
+        # MS Project's project summary task (UID 0) uses OutlineNumber "0" /
+        # OutlineLevel 0; this is not a real outline position.
+        return
     segments = outline.split(".")
     if not all(segment.isdigit() and int(segment) > 0 for segment in segments):
         issues.append(

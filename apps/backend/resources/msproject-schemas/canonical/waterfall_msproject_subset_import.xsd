@@ -50,14 +50,16 @@
               <xs:element name="Task" minOccurs="0" maxOccurs="unbounded">
                 <xs:complexType>
                   <xs:sequence>
-                    <xs:element name="UID" type="xs:positiveInteger"/>
-                    <xs:element name="ID" type="xs:positiveInteger" minOccurs="0"/>
+                    <!-- UID 0 is MS Project's project summary task; must stay non-negative, not positive. -->
+                    <xs:element name="UID" type="xs:nonNegativeInteger"/>
+                    <xs:element name="ID" type="xs:nonNegativeInteger" minOccurs="0"/>
                     <xs:element name="Name" type="xs:string" minOccurs="0"/>
                     <xs:element name="Type" minOccurs="0">
                       <xs:simpleType><xs:restriction base="xs:integer"><xs:enumeration value="0"/><xs:enumeration value="1"/><xs:enumeration value="2"/></xs:restriction></xs:simpleType>
                     </xs:element>
                     <xs:element name="OutlineNumber" type="xs:string" minOccurs="0"/>
-                    <xs:element name="OutlineLevel" type="xs:positiveInteger" minOccurs="0"/>
+                    <!-- OutlineLevel 0 is the project summary task's level. -->
+                    <xs:element name="OutlineLevel" type="xs:nonNegativeInteger" minOccurs="0"/>
                     <xs:element name="Start" type="xs:dateTime" minOccurs="0"/>
                     <xs:element name="Finish" type="xs:dateTime" minOccurs="0"/>
                     <xs:element name="Duration" type="xs:duration" minOccurs="0"/>
