@@ -86,6 +86,15 @@ describe("DataTable", () => {
     expect(screen.getByRole("columnheader", { name: "ID" })).toHaveAttribute("aria-sort", "none");
   });
 
+  it("omits aria-sort entirely on a column with no meta.sortColumn, rather than setting it to none", () => {
+    const columnsWithOneUnsortable: ColumnDef<Item>[] = [
+      ...columns,
+      { id: "actions", header: "Actions" },
+    ];
+    renderTable({ columns: columnsWithOneUnsortable, sort: "-name" });
+    expect(screen.getByRole("columnheader", { name: "Actions" })).not.toHaveAttribute("aria-sort");
+  });
+
   it("debounces search onChange calls instead of firing on every keystroke", () => {
     vi.useFakeTimers();
     try {
@@ -103,6 +112,34 @@ describe("DataTable", () => {
       vi.advanceTimersByTime(300);
 
       expect(onChange).toHaveBeenCalledExactlyOnceWith("abc");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still fires the debounced onChange despite unrelated re-renders that give it a new identity each time", () => {
+    // Regression: a page resetting pagination alongside the search value
+    // (onChange: (v) => { setQuery(v); setOffset(0); }) creates a fresh onChange
+    // identity every render -- an idiomatic pattern, not a contrived edge case. If
+    // the debounce effect depended on `onChange`, each such re-render would cancel
+    // and reschedule the pending timeout, and typing would appear to do nothing.
+    vi.useFakeTimers();
+    try {
+      const calls: string[] = [];
+      const { rerender, props } = renderTable({
+        search: { value: "", onChange: (next) => calls.push(next) },
+      });
+
+      fireEvent.change(screen.getByLabelText("Rechercher"), { target: { value: "a" } });
+
+      for (let i = 0; i < 5; i += 1) {
+        vi.advanceTimersByTime(200);
+        rerender(
+          <DataTable {...props} search={{ value: "", onChange: (next) => calls.push(next) }} />,
+        );
+      }
+
+      expect(calls).toEqual(["a"]);
     } finally {
       vi.useRealTimers();
     }
@@ -141,6 +178,22 @@ describe("DataTable", () => {
 
     expect(screen.getByRole("status", { name: "Chargement des données" })).toBeInTheDocument();
     expect(screen.queryByText("Aucune donnée.")).not.toBeInTheDocument();
+  });
+
+  it("freezes the position label and pagination controls while isLoading, even with stale data/pagination left mounted", () => {
+    // A caller may keep the previous page's `data`/`pagination` mounted during a
+    // background refetch to avoid a flash of empty content; without this, the
+    // position label and Prev/Next controls would describe that stale state
+    // underneath the loading indicator instead of freezing like isEditing does.
+    renderTable({
+      data: [{ id: 1, name: "Alpha" }, { id: 2, name: "Bravo" }],
+      pagination: { total: 20, limit: 2, offset: 2 },
+      isLoading: true,
+    });
+
+    expect(screen.getByRole("button", { name: "Précédent" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Suivant" })).toBeDisabled();
+    expect(screen.queryByText("3 à 4 sur 20")).not.toBeInTheDocument();
   });
 
   it("shows the default empty state when data is empty and there is no active search", () => {
@@ -212,6 +265,19 @@ describe("DataTable", () => {
     fireEvent.click(screen.getByRole("button", { name: "Suivant" }));
 
     expect(onPaginationChange).toHaveBeenCalledExactlyOnceWith({ offset: 5, limit: 5 });
+  });
+
+  it("calls onPaginationChange with the previous offset when Précédent is clicked, clamped at zero", () => {
+    const onPaginationChange = vi.fn();
+    renderTable({
+      data: [{ id: 1, name: "Alpha" }],
+      pagination: { total: 10, limit: 5, offset: 5 },
+      onPaginationChange,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Précédent" }));
+
+    expect(onPaginationChange).toHaveBeenCalledExactlyOnceWith({ offset: 0, limit: 5 });
   });
 
   it("exposes accessible, keyboard-reachable controls", () => {

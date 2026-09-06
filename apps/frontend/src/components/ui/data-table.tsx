@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   flexRender,
   getCoreRowModel,
@@ -110,9 +110,13 @@ function SortIcon({ direction }: { direction: "ascending" | "descending" | "none
 // only fires once typing pauses. Resyncs from `value` when it changes externally
 // (e.g. the caller clears the search elsewhere), using the React-documented
 // "adjust state during render" pattern instead of a setState-in-effect.
-// Note: `onChange` is an effect dependency, so callers should pass a referentially
-// stable callback (e.g. wrapped in `useMemo`/`useCallback`, as `onSessionRefresh`
-// already is on pages in this codebase) so the debounce timer isn't reset every render.
+// `onChange` is read through a ref rather than an effect dependency: a caller that
+// resets pagination alongside the search value (`onChange: (v) => { setQuery(v);
+// setOffset(0); }`, an entirely idiomatic pattern) creates a new `onChange` identity
+// every render. If it were a dependency, any unrelated re-render during the debounce
+// window would cancel and reschedule the pending timeout, and typing would appear to
+// do nothing -- verified empirically, not just in theory. Reading the latest
+// `onChange` via a ref removes the need for callers to memoize it at all.
 function useDebouncedSearchValue(value: string, delay: number, onChange: (next: string) => void) {
   const [localValue, setLocalValue] = useState(value);
   const [previousValue, setPreviousValue] = useState(value);
@@ -121,13 +125,18 @@ function useDebouncedSearchValue(value: string, delay: number, onChange: (next: 
     setLocalValue(value);
   }
 
+  const onChangeRef = useRef(onChange);
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  });
+
   useEffect(() => {
     if (localValue === value) {
       return;
     }
-    const timeoutId = setTimeout(() => onChange(localValue), delay);
+    const timeoutId = setTimeout(() => onChangeRef.current(localValue), delay);
     return () => clearTimeout(timeoutId);
-  }, [localValue, value, delay, onChange]);
+  }, [localValue, value, delay]);
 
   return [localValue, setLocalValue] as const;
 }
@@ -178,11 +187,18 @@ export function DataTable<TData>({
   const rows = table.getRowModel().rows;
   const leafColumnCount = table.getVisibleLeafColumns().length;
   const hasActiveSearch = Boolean(search?.value);
-  const canGoPrevious = !isEditing && pagination.offset > 0;
-  const canGoNext = !isEditing && pagination.offset + data.length < pagination.total;
-  const positionLabel = data.length
-    ? `${pagination.offset + 1} à ${pagination.offset + data.length} sur ${pagination.total}`
-    : "";
+  // While isLoading, `data`/`pagination` may still describe the page being replaced
+  // (a caller keeping the previous page mounted during a background refetch, to
+  // avoid a flash of empty content) rather than the page about to be shown. Freezing
+  // the position label and pagination controls here, once, avoids each of the 8
+  // upcoming table migrations independently guessing at (and likely disagreeing on)
+  // what to display in that gap.
+  const canGoPrevious = !isEditing && !isLoading && pagination.offset > 0;
+  const canGoNext = !isEditing && !isLoading && pagination.offset + data.length < pagination.total;
+  const positionLabel =
+    !isLoading && data.length
+      ? `${pagination.offset + 1} à ${pagination.offset + data.length} sur ${pagination.total}`
+      : "";
 
   return (
     <div className="space-y-3">
