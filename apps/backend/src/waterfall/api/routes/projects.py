@@ -6,6 +6,7 @@ from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from waterfall.api.dependencies import get_current_active_user
+from waterfall.api.pagination import ListParams, list_params
 from waterfall.api.routes.project_access import (
     get_project_or_404,
 )
@@ -29,6 +30,7 @@ from waterfall.schemas.projects import (
     EstimateTaskRowRead,
     ProjectCreate,
     ProjectEstimateRead,
+    ProjectListRead,
     ProjectRead,
     ProjectStatus,
     ProjectStatusUpdate,
@@ -40,6 +42,7 @@ from waterfall.schemas.projects import (
     TaskRoleAssignmentRead,
 )
 from waterfall.schemas.resources import CostTypeKind
+from waterfall.services import apply_pagination
 from waterfall.services.project_lifecycle import (
     ensure_project_mutable,
     validate_project_status_transition,
@@ -235,19 +238,33 @@ def to_task_role_assignment_read(
     )
 
 
-@router.get("", response_model=list[ProjectRead])
+@router.get("", response_model=ProjectListRead)
 def list_projects(
-    limit: int = Query(default=50, ge=1, le=500),
-    offset: int = Query(default=0, ge=0),
     include_archived: bool = Query(default=False),
+    params: ListParams = Depends(list_params),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
-) -> list[ProjectRead]:
+) -> ProjectListRead:
     query = db.query(MsProject).filter(MsProject.owner_id == current_user.id)
     if not include_archived:
         query = query.filter(MsProject.status.notin_(["perdu", "termine", "abandonne"]))
-    projects = query.order_by(MsProject.id.asc()).offset(offset).limit(limit).all()
-    return [to_project_read(project) for project in projects]
+    result = apply_pagination(
+        query,
+        params,
+        sortable={
+            "name": MsProject.name,
+            "status": MsProject.status,
+            "id": MsProject.id,
+        },
+        tiebreaker=MsProject.id,
+        searchable=[MsProject.name],
+    )
+    return ProjectListRead(
+        items=[to_project_read(project) for project in result.rows],
+        total=result.total,
+        limit=result.limit,
+        offset=result.offset,
+    )
 
 
 @router.post("", response_model=ProjectRead, status_code=status.HTTP_201_CREATED)
