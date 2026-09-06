@@ -1180,3 +1180,438 @@ def test_calendar_is_default_partial_unique_index_rejects_two_defaults() -> None
             session.rollback()
         else:
             raise AssertionError("only one calendar may be flagged is_default at a time")
+
+
+# --- EPIC E7 (#114): pagination/tri/recherche sur les endpoints de liste ---
+
+
+def test_calendars_pagination_sort_and_search() -> None:
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        _create_calendar_via_api(client, headers, "PAG-B")
+        _create_calendar_via_api(client, headers, "PAG-A")
+        _create_calendar_via_api(client, headers, "PAG-C")
+
+        # No limit: every row of the filtered set is returned, total matches.
+        unpaginated = cast(
+            dict[str, Any], client.get("/resources/calendars", headers=headers).json()
+        )
+        assert unpaginated["total"] == 3
+        assert unpaginated["limit"] is None
+        assert len(unpaginated["items"]) == 3
+
+        # limit truncates items but total still reflects the full filtered set.
+        first_page = cast(
+            dict[str, Any],
+            client.get("/resources/calendars?limit=2", headers=headers).json(),
+        )
+        assert first_page["total"] == 3
+        assert first_page["limit"] == 2
+        assert first_page["offset"] == 0
+        assert len(first_page["items"]) == 2
+
+        second_page = cast(
+            dict[str, Any],
+            client.get("/resources/calendars?limit=2&offset=2", headers=headers).json(),
+        )
+        assert second_page["total"] == 3
+        assert len(second_page["items"]) == 1
+
+        # sort=code / sort=-code.
+        ascending = cast(
+            dict[str, Any],
+            client.get("/resources/calendars?sort=code", headers=headers).json(),
+        )
+        assert [c["code"] for c in ascending["items"]] == ["PAG-A", "PAG-B", "PAG-C"]
+
+        descending = cast(
+            dict[str, Any],
+            client.get("/resources/calendars?sort=-code", headers=headers).json(),
+        )
+        assert [c["code"] for c in descending["items"]] == ["PAG-C", "PAG-B", "PAG-A"]
+
+        # q searches both code and name (case-insensitive substring).
+        searched = cast(
+            dict[str, Any],
+            client.get("/resources/calendars?q=pag-b", headers=headers).json(),
+        )
+        assert [c["code"] for c in searched["items"]] == ["PAG-B"]
+        assert searched["total"] == 1
+
+        # An undeclared sort column is rejected, never interpolated into SQL.
+        invalid_sort = client.get("/resources/calendars?sort=weeks_per_year", headers=headers)
+        assert invalid_sort.status_code == 400
+
+        # include_inactive still combines with the new params.
+        inactive_calendar_id = _create_calendar_via_api(client, headers, "PAG-INACTIVE")
+        client.patch(
+            f"/resources/calendars/{inactive_calendar_id}",
+            json={"is_active": False},
+            headers=headers,
+        )
+        active_sorted = cast(
+            dict[str, Any],
+            client.get("/resources/calendars?sort=code", headers=headers).json(),
+        )
+        assert "PAG-INACTIVE" not in [c["code"] for c in active_sorted["items"]]
+        with_inactive_sorted = cast(
+            dict[str, Any],
+            client.get(
+                "/resources/calendars?include_inactive=true&sort=code", headers=headers
+            ).json(),
+        )
+        assert with_inactive_sorted["total"] == 4
+        assert [c["code"] for c in with_inactive_sorted["items"]] == [
+            "PAG-A",
+            "PAG-B",
+            "PAG-C",
+            "PAG-INACTIVE",
+        ]
+
+        # offset without limit is rejected (PaginationMeta's offset/limit rule).
+        offset_only = client.get("/resources/calendars?offset=1", headers=headers)
+        assert offset_only.status_code == 400
+
+
+def test_roles_pagination_sort_search_and_node_filter() -> None:
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        context = _create_role_context(client, headers, "PAGROLE")
+        other_context = _create_role_context(client, headers, "PAGROLE2")
+        for name in ("Charlie", "Alice", "Bob"):
+            response = client.post(
+                "/resources/roles",
+                json={
+                    "name": name,
+                    "node_id": context["node_id"],
+                    "cost_category_id": context["cost_category_id"],
+                },
+                headers=headers,
+            )
+            assert response.status_code == 201
+        other_role = client.post(
+            "/resources/roles",
+            json={
+                "name": "Dana",
+                "node_id": other_context["node_id"],
+                "cost_category_id": other_context["cost_category_id"],
+            },
+            headers=headers,
+        )
+        assert other_role.status_code == 201
+
+        # node_id filter still combines with limit/sort.
+        filtered = cast(
+            dict[str, Any],
+            client.get(
+                f"/resources/roles?node_id={context['node_id']}&sort=name&limit=2",
+                headers=headers,
+            ).json(),
+        )
+        assert filtered["total"] == 3
+        assert len(filtered["items"]) == 2
+        assert [role["name"] for role in filtered["items"]] == ["Alice", "Bob"]
+
+        descending = cast(
+            dict[str, Any],
+            client.get(
+                f"/resources/roles?node_id={context['node_id']}&sort=-name", headers=headers
+            ).json(),
+        )
+        assert [role["name"] for role in descending["items"]] == ["Charlie", "Bob", "Alice"]
+
+        searched = cast(
+            dict[str, Any],
+            client.get("/resources/roles?q=ali", headers=headers).json(),
+        )
+        assert [role["name"] for role in searched["items"]] == ["Alice"]
+
+        invalid_sort = client.get("/resources/roles?sort=node_id", headers=headers)
+        assert invalid_sort.status_code == 400
+
+
+def test_categories_pagination_sort_and_search() -> None:
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        cost_type_id = cast(
+            dict[str, Any],
+            client.post(
+                "/resources/cost-types",
+                json={"code": "PAGCT", "name": "Cout pagine", "kind": "other"},
+                headers=headers,
+            ).json(),
+        )["id"]
+
+        def _create_category(accounting_code: str, category_code: str, name: str) -> int:
+            response = client.post(
+                "/resources/categories",
+                json={
+                    "cost_type_id": cost_type_id,
+                    "accounting_code": accounting_code,
+                    "category_code": category_code,
+                    "name": name,
+                },
+                headers=headers,
+            )
+            assert response.status_code == 201
+            return cast(int, cast(dict[str, Any], response.json())["id"])
+
+        _create_category("PAG-CAT-B", "SUB-B", "Beta")
+        _create_category("PAG-CAT-A", "SUB-A", "Alpha")
+        inactive_id = _create_category("PAG-CAT-Z", "SUB-Z", "Zulu")
+        client.patch(
+            f"/resources/categories/{inactive_id}",
+            json={"is_active": False},
+            headers=headers,
+        )
+
+        by_accounting_code = cast(
+            dict[str, Any],
+            client.get("/resources/categories?sort=accounting_code", headers=headers).json(),
+        )
+        assert [c["accounting_code"] for c in by_accounting_code["items"]] == [
+            "PAG-CAT-A",
+            "PAG-CAT-B",
+        ]
+
+        by_name_desc = cast(
+            dict[str, Any],
+            client.get(
+                "/resources/categories?sort=-name&include_inactive=true", headers=headers
+            ).json(),
+        )
+        assert [c["name"] for c in by_name_desc["items"]] == ["Zulu", "Beta", "Alpha"]
+
+        searched = cast(
+            dict[str, Any],
+            client.get("/resources/categories?q=SUB-A", headers=headers).json(),
+        )
+        assert [c["accounting_code"] for c in searched["items"]] == ["PAG-CAT-A"]
+
+        limited = cast(
+            dict[str, Any],
+            client.get(
+                "/resources/categories?limit=1&sort=accounting_code", headers=headers
+            ).json(),
+        )
+        assert limited["total"] == 2
+        assert len(limited["items"]) == 1
+
+        invalid_sort = client.get("/resources/categories?sort=cost_type_id", headers=headers)
+        assert invalid_sort.status_code == 400
+
+
+def test_cost_types_pagination_and_sort() -> None:
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        for code, name in (("PAG-CT-B", "Beta"), ("PAG-CT-A", "Alpha")):
+            response = client.post(
+                "/resources/cost-types",
+                json={"code": code, "name": name, "kind": "other"},
+                headers=headers,
+            )
+            assert response.status_code == 201
+
+        sorted_by_code = cast(
+            dict[str, Any],
+            client.get("/resources/cost-types?sort=code&limit=1", headers=headers).json(),
+        )
+        assert sorted_by_code["total"] == 2
+        assert [c["code"] for c in sorted_by_code["items"]] == ["PAG-CT-A"]
+
+        invalid_sort = client.get("/resources/cost-types?sort=kind", headers=headers)
+        assert invalid_sort.status_code == 400
+
+
+def test_category_rates_pagination_and_sort() -> None:
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        cost_type_id = cast(
+            dict[str, Any],
+            client.post(
+                "/resources/cost-types",
+                json={"code": "PAG-RATE-CT", "name": "Rate", "kind": "other"},
+                headers=headers,
+            ).json(),
+        )["id"]
+        category_id = cast(
+            dict[str, Any],
+            client.post(
+                "/resources/categories",
+                json={
+                    "cost_type_id": cost_type_id,
+                    "accounting_code": "PAG-RATE-CAT",
+                    "name": "Rate category",
+                },
+                headers=headers,
+            ).json(),
+        )["id"]
+        for year in (2027, 2025, 2026):
+            response = client.post(
+                "/resources/rates",
+                json={
+                    "cost_category_id": category_id,
+                    "year": year,
+                    "hourly_rate": "50",
+                    "currency_code": "EUR",
+                },
+                headers=headers,
+            )
+            assert response.status_code == 201
+
+        listed = cast(
+            dict[str, Any],
+            client.get(
+                f"/resources/categories/{category_id}/rates?sort=-year&limit=2",
+                headers=headers,
+            ).json(),
+        )
+        assert listed["total"] == 3
+        assert [r["year"] for r in listed["items"]] == [2027, 2026]
+
+
+def test_rates_pagination() -> None:
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        cost_type_id = cast(
+            dict[str, Any],
+            client.post(
+                "/resources/cost-types",
+                json={"code": "PAG-ALLRATE-CT", "name": "Rate", "kind": "other"},
+                headers=headers,
+            ).json(),
+        )["id"]
+        category_id = cast(
+            dict[str, Any],
+            client.post(
+                "/resources/categories",
+                json={
+                    "cost_type_id": cost_type_id,
+                    "accounting_code": "PAG-ALLRATE-CAT",
+                    "name": "Rate category",
+                },
+                headers=headers,
+            ).json(),
+        )["id"]
+        for year in (2030, 2031):
+            response = client.post(
+                "/resources/rates",
+                json={
+                    "cost_category_id": category_id,
+                    "year": year,
+                    "hourly_rate": "60",
+                    "currency_code": "EUR",
+                },
+                headers=headers,
+            )
+            assert response.status_code == 201
+
+        unpaginated = cast(dict[str, Any], client.get("/resources/rates", headers=headers).json())
+        assert unpaginated["total"] == 2
+        assert unpaginated["limit"] is None
+
+        first_page = cast(
+            dict[str, Any],
+            client.get("/resources/rates?limit=1&sort=year", headers=headers).json(),
+        )
+        assert first_page["total"] == 2
+        assert [r["year"] for r in first_page["items"]] == [2030]
+
+
+def test_inflation_pagination_and_sort() -> None:
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        for year in (2028, 2029, 2030):
+            response = client.put(
+                f"/resources/inflation/{year}",
+                json={"coefficient": "1.02"},
+                headers=headers,
+            )
+            assert response.status_code == 200
+
+        descending = cast(
+            dict[str, Any],
+            client.get("/resources/inflation?sort=-year&limit=2", headers=headers).json(),
+        )
+        assert descending["total"] == 3
+        assert [r["year"] for r in descending["items"]] == [2030, 2029]
+
+        invalid_sort = client.get("/resources/inflation?sort=coefficient", headers=headers)
+        assert invalid_sort.status_code == 400
+
+
+def test_capacities_pagination_sort_and_role_filter() -> None:
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        context = _create_role_context(client, headers, "PAGCAP")
+        role_ids: list[int] = []
+        for suffix in ("1", "2"):
+            role_response = client.post(
+                "/resources/roles",
+                json={
+                    "name": f"Role {suffix}",
+                    "node_id": context["node_id"],
+                    "cost_category_id": context["cost_category_id"],
+                },
+                headers=headers,
+            )
+            assert role_response.status_code == 201
+            role_id = cast(int, cast(dict[str, Any], role_response.json())["id"])
+            role_ids.append(role_id)
+            capacity_response = client.post(
+                "/resources/capacities",
+                json={"role_id": role_id, "person_count": "1", "available_hours": "1600"},
+                headers=headers,
+            )
+            assert capacity_response.status_code == 201
+
+        descending = cast(
+            dict[str, Any],
+            client.get("/resources/capacities?sort=-role_id", headers=headers).json(),
+        )
+        assert descending["total"] == 2
+        assert [c["role_id"] for c in descending["items"]] == sorted(role_ids, reverse=True)
+
+        filtered = cast(
+            dict[str, Any],
+            client.get(
+                f"/resources/capacities?role_id={role_ids[0]}&limit=1", headers=headers
+            ).json(),
+        )
+        assert filtered["total"] == 1
+        assert [c["role_id"] for c in filtered["items"]] == [role_ids[0]]
+
+        invalid_sort = client.get("/resources/capacities?sort=year", headers=headers)
+        assert invalid_sort.status_code == 400
+
+
+def test_resource_nodes_list_returns_complete_tree_without_truncation() -> None:
+    """/resources/nodes is deliberately excluded from pagination (EPIC E7): the
+    tree must always be returned whole. The new envelope shape still applies
+    (`items`/`total`/`limit`/`offset`), but `limit` is always `null` and `total`
+    always equals `len(items)` -- an unsupported `limit` query parameter passed by
+    a caller must be silently ignored rather than truncating the tree."""
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        created_codes = [f"PAG-NODE-{i}" for i in range(12)]
+        for code in created_codes:
+            response = client.post(
+                "/resources/nodes",
+                json={"code": code, "name": f"Node {code}"},
+                headers=headers,
+            )
+            assert response.status_code == 201
+
+        payload = cast(dict[str, Any], client.get("/resources/nodes", headers=headers).json())
+        assert payload["limit"] is None
+        assert payload["offset"] == 0
+        assert payload["total"] == len(payload["items"]) == len(created_codes)
+        assert {node["code"] for node in payload["items"]} == set(created_codes)
+
+        # An unsupported `limit` is ignored: FastAPI drops query params the
+        # endpoint does not declare, so the full tree still comes back.
+        ignored_limit = cast(
+            dict[str, Any],
+            client.get("/resources/nodes?limit=1", headers=headers).json(),
+        )
+        assert ignored_limit["total"] == len(created_codes)
