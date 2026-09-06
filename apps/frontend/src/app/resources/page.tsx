@@ -873,8 +873,15 @@ export default function ResourcesPage() {
 
   const categoryNameById = new Map(categories.map((category) => [category.id, category.name]));
   const nodeCodeById = new Map(nodes.map((node) => [node.id, node.code]));
-  const calendarIdsInUseByActiveRoles = new Set(
-    roles.filter((role) => role.is_active && role.calendar_id != null).map((role) => role.calendar_id as number),
+  // Memoized (not a plain `new Set()` on every render): `CalendarsTable` uses
+  // this as a dependency of its own memoized `columns` (to keep cell renderers
+  // at a stable identity while a draft is being typed elsewhere on the page --
+  // see that component's comments), and a fresh `Set` identity every render --
+  // even one with the same *contents* -- would defeat that memoization.
+  const calendarIdsInUseByActiveRoles = useMemo(
+    () =>
+      new Set(roles.filter((role) => role.is_active && role.calendar_id != null).map((role) => role.calendar_id as number)),
+    [roles],
   );
   const organizationRows = useMemo(() => flattenOrganization(nodes, collapsedNodeIds), [nodes, collapsedNodeIds]);
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? null;

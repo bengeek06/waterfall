@@ -1,6 +1,7 @@
 "use client";
 
 import type { FormEventHandler } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
 
 import { Badge } from "@/components/ui/badge";
@@ -63,70 +64,45 @@ export type CalendarsTableProps = {
   onSetDefault: (item: Calendar) => void;
 };
 
-function renderCodeCell(item: Calendar, props: CalendarsTableProps) {
-  if (props.editingId === item.id) {
-    return (
-      <Input
-        aria-label={`Code de ${item.code}`}
-        value={props.draft.code}
-        onChange={(event) => props.onDraftChange("code", event.target.value)}
-      />
-    );
-  }
+// A stable-identity input for one editable field of one calendar's edit row.
+// `columns` in `CalendarsTable` below is memoized (deps: `editingId`/`busy`/
+// `calendarIdsInUseByActiveRoles`, not `draft`) so TanStack Table's
+// `flexRender` keeps passing the *same* component type across renders while
+// the user types -- otherwise (a fresh `cell` closure on every keystroke,
+// since it closed over `draft`) React would unmount/remount the input after
+// every character, dropping focus (same bug class found in the parallel EPIC
+// E8 migrations #123/#124). Since the memo doesn't depend on `draft`, the
+// value displayed while typing can't be read fresh from it either -- this
+// component owns its value as local state instead, seeded once when the row
+// enters edit mode (which *is* a memo dependency, via `editingId`, so the seed
+// is always the value at that transition), reporting every keystroke upward
+// via `onChange` for `draft`/"Enregistrer" to use.
+function CalendarEditableField(props: {
+  ariaLabel: string;
+  type?: string;
+  min?: string;
+  max?: string;
+  step?: string;
+  className?: string;
+  initialValue: string;
+  onChange: (value: string) => void;
+}) {
+  const [value, setValue] = useState(props.initialValue);
   return (
-    <span className="font-medium flex items-center gap-2">
-      {item.code}
-      {item.is_default ? <Badge variant="secondary">Par défaut</Badge> : null}
-    </span>
+    <Input
+      aria-label={props.ariaLabel}
+      type={props.type}
+      min={props.min}
+      max={props.max}
+      step={props.step}
+      className={props.className}
+      value={value}
+      onChange={(event) => {
+        setValue(event.target.value);
+        props.onChange(event.target.value);
+      }}
+    />
   );
-}
-
-function renderNameCell(item: Calendar, props: CalendarsTableProps) {
-  if (props.editingId === item.id) {
-    return (
-      <Input
-        aria-label={`Nom de ${item.code}`}
-        value={props.draft.name}
-        onChange={(event) => props.onDraftChange("name", event.target.value)}
-      />
-    );
-  }
-  return item.name;
-}
-
-function renderWeeksPerYearCell(item: Calendar, props: CalendarsTableProps) {
-  if (props.editingId === item.id) {
-    return (
-      <Input
-        aria-label={`Semaines par an de ${item.code}`}
-        type="number"
-        min="1"
-        max="53"
-        value={props.draft.weeksPerYear}
-        onChange={(event) => props.onDraftChange("weeksPerYear", event.target.value)}
-      />
-    );
-  }
-  return item.weeks_per_year;
-}
-
-function renderWeekdayCell(item: Calendar, dayType: number, label: string, props: CalendarsTableProps) {
-  if (props.editingId === item.id) {
-    const value = props.draft.weekdays.find((weekday) => weekday.day_type === dayType)?.hours_per_day ?? "0.00";
-    return (
-      <Input
-        aria-label={`Heures du ${label} de ${item.code}`}
-        type="number"
-        min="0"
-        max="24"
-        step="0.25"
-        className="w-16"
-        value={value}
-        onChange={(event) => props.onDraftWeekdayChange(dayType, event.target.value)}
-      />
-    );
-  }
-  return (item.weekdays ?? []).find((weekday) => weekday.day_type === dayType)?.hours_per_day ?? "0";
 }
 
 // The three disable rules and their accompanying hint text, kept together since they
@@ -140,78 +116,6 @@ function getCalendarHints(item: Calendar, inUseByActiveRole: boolean): string[] 
   if (!item.is_default && !item.is_active) hints.push("Seul un calendrier actif peut être défini par défaut");
   if (item.is_default) hints.push(item.is_active ? "Calendrier par défaut" : "Calendrier par défaut (inactif)");
   return hints;
-}
-
-function renderActionsCell(item: Calendar, props: CalendarsTableProps) {
-  const editing = props.editingId === item.id;
-  const inUseByActiveRole = item.is_active && props.calendarIdsInUseByActiveRoles.has(item.id);
-  const toggleDisabled = props.busy || inUseByActiveRole || (item.is_active && item.is_default);
-  const hints = getCalendarHints(item, inUseByActiveRole);
-  return (
-    <div className="flex gap-2">
-      {editing ? (
-        <>
-          <Button size="sm" type="button" disabled={props.busy} onClick={() => props.onSave(item)}>
-            Enregistrer
-          </Button>
-          <Button size="sm" variant="outline" type="button" onClick={props.onCancel}>
-            Annuler
-          </Button>
-        </>
-      ) : (
-        <Button size="sm" variant="outline" type="button" onClick={() => props.onStartEdit(item)}>
-          Modifier
-        </Button>
-      )}
-      <Button size="sm" variant="outline" type="button" disabled={toggleDisabled} onClick={() => props.onToggle(item)}>
-        {item.is_active ? "Désactiver" : "Réactiver"}
-      </Button>
-      {!item.is_default ? (
-        <Button size="sm" variant="outline" type="button" disabled={props.busy || !item.is_active} onClick={() => props.onSetDefault(item)}>
-          Définir par défaut
-        </Button>
-      ) : null}
-      {hints.map((hint) => (
-        <span key={hint} className="text-xs text-muted-foreground">
-          {hint}
-        </span>
-      ))}
-    </div>
-  );
-}
-
-function buildColumns(props: CalendarsTableProps): ColumnDef<Calendar>[] {
-  const weekdayColumns: ColumnDef<Calendar>[] = WEEKDAY_ORDER.map(({ dayType, label }) => ({
-    id: `weekday-${dayType}`,
-    header: label,
-    cell: ({ row }) => renderWeekdayCell(row.original, dayType, label, props),
-  }));
-
-  return [
-    {
-      accessorKey: "code",
-      header: "Code",
-      meta: { sortColumn: "code" },
-      cell: ({ row }) => renderCodeCell(row.original, props),
-    },
-    {
-      accessorKey: "name",
-      header: "Nom",
-      meta: { sortColumn: "name" },
-      cell: ({ row }) => renderNameCell(row.original, props),
-    },
-    {
-      id: "weeksPerYear",
-      header: "Semaines/an",
-      cell: ({ row }) => renderWeeksPerYearCell(row.original, props),
-    },
-    ...weekdayColumns,
-    {
-      id: "actions",
-      header: "Actions",
-      cell: ({ row }) => renderActionsCell(row.original, props),
-    },
-  ];
 }
 
 function renderPinnedRow(props: CalendarsTableProps) {
@@ -261,7 +165,172 @@ function renderPinnedRow(props: CalendarsTableProps) {
 }
 
 export function CalendarsTable(props: CalendarsTableProps) {
-  const columns = buildColumns(props);
+  // Kept fresh on every render via `useLayoutEffect` (React forbids writing to
+  // a ref during render, `react-hooks/refs`) rather than read directly, so the
+  // cell renderers below -- built once per `columns` memoization, not every
+  // render -- can still reach the *current* mutation callbacks at the moment
+  // they're actually invoked (an event handler firing always runs after the
+  // most recent commit's layout effect has already flushed, so there's no
+  // staleness risk there, unlike reading the ref for a value used in the
+  // render output itself -- see `CalendarEditableField` for that case).
+  const propsRef = useRef(props);
+  useLayoutEffect(() => {
+    propsRef.current = props;
+  });
+
+  function renderCodeCell(item: Calendar) {
+    if (props.editingId === item.id) {
+      return (
+        <CalendarEditableField
+          ariaLabel={`Code de ${item.code}`}
+          initialValue={props.draft.code}
+          onChange={(value) => propsRef.current.onDraftChange("code", value)}
+        />
+      );
+    }
+    return (
+      <span className="font-medium flex items-center gap-2">
+        {item.code}
+        {item.is_default ? <Badge variant="secondary">Par défaut</Badge> : null}
+      </span>
+    );
+  }
+
+  function renderNameCell(item: Calendar) {
+    if (props.editingId === item.id) {
+      return (
+        <CalendarEditableField
+          ariaLabel={`Nom de ${item.code}`}
+          initialValue={props.draft.name}
+          onChange={(value) => propsRef.current.onDraftChange("name", value)}
+        />
+      );
+    }
+    return item.name;
+  }
+
+  function renderWeeksPerYearCell(item: Calendar) {
+    if (props.editingId === item.id) {
+      return (
+        <CalendarEditableField
+          ariaLabel={`Semaines par an de ${item.code}`}
+          type="number"
+          min="1"
+          max="53"
+          initialValue={props.draft.weeksPerYear}
+          onChange={(value) => propsRef.current.onDraftChange("weeksPerYear", value)}
+        />
+      );
+    }
+    return item.weeks_per_year;
+  }
+
+  function renderWeekdayCell(item: Calendar, dayType: number, label: string) {
+    if (props.editingId === item.id) {
+      const value = props.draft.weekdays.find((weekday) => weekday.day_type === dayType)?.hours_per_day ?? "0.00";
+      return (
+        <CalendarEditableField
+          ariaLabel={`Heures du ${label} de ${item.code}`}
+          type="number"
+          min="0"
+          max="24"
+          step="0.25"
+          className="w-16"
+          initialValue={value}
+          onChange={(next) => propsRef.current.onDraftWeekdayChange(dayType, next)}
+        />
+      );
+    }
+    return (item.weekdays ?? []).find((weekday) => weekday.day_type === dayType)?.hours_per_day ?? "0";
+  }
+
+  function renderActionsCell(item: Calendar) {
+    const editing = props.editingId === item.id;
+    const inUseByActiveRole = item.is_active && props.calendarIdsInUseByActiveRoles.has(item.id);
+    const toggleDisabled = props.busy || inUseByActiveRole || (item.is_active && item.is_default);
+    const hints = getCalendarHints(item, inUseByActiveRole);
+    return (
+      <div className="flex gap-2">
+        {editing ? (
+          <>
+            <Button size="sm" type="button" disabled={props.busy} onClick={() => propsRef.current.onSave(item)}>
+              Enregistrer
+            </Button>
+            <Button size="sm" variant="outline" type="button" onClick={() => propsRef.current.onCancel()}>
+              Annuler
+            </Button>
+          </>
+        ) : (
+          <Button size="sm" variant="outline" type="button" onClick={() => propsRef.current.onStartEdit(item)}>
+            Modifier
+          </Button>
+        )}
+        <Button size="sm" variant="outline" type="button" disabled={toggleDisabled} onClick={() => propsRef.current.onToggle(item)}>
+          {item.is_active ? "Désactiver" : "Réactiver"}
+        </Button>
+        {!item.is_default ? (
+          <Button size="sm" variant="outline" type="button" disabled={props.busy || !item.is_active} onClick={() => propsRef.current.onSetDefault(item)}>
+            Définir par défaut
+          </Button>
+        ) : null}
+        {hints.map((hint) => (
+          <span key={hint} className="text-xs text-muted-foreground">
+            {hint}
+          </span>
+        ))}
+      </div>
+    );
+  }
+
+  // Memoized so cell renderers keep a stable identity across renders -- see
+  // `CalendarEditableField`'s comment for why (otherwise every keystroke while
+  // editing a row remounts that field's `<Input>`, dropping focus).
+  // Deliberately excludes `props.draft` (changes per keystroke) from the
+  // dependency array; includes `editingId`/`busy`/`calendarIdsInUseByActiveRoles`
+  // since those govern which mode each cell renders in or whether an action is
+  // disabled, and change far less often (only on explicit user actions, not
+  // per keystroke). The render functions above are recreated every render (so
+  // they always close over the current `props` for these dependency-tracked
+  // reads) but are only actually *called* from within this memo's cells, whose
+  // own identity is what matters for TanStack/React -- see the comment on
+  // `propsRef` for why the callbacks they invoke stay fresh regardless.
+  const columns = useMemo<ColumnDef<Calendar>[]>(
+    () => {
+      const weekdayColumns: ColumnDef<Calendar>[] = WEEKDAY_ORDER.map(({ dayType, label }) => ({
+        id: `weekday-${dayType}`,
+        header: label,
+        cell: ({ row }) => renderWeekdayCell(row.original, dayType, label),
+      }));
+
+      return [
+        {
+          accessorKey: "code",
+          header: "Code",
+          meta: { sortColumn: "code" },
+          cell: ({ row }) => renderCodeCell(row.original),
+        },
+        {
+          accessorKey: "name",
+          header: "Nom",
+          meta: { sortColumn: "name" },
+          cell: ({ row }) => renderNameCell(row.original),
+        },
+        {
+          id: "weeksPerYear",
+          header: "Semaines/an",
+          cell: ({ row }) => renderWeeksPerYearCell(row.original),
+        },
+        ...weekdayColumns,
+        {
+          id: "actions",
+          header: "Actions",
+          cell: ({ row }) => renderActionsCell(row.original),
+        },
+      ];
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [props.editingId, props.busy, props.calendarIdsInUseByActiveRoles],
+  );
 
   return (
     <Card className="mt-4">
