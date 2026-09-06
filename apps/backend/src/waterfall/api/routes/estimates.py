@@ -73,6 +73,7 @@ def list_project_estimates(
             "status": Estimate.status,
             "created_at": Estimate.created_at,
         },
+        searchable=[Estimate.note],
         default_sort=Estimate.version_number,
         tiebreaker=Estimate.id,
     )

@@ -990,10 +990,11 @@ def test_list_project_estimates_pagination_sort_and_validation() -> None:
         headers = _auth_headers(client)
         project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
 
-        for _ in range(2):
+        notes = ["Chiffrage initial detaille", "Autre devis"]
+        for note in notes:
             created = client.post(
                 f"/projects/{project_id}/estimates",
-                json={"kind": "initial", "currency_code": "EUR"},
+                json={"kind": "initial", "currency_code": "EUR", "note": note},
                 headers=headers,
             )
             assert created.status_code == 201
@@ -1015,6 +1016,10 @@ def test_list_project_estimates_pagination_sort_and_validation() -> None:
             f"/projects/{project_id}/estimates?sort=unknown_column", headers=headers
         )
         assert invalid_sort.status_code == 400
+
+        searched = client.get(f"/projects/{project_id}/estimates?q=detaille", headers=headers)
+        assert searched.status_code == 200
+        assert [item["note"] for item in searched.json()["items"]] == ["Chiffrage initial detaille"]
 
 
 def test_list_estimate_task_rows_pagination_sort_and_validation() -> None:
@@ -1121,8 +1126,11 @@ def test_list_plannings_pagination_sort_and_validation() -> None:
         headers = _auth_headers(client)
         project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
 
-        for _ in range(2):
-            created = client.post(f"/projects/{project_id}/plannings", json={}, headers=headers)
+        notes = ["Brouillon de reference", "Autre version"]
+        for note in notes:
+            created = client.post(
+                f"/projects/{project_id}/plannings", json={"note": note}, headers=headers
+            )
             assert created.status_code == 201
 
         listed = client.get(f"/projects/{project_id}/plannings", headers=headers)
@@ -1142,6 +1150,10 @@ def test_list_plannings_pagination_sort_and_validation() -> None:
             f"/projects/{project_id}/plannings?sort=unknown_column", headers=headers
         )
         assert invalid_sort.status_code == 400
+
+        searched = client.get(f"/projects/{project_id}/plannings?q=reference", headers=headers)
+        assert searched.status_code == 200
+        assert [item["note"] for item in searched.json()["items"]] == ["Brouillon de reference"]
 
 
 def test_list_task_role_assignments_pagination_sort_and_validation() -> None:

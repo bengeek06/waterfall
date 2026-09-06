@@ -164,7 +164,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Lister les utilisateurs */
+        /**
+         * Lister les utilisateurs
+         * @description Le parametre `q` recherche sur `email`.
+         */
         get: operations["listUsers"];
         put?: never;
         /** Créer un utilisateur administrativement */
@@ -335,7 +338,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Lister les projets importes */
+        /**
+         * Lister les projets importes
+         * @description Le parametre `q` recherche sur `name`.
+         */
         get: operations["listProjects"];
         put?: never;
         /** Creer un projet sans import */
@@ -389,7 +395,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Lister les versions de planning */
+        /**
+         * Lister les versions de planning
+         * @description Le parametre `q` recherche sur `note`.
+         */
         get: operations["listPlannings"];
         put?: never;
         /** Creer un brouillon de planning */
@@ -714,7 +723,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Lister les affectations de main-d'œuvre d'une tâche */
+        /**
+         * Lister les affectations de main-d'œuvre d'une tâche
+         * @description Le parametre `q` recherche sur `role_name` (nom du role affecte).
+         */
         get: operations["listTaskRoleAssignments"];
         put?: never;
         /** Affecter un rôle de main-d'œuvre à une tâche */
@@ -750,7 +762,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Lister les versions de devis d'un projet */
+        /**
+         * Lister les versions de devis d'un projet
+         * @description Le parametre `q` recherche sur `note`.
+         */
         get: operations["listProjectEstimates"];
         put?: never;
         /** Créer un brouillon de devis et son snapshot de tâches */
@@ -785,7 +800,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Lister les lignes de tâches snapshotées dans un devis */
+        /**
+         * Lister les lignes de tâches snapshotées dans un devis
+         * @description Le parametre `q` recherche sur `task_name`.
+         */
         get: operations["listEstimateTaskRows"];
         put?: never;
         post?: never;
@@ -802,7 +820,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Lister les lignes de coût hors main-d'oeuvre d'un devis */
+        /**
+         * Lister les lignes de coût hors main-d'oeuvre d'un devis
+         * @description Le parametre `q` recherche sur `label`.
+         */
         get: operations["listEstimateCostLines"];
         put?: never;
         /** Ajouter une ligne Fourniture, Frais ou UO à un brouillon */

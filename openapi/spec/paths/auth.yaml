@@ -150,6 +150,7 @@
     tags:
     - auth
     summary: Lister les utilisateurs
+    description: 'Le parametre `q` recherche sur `email`.'
     operationId: listUsers
     security:
     - bearerAuth: []

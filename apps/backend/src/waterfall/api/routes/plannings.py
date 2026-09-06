@@ -94,9 +94,7 @@ def list_plannings(
             "status": WfPlanning.status,
             "created_at": WfPlanning.created_at,
         },
-        # WfPlanning has no free-text column: no `searchable` is declared, so a
-        # `q` (accepted per contract like on every list_params-based endpoint) is
-        # rejected with 400 by apply_pagination rather than silently ignored.
+        searchable=(WfPlanning.note,),
         default_sort=WfPlanning.version_number,
         tiebreaker=WfPlanning.id,
     )

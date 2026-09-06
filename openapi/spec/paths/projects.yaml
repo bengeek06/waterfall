@@ -3,6 +3,7 @@
     tags:
     - projects
     summary: Lister les projets importes
+    description: 'Le parametre `q` recherche sur `name`.'
     operationId: listProjects
     security:
     - bearerAuth: []
@@ -157,6 +158,7 @@
     tags:
     - projects
     summary: Lister les versions de planning
+    description: 'Le parametre `q` recherche sur `note`.'
     operationId: listPlannings
     security:
     - bearerAuth: []
@@ -757,6 +759,7 @@
     tags:
     - projects
     summary: Lister les affectations de main-d'œuvre d'une tâche
+    description: 'Le parametre `q` recherche sur `role_name` (nom du role affecte).'
     operationId: listTaskRoleAssignments
     security:
     - bearerAuth: []
@@ -869,6 +872,7 @@
     tags:
     - projects
     summary: Lister les versions de devis d'un projet
+    description: 'Le parametre `q` recherche sur `note`.'
     operationId: listProjectEstimates
     security:
     - bearerAuth: []
@@ -952,6 +956,7 @@
     tags:
     - projects
     summary: Lister les lignes de tâches snapshotées dans un devis
+    description: 'Le parametre `q` recherche sur `task_name`.'
     operationId: listEstimateTaskRows
     security:
     - bearerAuth: []
@@ -986,6 +991,7 @@
     tags:
     - projects
     summary: Lister les lignes de coût hors main-d'oeuvre d'un devis
+    description: 'Le parametre `q` recherche sur `label`.'
     operationId: listEstimateCostLines
     security:
     - bearerAuth: []
