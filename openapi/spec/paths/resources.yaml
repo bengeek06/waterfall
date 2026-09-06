@@ -13,15 +13,25 @@
       schema:
         type: boolean
         default: false
+    - $ref: ../components/parameters/Limit.yaml
+    - $ref: ../components/parameters/Offset.yaml
+    - $ref: ../components/parameters/Search.yaml
+    - name: sort
+      in: query
+      required: false
+      schema:
+        allOf:
+        - $ref: ../components/schemas/SortColumn.yaml
+        enum: [code, -code, name, -name]
     responses:
       '200':
         description: Liste des calendriers
         content:
           application/json:
             schema:
-              type: array
-              items:
-                $ref: ../components/schemas/CalendarRead.yaml
+              $ref: ../components/schemas/CalendarListRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
       '401':
         $ref: ../components/responses/Unauthorized.yaml
   post:
@@ -136,13 +146,16 @@
     - bearerAuth: []
     responses:
       '200':
-        description: Liste des noeuds
+        description: >-
+          Arbre complet des noeuds de ressources actifs. Non paginable
+          (EPIC E7) : l'arbre doit toujours etre renvoye en entier, jamais
+          tronque, sous peine de laisser le client reconstruire un arbre
+          incomplet. `limit` est donc toujours `null` et `total` egale
+          `items.length`.
         content:
           application/json:
             schema:
-              type: array
-              items:
-                $ref: ../components/schemas/ResourceNodeRead.yaml
+              $ref: ../components/schemas/ResourceNodeListRead.yaml
       '401':
         $ref: ../components/responses/Unauthorized.yaml
   post:
@@ -263,15 +276,25 @@
       schema:
         type: boolean
         default: false
+    - $ref: ../components/parameters/Limit.yaml
+    - $ref: ../components/parameters/Offset.yaml
+    - $ref: ../components/parameters/Search.yaml
+    - name: sort
+      in: query
+      required: false
+      schema:
+        allOf:
+        - $ref: ../components/schemas/SortColumn.yaml
+        enum: [name, -name]
     responses:
       '200':
         description: Liste des roles
         content:
           application/json:
             schema:
-              type: array
-              items:
-                $ref: ../components/schemas/ResourceRoleRead.yaml
+              $ref: ../components/schemas/ResourceRoleListRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
       '401':
         $ref: ../components/responses/Unauthorized.yaml
   post:
@@ -370,15 +393,25 @@
       schema:
         type: boolean
         default: false
+    - $ref: ../components/parameters/Limit.yaml
+    - $ref: ../components/parameters/Offset.yaml
+    - $ref: ../components/parameters/Search.yaml
+    - name: sort
+      in: query
+      required: false
+      schema:
+        allOf:
+        - $ref: ../components/schemas/SortColumn.yaml
+        enum: [accounting_code, -accounting_code, category_code, -category_code, name, -name]
     responses:
       '200':
         description: Liste des categories
         content:
           application/json:
             schema:
-              type: array
-              items:
-                $ref: ../components/schemas/CostCategoryRead.yaml
+              $ref: ../components/schemas/CostCategoryListRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
       '401':
         $ref: ../components/responses/Unauthorized.yaml
   post:
@@ -422,15 +455,25 @@
       schema:
         type: boolean
         default: false
+    - $ref: ../components/parameters/Limit.yaml
+    - $ref: ../components/parameters/Offset.yaml
+    - $ref: ../components/parameters/Search.yaml
+    - name: sort
+      in: query
+      required: false
+      schema:
+        allOf:
+        - $ref: ../components/schemas/SortColumn.yaml
+        enum: [code, -code, name, -name]
     responses:
       '200':
         description: Liste des types de coût
         content:
           application/json:
             schema:
-              type: array
-              items:
-                $ref: ../components/schemas/CostTypeRead.yaml
+              $ref: ../components/schemas/CostTypeListRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
       '401':
         $ref: ../components/responses/Unauthorized.yaml
   post:
@@ -547,15 +590,24 @@
     - bearerAuth: []
     parameters:
     - $ref: ../components/parameters/CategoryId.yaml
+    - $ref: ../components/parameters/Limit.yaml
+    - $ref: ../components/parameters/Offset.yaml
+    - name: sort
+      in: query
+      required: false
+      schema:
+        allOf:
+        - $ref: ../components/schemas/SortColumn.yaml
+        enum: [year, -year]
     responses:
       '200':
         description: Taux horaires annuels
         content:
           application/json:
             schema:
-              type: array
-              items:
-                $ref: ../components/schemas/CostRateRead.yaml
+              $ref: ../components/schemas/CostRateListRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
       '401':
         $ref: ../components/responses/Unauthorized.yaml
       '404':
@@ -568,15 +620,25 @@
     operationId: listCostRates
     security:
     - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/Limit.yaml
+    - $ref: ../components/parameters/Offset.yaml
+    - name: sort
+      in: query
+      required: false
+      schema:
+        allOf:
+        - $ref: ../components/schemas/SortColumn.yaml
+        enum: [year, -year]
     responses:
       '200':
         description: Liste des taux horaires annuels
         content:
           application/json:
             schema:
-              type: array
-              items:
-                $ref: ../components/schemas/CostRateRead.yaml
+              $ref: ../components/schemas/CostRateListRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
       '401':
         $ref: ../components/responses/Unauthorized.yaml
   post:
@@ -644,15 +706,25 @@
     operationId: listInflationRates
     security:
     - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/Limit.yaml
+    - $ref: ../components/parameters/Offset.yaml
+    - name: sort
+      in: query
+      required: false
+      schema:
+        allOf:
+        - $ref: ../components/schemas/SortColumn.yaml
+        enum: [year, -year]
     responses:
       '200':
         description: Coefficients annuels
         content:
           application/json:
             schema:
-              type: array
-              items:
-                $ref: ../components/schemas/InflationRateRead.yaml
+              $ref: ../components/schemas/InflationRateListRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
       '401':
         $ref: ../components/responses/Unauthorized.yaml
 /resources/inflation/{year}:
@@ -697,15 +769,28 @@
       schema:
         type: integer
         minimum: 1
+    - $ref: ../components/parameters/Limit.yaml
+    - $ref: ../components/parameters/Offset.yaml
+    - name: sort
+      in: query
+      required: false
+      description: >-
+        RoleCapacity ne porte pas de colonne `year` (une seule ligne de
+        capacite par role, cf. uq_wf_role_capacity_role) : `role_id` est
+        la seule cle de tri naturelle exposee.
+      schema:
+        allOf:
+        - $ref: ../components/schemas/SortColumn.yaml
+        enum: [role_id, -role_id]
     responses:
       '200':
         description: Capacites par periode
         content:
           application/json:
             schema:
-              type: array
-              items:
-                $ref: ../components/schemas/RoleCapacityRead.yaml
+              $ref: ../components/schemas/RoleCapacityListRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
       '401':
         $ref: ../components/responses/Unauthorized.yaml
   post:
