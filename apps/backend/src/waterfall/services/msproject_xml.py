@@ -351,7 +351,16 @@ def _parse_tasks(
             )
             continue
         task_uids.add(uid)
-        tasks.append(_parse_task(task_node, uid, minutes_per_day, issues))
+        parsed_task = _parse_task(task_node, uid, minutes_per_day, issues)
+        if parsed_task.outline_number == "0" and (
+            parsed_task.outline_level is None or parsed_task.outline_level == 0
+        ):
+            # MS Project's project summary task (UID 0): not a schedulable task,
+            # so it must not become a snapshot row (position/parent_uid checks
+            # require positive values). Its UID stays registered above so a
+            # (highly unlikely) predecessor link to it still validates.
+            continue
+        tasks.append(parsed_task)
         links.extend(_parse_task_links(task_node, uid, issues))
     return tasks, links, task_uids
 

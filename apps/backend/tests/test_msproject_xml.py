@@ -140,7 +140,7 @@ def _xml_with_schedule(tasks: str) -> bytes:
     ).encode()
 
 
-def test_parser_accepts_project_summary_task_with_outline_zero() -> None:
+def test_parser_drops_project_summary_task_with_outline_zero() -> None:
     task = """
     <Task><UID>0</UID><ID>0</ID><Name>Project</Name>
       <OutlineNumber>0</OutlineNumber><OutlineLevel>0</OutlineLevel><Summary>1</Summary>
@@ -150,7 +150,22 @@ def test_parser_accepts_project_summary_task_with_outline_zero() -> None:
     </Task>
     """
     parsed = parse_msproject_xml(_xml_with_schedule(task))
-    assert [task.outline_number for task in parsed.tasks] == ["0", "1"]
+    assert [task.outline_number for task in parsed.tasks] == ["1"]
+
+
+def test_parser_keeps_summary_uid_registered_for_link_validation() -> None:
+    task = """
+    <Task><UID>0</UID><ID>0</ID><Name>Project</Name>
+      <OutlineNumber>0</OutlineNumber><OutlineLevel>0</OutlineLevel><Summary>1</Summary>
+    </Task>
+    <Task><UID>1</UID><ID>1</ID><Name>A</Name>
+      <OutlineNumber>1</OutlineNumber><OutlineLevel>1</OutlineLevel>
+      <PredecessorLink><PredecessorUID>0</PredecessorUID><Type>1</Type></PredecessorLink>
+    </Task>
+    """
+    parsed = parse_msproject_xml(_xml_with_schedule(task))
+    assert [task.outline_number for task in parsed.tasks] == ["1"]
+    assert parsed.links[0].predecessor_uid == 0
 
 
 def test_validator_still_rejects_zero_segment_in_real_outline() -> None:
