@@ -1453,7 +1453,7 @@ export default function ProjectDetailsPage() {
         router.push("/login");
         return;
       }
-      setError(cause instanceof ApiError ? cause.message : "Impossible d'enregistrer la structure.");
+      setError(cause instanceof ApiError ? cause.message : "Impossible de générer le squelette.");
     } finally {
       setStructureBusy(false);
     }
@@ -1865,9 +1865,9 @@ export default function ProjectDetailsPage() {
             <CardContent className="pt-6">
             <h2 className="text-lg font-semibold">Lotissement du projet</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              Décris la décomposition du projet en postes, lots et livrables. « Enregistrer la
-              structure » sauvegarde un brouillon sans quitter cet écran ; « Générer le squelette »
-              crée le planning à partir de cette décomposition et t&apos;amène sur sa page.
+              Décris la décomposition du projet en postes, lots et livrables. « Enregistrer »
+              sauvegarde un brouillon sans quitter cet écran ; « Générer le squelette » crée le
+              planning à partir de cette décomposition et t&apos;amène sur sa page.
             </p>
             {postGroups.map((group, postIndex) => (
               <div className="mt-4 rounded-lg border p-4" key={group.groupId}>

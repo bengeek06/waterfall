@@ -368,8 +368,8 @@ describe("PlanningTreeTable", () => {
           parent_uid: null,
           position: 1,
           is_manual: true,
-          start_at: "2026-01-09T08:00:00",
-          finish_at: "2026-01-09T08:00:00",
+          start_at: "2026-01-09T03:00:00",
+          finish_at: "2026-01-09T03:00:00",
           duration_minutes: 480,
         }),
       ];
@@ -377,18 +377,21 @@ describe("PlanningTreeTable", () => {
 
       const startInput = screen.getByLabelText<HTMLInputElement>("Début de Tâche manuelle");
       // toDateInputValue must display the value's UTC calendar date (2026-01-09), not the
-      // timezone-shifted local one (which would be 2026-01-08 in America/New_York, since 08:00 UTC
-      // is 03:00 the previous day there).
+      // timezone-shifted local one: 03:00 UTC is 22:00 on January 8 in America/New_York (UTC-5),
+      // so a broken implementation using local date components would show "2026-01-08" here --
+      // picking a UTC time before 05:00 is what actually makes this cross midnight and exercise
+      // the regression (a time like 08:00 UTC stays on the same calendar day in this timezone and
+      // would not catch the bug).
       expect(startInput.value).toBe("2026-01-09");
 
       // Editing the date only (the field carries no time-of-day) and committing must combine it
-      // with the existing 08:00:00 UTC time-of-day via combineDateWithExistingTime, with no
+      // with the existing 03:00:00 UTC time-of-day via combineDateWithExistingTime, with no
       // timezone-induced drift -- this is the round-trip that corrupted data pre-fix.
       fireEvent.change(startInput, { target: { value: "2026-01-10" } });
       fireEvent.blur(startInput);
 
       expect(onScheduleUpdate).toHaveBeenCalledTimes(1);
-      expect(onScheduleUpdate.mock.calls[0][1].start_at).toBe("2026-01-10T08:00:00.000Z");
+      expect(onScheduleUpdate.mock.calls[0][1].start_at).toBe("2026-01-10T03:00:00.000Z");
     } finally {
       // `process.env.TZ = undefined` would coerce to the literal string "undefined" instead of
       // clearing the variable, leaking a bogus timezone into subsequent tests in this worker.
