@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { Task } from "./backend";
 import {
+  buildVisibleRows,
   computeIndentCommand,
   computeOutdentCommand,
   computeReorderCommand,
@@ -146,5 +147,31 @@ describe("computeReorderCommand", () => {
   it("moves a contiguous group down, preserving relative UID order", () => {
     const command = computeReorderCommand(groupTasks, new Set([2, 3]), "down");
     expect(command).toEqual({ task_uids: [2, 3], target_parent_uid: 1, position: 2 });
+  });
+});
+
+describe("buildVisibleRows", () => {
+  it("flattens the tree depth-first, annotating depth and hasChildren", () => {
+    const rows = buildVisibleRows(tasks, new Set());
+    expect(rows.map((row) => [row.uid, row.depth, row.hasChildren])).toEqual([
+      [1, 0, true],
+      [2, 1, false],
+      [3, 1, false],
+      [4, 0, false],
+    ]);
+  });
+
+  it("skips the descendants of a collapsed uid but keeps the collapsed row itself", () => {
+    const rows = buildVisibleRows(tasks, new Set([1]));
+    expect(rows.map((row) => row.uid)).toEqual([1, 4]);
+  });
+
+  it("orders siblings with no position after positioned ones instead of treating null as 0", () => {
+    const unordered: Task[] = [
+      task({ uid: 1, name: "Sans position", parent_uid: null, position: undefined }),
+      task({ uid: 2, name: "Position 1", parent_uid: null, position: 1 }),
+    ];
+    const rows = buildVisibleRows(unordered, new Set());
+    expect(rows.map((row) => row.uid)).toEqual([2, 1]);
   });
 });

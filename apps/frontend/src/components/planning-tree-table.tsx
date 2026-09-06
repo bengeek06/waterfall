@@ -1,230 +1,29 @@
 "use client";
 
-import {
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type KeyboardEvent,
-  type MouseEvent,
-} from "react";
+import { useMemo, useState, type MouseEvent } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import {
-  getPlanningTaskDeleteConflict,
-  type PlanningTaskScheduleUpdate,
-  type Task,
-  type TaskLinkWrite,
-} from "@/lib/backend";
+import { PlanningCascadeDeleteDialog } from "@/components/planning-cascade-delete-dialog";
+import { PlanningCreateTaskDialog } from "@/components/planning-create-task-dialog";
+import { PlanningScheduleCells } from "@/components/planning-schedule-cells";
+import { PlanningTaskLinksDialog } from "@/components/planning-task-links-dialog";
+import { PlanningTreeToolbar } from "@/components/planning-tree-toolbar";
+import { usePlanningCreateTaskDialog } from "@/hooks/use-planning-create-task-dialog";
+import { usePlanningDeleteSelection } from "@/hooks/use-planning-delete-selection";
+import { usePlanningScheduleDrafts } from "@/hooks/use-planning-schedule-drafts";
+import { usePlanningTaskLinks } from "@/hooks/use-planning-task-links";
+import { usePlanningTreeSelection } from "@/hooks/use-planning-tree-selection";
+import type { PlanningTaskScheduleUpdate, Task, TaskLinkWrite } from "@/lib/backend";
+import { predecessorsLabel } from "@/lib/planning-links";
 import {
   computeIndentCommand,
   computeOutdentCommand,
   computeReorderCommand,
   type PlanningMoveCommand,
 } from "@/lib/planning-tree";
-
-type PlanningTreeRow = Task & { depth: number; hasChildren: boolean };
-
-// MS Project standard predecessor link type codes (see wf_planning_link_snapshot check constraint).
-const LINK_TYPE_LABELS: Record<number, string> = { 0: "FF", 1: "FS", 2: "SF", 3: "SS" };
-const LINK_TYPE_OPTIONS = Object.entries(LINK_TYPE_LABELS).map(
-  ([value, label]) => [Number(value), label] as const,
-);
-
-type MspdiLagFormat = NonNullable<TaskLinkWrite["lag_format"]>;
-const MSPDI_LAG_FORMATS: ReadonlySet<number> = new Set([
-  3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 19, 20, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 51, 52,
-]);
-// A value outside the known MSPDI LagFormat codes falls back to null (elapsed), matching the
-// backend's own "an absent LagFormat is treated as elapsed" convention (see
-// waterfall.services.planning_tree._is_elapsed_lag_format) instead of forcing an unrecognized
-// legacy/foreign value into the write contract's stricter literal type.
-function normalizeLagFormat(value: number | null | undefined): MspdiLagFormat | null {
-  return value !== null && value !== undefined && MSPDI_LAG_FORMATS.has(value)
-    ? (value as MspdiLagFormat)
-    : null;
-}
-
-// Local editing state for one row of the predecessor links dialog; converted to a TaskLinkWrite on submit.
-type LinkRowDraft = {
-  rowId: string;
-  predecessorUid: number | null;
-  linkType: number;
-  lagMinutes: string;
-  // Preserved from the loaded link's lag_format (7=working-time day, 8/null=elapsed) so
-  // editing one row of a task's links does not silently rewrite the lag semantics of every
-  // link on that task. Only defaulted to 7 for a brand-new row, which has no prior value.
-  lagFormat: MspdiLagFormat | null;
-};
-
-let nextLinkRowId = 0;
-function createLinkRowDraft(link?: { predecessor_uid: number; link_type: number; lag_tenth_minute?: number | null; lag_format?: number | null }): LinkRowDraft {
-  nextLinkRowId += 1;
-  return {
-    rowId: `link-row-${nextLinkRowId}`,
-    predecessorUid: link?.predecessor_uid ?? null,
-    linkType: link?.link_type ?? 1,
-    lagMinutes: link?.lag_tenth_minute ? String(link.lag_tenth_minute / 10) : "",
-    lagFormat: link ? normalizeLagFormat(link.lag_format) : 7,
-  };
-}
-
-function buildVisibleRows(tasks: Task[], collapsedUids: Set<number>): PlanningTreeRow[] {
-  const knownUids = new Set(tasks.map((task) => task.uid));
-  const childrenByParent = new Map<number | null, Task[]>();
-  for (const task of tasks) {
-    const parentKey = task.parent_uid !== null && task.parent_uid !== undefined && knownUids.has(task.parent_uid)
-      ? task.parent_uid
-      : null;
-    const siblings = childrenByParent.get(parentKey) ?? [];
-    siblings.push(task);
-    childrenByParent.set(parentKey, siblings);
-  }
-  // The backend orders unpositioned tasks last; mirror that instead of treating null as position 0.
-  for (const siblings of childrenByParent.values()) {
-    siblings.sort((a, b) => (a.position ?? Number.POSITIVE_INFINITY) - (b.position ?? Number.POSITIVE_INFINITY));
-  }
-
-  const rows: PlanningTreeRow[] = [];
-  function walk(parentUid: number | null, depth: number) {
-    for (const task of childrenByParent.get(parentUid) ?? []) {
-      const hasChildren = (childrenByParent.get(task.uid) ?? []).length > 0;
-      rows.push({ ...task, depth, hasChildren });
-      if (hasChildren && !collapsedUids.has(task.uid)) {
-        walk(task.uid, depth + 1);
-      }
-    }
-  }
-  walk(null, 0);
-  return rows;
-}
-
-function formatDate(value: string | null | undefined): string {
-  if (!value) {
-    return "-";
-  }
-  // Read-only counterpart of toDateInputValue's UTC convention (see below): parse the
-  // naive-UTC backend value as UTC, then format in UTC too, so this display never disagrees
-  // with the editable fields or shifts across a midnight boundary for a non-UTC viewer.
-  return new Date(asUtcIsoString(value)).toLocaleDateString("fr-FR", { timeZone: "UTC" });
-}
-
-function formatDurationMinutes(minutes: number | null | undefined): string {
-  if (minutes === null || minutes === undefined) {
-    return "-";
-  }
-  if (minutes === 0) {
-    return "0";
-  }
-  const hours = Math.floor(minutes / 60);
-  const remainderMinutes = minutes % 60;
-  if (hours === 0) {
-    return `${remainderMinutes}min`;
-  }
-  if (remainderMinutes === 0) {
-    return `${hours}h`;
-  }
-  return `${hours}h${remainderMinutes}min`;
-}
-
-// The backend stores/returns naive-UTC datetimes (no offset, e.g. "2026-01-09T08:00:00"). A
-// string with no trailing "Z"/numeric offset is otherwise interpreted by `new Date(...)` as
-// *local* time (standard JS behaviour), which silently shifts every value by the browser's UTC
-// offset for any non-UTC user. Force it to be read as UTC by appending "Z" when no offset is
-// already present.
-function asUtcIsoString(value: string): string {
-  return /(?:Z|[+-]\d{2}:?\d{2})$/.test(value) ? value : `${value}Z`;
-}
-
-// Timezone convention (deliberate, keep toDateInputValue/combineDateWithExistingTime symmetric):
-// this field always displays and edits the value's *UTC* date component, not the browser's local
-// time. A native `date` input has no timezone concept of its own, so "local time" here would
-// actually mean "the browser's local time", which has no clean, lossless round-trip back to the
-// naive-UTC value the backend expects without extra local<->UTC conversion. Treating the
-// component's yyyy-MM-dd as a UTC calendar date end-to-end is simpler and fully reversible in
-// every browser timezone; it trades away a "shows my local date" UX nicety in favour of never
-// corrupting dates.
-function toDateInputValue(value: string | null | undefined): string {
-  if (!value) {
-    return "";
-  }
-  const date = new Date(asUtcIsoString(value));
-  if (Number.isNaN(date.getTime())) {
-    return "";
-  }
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;
-}
-
-const DATE_INPUT_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
-
-// The date input only ever exposes the calendar date, not the time of day: a manual task's
-// start_at/finish_at can carry a non-zero, non-minute-aligned time component derived from a
-// predecessor link's lag_tenth_minute (stored at a 6-second resolution), and commitScheduleEdit
-// always resends all three schedule fields on any single field edit (e.g. editing only the
-// duration). Discarding that time component here instead of preserving it would silently reset an
-// untouched start_at/finish_at to midnight on every commit, so the new date is combined with the
-// time-of-day already stored on `existingValue` (the row's current, pre-edit value) rather than
-// zeroing it out. A task that never had a time component (fresh manual entry) simply defaults to
-// midnight UTC.
-function combineDateWithExistingTime(
-  dateOnly: string,
-  existingValue: string | null | undefined,
-): string | null {
-  if (!dateOnly) {
-    return null;
-  }
-  const match = DATE_INPUT_PATTERN.exec(dateOnly);
-  if (!match) {
-    return null;
-  }
-  const [year, month, day] = match.slice(1).map(Number);
-  let hour = 0;
-  let minute = 0;
-  let second = 0;
-  if (existingValue) {
-    const existing = new Date(asUtcIsoString(existingValue));
-    if (!Number.isNaN(existing.getTime())) {
-      hour = existing.getUTCHours();
-      minute = existing.getUTCMinutes();
-      second = existing.getUTCSeconds();
-    }
-  }
-  // Symmetric with toDateInputValue: the field's yyyy-MM-dd components are a UTC calendar date, so
-  // they must be combined with the preserved time-of-day via Date.UTC directly, not through
-  // `new Date(...)`, which would reinterpret them as local time and reintroduce the same
-  // corruption this convention exists to avoid.
-  const date = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
-  if (Number.isNaN(date.getTime())) {
-    return null;
-  }
-  return date.toISOString();
-}
 
 function taskTypeLabel(task: Task): string {
   if (task.is_milestone) {
@@ -233,74 +32,15 @@ function taskTypeLabel(task: Task): string {
   return task.is_summary ? "Résumé" : "Tâche";
 }
 
-function taskModeLabel(task: Task): string {
-  if (task.is_manual === null || task.is_manual === undefined) {
-    return "-";
+// Only meaningful when exactly one row is selected: with zero or several rows selected there is
+// no single unambiguous "relative to this task" position, so the create dialog only offers the
+// root-level default in that case (see PlanningCreateTaskDialog's position <select>).
+function getSingleSelectedTask(selectedUids: Set<number>, tasksByUid: Map<number, Task>): Task | null {
+  if (selectedUids.size !== 1) {
+    return null;
   }
-  return task.is_manual ? "Manuel" : "Automatique";
+  return tasksByUid.get([...selectedUids][0]) ?? null;
 }
-
-// Shared with the direct duration-edit guard in commitScheduleEdit: _apply_automatic_schedule
-// rejects a null/zero/negative duration with a 400, so both the "switch to automatic" affordance
-// and the direct edit must treat 0/negative the same as missing.
-function durationInvalidForAutomatic(task: Task): boolean {
-  return (
-    task.duration_minutes === null ||
-    task.duration_minutes === undefined ||
-    task.duration_minutes <= 0
-  );
-}
-
-type PredecessorLink = NonNullable<Task["predecessor_links"]>[number];
-
-// A predecessor link only actually resolves to a start anchor server-side
-// (_resolve_predecessor_constraints) if the predecessor itself already carries the date the link
-// type depends on: FS/FF (link_type 1/0) derive from the predecessor's finish_at, SS/SF
-// (link_type 3/2) derive from the predecessor's start_at. Both columns are nullable (e.g. the
-// predecessor can itself be an unanchored automatic task), so "a link exists" alone is not
-// sufficient -- see LINK_TYPE_LABELS above for the code mapping.
-function predecessorResolvesStartAnchor(link: PredecessorLink, tasksByUid: Map<number, Task>): boolean {
-  const predecessor = tasksByUid.get(link.predecessor_uid);
-  if (!predecessor) {
-    return false;
-  }
-  if (link.link_type === 1 || link.link_type === 0) {
-    return Boolean(predecessor.finish_at);
-  }
-  return Boolean(predecessor.start_at);
-}
-
-// _apply_automatic_schedule/_apply_automatic_milestone_schedule both require either a stored
-// start_at or at least one predecessor link that resolves to a start anchor (see
-// predecessorResolvesStartAnchor) to derive one; without either, the server rejects the automatic
-// scheduling with a 400 regardless of the task being a milestone or not.
-function missingStartAnchorForAutomatic(task: Task, tasksByUid: Map<number, Task>): boolean {
-  if (task.start_at) {
-    return false;
-  }
-  return !task.predecessor_links?.some((link) => predecessorResolvesStartAnchor(link, tasksByUid));
-}
-
-function predecessorsLabel(task: Task): string {
-  if (!task.predecessor_links?.length) {
-    return "-";
-  }
-  return task.predecessor_links
-    .map((link) => {
-      const type = LINK_TYPE_LABELS[link.link_type] ?? String(link.link_type);
-      const lagMinutes = link.lag_tenth_minute ? link.lag_tenth_minute / 10 : 0;
-      const lagSign = lagMinutes > 0 ? "+" : "";
-      const lag = lagMinutes ? ` ${lagSign}${lagMinutes}min` : "";
-      return `${link.predecessor_uid} (${type}${lag})`;
-    })
-    .join(", ");
-}
-
-type ScheduleDraft = {
-  start_at: string;
-  finish_at: string;
-  duration_minutes: string;
-};
 
 type PlanningTreeTableProps = Readonly<{
   tasks: Task[];
@@ -324,8 +64,8 @@ type PlanningTreeTableProps = Readonly<{
   /**
    * Deletes the given task uids. Must reject on failure -- including the
    * CASCADE_CONFIRMATION_REQUIRED conflict, which this component itself turns into a follow-up
-   * confirmation dialog (see requestDeleteSelection/confirmCascadeDelete below) -- so it can tell
-   * "needs confirmation" apart from "resolved".
+   * confirmation dialog (see use-planning-delete-selection) -- so it can tell "needs confirmation"
+   * apart from "resolved".
    *
    * `versionKey` is the identity of the planning version the deletion was requested against
    * (captured from this component's own `versionKey` prop at the moment the request was made,
@@ -343,8 +83,6 @@ type PlanningTreeTableProps = Readonly<{
   mutationBusy?: boolean;
 }>;
 
-type CreateTaskPositionMode = "root" | "after" | "child";
-
 export function PlanningTreeTable({
   tasks,
   versionKey,
@@ -356,421 +94,47 @@ export function PlanningTreeTable({
   onDeleteTasks,
   mutationBusy = false,
 }: PlanningTreeTableProps) {
-  const [collapsedUids, setCollapsedUids] = useState<Set<number>>(new Set());
-  const [selectedUids, setSelectedUids] = useState<Set<number>>(new Set());
-  const [focusedUid, setFocusedUid] = useState<number | null>(null);
   const [renderedVersionKey, setRenderedVersionKey] = useState(versionKey);
-  const [scheduleDrafts, setScheduleDrafts] = useState<Record<number, ScheduleDraft>>({});
-  const [editingTaskUid, setEditingTaskUid] = useState<number | null>(null);
-  const [linkRows, setLinkRows] = useState<LinkRowDraft[]>([]);
-  const [linkFormError, setLinkFormError] = useState<string | null>(null);
-  const [linkFormBusy, setLinkFormBusy] = useState(false);
-  const [createDialogOpen, setCreateDialogOpen] = useState(false);
-  const [createTaskName, setCreateTaskName] = useState("");
-  const [createTaskIsMilestone, setCreateTaskIsMilestone] = useState(false);
-  const [createPositionMode, setCreatePositionMode] = useState<CreateTaskPositionMode>("root");
-  const [createTaskError, setCreateTaskError] = useState<string | null>(null);
-  const [cascadeConflict, setCascadeConflict] = useState<{
-    taskUids: number[];
-    descendantUids: number[];
-    // The planning version the initial (non-cascade) delete request was made against; re-sent
-    // unchanged on confirmation so the caller can detect a version switch that happened while
-    // this dialog was open (see the onDeleteTasks prop contract above).
-    versionKey: number | string | null;
-  } | null>(null);
-  const [cascadeBusy, setCascadeBusy] = useState(false);
-  const rowRefs = useRef(new Map<number, HTMLTableRowElement>());
-  // Tracks the *current* versionKey prop, unlike the `requestedVersionKey` a delete-flow function
-  // captures in its own closure at request time: that closure keeps referencing whatever value
-  // was current when the request started, for the lifetime of that async call, so it cannot be
-  // used to detect a version switch that happened later while the request was still in flight.
-  // React forbids writing to a ref during render (see the `react-hooks/refs` lint rule), so this
-  // cannot be a synchronous body write like the `renderedVersionKey` state sync just below; it is
-  // instead kept fresh via useLayoutEffect rather than useEffect, so the write happens
-  // synchronously in the commit phase, before the browser can paint or run any other queued task
-  // (including a pending fetch's resolution) — closing the staleness window a passive useEffect
-  // would otherwise leave open between commit and its own (deferred) flush.
-  const versionKeyRef = useRef(versionKey);
-  useLayoutEffect(() => {
-    versionKeyRef.current = versionKey;
-  }, [versionKey]);
 
-  // A different planning version must never reuse another version's expand/selection state.
-  if (versionKey !== renderedVersionKey) {
-    setRenderedVersionKey(versionKey);
-    setEditingTaskUid(null);
-    setLinkRows([]);
-    setLinkFormError(null);
-    setLinkFormBusy(false);
-    setCollapsedUids(new Set());
-    setSelectedUids(new Set());
-    setFocusedUid(null);
-    setScheduleDrafts({});
-    setCreateDialogOpen(false);
-    setCreateTaskName("");
-    setCreateTaskIsMilestone(false);
-    setCreatePositionMode("root");
-    setCreateTaskError(null);
-    setCascadeConflict(null);
-    setCascadeBusy(false);
-  }
-
-  const rows = useMemo(() => buildVisibleRows(tasks, collapsedUids), [tasks, collapsedUids]);
-  const rowIndexByUid = useMemo(() => new Map(rows.map((row, index) => [row.uid, index])), [rows]);
-  // Full-planning lookup (unlike rowIndexByUid, not limited to currently-visible rows): a
+  // Full-planning lookup (unlike selection.rows, not limited to currently-visible rows): a
   // predecessor referenced by a collapsed/off-screen task must still resolve correctly.
   const tasksByUid = useMemo(() => new Map(tasks.map((task) => [task.uid, task])), [tasks]);
 
-  useEffect(() => {
-    if (focusedUid === null) {
-      return;
-    }
-    const rowElement = rowRefs.current.get(focusedUid);
-    // Do not steal focus back to the row when it is already inside one of its inline edit controls.
-    if (rowElement && !rowElement.contains(document.activeElement)) {
-      rowElement.focus();
-    }
-  }, [focusedUid]);
+  const selection = usePlanningTreeSelection(tasks);
+  const scheduleDrafts = usePlanningScheduleDrafts({ onScheduleUpdate, mutationBusy });
+  const taskLinks = usePlanningTaskLinks({ tasks, onEditLinks });
+  const singleSelectedTask = getSingleSelectedTask(selection.selectedUids, tasksByUid);
+  const createTaskDialog = usePlanningCreateTaskDialog({ onCreateTask, singleSelectedTask });
+  const deleteSelection = usePlanningDeleteSelection({
+    tasks,
+    versionKey,
+    selectedUids: selection.selectedUids,
+    mutationBusy,
+    onDeleteTasks,
+    onSelectionCleared: selection.clearSelection,
+  });
+
+  // A different planning version must never reuse another version's expand/selection state. This
+  // is a deliberate synchronous render-body write (not a useEffect): it must reset every hook's
+  // local state within the same render as the versionKey prop change, so no frame is ever painted
+  // with the previous version's selection/drafts/dialogs applied to the newly loaded tasks.
+  if (versionKey !== renderedVersionKey) {
+    setRenderedVersionKey(versionKey);
+    taskLinks.reset();
+    selection.reset();
+    scheduleDrafts.reset();
+    createTaskDialog.reset();
+    deleteSelection.reset();
+  }
 
   const readOnlyNotice = readOnly ? (
     <p className="mt-2 text-xs text-muted-foreground">Version validée ou projet en lecture seule : édition désactivée.</p>
   ) : null;
 
-  function toggleCollapsed(uid: number) {
-    setCollapsedUids((current) => {
-      const next = new Set(current);
-      if (next.has(uid)) {
-        next.delete(uid);
-      } else {
-        next.add(uid);
-      }
-      return next;
-    });
-  }
-
-  function selectRow(row: PlanningTreeRow, event: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) {
-    setSelectedUids((current) => {
-      if (event.shiftKey && focusedUid !== null && rowIndexByUid.has(focusedUid)) {
-        const start = Math.min(rowIndexByUid.get(focusedUid)!, rowIndexByUid.get(row.uid)!);
-        const end = Math.max(rowIndexByUid.get(focusedUid)!, rowIndexByUid.get(row.uid)!);
-        return new Set(rows.slice(start, end + 1).map((candidate) => candidate.uid));
-      }
-      if (event.ctrlKey || event.metaKey) {
-        const next = new Set(current);
-        if (next.has(row.uid)) {
-          next.delete(row.uid);
-        } else {
-          next.add(row.uid);
-        }
-        return next;
-      }
-      return new Set([row.uid]);
-    });
-    setFocusedUid(row.uid);
-  }
-
-  function focusSibling(row: PlanningTreeRow, offset: number) {
-    const index = rowIndexByUid.get(row.uid) ?? 0;
-    const sibling = rows[index + offset];
-    if (sibling) {
-      setFocusedUid(sibling.uid);
-    }
-  }
-
-  function expandOrFocusChild(row: PlanningTreeRow) {
-    if (!row.hasChildren) {
-      return;
-    }
-    if (collapsedUids.has(row.uid)) {
-      toggleCollapsed(row.uid);
-    } else {
-      focusSibling(row, 1);
-    }
-  }
-
-  function collapseOrFocusParent(row: PlanningTreeRow) {
-    if (row.hasChildren && !collapsedUids.has(row.uid)) {
-      toggleCollapsed(row.uid);
-    } else if (row.parent_uid !== null && row.parent_uid !== undefined) {
-      setFocusedUid(row.parent_uid);
-    }
-  }
-
-  const rowKeyHandlers: Record<string, (row: PlanningTreeRow) => void> = {
-    ArrowDown: (row) => focusSibling(row, 1),
-    ArrowUp: (row) => focusSibling(row, -1),
-    ArrowRight: expandOrFocusChild,
-    ArrowLeft: collapseOrFocusParent,
-    Enter: (row) => selectRow(row, { ctrlKey: false, metaKey: false, shiftKey: false }),
-    " ": (row) => selectRow(row, { ctrlKey: true, metaKey: false, shiftKey: false }),
-  };
-
-  function onRowKeyDown(event: KeyboardEvent<HTMLTableRowElement>, row: PlanningTreeRow) {
-    const handler = rowKeyHandlers[event.key];
-    if (!handler) {
-      return;
-    }
-    event.preventDefault();
-    handler(row);
-  }
-
-  function defaultScheduleDraft(row: PlanningTreeRow): ScheduleDraft {
-    return {
-      start_at: toDateInputValue(row.start_at),
-      finish_at: toDateInputValue(row.finish_at),
-      duration_minutes: row.duration_minutes === null || row.duration_minutes === undefined ? "" : String(row.duration_minutes),
-    };
-  }
-
-  function scheduleDraftFor(row: PlanningTreeRow): ScheduleDraft {
-    return scheduleDrafts[row.uid] ?? defaultScheduleDraft(row);
-  }
-
-  function updateScheduleDraft(row: PlanningTreeRow, field: keyof ScheduleDraft, value: string) {
-    setScheduleDrafts((current) => ({
-      ...current,
-      [row.uid]: { ...(current[row.uid] ?? defaultScheduleDraft(row)), [field]: value },
-    }));
-  }
-
-  function clearScheduleDraft(uid: number) {
-    setScheduleDrafts((current) => {
-      if (!(uid in current)) {
-        return current;
-      }
-      const next = { ...current };
-      delete next[uid];
-      return next;
-    });
-  }
-
-  async function commitScheduleEdit(row: PlanningTreeRow) {
-    if (!onScheduleUpdate || mutationBusy) {
-      return;
-    }
-    // No draft entry means the user never actually typed into one of this row's fields (e.g. just
-    // tabbed through on focus/blur): nothing changed, so nothing should be committed.
-    if (!(row.uid in scheduleDrafts)) {
-      return;
-    }
-    const draft = scheduleDraftFor(row);
-    let payload: Omit<PlanningTaskScheduleUpdate, "expected_revision">;
-    if (row.is_milestone) {
-      // A milestone only exposes its start date: duration and finish are always forced by the
-      // server, so omitting them here avoids conflicting with a stale finish_at/duration.
-      const startAt = combineDateWithExistingTime(draft.start_at, row.start_at);
-      // The milestone schedule payload has no way to distinguish "field omitted" from "field
-      // explicitly cleared": both _apply_manual_milestone_schedule and
-      // _apply_automatic_milestone_schedule treat a null start_at as "not provided" and silently
-      // fall back to the already-stored value. Sending a cleared field would therefore succeed
-      // (200) but change nothing, then bounce the input back to its old value with no feedback.
-      // Bail out before the request instead, the same way the automatic-duration guard below
-      // does; the draft is intentionally left in place (not cleared) so the empty value stays
-      // visible to correct rather than silently reverting.
-      if (startAt === null) {
-        return;
-      }
-      payload = { is_manual: Boolean(row.is_manual), start_at: startAt };
-    } else if (row.is_manual) {
-      // Intentional: `is_manual: null/undefined` (e.g. a task imported without an explicit mode)
-      // is treated the same as `false` here, so the first edit on such a task — regardless of
-      // which field the user touched — assigns it "automatique". This is a deliberate product
-      // decision, not an oversight; do not "fix" it into a three-way branch.
-      payload = {
-        is_manual: true,
-        start_at: combineDateWithExistingTime(draft.start_at, row.start_at),
-        finish_at: combineDateWithExistingTime(draft.finish_at, row.finish_at),
-        duration_minutes: draft.duration_minutes === "" ? null : Number(draft.duration_minutes),
-      };
-    } else {
-      // Automatic, non-milestone tasks only allow editing the duration; start/finish are always
-      // recomputed by the server from the calendar and predecessors.
-      const durationMinutes = draft.duration_minutes === "" ? null : Number(draft.duration_minutes);
-      // _apply_automatic_schedule rejects a null/zero/negative duration with a 400. Bail out
-      // before the request instead of sending one guaranteed to fail; the draft is intentionally
-      // left in place (not cleared) so the user's in-progress, still-invalid value stays visible
-      // to correct rather than silently reverting to the last committed value. Mirrors the same
-      // guard already applied when switching a task into automatic mode (see the "Automatique"
-      // SelectItem's `disabled` condition below), just covering the direct-edit path too.
-      if (durationMinutes === null || durationMinutes <= 0) {
-        return;
-      }
-      payload = { is_manual: false, duration_minutes: durationMinutes };
-    }
-    // Only discard the draft once the update is confirmed persisted server-side: clearing it
-    // beforehand (or on failure) would make scheduleDraftFor(row) fall back to defaultScheduleDraft,
-    // which reflects the stale, pre-edit `row` values -- silently reverting the user's input to a
-    // value that was never actually saved, with no way to recover it. On failure the draft is left
-    // in place so the user still sees what they typed and can retry or correct it.
-    const succeeded = await onScheduleUpdate(row.uid, payload);
-    if (succeeded) {
-      clearScheduleDraft(row.uid);
-    }
-  }
-
-  async function commitModeChange(row: PlanningTreeRow, isManual: boolean) {
-    if (!onScheduleUpdate || mutationBusy) {
-      return;
-    }
-    const payload: Omit<PlanningTaskScheduleUpdate, "expected_revision"> = row.is_milestone
-      ? { is_manual: isManual, start_at: row.start_at ?? null }
-      : {
-          is_manual: isManual,
-          start_at: row.start_at ?? null,
-          finish_at: row.finish_at ?? null,
-          duration_minutes: row.duration_minutes ?? null,
-        };
-    // The mode change itself has no draft of its own to reconcile (unlike commitScheduleEdit):
-    // the Select is driven directly by row.is_manual, so on failure it simply re-renders with the
-    // same (unchanged) value once the parent's data reload reflects the rejected request -- no
-    // stale-draft/lost-input risk from *this* request to guard against. However, a *previous*
-    // schedule-field edit on this same row may have failed and left its draft in place
-    // (deliberately, so the user's invalid/unsaved input stays visible -- see commitScheduleEdit).
-    // If this mode change then succeeds, the server returns fresh start/finish/duration values,
-    // but scheduleDraftFor(row) would keep serving that stale leftover draft instead. Clear it on
-    // success so the fields reflect the row's new, server-confirmed values.
-    const succeeded = await onScheduleUpdate(row.uid, payload);
-    if (succeeded) {
-      clearScheduleDraft(row.uid);
-    }
-  }
-
-  function onScheduleFieldKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    // Editing a field must never bubble up to the row's own navigation shortcuts (arrows, space...).
-    event.stopPropagation();
-    if (event.key === "Enter") {
-      event.preventDefault();
-      // Blurring alone triggers the field's onBlur handler, which already commits the edit;
-      // calling commitScheduleEdit here too would fire two identical PATCH requests in the
-      // same tick, since the mutationBusy guard has not re-rendered yet at that point.
-      event.currentTarget.blur();
-    }
-  }
-
-  function renderScheduleCells(row: PlanningTreeRow) {
-    const editable = !row.is_summary && !readOnly && Boolean(onScheduleUpdate);
-    const draft = scheduleDraftFor(row);
-    const startEditable = editable && (row.is_milestone || row.is_manual);
-    // The client cannot know whether a predecessor link actually resolves to a schedule
-    // constraint server-side (`_apply_automatic_milestone_schedule` only ignores payload.start_at
-    // once `_resolve_predecessor_constraints` yields at least one value, which additionally
-    // requires the predecessor to itself already have a start_at/finish_at) -- only whether a
-    // predecessor link exists at all. Using "has at least one predecessor link" as a proxy is a
-    // documented, deliberate over-approximation: worst case a not-yet-constraining link disables
-    // the field a little early, which is far preferable to accepting an edit guaranteed to be
-    // silently reverted by the server.
-    const startConstrainedByPredecessors =
-      row.is_milestone && !row.is_manual && Boolean(row.predecessor_links?.length);
-    const startHelpText = startConstrainedByPredecessors
-      ? "Date déterminée par les prédécesseurs"
-      : undefined;
-    const finishEditable = editable && !row.is_milestone && row.is_manual;
-    const durationEditable = editable && !row.is_milestone;
-    return (
-      <>
-        <TableCell>
-          {startEditable ? (
-            <Input
-              type="date"
-              aria-label={startHelpText ? `Début de ${row.name} (${startHelpText})` : `Début de ${row.name}`}
-              title={startHelpText}
-              value={draft.start_at}
-              disabled={mutationBusy || startConstrainedByPredecessors}
-              onClick={(event) => event.stopPropagation()}
-              onChange={(event) => updateScheduleDraft(row, "start_at", event.target.value)}
-              onBlur={() => void commitScheduleEdit(row)}
-              onKeyDown={onScheduleFieldKeyDown}
-            />
-          ) : (
-            formatDate(row.start_at)
-          )}
-        </TableCell>
-        <TableCell>
-          {finishEditable ? (
-            <Input
-              type="date"
-              aria-label={`Fin de ${row.name}`}
-              value={draft.finish_at}
-              disabled={mutationBusy}
-              onClick={(event) => event.stopPropagation()}
-              onChange={(event) => updateScheduleDraft(row, "finish_at", event.target.value)}
-              onBlur={() => void commitScheduleEdit(row)}
-              onKeyDown={onScheduleFieldKeyDown}
-            />
-          ) : (
-            formatDate(row.finish_at)
-          )}
-        </TableCell>
-        <TableCell>
-          {durationEditable ? (
-            <Input
-              type="number"
-              // An automatic non-milestone task requires a strictly positive duration server-side
-              // (_apply_automatic_schedule rejects null/0/negative with a 400); a manual task's
-              // duration is always accepted, including 0/null. `min` is a browser hint only
-              // (commitScheduleEdit below is the real guard against a doomed request).
-              min={row.is_manual ? 0 : 1}
-              step={1}
-              aria-label={`Durée de ${row.name}`}
-              value={draft.duration_minutes}
-              disabled={mutationBusy}
-              onClick={(event) => event.stopPropagation()}
-              onChange={(event) => updateScheduleDraft(row, "duration_minutes", event.target.value)}
-              onBlur={() => void commitScheduleEdit(row)}
-              onKeyDown={onScheduleFieldKeyDown}
-            />
-          ) : (
-            formatDurationMinutes(row.duration_minutes)
-          )}
-        </TableCell>
-        <TableCell>
-          {editable ? (
-            <Select
-              value={row.is_manual ? "manual" : "auto"}
-              onValueChange={(value) => void commitModeChange(row, value === "manual")}
-              disabled={mutationBusy}
-            >
-              <SelectTrigger
-                aria-label={`Mode de ${row.name}`}
-                size="sm"
-                onClick={(event: MouseEvent<HTMLButtonElement>) => event.stopPropagation()}
-                onKeyDown={(event: KeyboardEvent<HTMLButtonElement>) => event.stopPropagation()}
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="manual">Manuel</SelectItem>
-                {/* A milestone's duration is always forced to 0 server-side, so it can always switch
-                    to automatic. A non-milestone task with no duration, or a zero/negative one
-                    (a valid state for a manual task), would be rejected by the server
-                    (_apply_automatic_schedule requires a strictly positive duration), so disable
-                    the option rather than let the user hit a guaranteed 400. Separately, both
-                    _apply_automatic_schedule and _apply_automatic_milestone_schedule need either a
-                    stored start_at or at least one predecessor link to derive a start anchor
-                    (milestone or not) — without either, disable the option too. */}
-                <SelectItem
-                  value="auto"
-                  disabled={
-                    (!row.is_milestone && durationInvalidForAutomatic(row)) ||
-                    missingStartAnchorForAutomatic(row, tasksByUid)
-                  }
-                >
-                  Automatique
-                </SelectItem>
-              </SelectContent>
-            </Select>
-          ) : (
-            taskModeLabel(row)
-          )}
-        </TableCell>
-      </>
-    );
-  }
-
-  const indentCommand = computeIndentCommand(tasks, selectedUids);
-  const outdentCommand = computeOutdentCommand(tasks, selectedUids);
-  const moveUpCommand = computeReorderCommand(tasks, selectedUids, "up");
-  const moveDownCommand = computeReorderCommand(tasks, selectedUids, "down");
+  const indentCommand = computeIndentCommand(tasks, selection.selectedUids);
+  const outdentCommand = computeOutdentCommand(tasks, selection.selectedUids);
+  const moveUpCommand = computeReorderCommand(tasks, selection.selectedUids, "up");
+  const moveDownCommand = computeReorderCommand(tasks, selection.selectedUids, "down");
 
   function dispatchMove(command: PlanningMoveCommand | null) {
     if (command) {
@@ -778,552 +142,168 @@ export function PlanningTreeTable({
     }
   }
 
-  // Only meaningful when exactly one row is selected: with zero or several rows selected there is
-  // no single unambiguous "relative to this task" position, so the create dialog only offers the
-  // root-level default in that case (see the position <select> below).
-  const singleSelectedUid = selectedUids.size === 1 ? [...selectedUids][0] : null;
-  const singleSelectedTask =
-    singleSelectedUid !== null ? (tasksByUid.get(singleSelectedUid) ?? null) : null;
-
-  function openCreateTaskDialog() {
-    setCreateTaskName("");
-    setCreateTaskIsMilestone(false);
-    setCreatePositionMode(singleSelectedTask ? "after" : "root");
-    setCreateTaskError(null);
-    setCreateDialogOpen(true);
-  }
-
-  function closeCreateTaskDialog() {
-    setCreateDialogOpen(false);
-    setCreateTaskName("");
-    setCreateTaskIsMilestone(false);
-    setCreatePositionMode("root");
-    setCreateTaskError(null);
-  }
-
-  function submitCreateTask() {
-    if (!onCreateTask) {
-      return;
-    }
-    const trimmedName = createTaskName.trim();
-    if (!trimmedName) {
-      setCreateTaskError("Le nom de la tâche est obligatoire.");
-      return;
-    }
-    let targetParentUid: number | undefined;
-    let insertAfterUid: number | undefined;
-    if (createPositionMode === "after" && singleSelectedTask) {
-      targetParentUid = singleSelectedTask.parent_uid ?? undefined;
-      insertAfterUid = singleSelectedTask.uid;
-    } else if (createPositionMode === "child" && singleSelectedTask) {
-      targetParentUid = singleSelectedTask.uid;
-    }
-    onCreateTask({ name: trimmedName, isMilestone: createTaskIsMilestone, targetParentUid, insertAfterUid });
-    closeCreateTaskDialog();
-  }
-
-  async function requestDeleteSelection() {
-    if (!onDeleteTasks || selectedUids.size === 0 || mutationBusy) {
-      return;
-    }
-    const taskUids = [...selectedUids];
-    // Captured now, not re-read later: this is what identifies "the planning version this
-    // deletion was requested against" for the caller's own freshness check on a cascade retry
-    // (see the onDeleteTasks prop contract above).
-    const requestedVersionKey = versionKey;
-    try {
-      await onDeleteTasks(taskUids, false, requestedVersionKey);
-      setSelectedUids(new Set());
-    } catch (cause) {
-      const conflict = getPlanningTaskDeleteConflict(cause);
-      // The version-mismatch reset above (see the top of the component) only fires *while*
-      // versionKey is changing; if the displayed planning version already changed and settled on
-      // a different one by the time this late 409 response arrives, versionKey (current) and
-      // renderedVersionKey (also already updated) match again, so that reset alone would not
-      // catch this. Re-check explicitly against what was captured when *this* request started:
-      // opening a cascade dialog for task uids from a version that is no longer displayed would
-      // show a confirmation the user has no way to correctly interpret.
-      if (conflict?.code === "CASCADE_CONFIRMATION_REQUIRED" && versionKeyRef.current === requestedVersionKey) {
-        // Not an error yet: ask the user to confirm the cascade instead of showing a failure.
-        setCascadeConflict({
-          taskUids,
-          descendantUids: conflict.descendantUids ?? [],
-          versionKey: requestedVersionKey,
-        });
-      }
-      // Covers both a TASK_REFERENCED conflict (never confirmable, regardless of confirm_cascade)
-      // and any other failure (including the caller rejecting a stale planning version). Nothing
-      // to do locally: errors are reported through the parent's own error state, mirroring
-      // onCreateTask.
-    }
-  }
-
-  async function confirmCascadeDelete() {
-    if (!onDeleteTasks || !cascadeConflict) {
-      return;
-    }
-    setCascadeBusy(true);
-    try {
-      await onDeleteTasks(cascadeConflict.taskUids, true, cascadeConflict.versionKey);
-      setSelectedUids(new Set());
-    } catch {
-      // Reported through the parent's own error state; just close the dialog below.
-    } finally {
-      setCascadeConflict(null);
-      setCascadeBusy(false);
-    }
-  }
-
-  function describeCascadeDescendants(descendantUids: number[]): string {
-    if (descendantUids.length === 0) {
-      return "Les tâches sélectionnées et leurs éventuelles sous-tâches seront supprimées définitivement.";
-    }
-    const names = descendantUids.map((uid) => {
-      const descendant = tasksByUid.get(uid);
-      return descendant ? `${descendant.id_display ?? descendant.uid} - ${descendant.name}` : String(uid);
-    });
-    return `Cette suppression entraînera aussi celle de ${descendantUids.length} tâche(s) enfant(s) : ${names.join(", ")}.`;
-  }
-
-  function openLinksDialog(row: PlanningTreeRow) {
-    setEditingTaskUid(row.uid);
-    setLinkRows((row.predecessor_links ?? []).map((link) => createLinkRowDraft(link)));
-    setLinkFormError(null);
-  }
-
-  function closeLinksDialog() {
-    setEditingTaskUid(null);
-    setLinkRows([]);
-    setLinkFormError(null);
-  }
-
-  function addLinkRow() {
-    setLinkRows((current) => [...current, createLinkRowDraft()]);
-  }
-
-  function removeLinkRow(rowId: string) {
-    setLinkRows((current) => current.filter((row) => row.rowId !== rowId));
-  }
-
-  function updateLinkRow(rowId: string, patch: Partial<LinkRowDraft>) {
-    setLinkRows((current) => current.map((row) => (row.rowId === rowId ? { ...row, ...patch } : row)));
-  }
-
-  async function submitLinks() {
-    if (editingTaskUid === null || !onEditLinks) {
-      return;
-    }
-    const missingPredecessor = linkRows.some((row) => row.predecessorUid === null);
-    if (missingPredecessor) {
-      setLinkFormError("Sélectionnez une tâche prédécesseure pour chaque ligne.");
-      return;
-    }
-    const seen = new Set<string>();
-    for (const row of linkRows) {
-      const dedupeKey = `${row.predecessorUid}-${row.linkType}`;
-      if (seen.has(dedupeKey)) {
-        setLinkFormError(
-          "Deux lignes ne peuvent pas référencer la même tâche prédécesseure avec le même type de lien.",
-        );
-        return;
-      }
-      seen.add(dedupeKey);
-    }
-    const links: TaskLinkWrite[] = [];
-    for (const row of linkRows) {
-      const trimmedLag = row.lagMinutes.trim();
-      const lagMinutesValue = trimmedLag === "" ? 0 : Number(trimmedLag);
-      // Checked after scaling, not on lagMinutesValue alone: a finite input large enough
-      // (e.g. 1e308) overflows to Infinity once multiplied by 10, which JSON.stringify
-      // would then silently turn into null instead of the entered value. The upper/lower
-      // bounds mirror the backend's lag_tenth_minute range (a PostgreSQL Integer column),
-      // so an out-of-range value is rejected here instead of via an avoidable failed request.
-      const lagTenthMinute = Math.round(lagMinutesValue * 10);
-      if (
-        !Number.isFinite(lagTenthMinute) ||
-        lagTenthMinute < -2_147_483_648 ||
-        lagTenthMinute > 2_147_483_647
-      ) {
-        setLinkFormError("Le décalage doit être un nombre de minutes valide.");
-        return;
-      }
-      links.push({
-        predecessor_uid: row.predecessorUid as number,
-        link_type: row.linkType,
-        lag_tenth_minute: lagTenthMinute,
-        // Preserve the row's existing lag_format rather than overwriting it: this dialog
-        // only edits predecessor/type/lag value, never the lag's working-time/elapsed unit.
-        lag_format: row.lagFormat,
-      });
-    }
-    setLinkFormError(null);
-    setLinkFormBusy(true);
-    try {
-      await onEditLinks({ taskUid: editingTaskUid, links });
-      closeLinksDialog();
-    } catch (cause) {
-      setLinkFormError(cause instanceof Error ? cause.message : "Impossible de mettre à jour les prédécesseurs.");
-    } finally {
-      setLinkFormBusy(false);
-    }
-  }
-
-  const editingTask = editingTaskUid !== null ? tasks.find((task) => task.uid === editingTaskUid) ?? null : null;
-  const linkCandidateTasks = tasks.filter((task) => task.uid !== editingTaskUid);
-
-  const showActionsToolbar = !readOnly && Boolean(onMove || onCreateTask || onDeleteTasks);
-  const actionsToolbar = showActionsToolbar ? (
-    <div className="mb-3 flex flex-wrap items-center gap-2">
-      {onMove ? (
-        <>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={!indentCommand || mutationBusy}
-            onClick={() => dispatchMove(indentCommand)}
-          >
-            Indenter
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={!outdentCommand || mutationBusy}
-            onClick={() => dispatchMove(outdentCommand)}
-          >
-            Désindenter
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={!moveUpCommand || mutationBusy}
-            onClick={() => dispatchMove(moveUpCommand)}
-          >
-            Monter
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={!moveDownCommand || mutationBusy}
-            onClick={() => dispatchMove(moveDownCommand)}
-          >
-            Descendre
-          </Button>
-        </>
-      ) : null}
-      {onCreateTask ? (
-        <Button type="button" variant="outline" size="sm" disabled={mutationBusy} onClick={openCreateTaskDialog}>
-          Ajouter une tâche
-        </Button>
-      ) : null}
-      {onDeleteTasks ? (
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={selectedUids.size === 0 || mutationBusy}
-          onClick={() => void requestDeleteSelection()}
-        >
-          Supprimer la sélection
-        </Button>
-      ) : null}
-    </div>
-  ) : null;
-
   return (
     <Card className="mt-4">
       <CardHeader>
         <CardTitle>Planning</CardTitle>
       </CardHeader>
       <CardContent>
-        {actionsToolbar}
-        {rows.length === 0 ? (
+        <PlanningTreeToolbar
+          visible={!readOnly}
+          showMoveActions={Boolean(onMove)}
+          indentDisabled={!indentCommand || mutationBusy}
+          outdentDisabled={!outdentCommand || mutationBusy}
+          moveUpDisabled={!moveUpCommand || mutationBusy}
+          moveDownDisabled={!moveDownCommand || mutationBusy}
+          onIndent={() => dispatchMove(indentCommand)}
+          onOutdent={() => dispatchMove(outdentCommand)}
+          onMoveUp={() => dispatchMove(moveUpCommand)}
+          onMoveDown={() => dispatchMove(moveDownCommand)}
+          showCreateAction={Boolean(onCreateTask)}
+          createDisabled={mutationBusy}
+          onCreateTask={createTaskDialog.openCreateTaskDialog}
+          showDeleteAction={Boolean(onDeleteTasks)}
+          deleteDisabled={selection.selectedUids.size === 0 || mutationBusy}
+          onDeleteSelection={() => void deleteSelection.requestDeleteSelection()}
+        />
+        {selection.rows.length === 0 ? (
           <p className="py-6 text-sm text-muted-foreground">Le planning ne contient aucune tâche.</p>
         ) : (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>UID</TableHead>
-              <TableHead>Nom</TableHead>
-              <TableHead>Type</TableHead>
-              <TableHead>Début</TableHead>
-              <TableHead>Fin</TableHead>
-              <TableHead>Durée</TableHead>
-              <TableHead>Mode</TableHead>
-              <TableHead>Prédécesseurs</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {rows.map((row) => {
-              const collapsed = collapsedUids.has(row.uid);
-              const selected = selectedUids.has(row.uid);
-              const isFocusable = focusedUid === row.uid || (focusedUid === null && row.uid === rows[0]?.uid);
-              return (
-                <TableRow
-                  key={row.uid}
-                  ref={(element) => {
-                    if (element) {
-                      rowRefs.current.set(row.uid, element);
-                    } else {
-                      rowRefs.current.delete(row.uid);
-                    }
-                  }}
-                  data-state={selected ? "selected" : undefined}
-                  aria-selected={selected}
-                  tabIndex={isFocusable ? 0 : -1}
-                  className="cursor-pointer outline-none"
-                  onClick={(event) => selectRow(row, event)}
-                  onFocus={() => setFocusedUid(row.uid)}
-                  onKeyDown={(event) => onRowKeyDown(event, row)}
-                >
-                  <TableCell>{row.id_display ?? row.uid}</TableCell>
-                  <TableCell>
-                    <div className="flex items-center gap-1" style={{ paddingLeft: `${row.depth * 1.25}rem` }}>
-                      {row.hasChildren ? (
-                        <button
-                          type="button"
-                          aria-label={collapsed ? `Déplier ${row.name}` : `Replier ${row.name}`}
-                          className="flex size-6 items-center justify-center"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            toggleCollapsed(row.uid);
-                          }}
-                        >
-                          {collapsed ? <ChevronRight aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}
-                        </button>
-                      ) : (
-                        <span className="size-6" />
-                      )}
-                      {row.is_milestone ? "◆ " : ""}
-                      {row.name}
-                    </div>
-                  </TableCell>
-                  <TableCell>{taskTypeLabel(row)}</TableCell>
-                  {renderScheduleCells(row)}
-                  <TableCell>
-                    <div className="flex items-center gap-2">
-                      <span>{predecessorsLabel(row)}</span>
-                      {!readOnly && onEditLinks ? (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          disabled={mutationBusy}
-                          aria-label={`Éditer les prédécesseurs de ${row.name}`}
-                          onClick={(event: MouseEvent<HTMLButtonElement>) => {
-                            event.stopPropagation();
-                            openLinksDialog(row);
-                          }}
-                        >
-                          Éditer
-                        </Button>
-                      ) : null}
-                    </div>
-                  </TableCell>
-                </TableRow>
-              );
-            })}
-          </TableBody>
-        </Table>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>UID</TableHead>
+                <TableHead>Nom</TableHead>
+                <TableHead>Type</TableHead>
+                <TableHead>Début</TableHead>
+                <TableHead>Fin</TableHead>
+                <TableHead>Durée</TableHead>
+                <TableHead>Mode</TableHead>
+                <TableHead>Prédécesseurs</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {selection.rows.map((row) => {
+                const collapsed = selection.collapsedUids.has(row.uid);
+                const selected = selection.selectedUids.has(row.uid);
+                const isFocusable =
+                  selection.focusedUid === row.uid ||
+                  (selection.focusedUid === null && row.uid === selection.rows[0]?.uid);
+                return (
+                  <TableRow
+                    key={row.uid}
+                    ref={(element) => {
+                      if (element) {
+                        selection.rowRefs.current.set(row.uid, element);
+                      } else {
+                        selection.rowRefs.current.delete(row.uid);
+                      }
+                    }}
+                    data-state={selected ? "selected" : undefined}
+                    aria-selected={selected}
+                    tabIndex={isFocusable ? 0 : -1}
+                    className="cursor-pointer outline-none"
+                    onClick={(event) => selection.selectRow(row, event)}
+                    onFocus={() => selection.setFocusedUid(row.uid)}
+                    onKeyDown={(event) => selection.onRowKeyDown(event, row)}
+                  >
+                    <TableCell>{row.id_display ?? row.uid}</TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-1" style={{ paddingLeft: `${row.depth * 1.25}rem` }}>
+                        {row.hasChildren ? (
+                          <button
+                            type="button"
+                            aria-label={collapsed ? `Déplier ${row.name}` : `Replier ${row.name}`}
+                            className="flex size-6 items-center justify-center"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              selection.toggleCollapsed(row.uid);
+                            }}
+                          >
+                            {collapsed ? <ChevronRight aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}
+                          </button>
+                        ) : (
+                          <span className="size-6" />
+                        )}
+                        {row.is_milestone ? "◆ " : ""}
+                        {row.name}
+                      </div>
+                    </TableCell>
+                    <TableCell>{taskTypeLabel(row)}</TableCell>
+                    <PlanningScheduleCells
+                      row={row}
+                      draft={scheduleDrafts.scheduleDraftFor(row)}
+                      readOnly={readOnly}
+                      hasScheduleUpdate={Boolean(onScheduleUpdate)}
+                      mutationBusy={mutationBusy}
+                      tasksByUid={tasksByUid}
+                      onUpdateDraft={(field, value) => scheduleDrafts.updateScheduleDraft(row, field, value)}
+                      onCommit={() => void scheduleDrafts.commitScheduleEdit(row)}
+                      onCommitModeChange={(isManual) => void scheduleDrafts.commitModeChange(row, isManual)}
+                      onFieldKeyDown={scheduleDrafts.onScheduleFieldKeyDown}
+                    />
+                    <TableCell>
+                      <div className="flex items-center gap-2">
+                        <span>{predecessorsLabel(row)}</span>
+                        {!readOnly && onEditLinks ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={mutationBusy}
+                            aria-label={`Éditer les prédécesseurs de ${row.name}`}
+                            onClick={(event: MouseEvent<HTMLButtonElement>) => {
+                              event.stopPropagation();
+                              taskLinks.openLinksDialog(row);
+                            }}
+                          >
+                            Éditer
+                          </Button>
+                        ) : null}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
         )}
         {readOnlyNotice}
       </CardContent>
-      <Dialog
-        open={editingTask !== null}
-        onOpenChange={(open) => {
-          // Ignore close attempts (Escape, backdrop click, the header X) while a submission is
-          // in flight, otherwise the dialog could close before we know if it actually succeeded.
-          if (!open && !linkFormBusy) closeLinksDialog();
-        }}
-      >
-        <DialogContent>
-          {editingTask ? (
-            <>
-              <DialogHeader>
-                <DialogTitle>Prédécesseurs de {editingTask.name}</DialogTitle>
-                <DialogDescription>
-                  Ajoutez, modifiez ou supprimez les tâches prédécesseures de cette tâche.
-                </DialogDescription>
-              </DialogHeader>
-              <div className="flex flex-col gap-3">
-                {linkRows.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">Aucun prédécesseur.</p>
-                ) : null}
-                {linkRows.map((row, rowIndex) => (
-                  <div key={row.rowId} className="flex flex-wrap items-center gap-2">
-                    <select
-                      aria-label="Tâche prédécesseure"
-                      className="h-8 rounded-md border border-input bg-background px-2 text-sm"
-                      value={row.predecessorUid ?? ""}
-                      disabled={linkFormBusy}
-                      onChange={(event) =>
-                        updateLinkRow(row.rowId, {
-                          predecessorUid: event.target.value ? Number(event.target.value) : null,
-                        })
-                      }
-                    >
-                      <option value="">Sélectionner une tâche</option>
-                      {linkCandidateTasks.map((candidate) => (
-                        <option key={candidate.uid} value={candidate.uid}>
-                          {candidate.id_display ?? candidate.uid} - {candidate.name}
-                        </option>
-                      ))}
-                    </select>
-                    <select
-                      aria-label="Type de lien"
-                      className="h-8 rounded-md border border-input bg-background px-2 text-sm"
-                      value={row.linkType}
-                      disabled={linkFormBusy}
-                      onChange={(event) => updateLinkRow(row.rowId, { linkType: Number(event.target.value) })}
-                    >
-                      {LINK_TYPE_OPTIONS.map(([value, label]) => (
-                        <option key={value} value={value}>
-                          {label}
-                        </option>
-                      ))}
-                    </select>
-                    <Input
-                      aria-label="Décalage en minutes"
-                      type="number"
-                      className="w-24"
-                      value={row.lagMinutes}
-                      disabled={linkFormBusy}
-                      onChange={(event) => updateLinkRow(row.rowId, { lagMinutes: event.target.value })}
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      disabled={linkFormBusy}
-                      aria-label={`Supprimer la ligne de prédécesseur ${rowIndex + 1}`}
-                      onClick={() => removeLinkRow(row.rowId)}
-                    >
-                      Supprimer
-                    </Button>
-                  </div>
-                ))}
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={linkCandidateTasks.length === 0 || linkFormBusy}
-                  onClick={addLinkRow}
-                >
-                  Ajouter une ligne
-                </Button>
-                {linkFormError ? (
-                  <p role="alert" className="text-sm text-destructive">
-                    {linkFormError}
-                  </p>
-                ) : null}
-              </div>
-              <DialogFooter>
-                <Button type="button" variant="outline" disabled={linkFormBusy} onClick={closeLinksDialog}>
-                  Annuler
-                </Button>
-                <Button type="button" disabled={linkFormBusy || mutationBusy} onClick={() => void submitLinks()}>
-                  {linkFormBusy ? "Enregistrement..." : "Enregistrer"}
-                </Button>
-              </DialogFooter>
-            </>
-          ) : null}
-        </DialogContent>
-      </Dialog>
-      <Dialog
-        open={createDialogOpen}
-        onOpenChange={(open) => {
-          if (!open) closeCreateTaskDialog();
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Ajouter une tâche</DialogTitle>
-            <DialogDescription>Créez une nouvelle tâche dans le planning.</DialogDescription>
-          </DialogHeader>
-          <div className="flex flex-col gap-3">
-            <div className="flex flex-col gap-1">
-              <label htmlFor="new-task-name" className="text-sm font-medium">
-                Nom
-              </label>
-              <Input
-                id="new-task-name"
-                aria-label="Nom de la nouvelle tâche"
-                value={createTaskName}
-                onChange={(event) => setCreateTaskName(event.target.value)}
-                maxLength={512}
-              />
-            </div>
-            <label className="flex items-center gap-2 text-sm">
-              <Checkbox
-                checked={createTaskIsMilestone}
-                onCheckedChange={(checked) => setCreateTaskIsMilestone(Boolean(checked))}
-              />
-              Jalon
-            </label>
-            <div className="flex flex-col gap-1">
-              <label htmlFor="new-task-position" className="text-sm font-medium">
-                Position
-              </label>
-              <select
-                id="new-task-position"
-                aria-label="Position de la nouvelle tâche"
-                className="h-8 rounded-md border border-input bg-background px-2 text-sm"
-                value={createPositionMode}
-                onChange={(event) => setCreatePositionMode(event.target.value as CreateTaskPositionMode)}
-              >
-                <option value="root">Ajouter en tête du planning</option>
-                {singleSelectedTask ? (
-                  <option value="after">Ajouter après « {singleSelectedTask.name} » (même niveau)</option>
-                ) : null}
-                {singleSelectedTask && !singleSelectedTask.is_milestone ? (
-                  <option value="child">Ajouter comme enfant de « {singleSelectedTask.name} »</option>
-                ) : null}
-              </select>
-            </div>
-            {createTaskError ? (
-              <p role="alert" className="text-sm text-destructive">
-                {createTaskError}
-              </p>
-            ) : null}
-          </div>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={closeCreateTaskDialog}>
-              Annuler
-            </Button>
-            <Button type="button" disabled={mutationBusy} onClick={submitCreateTask}>
-              Ajouter
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-      <AlertDialog
-        open={cascadeConflict !== null}
-        onOpenChange={(open) => {
-          if (!open && !cascadeBusy) setCascadeConflict(null);
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Confirmer la suppression en cascade ?</AlertDialogTitle>
-            <AlertDialogDescription>
-              {cascadeConflict ? describeCascadeDescendants(cascadeConflict.descendantUids) : null}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={cascadeBusy}>Annuler</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              disabled={cascadeBusy}
-              onClick={() => void confirmCascadeDelete()}
-            >
-              {cascadeBusy ? "Suppression..." : "Supprimer"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <PlanningTaskLinksDialog
+        editingTask={taskLinks.editingTask}
+        linkCandidateTasks={taskLinks.linkCandidateTasks}
+        linkRows={taskLinks.linkRows}
+        linkFormError={taskLinks.linkFormError}
+        linkFormBusy={taskLinks.linkFormBusy}
+        mutationBusy={mutationBusy}
+        onClose={taskLinks.closeLinksDialog}
+        onAddRow={taskLinks.addLinkRow}
+        onRemoveRow={taskLinks.removeLinkRow}
+        onUpdateRow={taskLinks.updateLinkRow}
+        onSubmit={() => void taskLinks.submitLinks()}
+      />
+      <PlanningCreateTaskDialog
+        open={createTaskDialog.createDialogOpen}
+        name={createTaskDialog.createTaskName}
+        isMilestone={createTaskDialog.createTaskIsMilestone}
+        positionMode={createTaskDialog.createPositionMode}
+        error={createTaskDialog.createTaskError}
+        singleSelectedTask={singleSelectedTask}
+        mutationBusy={mutationBusy}
+        onNameChange={createTaskDialog.setCreateTaskName}
+        onMilestoneChange={createTaskDialog.setCreateTaskIsMilestone}
+        onPositionModeChange={createTaskDialog.setCreatePositionMode}
+        onClose={createTaskDialog.closeCreateTaskDialog}
+        onSubmit={createTaskDialog.submitCreateTask}
+      />
+      <PlanningCascadeDeleteDialog
+        open={deleteSelection.cascadeConflict !== null}
+        description={deleteSelection.cascadeDescription}
+        busy={deleteSelection.cascadeBusy}
+        onCancel={deleteSelection.reset}
+        onConfirm={() => void deleteSelection.confirmCascadeDelete()}
+      />
     </Card>
   );
 }
