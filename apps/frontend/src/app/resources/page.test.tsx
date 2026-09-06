@@ -1,9 +1,10 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   ApiError,
   SessionExpiredError,
+  type AuthUserAdmin,
   type Calendar,
   type CostType,
   type ResourceNode,
@@ -21,6 +22,10 @@ const mocks = vi.hoisted(() => ({
   getInflationRates: vi.fn(),
   getRoleCapacities: vi.fn(),
   getUsers: vi.fn(),
+  createUser: vi.fn(),
+  deleteUser: vi.fn(),
+  setUserStatus: vi.fn(),
+  setUserRole: vi.fn(),
   createCalendar: vi.fn(),
   updateCalendar: vi.fn(),
   deleteCalendar: vi.fn(),
@@ -52,6 +57,10 @@ vi.mock("@/lib/backend", async () => {
     getInflationRates: mocks.getInflationRates,
     getRoleCapacities: mocks.getRoleCapacities,
     getUsers: mocks.getUsers,
+    createUser: mocks.createUser,
+    deleteUser: mocks.deleteUser,
+    setUserStatus: mocks.setUserStatus,
+    setUserRole: mocks.setUserRole,
     createCalendar: mocks.createCalendar,
     updateCalendar: mocks.updateCalendar,
     deleteCalendar: mocks.deleteCalendar,
@@ -111,7 +120,7 @@ async function renderResourcesTab(calendars: Calendar[], roles: ResourceRole[] =
   mocks.getCostRates.mockResolvedValue([]);
   mocks.getInflationRates.mockResolvedValue([]);
   mocks.getRoleCapacities.mockResolvedValue([]);
-  mocks.getUsers.mockResolvedValue([]);
+  mocks.getUsers.mockResolvedValue({ items: [], total: 0 });
 
   render(<ResourcesPage />);
 
@@ -331,7 +340,7 @@ describe("ResourcesPage default calendar warning", () => {
     mocks.getCostRates.mockResolvedValue([]);
     mocks.getInflationRates.mockResolvedValue([]);
     mocks.getRoleCapacities.mockResolvedValue([]);
-    mocks.getUsers.mockResolvedValue([]);
+    mocks.getUsers.mockResolvedValue({ items: [], total: 0 });
 
     render(<ResourcesPage />);
 
@@ -363,7 +372,7 @@ describe("ResourcesPage default calendar warning", () => {
     mocks.getCostRates.mockResolvedValue([]);
     mocks.getInflationRates.mockResolvedValue([]);
     mocks.getRoleCapacities.mockResolvedValue([]);
-    mocks.getUsers.mockResolvedValue([]);
+    mocks.getUsers.mockResolvedValue({ items: [], total: 0 });
 
     render(<ResourcesPage />);
 
@@ -396,7 +405,7 @@ describe("ResourcesPage default calendar warning", () => {
     mocks.getCostRates.mockResolvedValue([]);
     mocks.getInflationRates.mockResolvedValue([]);
     mocks.getRoleCapacities.mockResolvedValue([]);
-    mocks.getUsers.mockResolvedValue([]);
+    mocks.getUsers.mockResolvedValue({ items: [], total: 0 });
 
     render(<ResourcesPage />);
 
@@ -459,7 +468,7 @@ describe("ResourcesPage reload race", () => {
     mocks.getCostRates.mockResolvedValue([]);
     mocks.getInflationRates.mockResolvedValue([]);
     mocks.getRoleCapacities.mockResolvedValue([]);
-    mocks.getUsers.mockResolvedValue([]);
+    mocks.getUsers.mockResolvedValue({ items: [], total: 0 });
 
     render(<ResourcesPage />);
 
@@ -503,7 +512,7 @@ describe("ResourcesPage cost types table (E8-02)", () => {
     mocks.getCostRates.mockResolvedValue([]);
     mocks.getInflationRates.mockResolvedValue([]);
     mocks.getRoleCapacities.mockResolvedValue([]);
-    mocks.getUsers.mockResolvedValue([]);
+    mocks.getUsers.mockResolvedValue({ items: [], total: 0 });
   });
 
   afterEach(() => {
@@ -770,5 +779,217 @@ describe("ResourcesPage cost types table (E8-02)", () => {
     resolveStalePage({ items: [], total: 0 });
     await waitFor(() => expect(screen.getByText("NEW")).toBeInTheDocument());
     expect(screen.queryByRole("status", { name: "Chargement des données" })).not.toBeInTheDocument();
+  });
+});
+
+const userFixture = (overrides: Partial<AuthUserAdmin> = {}): AuthUserAdmin =>
+  ({
+    id: 1,
+    email: "alice@example.com",
+    is_active: true,
+    is_admin: false,
+    created_at: "2026-08-01T00:00:00Z",
+    updated_at: "2026-08-01T00:00:00Z",
+    ...overrides,
+  }) as AuthUserAdmin;
+
+describe("ResourcesPage users table (E8-09)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getResourceNodes.mockResolvedValue([]);
+    mocks.getResourceRoles.mockResolvedValue([]);
+    mocks.getCalendars.mockResolvedValue([]);
+    mocks.getCostTypes.mockResolvedValue({ items: [], total: 0 });
+    mocks.getCostCategories.mockResolvedValue([]);
+    mocks.getCostRates.mockResolvedValue([]);
+    mocks.getInflationRates.mockResolvedValue([]);
+    mocks.getRoleCapacities.mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  async function openUsersTab() {
+    render(<ResourcesPage />);
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("tab", { name: "Utilisateurs" }));
+  }
+
+  it("requests the users tab's own paginated page with an explicit page size", async () => {
+    mocks.getUsers.mockResolvedValue({ items: [userFixture({})], total: 1 });
+    await openUsersTab();
+    await waitFor(() => expect(screen.getByText("alice@example.com")).toBeInTheDocument());
+    expect(mocks.getUsers).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ limit: 20, offset: 0 }),
+    );
+  });
+
+  it("paginates: clicking Suivant refetches the users table with the next offset", async () => {
+    mocks.getUsers.mockResolvedValue({ items: [userFixture({})], total: 25 });
+    await openUsersTab();
+    const suivant = await screen.findByRole("button", { name: "Suivant" });
+    await waitFor(() => expect(suivant).toBeEnabled());
+
+    fireEvent.click(suivant);
+
+    await waitFor(() =>
+      expect(mocks.getUsers).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ limit: 20, offset: 20 }),
+      ),
+    );
+  });
+
+  it("searches: typing in the users search box debounces then refetches with q, resetting to offset 0", async () => {
+    mocks.getUsers.mockResolvedValue({ items: [userFixture({})], total: 1 });
+    await openUsersTab();
+    const searchInput = await screen.findByLabelText("Rechercher un utilisateur");
+
+    fireEvent.change(searchInput, { target: { value: "alice" } });
+
+    await waitFor(() =>
+      expect(mocks.getUsers).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ q: "alice", offset: 0 }),
+      ),
+    );
+  });
+
+  it("sorts: clicking the Email column header refetches with sort=email", async () => {
+    mocks.getUsers.mockResolvedValue({ items: [userFixture({})], total: 1 });
+    await openUsersTab();
+    await screen.findByRole("columnheader", { name: "Email" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Email" }));
+
+    await waitFor(() =>
+      expect(mocks.getUsers).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ sort: "email" }),
+      ),
+    );
+  });
+
+  it("keeps the create-user button accessible regardless of which users page is displayed", async () => {
+    mocks.getUsers.mockResolvedValue({ items: [userFixture({})], total: 25 });
+    await openUsersTab();
+    const suivant = await screen.findByRole("button", { name: "Suivant" });
+    await waitFor(() => expect(suivant).toBeEnabled());
+
+    fireEvent.click(suivant);
+
+    await waitFor(() => expect(mocks.getUsers).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("button", { name: "Ajouter un utilisateur" })).toBeInTheDocument();
+  });
+
+  it("preserves the existing error display when the users list is unreachable", async () => {
+    mocks.getUsers.mockRejectedValue(new ApiError(500, "Liste des utilisateurs indisponible."));
+    await openUsersTab();
+
+    await waitFor(() => expect(screen.getByText("Liste des utilisateurs indisponible.")).toBeInTheDocument());
+  });
+
+  it("freezes pagination and search while a destructive confirmation is open for a user", async () => {
+    mocks.getUsers.mockResolvedValue({ items: [userFixture({})], total: 25 });
+    await openUsersTab();
+    await waitFor(() => expect(screen.getByText("alice@example.com")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "Désactiver" }));
+    await screen.findByRole("alertdialog");
+
+    // The background content (including the DataTable's own controls) is made
+    // `inert` by the modal alert dialog itself -- `{ hidden: true }` is needed here
+    // purely to still be able to query past that for the assertion below; in a real
+    // browser this content is entirely unreachable while the dialog is open, which
+    // is the primary guarantee. `isEditing` is the defense-in-depth layer for
+    // whatever remains reachable (e.g. keyboard users tabbing before the dialog
+    // gains focus, or a future change that renders the confirmation differently).
+    expect(screen.getByLabelText("Rechercher un utilisateur")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Suivant", hidden: true })).toBeDisabled();
+  });
+
+  it("targets the originally selected user's status update even if the underlying list changes while the confirmation is open", async () => {
+    const userA = userFixture({ id: 1, email: "alice@example.com", is_active: true });
+    const userB = userFixture({ id: 2, email: "bob@example.com", is_active: true });
+    const userC = userFixture({ id: 3, email: "carol@example.com", is_active: true });
+
+    // A session-token refresh is the one thing on this page that can trigger a
+    // background refetch of the users list without any user interaction (every
+    // control that could otherwise do so -- search, sort, pagination, and even the
+    // "Ajouter un utilisateur" button behind the modal overlay -- is unreachable
+    // for as long as the confirmation dialog is open). Capturing the stable
+    // `onSessionRefresh` callback lets the test trigger that refresh deliberately,
+    // once the dialog is already open, instead of racing it against the initial
+    // load.
+    let onSessionRefresh: ((next: { accessToken: string }) => void) | null = null;
+    mocks.getResourceRoles.mockImplementation(
+      (_tokens: unknown, refresh: (next: { accessToken: string }) => void) => {
+        onSessionRefresh ??= refresh;
+        return Promise.resolve([]);
+      },
+    );
+    let listReplaced = false;
+    mocks.getUsers.mockImplementation(() =>
+      Promise.resolve(listReplaced ? { items: [userB, userC], total: 2 } : { items: [userA, userB], total: 2 }),
+    );
+    mocks.setUserStatus.mockResolvedValue({ ...userA, is_active: false });
+
+    render(<ResourcesPage />);
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("tab", { name: "Utilisateurs" }));
+    await waitFor(() => expect(screen.getByText("alice@example.com")).toBeInTheDocument());
+
+    // Open the confirmation for Alice specifically.
+    const aliceRow = screen.getByText("alice@example.com").closest("tr");
+    if (!aliceRow) throw new Error("row not found");
+    fireEvent.click(within(aliceRow).getByRole("button", { name: "Désactiver" }));
+    const alertDialog = await screen.findByRole("alertdialog");
+    expect(within(alertDialog).getByText(/alice@example.com sera désactiver/)).toBeInTheDocument();
+
+    // Trigger the background session refresh now, with the dialog already open:
+    // the users tab's own effect re-runs and replaces the underlying list --
+    // Alice isn't even in it any more.
+    listReplaced = true;
+    if (!onSessionRefresh) throw new Error("onSessionRefresh was never captured");
+    act(() => onSessionRefresh!({ accessToken: "refreshed-token" }));
+    await waitFor(() => expect(screen.getByText("carol@example.com")).toBeInTheDocument());
+    expect(screen.queryByText("alice@example.com")).not.toBeInTheDocument();
+
+    // The confirmation dialog itself must be unaffected by the list swap and must
+    // still target Alice specifically when confirmed -- not "whoever is now in that
+    // row" and not silently dropped.
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Désactiver" }));
+
+    await waitFor(() =>
+      expect(mocks.setUserStatus).toHaveBeenCalledExactlyOnceWith(1, false, expect.anything(), expect.anything()),
+    );
+  });
+
+  it("targets the originally selected user's deletion even if the list is reordered by a concurrent sort change from elsewhere", async () => {
+    const userA = userFixture({ id: 1, email: "alice@example.com" });
+    const userB = userFixture({ id: 2, email: "bob@example.com" });
+    mocks.getUsers.mockResolvedValue({ items: [userA, userB], total: 2 });
+    mocks.deleteUser.mockResolvedValue(undefined);
+
+    await openUsersTab();
+    await waitFor(() => expect(screen.getByText("bob@example.com")).toBeInTheDocument());
+
+    // Open the deletion confirmation for Bob, the second row.
+    const bobRow = screen.getByText("bob@example.com").closest("tr");
+    if (!bobRow) throw new Error("row not found");
+    fireEvent.click(within(bobRow).getByRole("button", { name: "Supprimer" }));
+    const alertDialog = await screen.findByRole("alertdialog");
+    expect(within(alertDialog).getByText(/bob@example.com/)).toBeInTheDocument();
+
+    fireEvent.click(within(alertDialog).getByRole("button", { name: "Supprimer" }));
+
+    await waitFor(() => expect(mocks.deleteUser).toHaveBeenCalledExactlyOnceWith(2, expect.anything(), expect.anything()));
   });
 });

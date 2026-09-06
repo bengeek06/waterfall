@@ -314,14 +314,16 @@ export function getMe(tokens: SessionTokens, onSessionRefresh: (next: SessionTok
 export async function getUsers(
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
-): Promise<AuthUserAdmin[]> {
+  listParams: ListQueryParams = {},
+): Promise<ListPage<AuthUserAdmin>> {
+  const query = buildListQuery(listParams);
   const page = await authRequest<components["schemas"]["UserAdminListRead"]>(
-    "/auth/users",
+    `/auth/users${query}`,
     tokens,
     { method: "GET" },
     onSessionRefresh,
   );
-  return page.items;
+  return { items: page.items, total: page.total };
 }
 
 export function createUser(
