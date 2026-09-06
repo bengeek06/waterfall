@@ -1,5 +1,5 @@
-COMPOSE := docker compose -f infra/docker/docker-compose.yml
-COMPOSE_FULL := docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.full.yml
+COMPOSE := docker compose --env-file .env -f infra/docker/docker-compose.yml
+COMPOSE_FULL := docker compose --env-file .env -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.full.yml
 BACKEND := apps/backend
 PYTHON := $(CURDIR)/.venv/bin/python
 RUFF := $(PYTHON) -m ruff
