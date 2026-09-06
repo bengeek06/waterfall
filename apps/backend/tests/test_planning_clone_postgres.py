@@ -17,10 +17,11 @@ several tasks deep), validated and set as the project's reference, then cloned v
 then `create_planning` -- directly against a disposable PostgreSQL database, proving the
 fix holds there too rather than only against SQLite's own query-planning quirks.
 
-`postgres_app_database_url` (below) is registered as a fixture for the whole test
-session via `pytest_plugins` in tests/conftest.py, not imported here by name --
-importing a `@pytest.fixture`-decorated callable into a module that also takes it as a
-test parameter trips ruff's F811.
+`postgres_app_database_url`, taken as a parameter by the test function below, is
+registered as a fixture for the whole test session via `pytest_plugins` in
+tests/conftest.py (it lives in tests/_postgres_support.py), not imported here by
+name -- importing a `@pytest.fixture`-decorated callable into a module that also
+takes it as a test parameter trips ruff's F811.
 """
 
 from __future__ import annotations

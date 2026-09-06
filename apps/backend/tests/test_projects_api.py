@@ -654,14 +654,17 @@ def test_creates_new_version_from_a_hierarchical_validated_planning() -> None:
     # query's result violated the FK.
     #
     # The unfiltered `SELECT ... WHERE planning_id = X` in create_planning has no
-    # ORDER BY, and both SQLite and PostgreSQL favour the (planning_id, uid) index
-    # backing the composite FK/uniqueness constraint for such a small table, returning
-    # rows in ascending *uid* order rather than insertion order. Root is therefore given
-    # the highest uid and grandchild the lowest, decoupling "hierarchy depth" from "uid
-    # value" so the query reliably returns grandchild/child/root -- child-before-parent
-    # -- and reproduces the bug, while every row is still perfectly valid to insert in
-    # straightforward root-then-child-then-grandchild order (each parent already exists
-    # by the time its child references it).
+    # ORDER BY, and SQLite favours the (planning_id, uid) index backing the composite
+    # FK/uniqueness constraint for such a small table, returning rows in ascending
+    # *uid* order rather than insertion order (see test_planning_clone_postgres.py for
+    # why PostgreSQL needs a different reproduction: it plans that same query as a
+    # sequential/heap scan for a table this size, returning insertion order instead).
+    # Root is therefore given the highest uid and grandchild the lowest, decoupling
+    # "hierarchy depth" from "uid value" so the query reliably returns
+    # grandchild/child/root -- child-before-parent -- and reproduces the bug here,
+    # while every row is still perfectly valid to insert in straightforward
+    # root-then-child-then-grandchild order (each parent already exists by the time
+    # its child references it).
     with TestClient(app) as client:
         headers = _auth_headers(client, "projects.hierarchical-clone@example.com")
         owner_id = _current_user_id(client, headers)
