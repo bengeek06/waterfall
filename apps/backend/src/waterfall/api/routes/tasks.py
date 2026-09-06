@@ -5,6 +5,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from waterfall.api.dependencies import get_current_active_user
+from waterfall.api.pagination import ListParams, list_params
 from waterfall.api.routes.planning_support import (
     _planning_detail,  # pyright: ignore[reportPrivateUsage]
     _to_task_reads,  # pyright: ignore[reportPrivateUsage]
@@ -29,41 +30,45 @@ from waterfall.models.user import User
 from waterfall.models.wf_core import WfTaskEnrichment
 from waterfall.schemas.projects import (
     TaskDescriptionUpdate,
+    TaskListRead,
     TaskRead,
     TaskRoleAssignmentCreate,
+    TaskRoleAssignmentListRead,
     TaskRoleAssignmentRead,
     TaskRoleAssignmentUpdate,
 )
 from waterfall.schemas.resources import CostTypeKind
+from waterfall.services import apply_pagination
 from waterfall.services.project_lifecycle import ensure_project_mutable
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
 
-@router.get("/{project_id}/tasks", response_model=list[TaskRead])
+@router.get("/{project_id}/tasks", response_model=TaskListRead)
 def list_project_tasks(
     project_id: int,
-    limit: int = Query(default=200, ge=1, le=2000),
-    offset: int = Query(default=0, ge=0),
     planning_id: int | None = Query(default=None, gt=0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
-) -> list[TaskRead]:
+) -> TaskListRead:
+    # Intentionally not paginated (EPIC E7, issue #115): this endpoint feeds the
+    # planning editor, which needs the whole task tree to reconstruct the
+    # hierarchy and compute summary-task durations -- truncating it would
+    # produce orphaned parents and wrong aggregates.
     project = get_project_or_404(db, project_id, current_user.id)
     selected_id = planning_id or project.displayed_planning_id
     if selected_id is not None:
         planning = get_planning_or_404(db, project_id, selected_id)
-        return _planning_detail(db, planning, offset=offset, limit=limit).tasks
-
-    tasks = (
-        db.query(MsTask)
-        .filter(MsTask.project_id == project_id)
-        .order_by(MsTask.outline_number.asc().nulls_last(), MsTask.id.asc())
-        .offset(offset)
-        .limit(limit)
-        .all()
-    )
-    return _to_task_reads(db, project_id, tasks)
+        items = _planning_detail(db, planning).tasks
+    else:
+        tasks = (
+            db.query(MsTask)
+            .filter(MsTask.project_id == project_id)
+            .order_by(MsTask.outline_number.asc().nulls_last(), MsTask.id.asc())
+            .all()
+        )
+        items = _to_task_reads(db, project_id, tasks)
+    return TaskListRead(items=items, total=len(items), limit=None, offset=0)
 
 
 @router.patch("/{project_id}/tasks/{task_uid}", response_model=TaskRead)
@@ -117,28 +122,43 @@ def update_task_description(
 
 @router.get(
     "/{project_id}/tasks/{task_uid}/role-assignments",
-    response_model=list[TaskRoleAssignmentRead],
+    response_model=TaskRoleAssignmentListRead,
 )
 def list_task_role_assignments(
     project_id: int,
     task_uid: int,
+    params: ListParams = Depends(list_params),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
-) -> list[TaskRoleAssignmentRead]:
+) -> TaskRoleAssignmentListRead:
     get_project_or_404(db, project_id, current_user.id)
     task = get_task_or_404(db, project_id, task_uid)
-    rows = (
+    query = (
         db.query(TaskRoleAssignment, ResourceRole, CostCategory)
         .join(ResourceRole, TaskRoleAssignment.role_id == ResourceRole.id)
         .join(CostCategory, ResourceRole.cost_category_id == CostCategory.id)
         .filter(TaskRoleAssignment.task_id == task.id)
-        .order_by(ResourceRole.name)
-        .all()
     )
-    return [
-        to_task_role_assignment_read(assignment, role, category)
-        for assignment, role, category in rows
-    ]
+    result = apply_pagination(
+        query,
+        params,
+        sortable={
+            "role_name": ResourceRole.name,
+            "quantity": TaskRoleAssignment.quantity,
+            "hours": TaskRoleAssignment.hours,
+        },
+        default_sort=ResourceRole.name,
+        tiebreaker=TaskRoleAssignment.id,
+    )
+    return TaskRoleAssignmentListRead(
+        items=[
+            to_task_role_assignment_read(assignment, role, category)
+            for assignment, role, category in result.rows
+        ],
+        total=result.total,
+        limit=result.limit,
+        offset=result.offset,
+    )
 
 
 @router.post(
