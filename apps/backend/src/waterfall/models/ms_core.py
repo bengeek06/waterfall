@@ -39,6 +39,14 @@ class MsProject(Base):
             "'en_cours', 'termine', 'abandonne')",
             name="ck_ms_project_status",
         ),
+        # Issue #116 (E7-05): GET /projects always filters on owner_id and sorts by
+        # name, status, or id (no default_sort; absent ?sort= falls back to the id
+        # tiebreaker alone, which idx_ms_project_owner_id also covers). name and
+        # status are not unique per owner, so those two composites carry the id
+        # tiebreaker; id is already the tiebreaker itself.
+        Index("idx_ms_project_owner_name", "owner_id", "name", "id"),
+        Index("idx_ms_project_owner_status", "owner_id", "status", "id"),
+        Index("idx_ms_project_owner_id", "owner_id", "id"),
         # These three constraints close an unresolvable cycle between ms_project,
         # wf_planning, and wf_estimate (ms_project references rows that in turn
         # reference ms_project.id). use_alter=True defers them to a post-create

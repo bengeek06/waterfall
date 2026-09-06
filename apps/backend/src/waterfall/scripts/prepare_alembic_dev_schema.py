@@ -4,9 +4,12 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, cast
 
+import sqlalchemy as sa
+from alembic import op
 from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.migration import MigrationContext
+from alembic.operations import Operations
 from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, ForeignKeyConstraint, create_engine, inspect, text
 from sqlalchemy.engine import Connection
@@ -16,8 +19,7 @@ from waterfall.db.base import Base
 from waterfall.db.schema_revision import get_alembic_config_path
 from waterfall.models import User
 
-HEAD_REVISION = "20260903_0006"
-REVISION_BEFORE_PLANNING_REVISION = "20260901_0005"
+HEAD_REVISION = "20260906_0007"
 STANDARD_CALENDAR_CODE = "STANDARD"
 STANDARD_WEEKDAY_HOURS = {
     1: Decimal("0.00"),
@@ -177,6 +179,33 @@ def _repair_calendar_invariants(connection: Connection) -> None:
         )
 
 
+def _add_missing_planning_revision_column(connection: Connection) -> None:
+    """Adds `wf_planning.revision` exactly as migration 20260903_0006 does, applied
+    directly against `connection`'s live transaction via Alembic's `Operations` API
+    (the same one migration scripts use through the `alembic.op` proxy).
+
+    `_only_missing_planning_revision` recognizes a `create_all`-built schema whose
+    *only* gap relative to head is this one column. The straightforward-looking fix
+    -- stamp to the revision right before 20260903_0006 and let `alembic upgrade
+    head` replay every migration since -- only worked back when that migration was
+    also head: replaying migrations added *after* it (e.g. #116's pagination
+    indexes) against a `create_all` schema that already has their effect (because
+    `create_all` always builds from *today's* `Base.metadata`) fails trying to
+    recreate objects that already exist. Applying just this one missing piece here,
+    then stamping straight to `HEAD_REVISION`, sidesteps that entirely -- mirroring
+    how the sibling `_schema_matches_head` branch below already stamps straight to
+    head after its own direct-SQL repairs.
+    """
+    context = MigrationContext.configure(connection)
+    with Operations.context(context):
+        with op.batch_alter_table("wf_planning") as batch_op:
+            batch_op.add_column(
+                sa.Column("revision", sa.Integer(), nullable=False, server_default="0")
+            )
+        with op.batch_alter_table("wf_planning") as batch_op:
+            batch_op.alter_column("revision", server_default=None)
+
+
 def _stamp_revision(connection: Connection, revision: str) -> None:
     if not inspect(connection).has_table("alembic_version"):
         connection.execute(
@@ -218,9 +247,10 @@ def prepare_legacy_create_all_schema(engine: Engine) -> str | None:
             return HEAD_REVISION
 
         if _only_missing_planning_revision(connection):
+            _add_missing_planning_revision_column(connection)
             _repair_calendar_invariants(connection)
-            _stamp_revision(connection, REVISION_BEFORE_PLANNING_REVISION)
-            return REVISION_BEFORE_PLANNING_REVISION
+            _stamp_revision(connection, HEAD_REVISION)
+            return HEAD_REVISION
 
         raise RuntimeError(
             "Unversioned legacy database schema has unsupported structural drift and "

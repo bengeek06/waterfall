@@ -105,7 +105,16 @@ def apply_pagination(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Unknown sort column: {column_name}",
             )
-        order_columns = [column.desc() if descending else column.asc(), tiebreaker]
+        # The tiebreaker must sort in the same direction as the requested column:
+        # a single ascending B-tree index can serve `ORDER BY col ASC, id ASC` via a
+        # forward scan and `ORDER BY col DESC, id DESC` via a backward scan, but not
+        # the mixed `col DESC, id ASC` a plain `tiebreaker` (implicitly ascending)
+        # would produce here -- that mixed order can't be satisfied by either scan
+        # direction of a same-order composite index, forcing an explicit sort step
+        # on every descending request regardless of how the index is built.
+        order_columns = (
+            [column.desc(), tiebreaker.desc()] if descending else [column.asc(), tiebreaker.asc()]
+        )
     elif default_sort is not None:
         order_columns = [default_sort, tiebreaker]
     else:
