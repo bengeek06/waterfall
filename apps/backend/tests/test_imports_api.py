@@ -165,7 +165,7 @@ def test_import_batch_minimal_flow() -> None:
 
         tasks_response: Response = client.get(f"/projects/{project_id}/tasks", headers=headers)
         assert tasks_response.status_code == 200
-        assert tasks_response.json() == []
+        assert tasks_response.json()["items"] == []
 
         rerun_response: Response = client.post(
             f"/imports/v1/batches/{batch_id}/run",
@@ -210,7 +210,7 @@ def test_import_diff_is_non_mutating_and_requires_confirmation() -> None:
         )
         assert diff_response.status_code == 200
         assert diff_response.json()["items"][0]["kind"] == "added"
-        assert client.get(f"/projects/{project_id}/tasks", headers=headers).json() == []
+        assert client.get(f"/projects/{project_id}/tasks", headers=headers).json()["items"] == []
 
         confirmation_response = client.post(
             f"/imports/v1/batches/{batch_id}/run",
@@ -492,7 +492,9 @@ def test_identical_source_after_validation_creates_a_new_draft() -> None:
             return batch_id
 
         import_source()
-        planning = client.get(f"/projects/{project_id}/plannings", headers=headers).json()[0]
+        planning = client.get(f"/projects/{project_id}/plannings", headers=headers).json()["items"][
+            0
+        ]
         assert (
             client.post(
                 f"/projects/{project_id}/plannings/{planning['id']}/validate", headers=headers
@@ -503,7 +505,7 @@ def test_identical_source_after_validation_creates_a_new_draft() -> None:
 
         plannings = client.get(f"/projects/{project_id}/plannings", headers=headers)
         assert plannings.status_code == 200
-        assert [item["status"] for item in plannings.json()] == ["validated", "draft"]
+        assert [item["status"] for item in plannings.json()["items"]] == ["validated", "draft"]
         session_factory = get_session_factory()
         with session_factory() as session:
             second_batch = (
@@ -651,7 +653,7 @@ def test_import_api_writes_draft_snapshots_and_preserves_validated_history() -> 
 
         first_planning_response = client.get(f"/projects/{project_id}/plannings", headers=headers)
         assert first_planning_response.status_code == 200
-        first_planning_items = cast(list[dict[str, Any]], first_planning_response.json())
+        first_planning_items = cast(list[dict[str, Any]], first_planning_response.json()["items"])
         assert len(first_planning_items) == 1
         first_planning_id = cast(int, first_planning_items[0]["id"])
 
