@@ -194,7 +194,7 @@ def test_migration_upgrade_creates_expected_schema() -> None:
 
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260903_0006"
+                == "20260906_0007"
             )
 
 
@@ -328,7 +328,7 @@ def test_calendar_default_flag_migration_backfills_standard_and_enforces_uniquen
 
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260903_0006"
+                == "20260906_0007"
             )
 
         # STANDARD is already backfilled to is_default=1 above, so a second row
@@ -811,7 +811,7 @@ def _assert_create_all_schema_can_be_stamped_by_migrate_up(database_url: str) ->
     _run_alembic(database_url, "head")
 
     with _disposable_engine(database_url) as engine, engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260903_0006"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260906_0007"
         standard = connection.execute(
             text("SELECT id, is_active, is_default FROM wf_calendar WHERE code = 'STANDARD'")
         ).one()
@@ -931,11 +931,21 @@ def test_legacy_prepare_reuses_empty_alembic_version_table() -> None:
         with _disposable_engine(database_url) as engine, engine.connect() as connection:
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260903_0006"
+                == "20260906_0007"
             )
 
 
 def test_create_all_schema_before_planning_revision_is_repaired_then_migrated() -> None:
+    """Simulates an unversioned legacy database whose schema matches head except for
+    the one gap `_only_missing_planning_revision` specifically recognizes and
+    repairs: a missing `wf_planning.revision` column (added by migration
+    20260903_0006). Recovery now applies that column directly and stamps straight to
+    `HEAD_REVISION` (see `_add_missing_planning_revision_column`) rather than
+    stamping to an intermediate revision and replaying every migration since --
+    `Base.metadata.create_all` always builds *today's* full schema, so replaying a
+    later, purely additive migration (e.g. #116's pagination indexes) against it
+    would fail trying to recreate objects that already exist.
+    """
     with TemporaryDirectory() as temporary_directory:
         database_path = Path(temporary_directory) / "create_all_before_revision.db"
         database_url = f"sqlite+pysqlite:///{database_path}"
@@ -949,7 +959,7 @@ def test_create_all_schema_before_planning_revision_is_repaired_then_migrated() 
         with _disposable_engine(database_url) as engine, engine.connect() as connection:
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260903_0006"
+                == "20260906_0007"
             )
             planning_columns = {
                 column["name"] for column in inspect(connection).get_columns("wf_planning")
@@ -1056,7 +1066,7 @@ def test_schema_revision_check_rejects_database_behind_head() -> None:
             assert_database_schema_current(engine)
 
     assert error.value.current_revision == "20260901_0005"
-    assert error.value.expected_revision == "20260903_0006"
+    assert error.value.expected_revision == "20260906_0007"
     assert "Run `make migrate-up`" in str(error.value)
 
 
@@ -1102,7 +1112,7 @@ def test_postgres_migration_upgrade_head_succeeds(postgres_database_url: str) ->
             "wf_estimate",
             "wf_estimate_task_row",
         }.issubset(table_names)
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260903_0006"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260906_0007"
 
 
 def test_postgres_project_external_uid_accepts_canonical_guid(
