@@ -646,6 +646,107 @@ def test_delete_project_with_displayed_planning_snapshot() -> None:
         assert project_response.status_code == 404
 
 
+def test_creates_new_version_from_a_hierarchical_validated_planning() -> None:
+    # Regression for #103: cloning a validated planning via source_planning_id used to
+    # insert every cloned WfPlanningTaskSnapshot with its real parent_uid already set in
+    # one batch. parent_uid is a composite self-reference onto (planning_id, uid) within
+    # that same batch, so a child snapshot landing before its parent in the source
+    # query's result violated the FK.
+    #
+    # The unfiltered `SELECT ... WHERE planning_id = X` in create_planning has no
+    # ORDER BY, and both SQLite and PostgreSQL favour the (planning_id, uid) index
+    # backing the composite FK/uniqueness constraint for such a small table, returning
+    # rows in ascending *uid* order rather than insertion order. Root is therefore given
+    # the highest uid and grandchild the lowest, decoupling "hierarchy depth" from "uid
+    # value" so the query reliably returns grandchild/child/root -- child-before-parent
+    # -- and reproduces the bug, while every row is still perfectly valid to insert in
+    # straightforward root-then-child-then-grandchild order (each parent already exists
+    # by the time its child references it).
+    with TestClient(app) as client:
+        headers = _auth_headers(client, "projects.hierarchical-clone@example.com")
+        owner_id = _current_user_id(client, headers)
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            project = MsProject(
+                owner_id=owner_id,
+                source_version=2016,
+                save_version_out=16,
+                name="Hierarchical clone source",
+                schedule_from_start=True,
+                start_date=datetime(2026, 1, 5, tzinfo=UTC),
+                finish_date=datetime(2026, 1, 20, tzinfo=UTC),
+                minutes_per_day=480,
+                minutes_per_week=2400,
+                days_per_month=20,
+            )
+            session.add(project)
+            session.flush()
+            project_id = project.id
+
+            planning = WfPlanning(project_id=project_id, version_number=1, status="draft")
+            session.add(planning)
+            session.flush()
+            planning_id = planning.id
+
+            session.add(
+                WfPlanningTaskSnapshot(
+                    planning_id=planning_id,
+                    uid=100,
+                    parent_uid=None,
+                    name="Root",
+                    position=1,
+                    is_summary=True,
+                    is_milestone=False,
+                )
+            )
+            session.add(
+                WfPlanningTaskSnapshot(
+                    planning_id=planning_id,
+                    uid=2,
+                    parent_uid=100,
+                    name="Child",
+                    position=1,
+                    is_summary=False,
+                    is_milestone=False,
+                )
+            )
+            session.add(
+                WfPlanningTaskSnapshot(
+                    planning_id=planning_id,
+                    uid=1,
+                    parent_uid=2,
+                    name="Grandchild",
+                    position=1,
+                    is_summary=False,
+                    is_milestone=False,
+                )
+            )
+            project.displayed_planning_id = planning_id
+            session.commit()
+
+        validate_response = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/validate", headers=headers
+        )
+        assert validate_response.status_code == 200
+        reference_response = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/reference", headers=headers
+        )
+        assert reference_response.status_code == 200
+
+        clone_response = client.post(
+            f"/projects/{project_id}/plannings",
+            json={"source_planning_id": planning_id},
+            headers=headers,
+        )
+
+        assert clone_response.status_code == 201
+        cloned_tasks = {task["uid"]: task for task in clone_response.json()["tasks"]}
+        assert cloned_tasks[100]["parent_uid"] is None
+        assert cloned_tasks[2]["parent_uid"] == 100
+        assert cloned_tasks[1]["parent_uid"] == 2
+
+
 def test_projects_are_isolated_by_owner() -> None:
     with TestClient(app) as client:
         owner_headers = _auth_headers(client)
