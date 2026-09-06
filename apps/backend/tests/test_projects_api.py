@@ -750,6 +750,102 @@ def test_creates_new_version_from_a_hierarchical_validated_planning() -> None:
         assert cloned_tasks[1]["parent_uid"] == 2
 
 
+def test_creates_first_planning_from_a_hierarchical_legacy_project() -> None:
+    # Correctness coverage for #160: create_planning's `else` branch -- copying legacy
+    # MsTask rows into a project's very first WfPlanning, when neither
+    # source_planning_id nor project.displayed_planning_id is set -- was hardened with
+    # the same two-phase parent_uid assignment as the sibling source_planning_id branch
+    # fixed in #103 (same composite self-reference hazard onto (project_id, uid) in
+    # principle, since MsTask carries the same parent/child shape).
+    #
+    # Unlike #103, this is *not* a proven pre-fix regression test: extensive attempts
+    # (adversarial uid gaps, individual per-row flush + UPDATE backfill to control
+    # physical insertion order, both on SQLite and PostgreSQL) never got the unordered
+    # `SELECT ... WHERE project_id = X` to actually return this table's rows
+    # child-before-parent through create_planning's own query -- MsTask's query planning
+    # behaves differently from WfPlanningTaskSnapshot's here, and it did not reproduce
+    # the 409 either before or after the fix. The change is kept as defensive
+    # hardening for symmetry and because MsTask.parent_uid could in principle be
+    # populated out of order by future code (generate_planning_structure, the only
+    # current writer, happens to always assign parent uids before children). This test
+    # verifies the hierarchy still clones correctly, not that it previously failed.
+    with TestClient(app) as client:
+        headers = _auth_headers(client, "projects.legacy-hierarchical-clone@example.com")
+        owner_id = _current_user_id(client, headers)
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            project = MsProject(
+                owner_id=owner_id,
+                source_version=2016,
+                save_version_out=16,
+                name="Legacy hierarchical clone source",
+                schedule_from_start=True,
+                start_date=datetime(2026, 1, 5, tzinfo=UTC),
+                finish_date=datetime(2026, 1, 20, tzinfo=UTC),
+                minutes_per_day=480,
+                minutes_per_week=2400,
+                days_per_month=20,
+            )
+            session.add(project)
+            session.flush()
+            project_id = project.id
+
+            session.add(
+                MsTask(
+                    project_id=project_id,
+                    uid=100,
+                    id_display=1,
+                    parent_uid=None,
+                    name="Root",
+                    task_type=1,
+                    outline_number="1",
+                    outline_level=1,
+                    is_summary=True,
+                    is_milestone=False,
+                )
+            )
+            session.add(
+                MsTask(
+                    project_id=project_id,
+                    uid=2,
+                    id_display=2,
+                    parent_uid=100,
+                    name="Child",
+                    task_type=0,
+                    outline_number="1.1",
+                    outline_level=2,
+                    is_summary=False,
+                    is_milestone=False,
+                )
+            )
+            session.add(
+                MsTask(
+                    project_id=project_id,
+                    uid=1,
+                    id_display=3,
+                    parent_uid=2,
+                    name="Grandchild",
+                    task_type=0,
+                    outline_number="1.1.1",
+                    outline_level=3,
+                    is_summary=False,
+                    is_milestone=False,
+                )
+            )
+            session.commit()
+
+        # No source_planning_id and no displayed_planning_id yet: exercises
+        # create_planning's `else` branch.
+        clone_response = client.post(f"/projects/{project_id}/plannings", json={}, headers=headers)
+
+        assert clone_response.status_code == 201
+        cloned_tasks = {task["uid"]: task for task in clone_response.json()["tasks"]}
+        assert cloned_tasks[100]["parent_uid"] is None
+        assert cloned_tasks[2]["parent_uid"] == 100
+        assert cloned_tasks[1]["parent_uid"] == 2
+
+
 def test_projects_are_isolated_by_owner() -> None:
     with TestClient(app) as client:
         owner_headers = _auth_headers(client)
