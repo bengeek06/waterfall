@@ -311,11 +311,17 @@ export function getMe(tokens: SessionTokens, onSessionRefresh: (next: SessionTok
   return authRequest<AuthUser>("/auth/me", tokens, { method: "GET" }, onSessionRefresh);
 }
 
-export function getUsers(
+export async function getUsers(
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
-) {
-  return authRequest<AuthUserAdmin[]>("/auth/users", tokens, { method: "GET" }, onSessionRefresh);
+): Promise<AuthUserAdmin[]> {
+  const page = await authRequest<components["schemas"]["UserAdminListRead"]>(
+    "/auth/users",
+    tokens,
+    { method: "GET" },
+    onSessionRefresh,
+  );
+  return page.items;
 }
 
 export function createUser(
@@ -351,8 +357,17 @@ export function deleteUser(
   );
 }
 
-export function getResourceNodes(tokens: SessionTokens, onSessionRefresh: (next: SessionTokens) => void) {
-  return authRequest<ResourceNode[]>("/resources/nodes", tokens, { method: "GET" }, onSessionRefresh);
+export async function getResourceNodes(
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+): Promise<ResourceNode[]> {
+  const page = await authRequest<components["schemas"]["ResourceNodeListRead"]>(
+    "/resources/nodes",
+    tokens,
+    { method: "GET" },
+    onSessionRefresh,
+  );
+  return page.items;
 }
 
 export function createResourceNode(
@@ -395,21 +410,22 @@ export function deleteResourceNode(
   );
 }
 
-export function getResourceRoles(
+export async function getResourceRoles(
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
   nodeId?: number,
   includeDescendants = false,
-) {
+): Promise<ResourceRole[]> {
   const query = nodeId
     ? `?node_id=${nodeId}&include_descendants=${includeDescendants}`
     : "";
-  return authRequest<ResourceRole[]>(
+  const page = await authRequest<components["schemas"]["ResourceRoleListRead"]>(
     `/resources/roles${query}`,
     tokens,
     { method: "GET" },
     onSessionRefresh,
   );
+  return page.items;
 }
 
 export function createResourceRole(
@@ -439,18 +455,19 @@ export function updateResourceRole(
   );
 }
 
-export function getCalendars(
+export async function getCalendars(
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
   includeInactive = false,
-) {
+): Promise<Calendar[]> {
   const query = includeInactive ? "?include_inactive=true" : "";
-  return authRequest<Calendar[]>(
+  const page = await authRequest<components["schemas"]["CalendarListRead"]>(
     `/resources/calendars${query}`,
     tokens,
     { method: "GET" },
     onSessionRefresh,
   );
+  return page.items;
 }
 
 export function createCalendar(
@@ -500,32 +517,34 @@ export function deleteCalendar(
   );
 }
 
-export function getCostCategories(
+export async function getCostCategories(
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
   includeInactive = false,
-) {
+): Promise<CostCategory[]> {
   const query = includeInactive ? "?include_inactive=true" : "";
-  return authRequest<CostCategory[]>(
+  const page = await authRequest<components["schemas"]["CostCategoryListRead"]>(
     `/resources/categories${query}`,
     tokens,
     { method: "GET" },
     onSessionRefresh,
   );
+  return page.items;
 }
 
-export function getCostTypes(
+export async function getCostTypes(
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
   includeInactive = false,
-) {
+): Promise<CostType[]> {
   const query = includeInactive ? "?include_inactive=true" : "";
-  return authRequest<CostType[]>(
+  const page = await authRequest<components["schemas"]["CostTypeListRead"]>(
     `/resources/cost-types${query}`,
     tokens,
     { method: "GET" },
     onSessionRefresh,
   );
+  return page.items;
 }
 
 export function createCostType(
@@ -593,8 +612,17 @@ export function updateCostCategory(
   );
 }
 
-export function getCostRates(tokens: SessionTokens, onSessionRefresh: (next: SessionTokens) => void) {
-  return authRequest<CostRate[]>("/resources/rates", tokens, { method: "GET" }, onSessionRefresh);
+export async function getCostRates(
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+): Promise<CostRate[]> {
+  const page = await authRequest<components["schemas"]["CostRateListRead"]>(
+    "/resources/rates",
+    tokens,
+    { method: "GET" },
+    onSessionRefresh,
+  );
+  return page.items;
 }
 
 export function createCostRate(
@@ -624,8 +652,17 @@ export function updateCostRate(
   );
 }
 
-export function getInflationRates(tokens: SessionTokens, onSessionRefresh: (next: SessionTokens) => void) {
-  return authRequest<InflationRate[]>("/resources/inflation", tokens, { method: "GET" }, onSessionRefresh);
+export async function getInflationRates(
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+): Promise<InflationRate[]> {
+  const page = await authRequest<components["schemas"]["InflationRateListRead"]>(
+    "/resources/inflation",
+    tokens,
+    { method: "GET" },
+    onSessionRefresh,
+  );
+  return page.items;
 }
 
 export function setInflationRate(
@@ -642,8 +679,17 @@ export function setInflationRate(
   );
 }
 
-export function getRoleCapacities(tokens: SessionTokens, onSessionRefresh: (next: SessionTokens) => void) {
-  return authRequest<RoleCapacity[]>("/resources/capacities", tokens, { method: "GET" }, onSessionRefresh);
+export async function getRoleCapacities(
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+): Promise<RoleCapacity[]> {
+  const page = await authRequest<components["schemas"]["RoleCapacityListRead"]>(
+    "/resources/capacities",
+    tokens,
+    { method: "GET" },
+    onSessionRefresh,
+  );
+  return page.items;
 }
 
 export function createRoleCapacity(
@@ -717,19 +763,25 @@ export function setUserRole(
   );
 }
 
-export function getProjects(
+export interface ProjectPage {
+  items: Project[];
+  total: number;
+}
+
+export async function getProjects(
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
   limit = 50,
   offset = 0,
   includeArchived = false,
-) {
-  return authRequest<Project[]>(
+): Promise<ProjectPage> {
+  const page = await authRequest<components["schemas"]["ProjectListRead"]>(
     `/projects?limit=${limit}&offset=${offset}&include_archived=${includeArchived}`,
     tokens,
     { method: "GET" },
     onSessionRefresh,
   );
+  return { items: page.items, total: page.total };
 }
 
 export function getProject(
@@ -745,17 +797,18 @@ export function getProject(
   );
 }
 
-export function listProjectEstimates(
+export async function listProjectEstimates(
   projectId: number,
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
-) {
-  return authRequest<ProjectEstimate[]>(
+): Promise<ProjectEstimate[]> {
+  const page = await authRequest<components["schemas"]["ProjectEstimateListRead"]>(
     `/projects/${projectId}/estimates`,
     tokens,
     { method: "GET" },
     onSessionRefresh,
   );
+  return page.items;
 }
 
 export function createProjectEstimate(
@@ -776,32 +829,34 @@ export function createProjectEstimate(
   );
 }
 
-export function listEstimateTaskRows(
+export async function listEstimateTaskRows(
   projectId: number,
   estimateId: number,
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
-) {
-  return authRequest<EstimateTaskRow[]>(
+): Promise<EstimateTaskRow[]> {
+  const page = await authRequest<components["schemas"]["EstimateTaskRowListRead"]>(
     `/projects/${projectId}/estimates/${estimateId}/task-rows`,
     tokens,
     { method: "GET" },
     onSessionRefresh,
   );
+  return page.items;
 }
 
-export function listEstimateCostLines(
+export async function listEstimateCostLines(
   projectId: number,
   estimateId: number,
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
-) {
-  return authRequest<EstimateCostLine[]>(
+): Promise<EstimateCostLine[]> {
+  const page = await authRequest<components["schemas"]["EstimateCostLineListRead"]>(
     `/projects/${projectId}/estimates/${estimateId}/cost-lines`,
     tokens,
     { method: "GET" },
     onSessionRefresh,
   );
+  return page.items;
 }
 
 export type EstimateCostLineCreate = components["schemas"]["EstimateCostLineCreate"];
@@ -1048,19 +1103,18 @@ export function getImportBatchStatus(
   );
 }
 
-export function getProjectTasks(
+export async function getProjectTasks(
   projectId: number,
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
-  limit = 200,
-  offset = 0,
-) {
-  return authRequest<Task[]>(
-    `/projects/${projectId}/tasks?limit=${limit}&offset=${offset}`,
+): Promise<Task[]> {
+  const page = await authRequest<components["schemas"]["TaskListRead"]>(
+    `/projects/${projectId}/tasks`,
     tokens,
     { method: "GET" },
     onSessionRefresh,
   );
+  return page.items;
 }
 
 export function createPlanningStructure(
@@ -1119,17 +1173,18 @@ export async function getPlanningStructureDraft(
   }
 }
 
-export function listPlannings(
+export async function listPlannings(
   projectId: number,
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
-) {
-  return authRequest<Planning[]>(
+): Promise<Planning[]> {
+  const page = await authRequest<components["schemas"]["PlanningListRead"]>(
     `/projects/${projectId}/plannings`,
     tokens,
     { method: "GET" },
     onSessionRefresh,
   );
+  return page.items;
 }
 
 export function getPlanning(
@@ -1381,18 +1436,19 @@ export function updateTaskDescription(
   );
 }
 
-export function getTaskRoleAssignments(
+export async function getTaskRoleAssignments(
   projectId: number,
   taskUid: number,
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
-) {
-  return authRequest<TaskRoleAssignment[]>(
+): Promise<TaskRoleAssignment[]> {
+  const page = await authRequest<components["schemas"]["TaskRoleAssignmentListRead"]>(
     `/projects/${projectId}/tasks/${taskUid}/role-assignments`,
     tokens,
     { method: "GET" },
     onSessionRefresh,
   );
+  return page.items;
 }
 
 export function createTaskRoleAssignment(

@@ -48,6 +48,7 @@ export default function ProjectsPage() {
   const router = useRouter();
   const [session, setSessionState] = useState<SessionTokens | null>(() => getSession());
   const [projects, setProjects] = useState<Project[]>([]);
+  const [projectTotal, setProjectTotal] = useState(0);
   const [projectOffset, setProjectOffset] = useState(0);
   const [includeArchived, setIncludeArchived] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
@@ -91,7 +92,7 @@ export default function ProjectsPage() {
       setError(null);
       try {
         await getMe(session, onSessionRefresh);
-        const projectsData = await getProjects(
+        const projectsPage = await getProjects(
           session,
           onSessionRefresh,
           PROJECT_PAGE_SIZE,
@@ -101,7 +102,8 @@ export default function ProjectsPage() {
         if (cancelled) {
           return;
         }
-        setProjects(projectsData);
+        setProjects(projectsPage.items);
+        setProjectTotal(projectsPage.total);
         setSelectedIds(new Set());
       } catch (cause) {
         if (cancelled) {
@@ -322,7 +324,9 @@ export default function ProjectsPage() {
         {!busy ? (
           <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
             <span className="text-sm text-muted-foreground">
-              {projects.length ? `Projets ${projectOffset + 1} à ${projectOffset + projects.length}` : ""}
+              {projects.length
+                ? `Projets ${projectOffset + 1} à ${projectOffset + projects.length} sur ${projectTotal}`
+                : ""}
             </span>
             <div className="flex gap-2">
               <Button
@@ -336,7 +340,7 @@ export default function ProjectsPage() {
               <Button
                 variant="outline"
                 type="button"
-                disabled={projects.length < PROJECT_PAGE_SIZE}
+                disabled={projectOffset + projects.length >= projectTotal}
                 onClick={() => setProjectOffset((current) => current + PROJECT_PAGE_SIZE)}
               >
                 Suivant
