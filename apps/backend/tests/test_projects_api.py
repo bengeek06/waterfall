@@ -1199,6 +1199,13 @@ def test_list_task_role_assignments_pagination_sort_and_validation() -> None:
         )
         assert invalid_sort.status_code == 400
 
+        searched = client.get(
+            f"/projects/{project_id}/tasks/1001/role-assignments?q=analyste",
+            headers=headers,
+        )
+        assert searched.status_code == 200
+        assert [item["role_name"] for item in searched.json()["items"]] == ["Analyste"]
+
 
 def test_project_estimate_snapshots_tasks_and_validates() -> None:
     with TestClient(app) as client:

@@ -149,6 +149,7 @@ def list_task_role_assignments(
         },
         default_sort=ResourceRole.name,
         tiebreaker=TaskRoleAssignment.id,
+        searchable=(ResourceRole.name,),
     )
     return TaskRoleAssignmentListRead(
         items=[
