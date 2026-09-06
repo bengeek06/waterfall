@@ -155,6 +155,7 @@ export function CostTypesTable(props: CostTypesTableProps) {
             onSortChange={props.onSortChange}
             search={{ value: props.search, onChange: props.onSearchChange, placeholder: "Rechercher un type de coût" }}
             pinnedRow={pinnedRow}
+            getRowClassName={(item) => (item.is_active ? undefined : "opacity-55")}
             isEditing={props.editingId !== null}
             editingReason="Terminez l'édition en cours pour changer de page ou filtrer."
             isLoading={props.isLoading}

@@ -330,9 +330,17 @@ export default function ResourcesPage() {
   // sort/search interaction. Session expiry is the one exception: it must still
   // force a logout like every other data source on this page, regardless of where
   // it's detected.
+  //
+  // Also sets `costTypesLoading` itself (guarded by the shared generation counter,
+  // like the effect above): a mutation can race an in-flight pagination/sort/search
+  // fetch, bumping `costTypesGenerationRef` and making that fetch's own result
+  // (including its `finally`'s `setCostTypesLoading(false)`) obsolete. Without this,
+  // `costTypesLoading` could get stuck `true` forever -- set by the now-abandoned
+  // effect fetch, never reset by anyone, since this function didn't touch it at all.
   async function reloadCostTypesPage() {
     if (!session) return;
     const generation = ++costTypesGenerationRef.current;
+    setCostTypesLoading(true);
     try {
       const page = await getCostTypes(session, onSessionRefresh, true, {
         limit: costTypesLimit,
@@ -346,6 +354,8 @@ export default function ResourcesPage() {
         clearSession();
         router.push("/login");
       }
+    } finally {
+      if (costTypesGenerationRef.current === generation) setCostTypesLoading(false);
     }
   }
 

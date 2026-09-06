@@ -67,6 +67,13 @@ export type DataTableProps<TData> = {
   // pagination or search.
   pinnedRow?: ReactNode;
 
+  // Optional class name for a data row's own <TableRow>, computed per row (e.g. a
+  // dimmed/"opacity-55" style for an inactive item). Column `cell` renderers can
+  // only style their own <TableCell>, not the row itself, so this is the only way
+  // for a caller to affect row-level styling without DataTable hard-coding a
+  // specific business meaning (like "is_active") into a shared component.
+  getRowClassName?: (row: TData) => string | undefined;
+
   isEditing?: boolean;
   editingReason?: string;
 
@@ -156,6 +163,7 @@ export function DataTable<TData>({
   onSortChange,
   search,
   pinnedRow,
+  getRowClassName,
   isEditing = false,
   editingReason,
   isLoading = false,
@@ -285,7 +293,7 @@ export function DataTable<TData>({
             </TableRow>
           ) : (
             rows.map((row) => (
-              <TableRow key={row.id}>
+              <TableRow key={row.id} className={getRowClassName?.(row.original)}>
                 {row.getVisibleCells().map((cell) => (
                   <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
                 ))}

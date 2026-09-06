@@ -65,6 +65,14 @@ describe("CostTypesTable", () => {
     renderTable({ items: [costType({ id: 2, is_active: false })] });
     expect(screen.queryByRole("button", { name: "Modifier" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Réactiver" })).toBeInTheDocument();
+    const row = screen.getByText("MO").closest("tr");
+    expect(row).toHaveClass("opacity-55");
+  });
+
+  it("renders an active row with no dimming class", () => {
+    renderTable({ items: [costType({ is_active: true })] });
+    const row = screen.getByText("MO").closest("tr");
+    expect(row).not.toHaveClass("opacity-55");
   });
 
   it("calls onSortChange with the server column name when the code header is clicked", () => {

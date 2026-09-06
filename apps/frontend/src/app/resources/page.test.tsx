@@ -717,4 +717,58 @@ describe("ResourcesPage cost types table (E8-02)", () => {
     await waitFor(() => expect(screen.getByText("Type de coût créé.")).toBeInTheDocument());
     expect(screen.queryByText("Actualisation impossible")).not.toBeInTheDocument();
   });
+
+  it("does not leave the table's loading indicator stuck when a mutation's reload races an in-flight pagination fetch", async () => {
+    // The initial paginated fetch is left pending on purpose (released at the end of
+    // the test), simulating a mutation firing while a pagination/sort/search fetch
+    // is still in flight. The mutation's own reload uses a fresh generation number
+    // and resolves immediately; without its own loading-state handling, the stale
+    // fetch's eventual resolution would be the only thing ever touching
+    // `costTypesLoading`, and it's guarded out by the generation check -- leaving
+    // the loading indicator stuck forever.
+    let resolveStalePage!: (page: { items: CostType[]; total: number }) => void;
+    const stalePagePromise = new Promise<{ items: CostType[]; total: number }>((resolve) => {
+      resolveStalePage = resolve;
+    });
+    let paginatedCallCount = 0;
+    mocks.getCostTypes.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, _includeInactive: unknown, listParams: unknown) => {
+        if (listParams === undefined) return Promise.resolve({ items: [], total: 0 });
+        paginatedCallCount += 1;
+        if (paginatedCallCount === 1) return stalePagePromise;
+        return Promise.resolve({
+          items: [costTypeFixture({ id: 3, code: "NEW", name: "Nouveau" })],
+          total: 1,
+        });
+      },
+    );
+    mocks.createCostType.mockResolvedValue(costTypeFixture({ id: 3, code: "NEW", name: "Nouveau" }));
+
+    render(<ResourcesPage />);
+    // Signaled by call count rather than the generic `status` role: the cost-types
+    // table's own loading skeleton is also a `role="status"`, and stays mounted
+    // throughout this test by design, so it can't be used as a page-ready signal.
+    await waitFor(() => expect(mocks.getCostTypes).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByRole("status", { name: "Chargement des données" })).toBeInTheDocument());
+
+    const codeInput = screen.getByLabelText("Code du nouveau type");
+    fireEvent.change(codeInput, { target: { value: "NEW" } });
+    fireEvent.change(screen.getByLabelText("Nom du nouveau type"), { target: { value: "Nouveau" } });
+    const addRow = codeInput.closest("tr");
+    if (!addRow) throw new Error("add row not found");
+    fireEvent.click(within(addRow).getByRole("button", { name: "Ajouter" }));
+
+    await waitFor(() => expect(mocks.createCostType).toHaveBeenCalledTimes(1));
+    // The mutation's own reload (2nd paginated call) resolves immediately and must
+    // clear the loading state on its own -- it must not wait for the stale 1st call.
+    await waitFor(() =>
+      expect(screen.queryByRole("status", { name: "Chargement des données" })).not.toBeInTheDocument(),
+    );
+
+    // Releasing the stale initial fetch afterwards must not resurrect the loading
+    // state or overwrite the fresher data already committed.
+    resolveStalePage({ items: [], total: 0 });
+    await waitFor(() => expect(screen.getByText("NEW")).toBeInTheDocument());
+    expect(screen.queryByRole("status", { name: "Chargement des données" })).not.toBeInTheDocument();
+  });
 });
