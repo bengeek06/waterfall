@@ -383,6 +383,18 @@ export default function ResourcesPage() {
   // exists once created for a role and the full set stays small). Guarded by its own
   // generation counter for the same reason as the main load above.
   const rolesPageGenerationRef = useRef(0);
+  // Mirrors `rolesOffset`/`rolesSort`/`rolesQuery` synchronously (updated at
+  // every write site below, not via a `useEffect`) so `reloadRolesPage` --
+  // called from `saveRoleCapacity` after an `await` -- reads the *live*
+  // pagination/sort/search state instead of the value closed over when
+  // `saveRoleCapacity` started. Otherwise: user saves a capacity (PATCH/POST in
+  // flight), pages to a later offset while it's pending, then the save
+  // resolves -- the reload it triggers would silently refetch and display
+  // stale data under the new offset's label. Same bug class and fix as #124
+  // (role-calendars-table)'s `reloadRoleCalendarsPage`.
+  const rolesOffsetRef = useRef(rolesOffset);
+  const rolesSortRef = useRef(rolesSort);
+  const rolesQueryRef = useRef(rolesQuery);
 
   useEffect(() => {
     const generation = ++rolesPageGenerationRef.current;
@@ -440,9 +452,9 @@ export default function ResourcesPage() {
     try {
       const page = await getResourceRoles(session, onSessionRefresh, undefined, false, {
         limit: rolesLimit,
-        offset: rolesOffset,
-        sort: rolesSort,
-        q: rolesQuery || undefined,
+        offset: rolesOffsetRef.current,
+        sort: rolesSortRef.current,
+        q: rolesQueryRef.current || undefined,
       });
       if (rolesPageGenerationRef.current === generation) setRolesPage(page);
     } catch (cause) {
@@ -978,7 +990,7 @@ export default function ResourcesPage() {
           <RolesPanel selectedNode={selectedNode} selectedRoles={selectedRoles} nodes={nodes} categories={categories} costTypes={costTypes} roleName={roleName} roleNodeId={roleNodeId} roleCategoryId={roleCategoryId} actionBusy={actionBusy} categoryNames={categoryNameById} onSubmit={addRole} onNameChange={setRoleName} onNodeChange={(value) => { setRoleNodeId(value); setSelectedNodeId(Number(value)); }} onCategoryChange={setRoleCategoryId} />
 
           </div>
-          <CapacityTable items={rolesPage.items} pagination={{ total: rolesPage.total, limit: rolesLimit, offset: rolesOffset }} onPaginationChange={(next) => setRolesOffset(next.offset)} sort={rolesSort} onSortChange={setRolesSort} search={rolesQuery} onSearchChange={(next) => { setRolesQuery(next); setRolesOffset(0); }} isLoading={rolesPageLoading} drafts={capacityDrafts} actionBusy={actionBusy} nodeCodeById={nodeCodeById} onDraftChange={(roleId, draft) => setCapacityDrafts((previous) => ({ ...previous, [roleId]: draft }))} onSave={(roleId) => void saveRoleCapacity(roleId)} />
+          <CapacityTable items={rolesPage.items} pagination={{ total: rolesPage.total, limit: rolesLimit, offset: rolesOffset }} onPaginationChange={(next) => { rolesOffsetRef.current = next.offset; setRolesOffset(next.offset); }} sort={rolesSort} onSortChange={(next) => { rolesSortRef.current = next; setRolesSort(next); }} search={rolesQuery} onSearchChange={(next) => { rolesQueryRef.current = next; setRolesQuery(next); rolesOffsetRef.current = 0; setRolesOffset(0); }} isLoading={rolesPageLoading} drafts={capacityDrafts} actionBusy={actionBusy} nodeCodeById={nodeCodeById} onDraftChange={(roleId, draft) => setCapacityDrafts((previous) => ({ ...previous, [roleId]: draft }))} onSave={(roleId) => void saveRoleCapacity(roleId)} />
           <RoleCalendarsTable roles={roles} calendars={calendars} drafts={roleCalendarDrafts} actionBusy={actionBusy} nodeCodeById={nodeCodeById} onDraftChange={(roleId, calendarId) => setRoleCalendarDrafts((previous) => ({ ...previous, [roleId]: calendarId }))} onSave={(roleId) => void saveRoleCalendar(roleId)} />
           <CalendarsTable
             items={calendars}

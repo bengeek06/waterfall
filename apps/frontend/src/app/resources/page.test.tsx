@@ -1171,4 +1171,75 @@ describe("ResourcesPage capacity table (E8-05)", () => {
     await waitFor(() => expect(within(capacityCard()).getByText("Nouveau rôle — IT (#9)")).toBeInTheDocument());
     expect(within(capacityCard()).queryByRole("status", { name: "Chargement des données" })).not.toBeInTheDocument();
   });
+
+  it("does not apply a stale offset to the reload triggered by creating a role, if the user paginated away while the creation was in flight", async () => {
+    const laborCostType = {
+      id: 1,
+      code: "MO",
+      name: "Main d'œuvre",
+      kind: "labor",
+      is_active: true,
+      created_at: "2026-08-01T00:00:00Z",
+      updated_at: "2026-08-01T00:00:00Z",
+    } as CostType;
+    const category = {
+      id: 5,
+      accounting_code: "C1",
+      category_code: null,
+      name: "Catégorie 1",
+      cost_type_id: 1,
+      is_active: true,
+    } as never;
+    mocks.getCostTypes.mockResolvedValue({ items: [laborCostType], total: 1 });
+    mocks.getCostCategories.mockResolvedValue([category]);
+    const pageAtOffset0 = { items: [resourceRoleFixture({ id: 1, name: "Page 1 role" })], total: 25 };
+    const pageAtOffset20 = { items: [resourceRoleFixture({ id: 2, name: "Page 2 role" })], total: 25 };
+    mocks.getResourceRoles.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, _nodeId: unknown, _includeDescendants: unknown, listParams: unknown) => {
+        if (listParams === undefined) return Promise.resolve({ items: [], total: 0 });
+        const offset = (listParams as { offset?: number }).offset ?? 0;
+        return Promise.resolve(offset === 0 ? pageAtOffset0 : pageAtOffset20);
+      },
+    );
+    let resolveCreate!: (role: ResourceRole) => void;
+    mocks.createResourceRole.mockReturnValue(
+      new Promise<ResourceRole>((resolve) => {
+        resolveCreate = resolve;
+      }),
+    );
+
+    render(<ResourcesPage />);
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("tab", { name: "Ressources" }));
+    await waitFor(() => expect(within(capacityCard()).getByText("Page 1 role — IT (#1)")).toBeInTheDocument());
+
+    const nameInput = screen.getByLabelText("Nom");
+    fireEvent.change(nameInput, { target: { value: "Nouveau rôle" } });
+    fireEvent.change(screen.getByLabelText("Code comptable"), { target: { value: "5" } });
+    const rolesForm = nameInput.closest("form");
+    if (!rolesForm) throw new Error("roles form not found");
+    fireEvent.click(within(rolesForm).getByRole("button", { name: "Ajouter" }));
+    await waitFor(() => expect(mocks.createResourceRole).toHaveBeenCalledTimes(1));
+
+    // Paginate to offset 20 while the role creation is still in flight.
+    const suivant = within(capacityCard()).getByRole("button", { name: "Suivant" });
+    fireEvent.click(suivant);
+    await waitFor(() => expect(within(capacityCard()).getByText("Page 2 role — IT (#2)")).toBeInTheDocument());
+
+    // Resolving the creation now must not refetch/display offset 0's stale page:
+    // the reload it triggers must target the *current* offset (20), not the
+    // offset that was current when "Ajouter" was clicked.
+    resolveCreate(resourceRoleFixture({ id: 9, name: "Nouveau rôle" }));
+    await waitFor(() =>
+      expect(mocks.getResourceRoles).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        undefined,
+        false,
+        expect.objectContaining({ offset: 20 }),
+      ),
+    );
+    expect(within(capacityCard()).getByText("Page 2 role — IT (#2)")).toBeInTheDocument();
+    expect(within(capacityCard()).queryByText("Page 1 role — IT (#1)")).not.toBeInTheDocument();
+  });
 });
