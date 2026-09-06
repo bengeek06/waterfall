@@ -128,7 +128,7 @@ function formatDate(value: string | null | undefined): string {
   if (!value) {
     return "-";
   }
-  // Read-only counterpart of toDateTimeInputValue's UTC convention (see below): parse the
+  // Read-only counterpart of toDateInputValue's UTC convention (see below): parse the
   // naive-UTC backend value as UTC, then format in UTC too, so this display never disagrees
   // with the editable fields or shifts across a midnight boundary for a non-UTC viewer.
   return new Date(asUtcIsoString(value)).toLocaleDateString("fr-FR", { timeZone: "UTC" });
@@ -161,22 +161,15 @@ function asUtcIsoString(value: string): string {
   return /(?:Z|[+-]\d{2}:?\d{2})$/.test(value) ? value : `${value}Z`;
 }
 
-// Timezone convention (deliberate, keep toDateTimeInputValue/fromDateTimeInputValue symmetric):
-// this field always displays and edits the value's *UTC* components, not the browser's local
-// time. A native `datetime-local` input has no timezone concept of its own, so "local time" here
-// would actually mean "the browser's local time", which has no clean, lossless round-trip back to
-// the naive-UTC value the backend expects without extra local<->UTC conversion. Treating the
-// component's yyyy-MM-ddTHH:mm:ss as UTC end-to-end is simpler and fully reversible in every
-// browser timezone; it trades away a "shows my local time" UX nicety in favour of never corrupting
-// dates.
-//
-// Seconds are included (not just minutes) because a manual task's start_at/finish_at can carry a
-// non-zero seconds component derived from a predecessor link's lag_tenth_minute (stored at a
-// 6-second resolution). commitScheduleEdit always resends all three schedule fields on any single
-// field edit (e.g. editing only the duration), so dropping seconds here would silently truncate an
-// untouched start_at/finish_at on every commit. `step="1"` on the corresponding <Input
-// type="datetime-local"> is required for the browser to surface/accept this seconds component.
-function toDateTimeInputValue(value: string | null | undefined): string {
+// Timezone convention (deliberate, keep toDateInputValue/combineDateWithExistingTime symmetric):
+// this field always displays and edits the value's *UTC* date component, not the browser's local
+// time. A native `date` input has no timezone concept of its own, so "local time" here would
+// actually mean "the browser's local time", which has no clean, lossless round-trip back to the
+// naive-UTC value the backend expects without extra local<->UTC conversion. Treating the
+// component's yyyy-MM-dd as a UTC calendar date end-to-end is simpler and fully reversible in
+// every browser timezone; it trades away a "shows my local date" UX nicety in favour of never
+// corrupting dates.
+function toDateInputValue(value: string | null | undefined): string {
   if (!value) {
     return "";
   }
@@ -185,27 +178,47 @@ function toDateTimeInputValue(value: string | null | undefined): string {
     return "";
   }
   const pad = (n: number) => String(n).padStart(2, "0");
-  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}T${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}`;
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;
 }
 
-// Seconds are captured as an optional group: toDateTimeInputValue always emits them, but a
-// `type="datetime-local"` field's seconds granularity ultimately depends on the host browser
-// honouring `step="1"` (and jsdom's own value-sanitization in tests never keeps them at all), so
-// this stays defensive and treats a missing seconds group as :00 rather than rejecting the value.
-const DATETIME_INPUT_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/;
+const DATE_INPUT_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 
-function fromDateTimeInputValue(value: string): string | null {
-  if (!value) {
+// The date input only ever exposes the calendar date, not the time of day: a manual task's
+// start_at/finish_at can carry a non-zero, non-minute-aligned time component derived from a
+// predecessor link's lag_tenth_minute (stored at a 6-second resolution), and commitScheduleEdit
+// always resends all three schedule fields on any single field edit (e.g. editing only the
+// duration). Discarding that time component here instead of preserving it would silently reset an
+// untouched start_at/finish_at to midnight on every commit, so the new date is combined with the
+// time-of-day already stored on `existingValue` (the row's current, pre-edit value) rather than
+// zeroing it out. A task that never had a time component (fresh manual entry) simply defaults to
+// midnight UTC.
+function combineDateWithExistingTime(
+  dateOnly: string,
+  existingValue: string | null | undefined,
+): string | null {
+  if (!dateOnly) {
     return null;
   }
-  // Symmetric with toDateTimeInputValue: the field's yyyy-MM-ddTHH:mm[:ss] components are UTC, so
-  // they must be parsed as UTC directly (Date.UTC), not through `new Date(value)`, which would
-  // reinterpret them as local time and reintroduce the same corruption this is fixing.
-  const match = DATETIME_INPUT_PATTERN.exec(value);
+  const match = DATE_INPUT_PATTERN.exec(dateOnly);
   if (!match) {
     return null;
   }
-  const [year, month, day, hour, minute, second] = match.slice(1).map((part) => (part === undefined ? 0 : Number(part)));
+  const [year, month, day] = match.slice(1).map(Number);
+  let hour = 0;
+  let minute = 0;
+  let second = 0;
+  if (existingValue) {
+    const existing = new Date(asUtcIsoString(existingValue));
+    if (!Number.isNaN(existing.getTime())) {
+      hour = existing.getUTCHours();
+      minute = existing.getUTCMinutes();
+      second = existing.getUTCSeconds();
+    }
+  }
+  // Symmetric with toDateInputValue: the field's yyyy-MM-dd components are a UTC calendar date, so
+  // they must be combined with the preserved time-of-day via Date.UTC directly, not through
+  // `new Date(...)`, which would reinterpret them as local time and reintroduce the same
+  // corruption this convention exists to avoid.
   const date = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
   if (Number.isNaN(date.getTime())) {
     return null;
@@ -503,8 +516,8 @@ export function PlanningTreeTable({
 
   function defaultScheduleDraft(row: PlanningTreeRow): ScheduleDraft {
     return {
-      start_at: toDateTimeInputValue(row.start_at),
-      finish_at: toDateTimeInputValue(row.finish_at),
+      start_at: toDateInputValue(row.start_at),
+      finish_at: toDateInputValue(row.finish_at),
       duration_minutes: row.duration_minutes === null || row.duration_minutes === undefined ? "" : String(row.duration_minutes),
     };
   }
@@ -545,7 +558,7 @@ export function PlanningTreeTable({
     if (row.is_milestone) {
       // A milestone only exposes its start date: duration and finish are always forced by the
       // server, so omitting them here avoids conflicting with a stale finish_at/duration.
-      const startAt = fromDateTimeInputValue(draft.start_at);
+      const startAt = combineDateWithExistingTime(draft.start_at, row.start_at);
       // The milestone schedule payload has no way to distinguish "field omitted" from "field
       // explicitly cleared": both _apply_manual_milestone_schedule and
       // _apply_automatic_milestone_schedule treat a null start_at as "not provided" and silently
@@ -565,8 +578,8 @@ export function PlanningTreeTable({
       // decision, not an oversight; do not "fix" it into a three-way branch.
       payload = {
         is_manual: true,
-        start_at: fromDateTimeInputValue(draft.start_at),
-        finish_at: fromDateTimeInputValue(draft.finish_at),
+        start_at: combineDateWithExistingTime(draft.start_at, row.start_at),
+        finish_at: combineDateWithExistingTime(draft.finish_at, row.finish_at),
         duration_minutes: draft.duration_minutes === "" ? null : Number(draft.duration_minutes),
       };
     } else {
@@ -658,8 +671,7 @@ export function PlanningTreeTable({
         <TableCell>
           {startEditable ? (
             <Input
-              type="datetime-local"
-              step="1"
+              type="date"
               aria-label={startHelpText ? `Début de ${row.name} (${startHelpText})` : `Début de ${row.name}`}
               title={startHelpText}
               value={draft.start_at}
@@ -676,8 +688,7 @@ export function PlanningTreeTable({
         <TableCell>
           {finishEditable ? (
             <Input
-              type="datetime-local"
-              step="1"
+              type="date"
               aria-label={`Fin de ${row.name}`}
               value={draft.finish_at}
               disabled={mutationBusy}

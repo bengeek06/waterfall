@@ -331,13 +331,10 @@ describe("PlanningTreeTable", () => {
     render(<PlanningTreeTable tasks={tasks} versionKey={1} onScheduleUpdate={onScheduleUpdate} />);
 
     const startInput = screen.getByLabelText("Début de Tâche manuelle");
-    // jsdom's own datetime-local value sanitization always truncates to minute precision
-    // regardless of `step`, so a seconds-carrying value can't be simulated through this input's
-    // change event here; the seconds round-trip itself is covered separately below (see "preserves
-    // a manual task's non-zero seconds when only the duration field is edited"), which never goes
-    // through this DOM sanitization path. A missing seconds group defaults to :00 (see
-    // DATETIME_INPUT_PATTERN).
-    fireEvent.change(startInput, { target: { value: "2026-01-06T09:00" } });
+    // The field only exposes the calendar date; the row's existing time-of-day (09:00:00, from
+    // start_at above) must be preserved by combineDateWithExistingTime rather than reset to
+    // midnight.
+    fireEvent.change(startInput, { target: { value: "2026-01-06" } });
     fireEvent.blur(startInput);
 
     expect(onScheduleUpdate).toHaveBeenCalledTimes(1);
@@ -345,10 +342,11 @@ describe("PlanningTreeTable", () => {
     expect(taskUid).toBe(1);
     expect(payload.is_manual).toBe(true);
     expect(payload.duration_minutes).toBe(480);
-    // The datetime-local field's components are UTC (see toDateTimeInputValue/fromDateTimeInputValue
-    // in planning-tree-table.tsx), so "2026-01-06T09:00" must round-trip to exactly this UTC
-    // instant regardless of the host's local timezone -- not whatever `new Date("2026-01-06T09:00")`
-    // (local-time interpretation) would produce.
+    // The date field's components are a UTC calendar date (see toDateInputValue/
+    // combineDateWithExistingTime in planning-tree-table.tsx), so "2026-01-06" combined with the
+    // preserved 09:00:00 time-of-day must round-trip to exactly this UTC instant regardless of the
+    // host's local timezone -- not whatever `new Date("2026-01-06")` (local-time interpretation)
+    // would produce.
     expect(payload.start_at).toBe("2026-01-06T09:00:00.000Z");
   });
 
@@ -378,21 +376,19 @@ describe("PlanningTreeTable", () => {
       render(<PlanningTreeTable tasks={tasks} versionKey={1} onScheduleUpdate={onScheduleUpdate} />);
 
       const startInput = screen.getByLabelText<HTMLInputElement>("Début de Tâche manuelle");
-      // toDateTimeInputValue must display the value's UTC components (08:00), not the
-      // timezone-shifted local ones (which would be 03:00 in America/New_York). jsdom's own
-      // datetime-local value sanitization always truncates to minute precision regardless of
-      // `step`, so `.value` here reads "08:00" even though toDateTimeInputValue itself produced
-      // "08:00:00" (real browsers with `step="1"` preserve the seconds subfield instead).
-      expect(startInput.value).toBe("2026-01-09T08:00");
+      // toDateInputValue must display the value's UTC calendar date (2026-01-09), not the
+      // timezone-shifted local one (which would be 2026-01-08 in America/New_York, since 08:00 UTC
+      // is 03:00 the previous day there).
+      expect(startInput.value).toBe("2026-01-09");
 
-      // Editing the minutes only (leaving the UTC-displayed date/hour untouched) and committing
-      // must produce exactly that UTC instant back through fromDateTimeInputValue, with no
+      // Editing the date only (the field carries no time-of-day) and committing must combine it
+      // with the existing 08:00:00 UTC time-of-day via combineDateWithExistingTime, with no
       // timezone-induced drift -- this is the round-trip that corrupted data pre-fix.
-      fireEvent.change(startInput, { target: { value: "2026-01-09T08:05" } });
+      fireEvent.change(startInput, { target: { value: "2026-01-10" } });
       fireEvent.blur(startInput);
 
       expect(onScheduleUpdate).toHaveBeenCalledTimes(1);
-      expect(onScheduleUpdate.mock.calls[0][1].start_at).toBe("2026-01-09T08:05:00.000Z");
+      expect(onScheduleUpdate.mock.calls[0][1].start_at).toBe("2026-01-10T08:00:00.000Z");
     } finally {
       // `process.env.TZ = undefined` would coerce to the literal string "undefined" instead of
       // clearing the variable, leaking a bogus timezone into subsequent tests in this worker.
@@ -432,9 +428,10 @@ describe("PlanningTreeTable", () => {
   it("preserves a manual task's non-zero seconds when only the duration field is edited", () => {
     // commitScheduleEdit always resends start_at/finish_at/duration_minutes together for a manual
     // task, even when the user only touched the duration field. lag_tenth_minute-derived dates can
-    // carry a non-zero, non-minute-aligned seconds component (a multiple of 6s), so
-    // toDateTimeInputValue/fromDateTimeInputValue must round-trip seconds losslessly, or an
-    // untouched start_at/finish_at would be silently truncated to :00 on every commit.
+    // carry a non-zero, non-minute-aligned seconds component (a multiple of 6s); since the date
+    // field no longer exposes time-of-day at all, combineDateWithExistingTime must recover it from
+    // the row's current start_at/finish_at, or an untouched value would be silently truncated to
+    // :00 on every commit.
     const onScheduleUpdate = vi.fn().mockResolvedValue(true);
     const tasks: Task[] = [
       task({
