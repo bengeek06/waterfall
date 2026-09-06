@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CapacityTable, type CapacityTableProps } from "./capacity-table";
@@ -109,5 +110,51 @@ describe("CapacityTable", () => {
   it("shows the loading skeleton while a page is being fetched", () => {
     renderTable({ isLoading: true });
     expect(screen.getByRole("status", { name: "Chargement des données" })).toBeInTheDocument();
+  });
+
+  it("keeps focus on a capacity input across keystrokes, even though every keystroke round-trips through the parent's drafts prop", () => {
+    // Regression test for a real bug: TanStack Table's `flexRender` passes each
+    // cell renderer to React as a component *type*. Rebuilding `columns` inline
+    // on every render (as this component used to) gives every cell a new
+    // function identity whenever `drafts` changes -- which happens on every
+    // keystroke, since the parent stores drafts in its own state and passes
+    // them back down. React then treats each cell as a *different* component
+    // and unmounts/remounts the DOM node, dropping focus after every single
+    // character. A component wrapping `CapacityTable` in real `useState` (not
+    // a static props object, unlike the other tests in this file) is required
+    // to reproduce this: it's specifically the round-trip through a re-render
+    // with new `drafts` that triggers the remount.
+    function Wrapper() {
+      const [drafts, setDrafts] = useState<CapacityTableProps["drafts"]>({});
+      return (
+        <CapacityTable
+          items={[{ id: 1, name: "Développeur", node_id: 1 } as never]}
+          pagination={{ total: 1, limit: 20, offset: 0 }}
+          onPaginationChange={vi.fn()}
+          sort={null}
+          onSortChange={vi.fn()}
+          search=""
+          onSearchChange={vi.fn()}
+          isLoading={false}
+          drafts={drafts}
+          actionBusy={false}
+          nodeCodeById={nodeCodeById}
+          onDraftChange={(id, draft) => setDrafts((previous) => ({ ...previous, [id]: draft }))}
+          onSave={vi.fn()}
+        />
+      );
+    }
+
+    render(<Wrapper />);
+    const input = screen.getByLabelText("Nombre de personnes pour Développeur — IT (#1)") as HTMLInputElement;
+    input.focus();
+
+    fireEvent.change(input, { target: { value: "3" } });
+    expect(document.activeElement).toBe(input);
+    expect(input.value).toBe("3");
+
+    fireEvent.change(input, { target: { value: "35" } });
+    expect(document.activeElement).toBe(input);
+    expect(input.value).toBe("35");
   });
 });
