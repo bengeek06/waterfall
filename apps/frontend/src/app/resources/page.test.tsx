@@ -1077,4 +1077,56 @@ describe("ResourcesPage roles panel (E8-08)", () => {
 
     confirmSpy.mockRestore();
   });
+
+  it("does not overwrite the panel with a stale node's data when the selection changes while a role creation's reload is still pending", async () => {
+    const nodeARole = roleFixture2({ id: 10, name: "RôleA", node_id: nodeA.id });
+    const nodeBRole = roleFixture2({ id: 20, name: "RôleB", node_id: nodeB.id });
+    mocks.getResourceRoles.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, nodeId: unknown, _includeDescendants: unknown, listParams: unknown) => {
+        if (listParams === undefined) return Promise.resolve({ items: [], total: 0 });
+        if (nodeId === nodeA.id) return Promise.resolve({ items: [nodeARole], total: 1 });
+        if (nodeId === nodeB.id) return Promise.resolve({ items: [nodeBRole], total: 1 });
+        return Promise.resolve({ items: [], total: 0 });
+      },
+    );
+    let resolveCreate!: (role: ResourceRole) => void;
+    mocks.createResourceRole.mockReturnValue(
+      new Promise<ResourceRole>((resolve) => {
+        resolveCreate = resolve;
+      }),
+    );
+
+    await openRessourcesTab();
+    await waitFor(() => expect(screen.getByText("RôleA (#10)")).toBeInTheDocument());
+
+    const nameInput = screen.getByLabelText("Nom");
+    fireEvent.change(nameInput, { target: { value: "Nouveau rôle" } });
+    fireEvent.change(screen.getByLabelText("Nœud"), { target: { value: String(nodeA.id) } });
+    fireEvent.change(screen.getByLabelText("Code comptable"), { target: { value: "200" } });
+    const roleForm = nameInput.closest("form");
+    if (!roleForm) throw new Error("role create form not found");
+    fireEvent.click(within(roleForm).getByRole("button", { name: "Ajouter" }));
+    await waitFor(() => expect(mocks.createResourceRole).toHaveBeenCalledTimes(1));
+
+    // Switch to node B in the org tree while node A's role creation is still
+    // pending (org-tree row selection isn't disabled by `actionBusy`).
+    const nodeBRow = screen.getByText(nodeB.code).closest("tr");
+    if (!nodeBRow) throw new Error("node row not found");
+    fireEvent.click(nodeBRow);
+    await waitFor(() => expect(screen.getByText("RôleB (#20)")).toBeInTheDocument());
+
+    // Resolving the creation now must not re-fetch/apply node A's page: the
+    // reload it triggers must target the *currently* selected node (B), not the
+    // node that was selected when the create form was submitted (A).
+    resolveCreate(roleFixture2({ id: 30, name: "Nouveau rôle", node_id: nodeA.id }));
+    await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      nodeB.id,
+      false,
+      expect.objectContaining({ limit: 20, offset: 0 }),
+    ));
+    expect(screen.getByText("RôleB (#20)")).toBeInTheDocument();
+    expect(screen.queryByText("RôleA (#10)")).not.toBeInTheDocument();
+  });
 });

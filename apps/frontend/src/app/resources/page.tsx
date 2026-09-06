@@ -94,6 +94,14 @@ export default function ResourcesPage() {
   const [activeTab, setActiveTab] = useState<SettingsTab>("costs");
   const [nodes, setNodes] = useState<ResourceNode[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null);
+  // Mirrors `selectedNodeId` synchronously (updated at every write site below,
+  // not via a `useEffect`) so an async continuation resumed after selection has
+  // since changed (e.g. `reloadRolesPanelPage`, called from `addRole` after
+  // `await createResourceRole`) can read the *live* selection instead of the
+  // value closed over when it started -- otherwise a role created for node A
+  // while the user has since switched to node B would fetch and display A's
+  // page under B's heading.
+  const selectedNodeIdRef = useRef<number | null>(null);
   // `roles` (full, unfiltered across every node) feeds CapacityTable and
   // RoleCalendarsTable, which both need the complete reference list (they display
   // every role, labelled with its own node code, not just the currently selected
@@ -244,7 +252,11 @@ export default function ResourcesPage() {
         ]);
         if (!isCurrentGeneration()) return;
         setNodes(nodeData);
-        setSelectedNodeId((previous) => previous ?? nodeData[0]?.id ?? null);
+        setSelectedNodeId((previous) => {
+          const next = previous ?? nodeData[0]?.id ?? null;
+          selectedNodeIdRef.current = next;
+          return next;
+        });
         setRoleNodeId((previous) => previous || (nodeData[0] ? String(nodeData[0].id) : ""));
         setRoles(roleData);
         setCalendars(calendarData);
@@ -451,17 +463,25 @@ export default function ResourcesPage() {
   // mutation's reload racing an in-flight pagination/sort/search fetch can't leave
   // the loading indicator stuck forever.
   async function reloadRolesPanelPage() {
-    if (!session || selectedNodeId === null) return;
+    // Reads the live selection via the ref, not the `selectedNodeId` closed over
+    // when this function's caller was invoked -- see `selectedNodeIdRef`'s
+    // comment above. The ref is re-checked again below after the request
+    // resolves, since the selection can also change while this request is
+    // itself in flight.
+    const nodeId = selectedNodeIdRef.current;
+    if (!session || nodeId === null) return;
     const generation = ++rolesPanelGenerationRef.current;
     setRolesPanelLoading(true);
     try {
-      const page = await getResourceRoles(session, onSessionRefresh, selectedNodeId, false, {
+      const page = await getResourceRoles(session, onSessionRefresh, nodeId, false, {
         limit: rolesPanelLimit,
         offset: rolesPanelOffset,
         sort: rolesPanelSort,
         q: rolesPanelQuery || undefined,
       });
-      if (rolesPanelGenerationRef.current === generation) setRolesPanelPage(page);
+      if (rolesPanelGenerationRef.current === generation && selectedNodeIdRef.current === nodeId) {
+        setRolesPanelPage(page);
+      }
     } catch (cause) {
       if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
         clearSession();
@@ -528,8 +548,15 @@ export default function ResourcesPage() {
     await submitAction(async () => {
       await deleteResourceNode(node.id, session, onSessionRefresh);
       setNodes((previous) => previous.filter((item) => item.id !== node.id));
-      setSelectedNodeId((previous) => (previous === node.id ? null : previous));
-      if (selectedNodeId === node.id) setRolesPanelOffset(0);
+      // Reads the live selection via the ref (see `selectedNodeIdRef`'s comment
+      // above), not the value closed over when `removeNode` started -- otherwise
+      // deleting node A while the user has since switched to node B would
+      // incorrectly reset B's own pagination back to page 1.
+      if (selectedNodeIdRef.current === node.id) {
+        selectedNodeIdRef.current = null;
+        setSelectedNodeId(null);
+        setRolesPanelOffset(0);
+      }
     }, "Nœud supprimé.");
   }
 
@@ -884,6 +911,7 @@ export default function ResourcesPage() {
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? null;
 
   function selectNode(nodeId: number) {
+    selectedNodeIdRef.current = nodeId;
     setSelectedNodeId(nodeId);
     setRoleNodeId(String(nodeId));
     setRolesPanelOffset(0);
@@ -993,7 +1021,7 @@ export default function ResourcesPage() {
             onNodeChange={(field, value) => { if (field === "code") setNodeCode(value); if (field === "name") setNodeName(value); if (field === "parent") setNodeParentId(value); }}
           />
 
-          <RolesPanel selectedNode={selectedNode} items={rolesPanelPage.items} pagination={{ total: rolesPanelPage.total, limit: rolesPanelLimit, offset: rolesPanelOffset }} onPaginationChange={(next) => setRolesPanelOffset(next.offset)} sort={rolesPanelSort} onSortChange={setRolesPanelSort} search={rolesPanelQuery} onSearchChange={(next) => { setRolesPanelQuery(next); setRolesPanelOffset(0); }} isLoading={rolesPanelLoading} nodes={nodes} categories={categories} costTypes={costTypes} roleName={roleName} roleNodeId={roleNodeId} roleCategoryId={roleCategoryId} actionBusy={actionBusy} categoryNames={categoryNameById} onSubmit={addRole} onNameChange={setRoleName} onNodeChange={(value) => { setRoleNodeId(value); setSelectedNodeId(Number(value)); setRolesPanelOffset(0); }} onCategoryChange={setRoleCategoryId} />
+          <RolesPanel selectedNode={selectedNode} items={rolesPanelPage.items} pagination={{ total: rolesPanelPage.total, limit: rolesPanelLimit, offset: rolesPanelOffset }} onPaginationChange={(next) => setRolesPanelOffset(next.offset)} sort={rolesPanelSort} onSortChange={setRolesPanelSort} search={rolesPanelQuery} onSearchChange={(next) => { setRolesPanelQuery(next); setRolesPanelOffset(0); }} isLoading={rolesPanelLoading} nodes={nodes} categories={categories} costTypes={costTypes} roleName={roleName} roleNodeId={roleNodeId} roleCategoryId={roleCategoryId} actionBusy={actionBusy} categoryNames={categoryNameById} onSubmit={addRole} onNameChange={setRoleName} onNodeChange={(value) => { setRoleNodeId(value); selectedNodeIdRef.current = Number(value); setSelectedNodeId(Number(value)); setRolesPanelOffset(0); }} onCategoryChange={setRoleCategoryId} />
 
           </div>
           <CapacityTable roles={roles} drafts={capacityDrafts} actionBusy={actionBusy} nodeCodeById={nodeCodeById} onDraftChange={(roleId, draft) => setCapacityDrafts((previous) => ({ ...previous, [roleId]: draft }))} onSave={(roleId) => void saveRoleCapacity(roleId)} />
