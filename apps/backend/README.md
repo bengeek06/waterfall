@@ -31,6 +31,24 @@ pytest
 uvicorn waterfall.main:app --app-dir src --reload
 ```
 
+## Complexité (Ruff C90 / McCabe)
+
+`ruff check` inclut la règle `C90` (McCabe) avec un seuil de complexité
+cyclomatique fixé à 15 (`[tool.ruff.lint.mccabe]` dans `pyproject.toml`). C'est
+la seule métrique de complexité retenue pour ce backend ; ce même seuil
+s'applique en local, dans les hooks pre-commit et en CI (job
+`backend-quality`), puisqu'ils lisent tous la configuration partagée du
+`pyproject.toml`.
+
+Si une fonction dépasse légitimement ce seuil (cas résiduel documenté), la
+suppression du diagnostic avec `# noqa: C901` doit obligatoirement
+s'accompagner d'un commentaire expliquant pourquoi une décomposition
+supplémentaire n'est pas souhaitable.
+
+```bash
+ruff check --select C90 .
+```
+
 ## Migrations
 
 ```bash
