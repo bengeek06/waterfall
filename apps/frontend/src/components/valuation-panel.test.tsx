@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ValuationPanel, type ValuationPanelProps } from "./valuation-panel";
 import type { CostCategory } from "@/lib/backend";
@@ -144,5 +145,44 @@ describe("ValuationPanel", () => {
     renderPanel({ busy: true });
     expect(screen.getByRole("button", { name: "Enregistrer" })).toBeDisabled();
     expect(screen.getByLabelText("Rechercher une catégorie")).toBeEnabled();
+  });
+
+  it("keeps focus on a rate input across keystrokes, even though it round-trips through the parent's drafts prop", () => {
+    // Regression test for a real bug: TanStack Table's `flexRender` passes each
+    // cell renderer to React as a component *type*. Rebuilding `columns`
+    // inline on every render (as this component used to) gives every cell a
+    // new function identity whenever `drafts` changes -- which happens on
+    // every keystroke, since the parent stores drafts in its own state and
+    // passes them back down. React then treats the cell as a *different*
+    // component and unmounts/remounts the DOM node, dropping focus right
+    // after the keystroke. A component wrapping `ValuationPanel` in real
+    // `useState` (not the static props object every other test in this file
+    // uses) is required to reproduce this: it's specifically the round-trip
+    // through a re-render with new `drafts` that triggers the remount.
+    const item = category({});
+    function Wrapper() {
+      const [drafts, setDrafts] = useState<ValuationPanelProps["drafts"]>({});
+      return (
+        <ValuationPanel
+          {...panelProps({
+            items: [item],
+            drafts,
+            onRateChange: (key, value) => setDrafts((previous) => ({ ...previous, [key]: value })),
+          })}
+        />
+      );
+    }
+
+    render(<Wrapper />);
+    const input = screen.getByLabelText(`MO-DEV ${currentYear}`) as HTMLInputElement;
+    input.focus();
+
+    fireEvent.change(input, { target: { value: "3" } });
+    expect(document.activeElement).toBe(input);
+    expect(input.value).toBe("3");
+
+    fireEvent.change(input, { target: { value: "35" } });
+    expect(document.activeElement).toBe(input);
+    expect(input.value).toBe("35");
   });
 });

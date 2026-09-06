@@ -26,6 +26,8 @@ const mocks = vi.hoisted(() => ({
   deleteCalendar: vi.fn(),
   updateResourceRole: vi.fn(),
   createCostType: vi.fn(),
+  createCostRate: vi.fn(),
+  updateCostRate: vi.fn(),
   router: { push: vi.fn() },
 }));
 
@@ -57,6 +59,8 @@ vi.mock("@/lib/backend", async () => {
     deleteCalendar: mocks.deleteCalendar,
     updateResourceRole: mocks.updateResourceRole,
     createCostType: mocks.createCostType,
+    createCostRate: mocks.createCostRate,
+    updateCostRate: mocks.updateCostRate,
   };
 });
 
@@ -492,6 +496,86 @@ const costTypeFixture = (overrides: Partial<CostType> = {}): CostType =>
     updated_at: "2026-08-01T00:00:00Z",
     ...overrides,
   }) as CostType;
+
+describe("ResourcesPage valuation panel (E8-04)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getResourceNodes.mockResolvedValue([]);
+    mocks.getResourceRoles.mockResolvedValue([]);
+    mocks.getCalendars.mockResolvedValue([]);
+    mocks.getCostTypes.mockResolvedValue({ items: [costTypeFixture({})], total: 1 });
+    mocks.getCostRates.mockResolvedValue([]);
+    mocks.getInflationRates.mockResolvedValue([]);
+    mocks.getRoleCapacities.mockResolvedValue([]);
+    mocks.getUsers.mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  function valuationCard() {
+    return screen.getByRole("heading", { name: "Valorisation" }).closest("[data-slot='card']") as HTMLElement;
+  }
+
+  it("bulk-saves a rate entered on a page other than the one visible when Enregistrer is clicked, exercising the full labor-category set rather than just the visible page", async () => {
+    // 21 labor categories: 20 fit on the ValuationPanel's first page (limit 20),
+    // leaving exactly one -- "A21" -- on page 2. This is the concrete gap named by
+    // the local review: `getLaborCategories`/`getValuationCategoryPage` and the
+    // page-level bulk-save wiring were previously exercised only by
+    // `valuation-panel.test.tsx`'s hand-constructed props, never by a real
+    // multi-page scenario driven through `ResourcesPage` itself.
+    const categories = Array.from({ length: 21 }, (_, index) => ({
+      id: index + 1,
+      accounting_code: `A${String(index + 1).padStart(2, "0")}`,
+      category_code: null,
+      name: `Catégorie ${index + 1}`,
+      cost_type_id: 1,
+      is_active: true,
+    })) as never[];
+    mocks.getCostCategories.mockResolvedValue(categories);
+    mocks.createCostRate.mockResolvedValue({
+      id: 100,
+      cost_category_id: 21,
+      year: new Date().getFullYear(),
+      hourly_rate: "42.00",
+      currency_code: "EUR",
+    });
+
+    render(<ResourcesPage />);
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+
+    const card = valuationCard();
+    expect(within(card).getByText("A01")).toBeInTheDocument();
+    expect(within(card).queryByText("A21")).not.toBeInTheDocument();
+
+    // Navigate to page 2, where category A21 lives, and enter a rate for it.
+    fireEvent.click(within(card).getByRole("button", { name: "Suivant" }));
+    await waitFor(() => expect(within(card).getByText("A21")).toBeInTheDocument());
+    const year = new Date().getFullYear();
+    fireEvent.change(within(card).getByLabelText(`A21 ${year}`), { target: { value: "42.00" } });
+
+    // Navigate back to page 1 -- A21's row (and its draft) is no longer rendered --
+    // then save from there.
+    fireEvent.click(within(card).getByRole("button", { name: "Précédent" }));
+    await waitFor(() => expect(within(card).getByText("A01")).toBeInTheDocument());
+    expect(within(card).queryByText("A21")).not.toBeInTheDocument();
+
+    fireEvent.click(within(card).getByRole("button", { name: "Enregistrer" }));
+
+    await waitFor(() =>
+      expect(mocks.createCostRate).toHaveBeenCalledWith(
+        { cost_category_id: 21, year, hourly_rate: "42.00", currency_code: "EUR" },
+        expect.anything(),
+        expect.anything(),
+      ),
+    );
+    // Only the one category with an actual draft value should have triggered a
+    // save -- the other 20 labor categories were left blank.
+    expect(mocks.createCostRate).toHaveBeenCalledTimes(1);
+    expect(mocks.updateCostRate).not.toHaveBeenCalled();
+  });
+});
 
 describe("ResourcesPage cost types table (E8-02)", () => {
   beforeEach(() => {

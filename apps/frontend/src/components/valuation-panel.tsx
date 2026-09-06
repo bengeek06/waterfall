@@ -1,6 +1,7 @@
 "use client";
 
 import type { ColumnDef } from "@tanstack/react-table";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -29,6 +30,39 @@ export type ValuationPanelProps = {
   onRateChange: (key: string, value: string) => void;
   onSave: () => void;
 };
+
+// A stable-identity input for one category/year rate cell. `columns` below is
+// memoized with an empty dependency array so TanStack Table's `flexRender`
+// keeps passing the *same* component type across renders -- otherwise (a
+// fresh `cell` closure on every keystroke, since it closed over `props.drafts`)
+// React would unmount/remount the input after every character typed, dropping
+// focus (same bug class found in the parallel EPIC E8 migrations #123/#124).
+// Since the memo doesn't depend on `drafts`, the value displayed while typing
+// can't be read fresh from it either -- this component owns its value as
+// local state instead, seeded once when the row/year cell first appears (e.g.
+// on initial load or a page change), reporting every keystroke upward via
+// `onChange` for `drafts`/"Enregistrer" to use. Cross-page persistence of a
+// draft (this panel's whole reason for keeping `drafts` in the parent, per the
+// comment on `ValuationPanel`) is unaffected: navigating away and back
+// remounts this cell (a different row/page), correctly re-seeding from
+// `drafts`, which already reflects whatever was typed before navigating away.
+function ValuationRateInput(props: { ariaLabel: string; initialValue: string; onChange: (value: string) => void }) {
+  const [value, setValue] = useState(props.initialValue);
+  return (
+    <Input
+      aria-label={props.ariaLabel}
+      type="number"
+      step="0.01"
+      min="0"
+      value={value}
+      onChange={(event) => {
+        setValue(event.target.value);
+        props.onChange(event.target.value);
+      }}
+      placeholder="-"
+    />
+  );
+}
 
 // Comportement retenu pour les brouillons (issue #122, EPIC E8) : ILS SONT
 // CONSERVÉS entre deux pages, tris ou recherches -- jamais réinitialisés par un
@@ -59,37 +93,51 @@ export function ValuationPanel(props: ValuationPanelProps) {
   const years = [-4, -3, -2, -1, 0].map((offset) => new Date().getFullYear() + offset);
   const lastYear = years.at(-1);
 
-  const columns: ColumnDef<CostCategory>[] = [
-    {
-      accessorKey: "accounting_code",
-      header: "Code comptable",
-      meta: { sortColumn: "accounting_code" },
-      cell: ({ row }) => <span className="font-medium">{row.original.accounting_code}</span>,
-    },
-    ...years.map(
-      (year): ColumnDef<CostCategory> => ({
-        id: `year-${year}`,
-        header: () => <span className={year === lastYear ? "font-medium" : undefined}>{year}</span>,
-        cell: ({ row }) => {
-          const category = row.original;
-          const key = `${category.id}:${year}`;
-          return (
-            <div className={year === lastYear ? "-mx-2 rounded bg-muted px-2 py-1" : undefined}>
-              <Input
-                aria-label={`${category.accounting_code} ${year}`}
-                type="number"
-                step="0.01"
-                min="0"
-                value={props.drafts[key] ?? ""}
-                onChange={(event) => props.onRateChange(key, event.target.value)}
-                placeholder="-"
-              />
-            </div>
-          );
-        },
-      }),
-    ),
-  ];
+  // Callbacks are forwarded through this ref (safe -- only invoked from event
+  // handlers, which run after the most recent commit's `useLayoutEffect` has
+  // already flushed), so `columns` below doesn't need `onRateChange` (recreated
+  // every render by the parent) as a dependency.
+  const propsRef = useRef(props);
+  useLayoutEffect(() => {
+    propsRef.current = props;
+  });
+
+  // Memoized (empty deps) so cell renderers keep a stable identity across
+  // renders -- see `ValuationRateInput`'s comment for why. `years`/`lastYear`
+  // are derived from the current date and, in practice, don't change during
+  // the component's lifetime, so capturing them once at mount is equivalent to
+  // recomputing them every render.
+  const columns = useMemo<ColumnDef<CostCategory>[]>(
+    () => [
+      {
+        accessorKey: "accounting_code",
+        header: "Code comptable",
+        meta: { sortColumn: "accounting_code" },
+        cell: ({ row }) => <span className="font-medium">{row.original.accounting_code}</span>,
+      },
+      ...years.map(
+        (year): ColumnDef<CostCategory> => ({
+          id: `year-${year}`,
+          header: () => <span className={year === lastYear ? "font-medium" : undefined}>{year}</span>,
+          cell: ({ row }) => {
+            const category = row.original;
+            const key = `${category.id}:${year}`;
+            return (
+              <div className={year === lastYear ? "-mx-2 rounded bg-muted px-2 py-1" : undefined}>
+                <ValuationRateInput
+                  ariaLabel={`${category.accounting_code} ${year}`}
+                  initialValue={propsRef.current.drafts[key] ?? ""}
+                  onChange={(value) => propsRef.current.onRateChange(key, value)}
+                />
+              </div>
+            );
+          },
+        }),
+      ),
+    ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
 
   return (
     <Card className="mt-4">
