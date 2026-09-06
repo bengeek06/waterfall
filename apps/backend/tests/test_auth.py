@@ -251,7 +251,9 @@ def test_admin_can_manage_users() -> None:
 
         users_response = client.get("/auth/users", headers=_auth_header(admin_token))
         assert users_response.status_code == 200
-        users_payload = cast(list[dict[str, Any]], users_response.json())
+        users_body = cast(dict[str, Any], users_response.json())
+        users_payload = cast(list[dict[str, Any]], users_body["items"])
+        assert users_body["total"] == len(users_payload)
         assert any(item["email"] == "user@example.com" for item in users_payload)
 
         disable_response = client.patch(
@@ -297,6 +299,36 @@ def test_admin_can_create_and_delete_user() -> None:
 
         missing_response = client.delete(f"/auth/users/{user_id}", headers=admin_headers)
         assert missing_response.status_code == 404
+
+
+def test_admin_can_list_users_with_sort_and_search_and_rejects_unknown_sort() -> None:
+    with TestClient(app) as client:
+        admin_headers = _admin_headers(client)
+
+        for email in ("zeta.user@example.com", "alpha.user@example.com"):
+            created = client.post(
+                "/auth/register", json={"email": email, "password": "SuperSecret123"}
+            )
+            assert created.status_code == 201
+
+        listed = client.get("/auth/users", headers=admin_headers)
+        assert listed.status_code == 200
+        body = cast(dict[str, Any], listed.json())
+        assert body["limit"] is None
+        assert body["total"] == len(body["items"])
+
+        ascending = client.get("/auth/users?sort=email", headers=admin_headers)
+        assert ascending.status_code == 200
+        emails = cast(list[str], [item["email"] for item in ascending.json()["items"]])
+        assert emails == sorted(emails)
+
+        searched = client.get("/auth/users?q=alpha.user", headers=admin_headers)
+        assert searched.status_code == 200
+        searched_emails = [item["email"] for item in searched.json()["items"]]
+        assert searched_emails == ["alpha.user@example.com"]
+
+        invalid_sort = client.get("/auth/users?sort=unknown_column", headers=admin_headers)
+        assert invalid_sort.status_code == 400
 
 
 def test_admin_cannot_delete_self() -> None:

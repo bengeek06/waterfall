@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -6,6 +8,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from waterfall.api.dependencies import get_current_active_user
+from waterfall.api.pagination import ListParams, list_params
 from waterfall.api.routes.planning_support import (
     order_snapshots_depth_first,
 )
@@ -31,15 +34,18 @@ from waterfall.models.user import User
 from waterfall.schemas.projects import (
     EstimateAggregatesRead,
     EstimateCostLineCreate,
+    EstimateCostLineListRead,
     EstimateCostLineRead,
     EstimateCostLineUpdate,
-    EstimateTaskRowRead,
+    EstimateTaskRowListRead,
     ProjectEstimateCreate,
+    ProjectEstimateListRead,
     ProjectEstimateRead,
     ProjectRead,
 )
 from waterfall.schemas.resources import CostTypeKind
 from waterfall.services import (
+    apply_pagination,
     build_estimate_workbook,
     calculate_estimate_aggregates,
     calculate_estimate_lines,
@@ -49,20 +55,34 @@ from waterfall.services.project_lifecycle import ensure_project_mutable
 router = APIRouter(prefix="/projects", tags=["projects"])
 
 
-@router.get("/{project_id}/estimates", response_model=list[ProjectEstimateRead])
+@router.get("/{project_id}/estimates", response_model=ProjectEstimateListRead)
 def list_project_estimates(
     project_id: int,
+    params: ListParams = Depends(list_params),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
-) -> list[ProjectEstimateRead]:
+) -> ProjectEstimateListRead:
     get_project_or_404(db, project_id, current_user.id)
-    estimates = (
-        db.query(Estimate)
-        .filter(Estimate.project_id == project_id)
-        .order_by(Estimate.version_number)
-        .all()
+    query = db.query(Estimate).filter(Estimate.project_id == project_id)
+    result = apply_pagination(
+        query,
+        params,
+        sortable={
+            "version_number": Estimate.version_number,
+            "kind": Estimate.kind,
+            "status": Estimate.status,
+            "created_at": Estimate.created_at,
+        },
+        searchable=[Estimate.note],
+        default_sort=Estimate.version_number,
+        tiebreaker=Estimate.id,
     )
-    return [to_project_estimate_read(estimate) for estimate in estimates]
+    return ProjectEstimateListRead(
+        items=[to_project_estimate_read(estimate) for estimate in result.rows],
+        total=result.total,
+        limit=result.limit,
+        offset=result.offset,
+    )
 
 
 @router.post(
@@ -215,23 +235,37 @@ def set_estimate_reference(
 
 @router.get(
     "/{project_id}/estimates/{estimate_id}/task-rows",
-    response_model=list[EstimateTaskRowRead],
+    response_model=EstimateTaskRowListRead,
 )
 def list_estimate_task_rows(
     project_id: int,
     estimate_id: int,
+    params: ListParams = Depends(list_params),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
-) -> list[EstimateTaskRowRead]:
+) -> EstimateTaskRowListRead:
     get_project_or_404(db, project_id, current_user.id)
     get_estimate_or_404(db, project_id, estimate_id)
-    rows = (
-        db.query(EstimateTaskRow)
-        .filter(EstimateTaskRow.estimate_id == estimate_id)
-        .order_by(EstimateTaskRow.position)
-        .all()
+    query = db.query(EstimateTaskRow).filter(EstimateTaskRow.estimate_id == estimate_id)
+    result = apply_pagination(
+        query,
+        params,
+        sortable={
+            "position": EstimateTaskRow.position,
+            "task_name": EstimateTaskRow.task_name,
+            "outline_number": EstimateTaskRow.outline_number,
+            "outline_level": EstimateTaskRow.outline_level,
+        },
+        default_sort=EstimateTaskRow.position,
+        tiebreaker=EstimateTaskRow.id,
+        searchable=[EstimateTaskRow.task_name],
     )
-    return [to_estimate_task_row_read(row) for row in rows]
+    return EstimateTaskRowListRead(
+        items=[to_estimate_task_row_read(row) for row in result.rows],
+        total=result.total,
+        limit=result.limit,
+        offset=result.offset,
+    )
 
 
 @router.get(
@@ -269,23 +303,37 @@ def export_estimate_excel(
 
 @router.get(
     "/{project_id}/estimates/{estimate_id}/cost-lines",
-    response_model=list[EstimateCostLineRead],
+    response_model=EstimateCostLineListRead,
 )
 def list_estimate_cost_lines(
     project_id: int,
     estimate_id: int,
+    params: ListParams = Depends(list_params),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
-) -> list[EstimateCostLineRead]:
+) -> EstimateCostLineListRead:
     get_project_or_404(db, project_id, current_user.id)
     get_estimate_or_404(db, project_id, estimate_id)
-    lines = (
-        db.query(EstimateCostLine)
-        .filter(EstimateCostLine.estimate_id == estimate_id)
-        .order_by(EstimateCostLine.id)
-        .all()
+    query = db.query(EstimateCostLine).filter(EstimateCostLine.estimate_id == estimate_id)
+    result = apply_pagination(
+        query,
+        params,
+        sortable={
+            "label": EstimateCostLine.label,
+            "quantity": EstimateCostLine.quantity,
+            "unit_cost": EstimateCostLine.unit_cost,
+            "purchase_cost": EstimateCostLine.purchase_cost,
+            "created_at": EstimateCostLine.created_at,
+        },
+        tiebreaker=EstimateCostLine.id,
+        searchable=[EstimateCostLine.label],
     )
-    return [to_estimate_cost_line_read(line) for line in lines]
+    return EstimateCostLineListRead(
+        items=[to_estimate_cost_line_read(line) for line in result.rows],
+        total=result.total,
+        limit=result.limit,
+        offset=result.offset,
+    )
 
 
 @router.post(

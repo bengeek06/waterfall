@@ -7,6 +7,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
 from waterfall.api.dependencies import get_current_active_user, get_current_admin_user
+from waterfall.api.pagination import ListParams, list_params
 from waterfall.core.config import get_settings
 from waterfall.core.security import (
     create_access_token,
@@ -21,12 +22,14 @@ from waterfall.models.user import User
 from waterfall.schemas.auth import (
     PasswordChangeRequest,
     Token,
+    UserAdminListRead,
     UserAdminRead,
     UserCreate,
     UserRead,
     UserRoleUpdate,
     UserStatusUpdate,
 )
+from waterfall.services import apply_pagination
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
@@ -254,13 +257,29 @@ def change_password(
     logger.info("auth.password_changed", extra={"email": current_user.email})
 
 
-@router.get("/users", response_model=list[UserAdminRead])
+@router.get("/users", response_model=UserAdminListRead)
 def list_users(
+    params: ListParams = Depends(list_params),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_admin_user),
-) -> list[UserAdminRead]:
-    users = db.query(User).order_by(User.id.asc()).all()
-    return [_to_user_admin_read(item) for item in users]
+) -> UserAdminListRead:
+    result = apply_pagination(
+        db.query(User),
+        params,
+        sortable={
+            "email": User.email,
+            "created_at": User.created_at,
+            "is_active": User.is_active,
+        },
+        tiebreaker=User.id,
+        searchable=[User.email],
+    )
+    return UserAdminListRead(
+        items=[_to_user_admin_read(item) for item in result.rows],
+        total=result.total,
+        limit=result.limit,
+        offset=result.offset,
+    )
 
 
 @router.post("/users", response_model=UserAdminRead, status_code=status.HTTP_201_CREATED)

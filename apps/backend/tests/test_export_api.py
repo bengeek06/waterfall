@@ -245,9 +245,9 @@ def test_export_xml_contains_task_notes_from_description() -> None:
             headers=headers,
         )
         assert tasks_response.status_code == 200
-        raw_tasks_payload = tasks_response.json()
-        assert isinstance(raw_tasks_payload, list)
-        tasks_payload = cast(list[dict[str, Any]], raw_tasks_payload)
+        raw_tasks_body = tasks_response.json()
+        assert isinstance(raw_tasks_body, dict)
+        tasks_payload = cast(list[dict[str, Any]], raw_tasks_body["items"])
         assert len(tasks_payload) > 0
         task_uid = cast(int, tasks_payload[0]["uid"])
         source_description = tasks_payload[0]["description"]
@@ -816,7 +816,7 @@ def test_export_then_reimport_round_trip_preserves_tasks_and_links() -> None:
 
         source_tasks_before = cast(
             list[dict[str, Any]],
-            client.get(f"/projects/{source_project_id}/tasks", headers=headers).json(),
+            client.get(f"/projects/{source_project_id}/tasks", headers=headers).json()["items"],
         )
         assert len(source_tasks_before) == 2
         first_task_uid = cast(
@@ -848,7 +848,7 @@ def test_export_then_reimport_round_trip_preserves_tasks_and_links() -> None:
 
         source_tasks = cast(
             list[dict[str, Any]],
-            client.get(f"/projects/{source_project_id}/tasks", headers=headers).json(),
+            client.get(f"/projects/{source_project_id}/tasks", headers=headers).json()["items"],
         )
         source_by_uid = {task["uid"]: task for task in source_tasks}
 
@@ -866,7 +866,7 @@ def test_export_then_reimport_round_trip_preserves_tasks_and_links() -> None:
 
         target_tasks = cast(
             list[dict[str, Any]],
-            client.get(f"/projects/{target_project_id}/tasks", headers=headers).json(),
+            client.get(f"/projects/{target_project_id}/tasks", headers=headers).json()["items"],
         )
         target_by_uid = {task["uid"]: task for task in target_tasks}
 

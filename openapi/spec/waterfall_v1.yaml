@@ -369,6 +369,22 @@ components:
       $ref: ./components/schemas/PaginationMeta.yaml
     SortColumn:
       $ref: ./components/schemas/SortColumn.yaml
+    ProjectListRead:
+      $ref: ./components/schemas/ProjectListRead.yaml
+    TaskListRead:
+      $ref: ./components/schemas/TaskListRead.yaml
+    PlanningListRead:
+      $ref: ./components/schemas/PlanningListRead.yaml
+    ProjectEstimateListRead:
+      $ref: ./components/schemas/ProjectEstimateListRead.yaml
+    EstimateTaskRowListRead:
+      $ref: ./components/schemas/EstimateTaskRowListRead.yaml
+    EstimateCostLineListRead:
+      $ref: ./components/schemas/EstimateCostLineListRead.yaml
+    TaskRoleAssignmentListRead:
+      $ref: ./components/schemas/TaskRoleAssignmentListRead.yaml
+    UserAdminListRead:
+      $ref: ./components/schemas/UserAdminListRead.yaml
   parameters:
     BatchId:
       $ref: ./components/parameters/BatchId.yaml

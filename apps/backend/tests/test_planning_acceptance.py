@@ -111,7 +111,7 @@ def test_planning_version_and_draft_lifecycle() -> None:
         assert len(cast(list[dict[str, Any]], generated_payload["tasks"])) == 9
         versions_after_generation = client.get(f"/projects/{project_id}/plannings", headers=headers)
         assert versions_after_generation.status_code == 200
-        first_planning = cast(dict[str, Any], versions_after_generation.json()[0])
+        first_planning = cast(dict[str, Any], versions_after_generation.json()["items"][0])
         first_planning_id = cast(int, first_planning["id"])
         assert first_planning["status"] == "draft"
 
@@ -131,7 +131,7 @@ def test_planning_version_and_draft_lifecycle() -> None:
 
         versions = client.get(f"/projects/{project_id}/plannings", headers=headers)
         assert versions.status_code == 200
-        versions_by_id = {version["id"]: version for version in versions.json()}
+        versions_by_id = {version["id"]: version for version in versions.json()["items"]}
         assert versions_by_id[first_planning_id]["status"] == "validated"
 
         displayed = client.post(
@@ -170,7 +170,7 @@ def test_import_diff_confirmation_and_export_lifecycle() -> None:
         assert diff_response.status_code == 200
         diff_items = cast(list[dict[str, Any]], diff_response.json()["items"])
         assert diff_items[0]["kind"] == "added"
-        assert client.get(f"/projects/{project_id}/tasks", headers=headers).json() == []
+        assert client.get(f"/projects/{project_id}/tasks", headers=headers).json()["items"] == []
 
         without_confirmation = client.post(
             f"/imports/v1/batches/{batch_id}/run",
@@ -178,8 +178,10 @@ def test_import_diff_confirmation_and_export_lifecycle() -> None:
             headers=headers,
         )
         assert without_confirmation.status_code == 409
-        assert client.get(f"/projects/{project_id}/tasks", headers=headers).json() == []
-        assert client.get(f"/projects/{project_id}/plannings", headers=headers).json() == []
+        assert client.get(f"/projects/{project_id}/tasks", headers=headers).json()["items"] == []
+        assert (
+            client.get(f"/projects/{project_id}/plannings", headers=headers).json()["items"] == []
+        )
 
         confirmed = client.post(
             f"/imports/v1/batches/{batch_id}/run",
@@ -191,7 +193,7 @@ def test_import_diff_confirmation_and_export_lifecycle() -> None:
 
         planning_response = client.get(f"/projects/{project_id}/plannings", headers=headers)
         assert planning_response.status_code == 200
-        planning_payload = cast(list[dict[str, Any]], planning_response.json())
+        planning_payload = cast(list[dict[str, Any]], planning_response.json()["items"])
         assert len(planning_payload) == 1
         planning_id = cast(int, planning_payload[0]["id"])
         assert planning_payload[0]["status"] == "draft"
@@ -222,7 +224,7 @@ def test_import_modify_export_reimport_round_trip() -> None:
         _import_xml(client, headers, source_project_id, IMPORT_XML, "initial.xml")
         first_planning = cast(
             list[dict[str, Any]],
-            client.get(f"/projects/{source_project_id}/plannings", headers=headers).json(),
+            client.get(f"/projects/{source_project_id}/plannings", headers=headers).json()["items"],
         )[0]
         first_planning_id = cast(int, first_planning["id"])
         assert (
@@ -262,7 +264,7 @@ def test_import_modify_export_reimport_round_trip() -> None:
 
         plannings = client.get(f"/projects/{source_project_id}/plannings", headers=headers)
         assert plannings.status_code == 200
-        planning_statuses = [item["status"] for item in plannings.json()]
+        planning_statuses = [item["status"] for item in plannings.json()["items"]]
         assert planning_statuses == ["validated", "draft"]
         source_export = client.get(f"/projects/{source_project_id}/export.xml", headers=headers)
         assert source_export.status_code == 200
@@ -282,7 +284,7 @@ def test_import_modify_export_reimport_round_trip() -> None:
         )
         target_tasks = client.get(f"/projects/{target_project_id}/tasks", headers=headers)
         assert target_tasks.status_code == 200
-        assert target_tasks.json()[0]["name"] == "Imported acceptance task v2"
+        assert target_tasks.json()["items"][0]["name"] == "Imported acceptance task v2"
 
 
 def test_import_round_trip_allows_direct_draft_edit() -> None:
@@ -295,7 +297,7 @@ def test_import_round_trip_allows_direct_draft_edit() -> None:
 
         planning = cast(
             list[dict[str, Any]],
-            client.get(f"/projects/{project_id}/plannings", headers=headers).json(),
+            client.get(f"/projects/{project_id}/plannings", headers=headers).json()["items"],
         )[0]
         planning_id = cast(int, planning["id"])
         update_response = client.patch(
@@ -326,7 +328,7 @@ def test_validated_planning_rejects_direct_edit_without_mutating() -> None:
         _import_xml(client, headers, project_id, IMPORT_XML, "validated.xml")
         planning = cast(
             list[dict[str, Any]],
-            client.get(f"/projects/{project_id}/plannings", headers=headers).json(),
+            client.get(f"/projects/{project_id}/plannings", headers=headers).json()["items"],
         )[0]
         planning_id = cast(int, planning["id"])
         assert (
@@ -362,7 +364,7 @@ def test_read_only_project_rejects_direct_edit_without_mutating(project_status: 
         _import_xml(client, headers, project_id, IMPORT_XML, f"{project_status}.xml")
         planning = cast(
             list[dict[str, Any]],
-            client.get(f"/projects/{project_id}/plannings", headers=headers).json(),
+            client.get(f"/projects/{project_id}/plannings", headers=headers).json()["items"],
         )[0]
         planning_id = cast(int, planning["id"])
 

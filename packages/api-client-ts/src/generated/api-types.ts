@@ -164,7 +164,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Lister les utilisateurs */
+        /**
+         * Lister les utilisateurs
+         * @description Le parametre `q` recherche sur `email`.
+         */
         get: operations["listUsers"];
         put?: never;
         /** Créer un utilisateur administrativement */
@@ -335,7 +338,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Lister les projets importes */
+        /**
+         * Lister les projets importes
+         * @description Le parametre `q` recherche sur `name`.
+         */
         get: operations["listProjects"];
         put?: never;
         /** Creer un projet sans import */
@@ -389,7 +395,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Lister les versions de planning */
+        /**
+         * Lister les versions de planning
+         * @description Le parametre `q` recherche sur `note`.
+         */
         get: operations["listPlannings"];
         put?: never;
         /** Creer un brouillon de planning */
@@ -714,7 +723,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Lister les affectations de main-d'œuvre d'une tâche */
+        /**
+         * Lister les affectations de main-d'œuvre d'une tâche
+         * @description Le parametre `q` recherche sur `role_name` (nom du role affecte).
+         */
         get: operations["listTaskRoleAssignments"];
         put?: never;
         /** Affecter un rôle de main-d'œuvre à une tâche */
@@ -750,7 +762,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Lister les versions de devis d'un projet */
+        /**
+         * Lister les versions de devis d'un projet
+         * @description Le parametre `q` recherche sur `note`.
+         */
         get: operations["listProjectEstimates"];
         put?: never;
         /** Créer un brouillon de devis et son snapshot de tâches */
@@ -785,7 +800,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Lister les lignes de tâches snapshotées dans un devis */
+        /**
+         * Lister les lignes de tâches snapshotées dans un devis
+         * @description Le parametre `q` recherche sur `task_name`.
+         */
         get: operations["listEstimateTaskRows"];
         put?: never;
         post?: never;
@@ -802,7 +820,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Lister les lignes de coût hors main-d'oeuvre d'un devis */
+        /**
+         * Lister les lignes de coût hors main-d'oeuvre d'un devis
+         * @description Le parametre `q` recherche sur `label`.
+         */
         get: operations["listEstimateCostLines"];
         put?: never;
         /** Ajouter une ligne Fourniture, Frais ou UO à un brouillon */
@@ -1901,6 +1922,30 @@ export interface components {
          *     Une colonne absente de cet enum est rejetee avec la reponse BadRequest.yaml, jamais interpolee dans le SQL.
          */
         SortColumn: string;
+        ProjectListRead: components["schemas"]["PaginationMeta"] & {
+            items: components["schemas"]["ProjectRead"][];
+        };
+        TaskListRead: components["schemas"]["PaginationMeta"] & {
+            items: components["schemas"]["TaskRead"][];
+        };
+        PlanningListRead: components["schemas"]["PaginationMeta"] & {
+            items: components["schemas"]["PlanningRead"][];
+        };
+        ProjectEstimateListRead: components["schemas"]["PaginationMeta"] & {
+            items: components["schemas"]["ProjectEstimateRead"][];
+        };
+        EstimateTaskRowListRead: components["schemas"]["PaginationMeta"] & {
+            items: components["schemas"]["EstimateTaskRowRead"][];
+        };
+        EstimateCostLineListRead: components["schemas"]["PaginationMeta"] & {
+            items: components["schemas"]["EstimateCostLineRead"][];
+        };
+        TaskRoleAssignmentListRead: components["schemas"]["PaginationMeta"] & {
+            items: components["schemas"]["TaskRoleAssignmentRead"][];
+        };
+        UserAdminListRead: components["schemas"]["PaginationMeta"] & {
+            items: components["schemas"]["UserAdminRead"][];
+        };
         PlanningTaskDeleteConflict: {
             detail: {
                 /** @enum {string} */
@@ -2491,7 +2536,15 @@ export interface operations {
     };
     listUsers: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Nombre maximum de lignes renvoyees. Absent, l'endpoint renvoie l'integralite des lignes du jeu filtre (voir PaginationMeta.yaml) : il n'y a pas de valeur par defaut qui tronquerait silencieusement une liste. */
+                limit?: components["parameters"]["Limit"];
+                /** @description Nombre de lignes a sauter avant le debut de la page. Requiert `limit` : fourni sans `limit`, il serait sous-specifie (voir la note "Regle offset/limit" dans PaginationMeta.yaml) et est donc rejete avec la reponse BadRequest.yaml. */
+                offset?: components["parameters"]["Offset"];
+                /** @description Recherche plein texte simple (sous-chaine, insensible a la casse), sur le sous-ensemble de colonnes documente par chaque ressource dans la description de ce parametre au niveau de l'operation. A distinguer des filtres structures deja existants sur certaines ressources (`include_inactive`, `node_id`, `role_id`, ...), qui restent des parametres dedies et se combinent avec `q`. */
+                q?: components["parameters"]["Search"];
+                sort?: "email" | "-email" | "created_at" | "-created_at" | "is_active" | "-is_active";
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -2504,9 +2557,10 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["UserAdminRead"][];
+                    "application/json": components["schemas"]["UserAdminListRead"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
         };
@@ -2824,9 +2878,14 @@ export interface operations {
     listProjects: {
         parameters: {
             query?: {
-                limit?: number;
-                offset?: number;
                 include_archived?: boolean;
+                /** @description Nombre maximum de lignes renvoyees. Absent, l'endpoint renvoie l'integralite des lignes du jeu filtre (voir PaginationMeta.yaml) : il n'y a pas de valeur par defaut qui tronquerait silencieusement une liste. */
+                limit?: components["parameters"]["Limit"];
+                /** @description Nombre de lignes a sauter avant le debut de la page. Requiert `limit` : fourni sans `limit`, il serait sous-specifie (voir la note "Regle offset/limit" dans PaginationMeta.yaml) et est donc rejete avec la reponse BadRequest.yaml. */
+                offset?: components["parameters"]["Offset"];
+                /** @description Recherche plein texte simple (sous-chaine, insensible a la casse), sur le sous-ensemble de colonnes documente par chaque ressource dans la description de ce parametre au niveau de l'operation. A distinguer des filtres structures deja existants sur certaines ressources (`include_inactive`, `node_id`, `role_id`, ...), qui restent des parametres dedies et se combinent avec `q`. */
+                q?: components["parameters"]["Search"];
+                sort?: "name" | "-name" | "status" | "-status" | "id" | "-id";
             };
             header?: never;
             path?: never;
@@ -2840,9 +2899,10 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ProjectRead"][];
+                    "application/json": components["schemas"]["ProjectListRead"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
         };
     };
@@ -2982,7 +3042,15 @@ export interface operations {
     };
     listPlannings: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Nombre maximum de lignes renvoyees. Absent, l'endpoint renvoie l'integralite des lignes du jeu filtre (voir PaginationMeta.yaml) : il n'y a pas de valeur par defaut qui tronquerait silencieusement une liste. */
+                limit?: components["parameters"]["Limit"];
+                /** @description Nombre de lignes a sauter avant le debut de la page. Requiert `limit` : fourni sans `limit`, il serait sous-specifie (voir la note "Regle offset/limit" dans PaginationMeta.yaml) et est donc rejete avec la reponse BadRequest.yaml. */
+                offset?: components["parameters"]["Offset"];
+                /** @description Recherche plein texte simple (sous-chaine, insensible a la casse), sur le sous-ensemble de colonnes documente par chaque ressource dans la description de ce parametre au niveau de l'operation. A distinguer des filtres structures deja existants sur certaines ressources (`include_inactive`, `node_id`, `role_id`, ...), qui restent des parametres dedies et se combinent avec `q`. */
+                q?: components["parameters"]["Search"];
+                sort?: "version_number" | "-version_number" | "status" | "-status" | "created_at" | "-created_at";
+            };
             header?: never;
             path: {
                 /** @description Identifiant technique ms_project.id */
@@ -2998,9 +3066,10 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PlanningRead"][];
+                    "application/json": components["schemas"]["PlanningListRead"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["ProjectNotFound"];
         };
@@ -3381,8 +3450,6 @@ export interface operations {
     listProjectTasks: {
         parameters: {
             query?: {
-                limit?: number;
-                offset?: number;
                 planning_id?: number | null;
             };
             header?: never;
@@ -3394,13 +3461,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Liste de taches */
+            /** @description Integralite des taches du projet (non pagine : cet endpoint alimente l'editeur de planning, qui a besoin de l'arbre complet pour reconstruire la hierarchie et calculer les durees des taches synthese -- une troncature produirait des parents orphelins et des agregats faux). */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TaskRead"][];
+                    "application/json": components["schemas"]["TaskListRead"];
                 };
             };
             401: components["responses"]["Unauthorized"];
@@ -3605,7 +3672,15 @@ export interface operations {
     };
     listTaskRoleAssignments: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Nombre maximum de lignes renvoyees. Absent, l'endpoint renvoie l'integralite des lignes du jeu filtre (voir PaginationMeta.yaml) : il n'y a pas de valeur par defaut qui tronquerait silencieusement une liste. */
+                limit?: components["parameters"]["Limit"];
+                /** @description Nombre de lignes a sauter avant le debut de la page. Requiert `limit` : fourni sans `limit`, il serait sous-specifie (voir la note "Regle offset/limit" dans PaginationMeta.yaml) et est donc rejete avec la reponse BadRequest.yaml. */
+                offset?: components["parameters"]["Offset"];
+                /** @description Recherche plein texte simple (sous-chaine, insensible a la casse), sur le sous-ensemble de colonnes documente par chaque ressource dans la description de ce parametre au niveau de l'operation. A distinguer des filtres structures deja existants sur certaines ressources (`include_inactive`, `node_id`, `role_id`, ...), qui restent des parametres dedies et se combinent avec `q`. */
+                q?: components["parameters"]["Search"];
+                sort?: "role_name" | "-role_name" | "quantity" | "-quantity" | "hours" | "-hours";
+            };
             header?: never;
             path: {
                 /** @description Identifiant technique ms_project.id */
@@ -3623,9 +3698,10 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TaskRoleAssignmentRead"][];
+                    "application/json": components["schemas"]["TaskRoleAssignmentListRead"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["TaskNotFound"];
         };
@@ -3725,7 +3801,15 @@ export interface operations {
     };
     listProjectEstimates: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Nombre maximum de lignes renvoyees. Absent, l'endpoint renvoie l'integralite des lignes du jeu filtre (voir PaginationMeta.yaml) : il n'y a pas de valeur par defaut qui tronquerait silencieusement une liste. */
+                limit?: components["parameters"]["Limit"];
+                /** @description Nombre de lignes a sauter avant le debut de la page. Requiert `limit` : fourni sans `limit`, il serait sous-specifie (voir la note "Regle offset/limit" dans PaginationMeta.yaml) et est donc rejete avec la reponse BadRequest.yaml. */
+                offset?: components["parameters"]["Offset"];
+                /** @description Recherche plein texte simple (sous-chaine, insensible a la casse), sur le sous-ensemble de colonnes documente par chaque ressource dans la description de ce parametre au niveau de l'operation. A distinguer des filtres structures deja existants sur certaines ressources (`include_inactive`, `node_id`, `role_id`, ...), qui restent des parametres dedies et se combinent avec `q`. */
+                q?: components["parameters"]["Search"];
+                sort?: "version_number" | "-version_number" | "kind" | "-kind" | "status" | "-status" | "created_at" | "-created_at";
+            };
             header?: never;
             path: {
                 /** @description Identifiant technique ms_project.id */
@@ -3741,9 +3825,10 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ProjectEstimateRead"][];
+                    "application/json": components["schemas"]["ProjectEstimateListRead"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["ProjectNotFound"];
         };
@@ -3807,7 +3892,15 @@ export interface operations {
     };
     listEstimateTaskRows: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Nombre maximum de lignes renvoyees. Absent, l'endpoint renvoie l'integralite des lignes du jeu filtre (voir PaginationMeta.yaml) : il n'y a pas de valeur par defaut qui tronquerait silencieusement une liste. */
+                limit?: components["parameters"]["Limit"];
+                /** @description Nombre de lignes a sauter avant le debut de la page. Requiert `limit` : fourni sans `limit`, il serait sous-specifie (voir la note "Regle offset/limit" dans PaginationMeta.yaml) et est donc rejete avec la reponse BadRequest.yaml. */
+                offset?: components["parameters"]["Offset"];
+                /** @description Recherche plein texte simple (sous-chaine, insensible a la casse), sur le sous-ensemble de colonnes documente par chaque ressource dans la description de ce parametre au niveau de l'operation. A distinguer des filtres structures deja existants sur certaines ressources (`include_inactive`, `node_id`, `role_id`, ...), qui restent des parametres dedies et se combinent avec `q`. */
+                q?: components["parameters"]["Search"];
+                sort?: "position" | "-position" | "task_name" | "-task_name" | "outline_number" | "-outline_number" | "outline_level" | "-outline_level";
+            };
             header?: never;
             path: {
                 /** @description Identifiant technique ms_project.id */
@@ -3825,16 +3918,25 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["EstimateTaskRowRead"][];
+                    "application/json": components["schemas"]["EstimateTaskRowListRead"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["ProjectNotFound"];
         };
     };
     listEstimateCostLines: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Nombre maximum de lignes renvoyees. Absent, l'endpoint renvoie l'integralite des lignes du jeu filtre (voir PaginationMeta.yaml) : il n'y a pas de valeur par defaut qui tronquerait silencieusement une liste. */
+                limit?: components["parameters"]["Limit"];
+                /** @description Nombre de lignes a sauter avant le debut de la page. Requiert `limit` : fourni sans `limit`, il serait sous-specifie (voir la note "Regle offset/limit" dans PaginationMeta.yaml) et est donc rejete avec la reponse BadRequest.yaml. */
+                offset?: components["parameters"]["Offset"];
+                /** @description Recherche plein texte simple (sous-chaine, insensible a la casse), sur le sous-ensemble de colonnes documente par chaque ressource dans la description de ce parametre au niveau de l'operation. A distinguer des filtres structures deja existants sur certaines ressources (`include_inactive`, `node_id`, `role_id`, ...), qui restent des parametres dedies et se combinent avec `q`. */
+                q?: components["parameters"]["Search"];
+                sort?: "label" | "-label" | "quantity" | "-quantity" | "unit_cost" | "-unit_cost" | "purchase_cost" | "-purchase_cost" | "created_at" | "-created_at";
+            };
             header?: never;
             path: {
                 /** @description Identifiant technique ms_project.id */
@@ -3852,9 +3954,10 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["EstimateCostLineRead"][];
+                    "application/json": components["schemas"]["EstimateCostLineListRead"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["ProjectNotFound"];
         };

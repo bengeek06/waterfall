@@ -74,10 +74,10 @@ def test_save_planning_structure_draft_is_non_operational_and_generates_later() 
         assert second.status_code == 200
         assert first.json()["planning_id"] == second.json()["planning_id"]
         assert client.get(f"/projects/{project_id}", headers=headers).json()["status"] == "cree"
-        assert client.get(f"/projects/{project_id}/tasks", headers=headers).json() == []
+        assert client.get(f"/projects/{project_id}/tasks", headers=headers).json()["items"] == []
         plannings = client.get(f"/projects/{project_id}/plannings", headers=headers)
         assert plannings.status_code == 200
-        planning_items = cast(list[dict[str, Any]], plannings.json())
+        planning_items = cast(list[dict[str, Any]], plannings.json()["items"])
         assert len(planning_items) == 1
         assert planning_items[0]["status"] == "draft"
 
@@ -188,7 +188,7 @@ def test_skip_planning_structure_creates_empty_planning_and_initialises_project(
 
         plannings = client.get(f"/projects/{project_id}/plannings", headers=headers)
         assert plannings.status_code == 200
-        planning_items = cast(list[dict[str, Any]], plannings.json())
+        planning_items = cast(list[dict[str, Any]], plannings.json()["items"])
         assert len(planning_items) == 1
         assert planning_items[0]["status"] == "draft"
 
@@ -224,7 +224,7 @@ def test_skip_planning_structure_rejects_call_once_project_left_cree() -> None:
 
         plannings = client.get(f"/projects/{project_id}/plannings", headers=headers)
         assert plannings.status_code == 200
-        assert len(cast(list[dict[str, Any]], plannings.json())) == 1
+        assert len(cast(list[dict[str, Any]], plannings.json()["items"])) == 1
 
 
 def test_skip_planning_structure_does_not_overwrite_validated_reference() -> None:
@@ -402,7 +402,7 @@ def test_skip_then_generate_structure_reuses_same_empty_planning() -> None:
 
         plannings = client.get(f"/projects/{project_id}/plannings", headers=headers)
         assert plannings.status_code == 200
-        assert len(cast(list[dict[str, Any]], plannings.json())) == 1
+        assert len(cast(list[dict[str, Any]], plannings.json()["items"])) == 1
 
 
 def test_skip_planning_structure_rejects_read_only_project() -> None:
@@ -550,7 +550,7 @@ def test_create_planning_structure_is_idempotent() -> None:
 
         listed = client.get(f"/projects/{project_id}/tasks", headers=headers)
         assert listed.status_code == 200
-        listed_tasks = cast(list[dict[str, Any]], listed.json())
+        listed_tasks = cast(list[dict[str, Any]], listed.json()["items"])
         assert len(listed_tasks) == len(first_tasks)
 
 
@@ -588,7 +588,7 @@ def test_create_planning_structure_reconciles_removed_lots() -> None:
         assert second.status_code == 201
         listed = client.get(f"/projects/{project_id}/tasks", headers=headers)
         assert listed.status_code == 200
-        tasks = cast(list[dict[str, Any]], listed.json())
+        tasks = cast(list[dict[str, Any]], listed.json()["items"])
         assert len(tasks) == 5
         assert all(task["structure_key"] != "design/validation" for task in tasks)
 
@@ -609,7 +609,7 @@ def test_create_planning_structure_rejects_duplicate_keys_without_mutation() -> 
         assert response.status_code == 422
         listed = client.get(f"/projects/{project_id}/tasks", headers=headers)
         assert listed.status_code == 200
-        assert listed.json() == []
+        assert listed.json()["items"] == []
 
 
 def test_task_mutations_target_displayed_draft_snapshot() -> None:
@@ -661,7 +661,7 @@ def test_task_mutations_target_displayed_draft_snapshot() -> None:
             headers=headers,
         )
         assert leaf_delete.status_code == 200
-        remaining = client.get(f"/projects/{project_id}/tasks", headers=headers).json()
+        remaining = client.get(f"/projects/{project_id}/tasks", headers=headers).json()["items"]
         assert new_uid not in [task["uid"] for task in remaining]
 
 
@@ -674,7 +674,7 @@ def test_reopen_and_regenerate_preserves_uids() -> None:
         assert client.post(path, json=_payload(), headers=headers).status_code == 201
         initial_tasks = cast(
             list[dict[str, Any]],
-            client.get(f"/projects/{project_id}/tasks", headers=headers).json(),
+            client.get(f"/projects/{project_id}/tasks", headers=headers).json()["items"],
         )
         uid_by_key = {task["structure_key"]: task["uid"] for task in initial_tasks}
         previous_max_uid = max(uid_by_key.values())
@@ -689,7 +689,7 @@ def test_reopen_and_regenerate_preserves_uids() -> None:
         assert client.post(path, json=extended, headers=headers).status_code == 201
         regenerated_tasks = cast(
             list[dict[str, Any]],
-            client.get(f"/projects/{project_id}/tasks", headers=headers).json(),
+            client.get(f"/projects/{project_id}/tasks", headers=headers).json()["items"],
         )
         regenerated_uid_by_key = {task["structure_key"]: task["uid"] for task in regenerated_tasks}
 
@@ -709,7 +709,7 @@ def test_regenerate_structure_preserves_manual_tasks() -> None:
         assert client.post(path, json=_payload(), headers=headers).status_code == 201
         structured_tasks = cast(
             list[dict[str, Any]],
-            client.get(f"/projects/{project_id}/tasks", headers=headers).json(),
+            client.get(f"/projects/{project_id}/tasks", headers=headers).json()["items"],
         )
         uid_by_key = {
             task["structure_key"]: task["uid"]
@@ -739,7 +739,7 @@ def test_regenerate_structure_preserves_manual_tasks() -> None:
 
         regenerated = cast(
             list[dict[str, Any]],
-            client.get(f"/projects/{project_id}/tasks", headers=headers).json(),
+            client.get(f"/projects/{project_id}/tasks", headers=headers).json()["items"],
         )
         assert manual_uid in [task["uid"] for task in regenerated]
         regenerated_uid_by_key = {
@@ -797,7 +797,7 @@ def test_regenerate_structure_preserves_nested_manual_task_hierarchy() -> None:
         assert manual_child["parent_uid"] == parent_uid
 
         before_regeneration = cast(
-            list[dict[str, Any]], client.get(tasks_url, headers=headers).json()
+            list[dict[str, Any]], client.get(tasks_url, headers=headers).json()["items"]
         )
         manual_child_before = next(task for task in before_regeneration if task["uid"] == child_uid)
         assert manual_child_before["parent_uid"] == parent_uid
@@ -807,7 +807,7 @@ def test_regenerate_structure_preserves_nested_manual_task_hierarchy() -> None:
         assert client.post(path, json=_payload(), headers=headers).status_code == 201
 
         after_regeneration = cast(
-            list[dict[str, Any]], client.get(tasks_url, headers=headers).json()
+            list[dict[str, Any]], client.get(tasks_url, headers=headers).json()["items"]
         )
         manual_parent_after = next(task for task in after_regeneration if task["uid"] == parent_uid)
         manual_child_after = next(task for task in after_regeneration if task["uid"] == child_uid)
@@ -826,7 +826,9 @@ def test_regenerate_structure_still_orphans_manual_task_under_removed_deliverabl
         planning_id = client.get(f"/projects/{project_id}", headers=headers).json()[
             "displayed_planning_id"
         ]
-        structured_tasks = cast(list[dict[str, Any]], client.get(tasks_url, headers=headers).json())
+        structured_tasks = cast(
+            list[dict[str, Any]], client.get(tasks_url, headers=headers).json()["items"]
+        )
         uid_by_key = {
             task["structure_key"]: task["uid"]
             for task in structured_tasks
@@ -861,7 +863,9 @@ def test_regenerate_structure_still_orphans_manual_task_under_removed_deliverabl
             client.post(path, json=payload_without_architecture, headers=headers).status_code == 201
         )
 
-        regenerated = cast(list[dict[str, Any]], client.get(tasks_url, headers=headers).json())
+        regenerated = cast(
+            list[dict[str, Any]], client.get(tasks_url, headers=headers).json()["items"]
+        )
         manual_after = next(task for task in regenerated if task["uid"] == manual_uid)
         assert manual_after["parent_uid"] is None
 
@@ -921,13 +925,13 @@ def test_structure_versions_validated_planning_is_immutable_and_reopenable() -> 
 
         default_tasks = client.get(f"/projects/{project_id}/tasks", headers=headers)
         assert default_tasks.status_code == 200
-        default_task_items = cast(list[dict[str, Any]], default_tasks.json())
+        default_task_items = cast(list[dict[str, Any]], default_tasks.json()["items"])
         assert len(default_task_items) == 5
         selected_original = client.get(
             f"/projects/{project_id}/tasks?planning_id={first_planning_id}", headers=headers
         )
         assert selected_original.status_code == 200
-        selected_original_items = cast(list[dict[str, Any]], selected_original.json())
+        selected_original_items = cast(list[dict[str, Any]], selected_original.json()["items"])
         assert len(selected_original_items) == 8
         paged_original = client.get(
             f"/projects/{project_id}/plannings/{first_planning_id}?limit=1&offset=1",
@@ -939,7 +943,7 @@ def test_structure_versions_validated_planning_is_immutable_and_reopenable() -> 
 
         plannings = client.get(f"/projects/{project_id}/plannings", headers=headers)
         assert plannings.status_code == 200
-        planning_items = cast(list[dict[str, Any]], plannings.json())
+        planning_items = cast(list[dict[str, Any]], plannings.json()["items"])
         assert all(
             set(item)
             == {

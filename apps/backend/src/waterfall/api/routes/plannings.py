@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from waterfall.api.dependencies import get_current_active_user
+from waterfall.api.pagination import ListParams, list_params
 from waterfall.api.routes.planning_support import (
     _planning_detail,
     _PlanningTaskBodyValidationRoute,
@@ -33,6 +34,7 @@ from waterfall.schemas.projects import (
     FastAPIErrorResponse,
     PlanningCreate,
     PlanningDetailRead,
+    PlanningListRead,
     PlanningRead,
     PlanningSnapshotRestore,
     PlanningStructureCreate,
@@ -58,6 +60,7 @@ from waterfall.services import (
     PlanningTreeMoveError,
     PlanningTreeMoveNotFoundError,
     PlanningTreeTaskReferencedError,
+    apply_pagination,
     create_planning_task,
     delete_planning_tasks,
     generate_planning_snapshot,
@@ -74,20 +77,33 @@ from waterfall.services.project_lifecycle import validate_project_status_transit
 router = APIRouter(prefix="/projects", tags=["projects"])
 
 
-@router.get("/{project_id}/plannings", response_model=list[PlanningRead])
+@router.get("/{project_id}/plannings", response_model=PlanningListRead)
 def list_plannings(
     project_id: int,
+    params: ListParams = Depends(list_params),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
-) -> list[PlanningRead]:
+) -> PlanningListRead:
     get_project_or_404(db, project_id, current_user.id)
-    plannings = (
-        db.query(WfPlanning)
-        .filter(WfPlanning.project_id == project_id)
-        .order_by(WfPlanning.version_number.asc())
-        .all()
+    query = db.query(WfPlanning).filter(WfPlanning.project_id == project_id)
+    result = apply_pagination(
+        query,
+        params,
+        sortable={
+            "version_number": WfPlanning.version_number,
+            "status": WfPlanning.status,
+            "created_at": WfPlanning.created_at,
+        },
+        searchable=(WfPlanning.note,),
+        default_sort=WfPlanning.version_number,
+        tiebreaker=WfPlanning.id,
     )
-    return [_to_planning_read(planning) for planning in plannings]
+    return PlanningListRead(
+        items=[_to_planning_read(planning) for planning in result.rows],
+        total=result.total,
+        limit=result.limit,
+        offset=result.offset,
+    )
 
 
 @router.post(

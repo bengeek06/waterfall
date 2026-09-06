@@ -3,40 +3,36 @@
     tags:
     - projects
     summary: Lister les projets importes
+    description: 'Le parametre `q` recherche sur `name`.'
     operationId: listProjects
     security:
     - bearerAuth: []
     parameters:
-    - name: limit
-      in: query
-      required: false
-      schema:
-        type: integer
-        minimum: 1
-        maximum: 500
-        default: 50
-    - name: offset
-      in: query
-      required: false
-      schema:
-        type: integer
-        minimum: 0
-        default: 0
     - name: include_archived
       in: query
       required: false
       schema:
         type: boolean
         default: false
+    - $ref: ../components/parameters/Limit.yaml
+    - $ref: ../components/parameters/Offset.yaml
+    - $ref: ../components/parameters/Search.yaml
+    - name: sort
+      in: query
+      required: false
+      schema:
+        allOf:
+        - $ref: ../components/schemas/SortColumn.yaml
+        enum: [name, -name, status, -status, id, -id]
     responses:
       '200':
         description: Liste de projets
         content:
           application/json:
             schema:
-              type: array
-              items:
-                $ref: ../components/schemas/ProjectRead.yaml
+              $ref: ../components/schemas/ProjectListRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
       '401':
         $ref: ../components/responses/Unauthorized.yaml
   post:
@@ -162,20 +158,31 @@
     tags:
     - projects
     summary: Lister les versions de planning
+    description: 'Le parametre `q` recherche sur `note`.'
     operationId: listPlannings
     security:
     - bearerAuth: []
     parameters:
     - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/Limit.yaml
+    - $ref: ../components/parameters/Offset.yaml
+    - $ref: ../components/parameters/Search.yaml
+    - name: sort
+      in: query
+      required: false
+      schema:
+        allOf:
+        - $ref: ../components/schemas/SortColumn.yaml
+        enum: [version_number, -version_number, status, -status, created_at, -created_at]
     responses:
       '200':
         description: Versions de planning
         content:
           application/json:
             schema:
-              type: array
-              items:
-                $ref: ../components/schemas/PlanningRead.yaml
+              $ref: ../components/schemas/PlanningListRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
       '401':
         $ref: ../components/responses/Unauthorized.yaml
       '404':
@@ -543,21 +550,6 @@
     - bearerAuth: []
     parameters:
     - $ref: ../components/parameters/ProjectId.yaml
-    - name: limit
-      in: query
-      required: false
-      schema:
-        type: integer
-        minimum: 1
-        maximum: 2000
-        default: 200
-    - name: offset
-      in: query
-      required: false
-      schema:
-        type: integer
-        minimum: 0
-        default: 0
     - name: planning_id
       in: query
       required: false
@@ -566,13 +558,16 @@
         minimum: 1
     responses:
       '200':
-        description: Liste de taches
+        description: >-
+          Integralite des taches du projet (non pagine : cet endpoint
+          alimente l'editeur de planning, qui a besoin de l'arbre complet
+          pour reconstruire la hierarchie et calculer les durees des
+          taches synthese -- une troncature produirait des parents
+          orphelins et des agregats faux).
         content:
           application/json:
             schema:
-              type: array
-              items:
-                $ref: ../components/schemas/TaskRead.yaml
+              $ref: ../components/schemas/TaskListRead.yaml
       '401':
         $ref: ../components/responses/Unauthorized.yaml
       '404':
@@ -764,21 +759,32 @@
     tags:
     - projects
     summary: Lister les affectations de main-d'œuvre d'une tâche
+    description: 'Le parametre `q` recherche sur `role_name` (nom du role affecte).'
     operationId: listTaskRoleAssignments
     security:
     - bearerAuth: []
     parameters:
     - $ref: ../components/parameters/ProjectId.yaml
     - $ref: ../components/parameters/TaskUid.yaml
+    - $ref: ../components/parameters/Limit.yaml
+    - $ref: ../components/parameters/Offset.yaml
+    - $ref: ../components/parameters/Search.yaml
+    - name: sort
+      in: query
+      required: false
+      schema:
+        allOf:
+        - $ref: ../components/schemas/SortColumn.yaml
+        enum: [role_name, -role_name, quantity, -quantity, hours, -hours]
     responses:
       '200':
         description: Affectations de rôles
         content:
           application/json:
             schema:
-              type: array
-              items:
-                $ref: ../components/schemas/TaskRoleAssignmentRead.yaml
+              $ref: ../components/schemas/TaskRoleAssignmentListRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
       '401':
         $ref: ../components/responses/Unauthorized.yaml
       '404':
@@ -866,20 +872,31 @@
     tags:
     - projects
     summary: Lister les versions de devis d'un projet
+    description: 'Le parametre `q` recherche sur `note`.'
     operationId: listProjectEstimates
     security:
     - bearerAuth: []
     parameters:
     - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/Limit.yaml
+    - $ref: ../components/parameters/Offset.yaml
+    - $ref: ../components/parameters/Search.yaml
+    - name: sort
+      in: query
+      required: false
+      schema:
+        allOf:
+        - $ref: ../components/schemas/SortColumn.yaml
+        enum: [version_number, -version_number, kind, -kind, status, -status, created_at, -created_at]
     responses:
       '200':
         description: Versions de devis
         content:
           application/json:
             schema:
-              type: array
-              items:
-                $ref: ../components/schemas/ProjectEstimateRead.yaml
+              $ref: ../components/schemas/ProjectEstimateListRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
       '401':
         $ref: ../components/responses/Unauthorized.yaml
       '404':
@@ -939,21 +956,32 @@
     tags:
     - projects
     summary: Lister les lignes de tâches snapshotées dans un devis
+    description: 'Le parametre `q` recherche sur `task_name`.'
     operationId: listEstimateTaskRows
     security:
     - bearerAuth: []
     parameters:
     - $ref: ../components/parameters/ProjectId.yaml
     - $ref: ../components/parameters/EstimateId.yaml
+    - $ref: ../components/parameters/Limit.yaml
+    - $ref: ../components/parameters/Offset.yaml
+    - $ref: ../components/parameters/Search.yaml
+    - name: sort
+      in: query
+      required: false
+      schema:
+        allOf:
+        - $ref: ../components/schemas/SortColumn.yaml
+        enum: [position, -position, task_name, -task_name, outline_number, -outline_number, outline_level, -outline_level]
     responses:
       '200':
         description: Lignes de tâches du devis
         content:
           application/json:
             schema:
-              type: array
-              items:
-                $ref: ../components/schemas/EstimateTaskRowRead.yaml
+              $ref: ../components/schemas/EstimateTaskRowListRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
       '401':
         $ref: ../components/responses/Unauthorized.yaml
       '404':
@@ -963,21 +991,32 @@
     tags:
     - projects
     summary: Lister les lignes de coût hors main-d'oeuvre d'un devis
+    description: 'Le parametre `q` recherche sur `label`.'
     operationId: listEstimateCostLines
     security:
     - bearerAuth: []
     parameters:
     - $ref: ../components/parameters/ProjectId.yaml
     - $ref: ../components/parameters/EstimateId.yaml
+    - $ref: ../components/parameters/Limit.yaml
+    - $ref: ../components/parameters/Offset.yaml
+    - $ref: ../components/parameters/Search.yaml
+    - name: sort
+      in: query
+      required: false
+      schema:
+        allOf:
+        - $ref: ../components/schemas/SortColumn.yaml
+        enum: [label, -label, quantity, -quantity, unit_cost, -unit_cost, purchase_cost, -purchase_cost, created_at, -created_at]
     responses:
       '200':
         description: Lignes de coût du devis
         content:
           application/json:
             schema:
-              type: array
-              items:
-                $ref: ../components/schemas/EstimateCostLineRead.yaml
+              $ref: ../components/schemas/EstimateCostLineListRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
       '401':
         $ref: ../components/responses/Unauthorized.yaml
       '404':
