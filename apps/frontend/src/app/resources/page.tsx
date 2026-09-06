@@ -88,6 +88,43 @@ function flattenOrganization(nodes: ResourceNode[], collapsedIds: Set<number>): 
   return rows;
 }
 
+// Categories eligible for hourly-rate entry in the ValuationPanel grid: only those
+// whose cost type is "labor" (main d'œuvre). Shared between the grid's own
+// paginated view (`getValuationCategoryPage` below) and `saveAllValuation`, which
+// must act on the *complete* set of labor categories regardless of that grid's
+// current page -- see the draft-preservation comment in valuation-panel.tsx.
+function getLaborCategories(categories: CostCategory[], costTypes: CostType[]): CostCategory[] {
+  const laborCostTypeIds = new Set(costTypes.filter((type) => type.kind === "labor").map((type) => type.id));
+  return categories.filter((category) => laborCostTypeIds.has(category.cost_type_id));
+}
+
+// Computes the ValuationPanel grid's own search/sort/pagination in memory, over the
+// full, already-loaded `categories`/`costTypes` reference lists -- deliberately NOT
+// a server round-trip. See the long comment in valuation-panel.tsx for why:
+// `/resources/categories` has no cost-type-kind filter, so a server-paginated page
+// could contain non-labor categories that must never be shown here, and
+// post-filtering it client-side would produce incomplete or empty-looking pages.
+function getValuationCategoryPage(
+  categories: CostCategory[],
+  costTypes: CostType[],
+  { query, sort, offset, limit }: { query: string; sort: string | null; offset: number; limit: number },
+): { items: CostCategory[]; total: number } {
+  const laborCategories = getLaborCategories(categories, costTypes);
+  const needle = query.trim().toLowerCase();
+  const filtered = needle
+    ? laborCategories.filter((category) =>
+        [category.accounting_code, category.category_code, category.name]
+          .filter((value): value is string => Boolean(value))
+          .some((value) => value.toLowerCase().includes(needle)),
+      )
+    : laborCategories;
+  const descending = sort === "-accounting_code";
+  const sorted = [...filtered].sort(
+    (left, right) => (descending ? -1 : 1) * left.accounting_code.localeCompare(right.accounting_code),
+  );
+  return { items: sorted.slice(offset, offset + limit), total: sorted.length };
+}
+
 export default function ResourcesPage() {
   const router = useRouter();
   const [session, setSessionState] = useState<SessionTokens | null>(() => getSession());
@@ -157,6 +194,13 @@ export default function ResourcesPage() {
   const [inflationValue, setInflationValue] = useState("");
   const [displayCurrency, setDisplayCurrency] = useState("EUR");
   const [rateDrafts, setRateDrafts] = useState<Record<string, string>>({});
+  // The ValuationPanel grid's own search/sort/pagination controls (E8-04): see
+  // `getValuationCategoryPage` above for why these drive an in-memory computation
+  // rather than a second fetch, unlike `costTypesOffset`/`costTypesSort`/etc. below.
+  const [valuationOffset, setValuationOffset] = useState(0);
+  const [valuationLimit] = useState(20);
+  const [valuationSort, setValuationSort] = useState<string | null>(null);
+  const [valuationQuery, setValuationQuery] = useState("");
   const [createUserMode, setCreateUserMode] = useState(false);
   const [newEmail, setNewEmail] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -642,7 +686,12 @@ export default function ResourcesPage() {
         await setInflationRate(Number(inflationYear), String(1 + percentage / 100), session, onSessionRefresh);
       }
       const years = [-4, -3, -2, -1, 0].map((offset) => new Date().getFullYear() + offset);
-      const laborCategories = categories.filter((category) => costTypes.find((type) => type.id === category.cost_type_id)?.kind === "labor");
+      // Deliberately the *full* labor-category set, not the ValuationPanel grid's
+      // currently visible page: see the draft-preservation comment in
+      // valuation-panel.tsx -- bulk save must act on every draft with a value,
+      // regardless of which page/search/sort was active when "Enregistrer" was
+      // clicked.
+      const laborCategories = getLaborCategories(categories, costTypes);
       for (const category of laborCategories) {
         for (const year of years) {
           const value = rateDrafts[`${category.id}:${year}`]?.trim() ?? "";
@@ -768,6 +817,12 @@ export default function ResourcesPage() {
   const organizationRows = useMemo(() => flattenOrganization(nodes, collapsedNodeIds), [nodes, collapsedNodeIds]);
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? null;
   const selectedRoles = selectedNodeId === null ? [] : roles.filter((role) => role.node_id === selectedNodeId);
+  const valuationPage = getValuationCategoryPage(categories, costTypes, {
+    query: valuationQuery,
+    sort: valuationSort,
+    offset: valuationOffset,
+    limit: valuationLimit,
+  });
 
   function selectNode(nodeId: number) {
     setSelectedNodeId(nodeId);
@@ -915,7 +970,7 @@ export default function ResourcesPage() {
 
           <CostCategoriesTable items={categories} types={costTypes} typeId={categoryCostTypeId} accountingCode={categoryCode} categoryCode={accountingCode} name={categoryName} draft={categoryDraft} editingId={editingCategoryId} busy={actionBusy} onSubmit={addCategory} onTypeChange={setCategoryCostTypeId} onAccountingCodeChange={setCategoryCode} onCategoryCodeChange={setAccountingCode} onNameChange={setCategoryName} onStartEdit={startEditCategory} onDraftChange={(field, value) => setCategoryDraft((previous) => ({ ...previous, [field]: value }))} onSave={(item) => void saveCategory(item)} onCancel={() => setEditingCategoryId(null)} onToggle={(item) => void toggleCategoryActive(item)} />
 
-          <ValuationPanel categories={categories} costTypes={costTypes} inflationYear={inflationYear} inflationValue={inflationValue} currency={displayCurrency} drafts={rateDrafts} busy={actionBusy} onCurrencyChange={setDisplayCurrency} onInflationChange={setInflationValue} onRateChange={(key, value) => setRateDrafts((previous) => ({ ...previous, [key]: value }))} onSave={() => void saveAllValuation()} />
+          <ValuationPanel items={valuationPage.items} pagination={{ total: valuationPage.total, limit: valuationLimit, offset: valuationOffset }} onPaginationChange={(next) => setValuationOffset(next.offset)} sort={valuationSort} onSortChange={setValuationSort} search={valuationQuery} onSearchChange={(next) => { setValuationQuery(next); setValuationOffset(0); }} inflationYear={inflationYear} inflationValue={inflationValue} currency={displayCurrency} drafts={rateDrafts} busy={actionBusy} onCurrencyChange={setDisplayCurrency} onInflationChange={setInflationValue} onRateChange={(key, value) => setRateDrafts((previous) => ({ ...previous, [key]: value }))} onSave={() => void saveAllValuation()} />
         </>
       ) : null}
 

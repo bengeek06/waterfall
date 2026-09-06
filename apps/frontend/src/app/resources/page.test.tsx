@@ -577,7 +577,12 @@ describe("ResourcesPage cost types table (E8-02)", () => {
 
     render(<ResourcesPage />);
     await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
-    const suivant = await screen.findByRole("button", { name: "Suivant" });
+    // Scoped to the cost-types table's own card: the ValuationPanel grid (E8-04)
+    // renders its own, independent "Suivant" button on the same tab.
+    const costTypesCard = (await screen.findByRole("heading", { name: "Types de coût" })).closest(
+      "[data-slot='card']",
+    ) as HTMLElement;
+    const suivant = within(costTypesCard).getByRole("button", { name: "Suivant" });
     await waitFor(() => expect(suivant).toBeEnabled());
 
     fireEvent.click(suivant);
