@@ -3,6 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel, EmailStr, Field
 
 from waterfall.core.security import MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH
+from waterfall.schemas.pagination import PaginatedList
 
 
 class UserCreate(BaseModel):
@@ -25,6 +26,10 @@ class UserAdminRead(BaseModel):
     locked_until: datetime | None
     created_at: datetime
     updated_at: datetime
+
+
+class UserAdminListRead(PaginatedList[UserAdminRead]):
+    pass
 
 
 class UserStatusUpdate(BaseModel):

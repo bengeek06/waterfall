@@ -4,6 +4,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from waterfall.schemas.pagination import PaginatedList
+
 StructureKind = Literal["poste", "lot", "livrable", "milestone", "task"]
 ProjectStatus = Literal[
     "cree",
@@ -44,6 +46,10 @@ class ProjectRead(BaseModel):
     planning_reference_id: int | None
     displayed_planning_id: int | None
     reference_estimate_id: int | None
+
+
+class ProjectListRead(PaginatedList[ProjectRead]):
+    pass
 
 
 class ProjectCreate(BaseModel):
@@ -101,6 +107,10 @@ class TaskRead(BaseModel):
     calendar_uid: int | None
     description: str | None
     predecessor_links: list["TaskLinkRead"] = Field(default_factory=list)
+
+
+class TaskListRead(PaginatedList[TaskRead]):
+    pass
 
 
 class TaskLinkRead(BaseModel):
@@ -218,6 +228,10 @@ class PlanningRead(BaseModel):
     note: str | None
     created_at: datetime
     validated_at: datetime | None
+
+
+class PlanningListRead(PaginatedList[PlanningRead]):
+    pass
 
 
 class PlanningDetailRead(PlanningRead):
@@ -473,6 +487,10 @@ class TaskRoleAssignmentRead(BaseModel):
     updated_at: datetime
 
 
+class TaskRoleAssignmentListRead(PaginatedList[TaskRoleAssignmentRead]):
+    pass
+
+
 class ProjectEstimateCreate(BaseModel):
     kind: str = Field(pattern="^(initial|contract_reference|forecast_remaining)$")
     currency_code: str = Field(min_length=3, max_length=3)
@@ -512,6 +530,10 @@ class ProjectEstimateRead(BaseModel):
     note: str | None
 
 
+class ProjectEstimateListRead(PaginatedList[ProjectEstimateRead]):
+    pass
+
+
 class EstimateTaskRowRead(BaseModel):
     id: int
     estimate_id: int
@@ -522,6 +544,10 @@ class EstimateTaskRowRead(BaseModel):
     outline_number: str | None = None
     outline_level: int | None = None
     is_milestone: bool
+
+
+class EstimateTaskRowListRead(PaginatedList[EstimateTaskRowRead]):
+    pass
 
 
 SupplyStatus = Literal["planned", "ordered", "received", "cancelled"]
@@ -585,6 +611,10 @@ class EstimateCostLineRead(BaseModel):
     unit_cost: Decimal
     purchase_cost: Decimal
     supply_status: SupplyStatus | None
+
+
+class EstimateCostLineListRead(PaginatedList[EstimateCostLineRead]):
+    pass
 
 
 class EstimateAggregatesRead(BaseModel):
