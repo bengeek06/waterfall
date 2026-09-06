@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { RoleCalendarsTable, type RoleCalendarsTableProps } from "./role-calendars-table";
@@ -190,5 +191,63 @@ describe("RoleCalendarsTable", () => {
   it("shows the loading skeleton and search-aware empty state", () => {
     renderTable({ isLoading: true });
     expect(screen.getByRole("status", { name: "Chargement des données" })).toBeInTheDocument();
+  });
+
+  it("keeps focus on a role's calendar select across a selection, even though it round-trips through the parent's drafts prop", () => {
+    // Regression test for a real bug: TanStack Table's `flexRender` passes each
+    // cell renderer to React as a component *type*. Rebuilding `columns` inline
+    // on every render (as this component used to) gives every cell a new
+    // function identity whenever `drafts` changes -- which happens on every
+    // selection, since the parent stores drafts in its own state and passes
+    // them back down. React then treats the cell as a *different* component and
+    // unmounts/remounts the DOM node, dropping keyboard focus right after the
+    // selection. A component wrapping `RoleCalendarsTable` in real `useState`
+    // (not a static props object, unlike the other tests in this file) is
+    // required to reproduce this: it's specifically the round-trip through a
+    // re-render with new `drafts` that triggers the remount.
+    // Mirrors production (`resources/page.tsx`): `roles`/`calendars` are their
+    // own separate state, untouched by a draft-only update, and therefore keep
+    // a stable array identity across a re-render triggered by `setDrafts` alone
+    // -- unlike an inline array literal in JSX, which would be recreated (a new
+    // reference) on every render regardless, masking the very bug this test
+    // exists to catch.
+    const roles = [{ id: 1, name: "Développeur", node_id: 1, calendar_id: null } as never];
+    const calendars = [
+      { id: 2, code: "PARTTIME", name: "Temps partiel", is_active: true } as never,
+      { id: 3, code: "FULLTIME", name: "Temps plein", is_active: true } as never,
+    ];
+    function Wrapper() {
+      const [drafts, setDrafts] = useState<RoleCalendarsTableProps["drafts"]>({});
+      return (
+        <RoleCalendarsTable
+          roles={roles}
+          calendars={calendars}
+          pagination={{ total: 1, limit: 20, offset: 0 }}
+          onPaginationChange={vi.fn()}
+          sort={null}
+          onSortChange={vi.fn()}
+          search=""
+          onSearchChange={vi.fn()}
+          isLoading={false}
+          drafts={drafts}
+          actionBusy={false}
+          nodeCodeById={nodeCodeById}
+          onDraftChange={(roleId, value) => setDrafts((previous) => ({ ...previous, [roleId]: value }))}
+          onSave={vi.fn()}
+        />
+      );
+    }
+
+    render(<Wrapper />);
+    const select = screen.getByLabelText("Calendrier de Développeur — IT (#1)") as HTMLSelectElement;
+    select.focus();
+
+    fireEvent.change(select, { target: { value: "2" } });
+    expect(document.activeElement).toBe(select);
+    expect(select.value).toBe("2");
+
+    fireEvent.change(select, { target: { value: "3" } });
+    expect(document.activeElement).toBe(select);
+    expect(select.value).toBe("3");
   });
 });

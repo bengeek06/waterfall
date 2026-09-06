@@ -989,16 +989,13 @@ describe("ResourcesPage role calendars table (E8-06)", () => {
     const select = await screen.findByLabelText(roleCalendarSelectLabel);
     fireEvent.change(select, { target: { value: String(activeCalendar.id) } });
 
-    // Re-queries the select rather than reusing the pre-change DOM reference: the
-    // DataTable columns array is recreated on every render (see `data-table.tsx`),
-    // and TanStack's `flexRender` treats each cell's function identity as its own
-    // component type, so a re-render (triggered here by the draft-change re-render
-    // of the whole table) remounts the cell's DOM node instead of just updating it.
+    // The select keeps the same DOM identity across the draft-change re-render
+    // (see `role-calendars-table.tsx`'s `RoleCalendarSelect`/`columns` comments),
+    // so the original reference stays valid -- no need to re-query it.
     // CapacityTable renders an "Enregistrer" button per role too, so the button
     // lookup must stay scoped to this row rather than the page as a whole.
-    await waitFor(() => expect(screen.getByLabelText(roleCalendarSelectLabel)).toHaveValue(String(activeCalendar.id)));
-    const refreshedSelect = screen.getByLabelText(roleCalendarSelectLabel);
-    fireEvent.click(within(refreshedSelect.closest("tr")!).getByRole("button", { name: "Enregistrer" }));
+    await waitFor(() => expect(select).toHaveValue(String(activeCalendar.id)));
+    fireEvent.click(within(select.closest("tr")!).getByRole("button", { name: "Enregistrer" }));
 
     await waitFor(() => expect(mocks.updateResourceRole).toHaveBeenCalledTimes(1));
     // The initial load made 2 calls (reference list + table page); saving a role's
@@ -1080,5 +1077,72 @@ describe("ResourcesPage role calendars table (E8-06)", () => {
       ).toBeInTheDocument(),
     );
     expect(screen.queryByRole("status", { name: "Chargement des données" })).not.toBeInTheDocument();
+  });
+
+  it("does not apply a stale offset to the reload triggered by saving a role's calendar, if the user paginated away while the save was in flight", async () => {
+    // The pagination effect and `reloadRoleCalendarsPage` share one mock
+    // implementation, so responses are distinguished by which offset they were
+    // actually called with rather than by call order.
+    const pageAtOffset0 = [roleFixture];
+    const pageAtOffset20: ResourceRole[] = [{ ...roleFixture, id: 77, name: "Page 2 role" } as never];
+    mocks.getResourceRoles.mockImplementation(
+      (
+        _tokens: unknown,
+        _refresh: unknown,
+        _nodeId: unknown,
+        _includeDescendants: unknown,
+        listParams: unknown,
+      ) => {
+        if (listParams === undefined) return Promise.resolve([roleFixture]);
+        const offset = (listParams as { offset?: number }).offset ?? 0;
+        return Promise.resolve({
+          items: offset === 0 ? pageAtOffset0 : pageAtOffset20,
+          total: 25,
+        });
+      },
+    );
+    let resolveUpdate!: (role: ResourceRole) => void;
+    mocks.updateResourceRole.mockReturnValue(
+      new Promise<ResourceRole>((resolve) => {
+        resolveUpdate = resolve;
+      }),
+    );
+
+    await renderRoleCalendarsTab();
+    await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalledTimes(2));
+
+    const roleCalendarSelectLabel = `Calendrier de ${roleFixture.name} — ${nodeFixture.code} (#${roleFixture.id})`;
+    const select = await screen.findByLabelText(roleCalendarSelectLabel);
+    fireEvent.change(select, { target: { value: String(activeCalendar.id) } });
+    fireEvent.click(within(select.closest("tr")!).getByRole("button", { name: "Enregistrer" }));
+    await waitFor(() => expect(mocks.updateResourceRole).toHaveBeenCalledTimes(1));
+
+    // Paginate to offset 20 while the save is still in flight.
+    const suivantButtons = screen.getAllByRole("button", { name: "Suivant" });
+    const roleCalendarsSuivant = suivantButtons[suivantButtons.length - 1];
+    fireEvent.click(roleCalendarsSuivant);
+    await waitFor(() =>
+      expect(
+        screen.getByLabelText(`Calendrier de Page 2 role — ${nodeFixture.code} (#77)`),
+      ).toBeInTheDocument(),
+    );
+
+    // Resolving the save now must not refetch/display offset 0's stale page: the
+    // reload it triggers must target the *current* offset (20), not the offset
+    // that was current when "Enregistrer" was clicked.
+    resolveUpdate({ ...roleFixture, calendar_id: activeCalendar.id } as never);
+    await waitFor(() =>
+      expect(mocks.getResourceRoles).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        undefined,
+        undefined,
+        expect.objectContaining({ offset: 20 }),
+      ),
+    );
+    expect(
+      screen.getByLabelText(`Calendrier de Page 2 role — ${nodeFixture.code} (#77)`),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText(roleCalendarSelectLabel)).not.toBeInTheDocument();
   });
 });
