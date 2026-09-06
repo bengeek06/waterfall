@@ -1555,4 +1555,123 @@ describe("PlanningTreeTable", () => {
       expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     });
   });
+
+  describe("column resizing", () => {
+    afterEach(() => window.localStorage.clear());
+
+    it("renders a colgroup with one column per header", () => {
+      const { container } = render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+
+      expect(container.querySelectorAll("colgroup col")).toHaveLength(8);
+    });
+
+    it("renders a resize handle on every column header", () => {
+      render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+
+      expect(screen.getByTestId("resize-handle-uid")).toBeInTheDocument();
+      expect(screen.getByTestId("resize-handle-name")).toBeInTheDocument();
+      expect(screen.getByTestId("resize-handle-predecessors")).toBeInTheDocument();
+    });
+
+    it("resizes the predecessors column by dragging its handle and persists the width", () => {
+      const { container } = render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+
+      const predecessorsCol = container.querySelectorAll("colgroup col")[7] as HTMLElement;
+      const initialWidth = predecessorsCol.style.width;
+
+      fireEvent.mouseDown(screen.getByTestId("resize-handle-predecessors"), { clientX: 100 });
+      fireEvent.mouseMove(window, { clientX: 220 });
+      fireEvent.mouseUp(window, { clientX: 220 });
+
+      expect(predecessorsCol.style.width).not.toBe(initialWidth);
+      expect(predecessorsCol.style.width).toBe("360px");
+    });
+
+    it("wraps the predecessors column content instead of truncating it", () => {
+      render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+
+      expect(screen.getByText("Prédécesseurs").closest("th")).toHaveClass(
+        "whitespace-normal",
+        "break-words",
+        "align-top",
+      );
+
+      const firstDataRow = screen.getAllByRole("row")[1];
+      const predecessorsCell = firstDataRow.querySelectorAll("td")[7];
+      expect(predecessorsCell).toHaveClass("whitespace-normal", "break-words", "align-top");
+    });
+
+    it("truncates a long task name instead of letting it overflow into the next column", () => {
+      const longName = "Un nom de tâche extrêmement long qui dépasserait largement la largeur de la colonne";
+      const tasks: Task[] = [task({ uid: 1, name: longName, parent_uid: null, position: 1 })];
+      render(<PlanningTreeTable tasks={tasks} versionKey={1} />);
+
+      const nameSpan = screen.getByTitle(longName);
+      expect(nameSpan).toHaveClass("truncate");
+      expect(nameSpan).toHaveTextContent(longName);
+    });
+
+    it("makes every resize handle focusable via the keyboard", () => {
+      render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+
+      expect(screen.getByTestId("resize-handle-name")).toHaveAttribute("tabIndex", "0");
+    });
+
+    it("exposes the current width and minimum on the resize handle for assistive tech", () => {
+      render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+
+      const handle = screen.getByTestId("resize-handle-name");
+      expect(handle).toHaveAttribute("aria-valuenow", "220");
+      expect(handle).toHaveAttribute("aria-valuemin", "60");
+    });
+
+    it("widens a column by a fixed step on ArrowRight and persists it", () => {
+      const { container } = render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+
+      const handle = screen.getByTestId("resize-handle-name");
+      const nameCol = container.querySelectorAll("colgroup col")[1] as HTMLElement;
+      expect(nameCol.style.width).toBe("220px");
+
+      fireEvent.keyDown(handle, { key: "ArrowRight" });
+
+      expect(nameCol.style.width).toBe("230px");
+      expect(handle).toHaveAttribute("aria-valuenow", "230");
+    });
+
+    it("narrows a column by a fixed step on ArrowLeft, clamped to the minimum width", () => {
+      const { container } = render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+
+      const handle = screen.getByTestId("resize-handle-uid");
+      const uidCol = container.querySelectorAll("colgroup col")[0] as HTMLElement;
+      expect(uidCol.style.width).toBe("64px");
+
+      fireEvent.keyDown(handle, { key: "ArrowLeft" });
+      expect(uidCol.style.width).toBe("60px");
+
+      // 64 - 10 would go below the 60px minimum on a second press: it must clamp, not go negative.
+      fireEvent.keyDown(handle, { key: "ArrowLeft" });
+      expect(uidCol.style.width).toBe("60px");
+    });
+
+    it("does not scroll the page when adjusting a column width with the arrow keys", () => {
+      render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+
+      const handle = screen.getByTestId("resize-handle-name");
+      const event = new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true });
+      handle.dispatchEvent(event);
+
+      expect(event.defaultPrevented).toBe(true);
+    });
+
+    it("ignores unrelated keys on the resize handle", () => {
+      const { container } = render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+
+      const handle = screen.getByTestId("resize-handle-name");
+      const nameCol = container.querySelectorAll("colgroup col")[1] as HTMLElement;
+
+      fireEvent.keyDown(handle, { key: "Enter" });
+
+      expect(nameCol.style.width).toBe("220px");
+    });
+  });
 });

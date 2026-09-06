@@ -11,6 +11,11 @@ import { PlanningCreateTaskDialog } from "@/components/planning-create-task-dial
 import { PlanningScheduleCells } from "@/components/planning-schedule-cells";
 import { PlanningTaskLinksDialog } from "@/components/planning-task-links-dialog";
 import { PlanningTreeToolbar } from "@/components/planning-tree-toolbar";
+import {
+  PLANNING_MIN_COLUMN_WIDTH,
+  usePlanningColumnWidths,
+  type PlanningColumnKey,
+} from "@/hooks/use-planning-column-widths";
 import { usePlanningCreateTaskDialog } from "@/hooks/use-planning-create-task-dialog";
 import { usePlanningDeleteSelection } from "@/hooks/use-planning-delete-selection";
 import { usePlanningScheduleDrafts } from "@/hooks/use-planning-schedule-drafts";
@@ -24,6 +29,59 @@ import {
   computeReorderCommand,
   type PlanningMoveCommand,
 } from "@/lib/planning-tree";
+import { cn } from "@/lib/utils";
+
+const COLUMN_HEADERS: ReadonlyArray<{ key: PlanningColumnKey; label: string }> = [
+  { key: "uid", label: "UID" },
+  { key: "name", label: "Nom" },
+  { key: "type", label: "Type" },
+  { key: "start", label: "Début" },
+  { key: "end", label: "Fin" },
+  { key: "duration", label: "Durée" },
+  { key: "mode", label: "Mode" },
+  { key: "predecessors", label: "Prédécesseurs" },
+];
+
+// Fixed step for keyboard-driven resizing (ArrowLeft/ArrowRight), mirroring the granularity of a
+// small mouse drag.
+const COLUMN_RESIZE_KEYBOARD_STEP = 10;
+
+function ColumnResizeHandle({
+  column,
+  label,
+  width,
+  onResizeStart,
+  onResizeBy,
+}: {
+  column: PlanningColumnKey;
+  label: string;
+  width: number;
+  onResizeStart: (column: PlanningColumnKey, event: MouseEvent<HTMLSpanElement>) => void;
+  onResizeBy: (column: PlanningColumnKey, delta: number) => void;
+}) {
+  return (
+    <span
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={`Redimensionner la colonne ${label}`}
+      aria-valuenow={width}
+      aria-valuemin={PLANNING_MIN_COLUMN_WIDTH}
+      tabIndex={0}
+      data-testid={`resize-handle-${column}`}
+      className="absolute right-0 top-0 h-full w-1 cursor-col-resize select-none"
+      onMouseDown={(event) => onResizeStart(column, event)}
+      onKeyDown={(event) => {
+        if (event.key === "ArrowLeft") {
+          event.preventDefault();
+          onResizeBy(column, -COLUMN_RESIZE_KEYBOARD_STEP);
+        } else if (event.key === "ArrowRight") {
+          event.preventDefault();
+          onResizeBy(column, COLUMN_RESIZE_KEYBOARD_STEP);
+        }
+      }}
+    />
+  );
+}
 
 function taskTypeLabel(task: Task): string {
   if (task.is_milestone) {
@@ -100,6 +158,7 @@ export function PlanningTreeTable({
   // predecessor referenced by a collapsed/off-screen task must still resolve correctly.
   const tasksByUid = useMemo(() => new Map(tasks.map((task) => [task.uid, task])), [tasks]);
 
+  const columnWidths = usePlanningColumnWidths();
   const selection = usePlanningTreeSelection(tasks);
   const scheduleDrafts = usePlanningScheduleDrafts({ onScheduleUpdate, mutationBusy });
   const taskLinks = usePlanningTaskLinks({ tasks, onEditLinks });
@@ -169,17 +228,32 @@ export function PlanningTreeTable({
         {selection.rows.length === 0 ? (
           <p className="py-6 text-sm text-muted-foreground">Le planning ne contient aucune tâche.</p>
         ) : (
-          <Table>
+          <Table className="table-fixed">
+            <colgroup>
+              {COLUMN_HEADERS.map(({ key }) => (
+                <col key={key} style={{ width: `${columnWidths.widths[key]}px` }} />
+              ))}
+            </colgroup>
             <TableHeader>
               <TableRow>
-                <TableHead>UID</TableHead>
-                <TableHead>Nom</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Début</TableHead>
-                <TableHead>Fin</TableHead>
-                <TableHead>Durée</TableHead>
-                <TableHead>Mode</TableHead>
-                <TableHead>Prédécesseurs</TableHead>
+                {COLUMN_HEADERS.map(({ key, label }) => (
+                  <TableHead
+                    key={key}
+                    className={cn(
+                      "relative overflow-hidden",
+                      key === "predecessors" && "whitespace-normal break-words align-top",
+                    )}
+                  >
+                    {label}
+                    <ColumnResizeHandle
+                      column={key}
+                      label={label}
+                      width={columnWidths.widths[key]}
+                      onResizeStart={columnWidths.startResize}
+                      onResizeBy={columnWidths.resizeBy}
+                    />
+                  </TableHead>
+                ))}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -209,12 +283,15 @@ export function PlanningTreeTable({
                   >
                     <TableCell>{row.id_display ?? row.uid}</TableCell>
                     <TableCell>
-                      <div className="flex items-center gap-1" style={{ paddingLeft: `${row.depth * 1.25}rem` }}>
+                      <div
+                        className="flex min-w-0 items-center gap-1"
+                        style={{ paddingLeft: `${row.depth * 1.25}rem` }}
+                      >
                         {row.hasChildren ? (
                           <button
                             type="button"
                             aria-label={collapsed ? `Déplier ${row.name}` : `Replier ${row.name}`}
-                            className="flex size-6 items-center justify-center"
+                            className="flex size-6 shrink-0 items-center justify-center"
                             onClick={(event) => {
                               event.stopPropagation();
                               selection.toggleCollapsed(row.uid);
@@ -223,10 +300,12 @@ export function PlanningTreeTable({
                             {collapsed ? <ChevronRight aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}
                           </button>
                         ) : (
-                          <span className="size-6" />
+                          <span className="size-6 shrink-0" />
                         )}
-                        {row.is_milestone ? "◆ " : ""}
-                        {row.name}
+                        <span className="truncate" title={row.name}>
+                          {row.is_milestone ? "◆ " : ""}
+                          {row.name}
+                        </span>
                       </div>
                     </TableCell>
                     <TableCell>{taskTypeLabel(row)}</TableCell>
@@ -242,7 +321,7 @@ export function PlanningTreeTable({
                       onCommitModeChange={(isManual) => void scheduleDrafts.commitModeChange(row, isManual)}
                       onFieldKeyDown={scheduleDrafts.onScheduleFieldKeyDown}
                     />
-                    <TableCell>
+                    <TableCell className="whitespace-normal break-words align-top">
                       <div className="flex items-center gap-2">
                         <span>{predecessorsLabel(row)}</span>
                         {!readOnly && onEditLinks ? (
