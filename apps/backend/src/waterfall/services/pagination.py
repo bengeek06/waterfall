@@ -69,6 +69,13 @@ def apply_pagination(
     intent, no dedicated exception type): it is never interpolated into SQL,
     which is what makes arbitrary column names safe to accept from a client
     in the first place.
+
+    `list_params` accepts `q` unconditionally, even for endpoints with no
+    `searchable` columns of their own. Without a check here, such a `q`
+    would be silently ignored -- a request that filtered nothing would
+    look identical to one that filtered everything out, with no error to
+    tell the two apart. So `q` on a resource with no `searchable` columns
+    is rejected the same way an unknown `sort` column is.
     """
     # Drop any ordering already present on `query` up front: apply_pagination owns
     # ordering entirely, and Query.order_by() *appends* rather than replaces on each
@@ -77,7 +84,12 @@ def apply_pagination(
     # boundaries.
     query = query.order_by(None)
 
-    if params.q and searchable:
+    if params.q is not None:
+        if not searchable:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This resource does not support the 'q' search parameter",
+            )
         pattern = f"%{_escape_like(params.q)}%"
         query = query.filter(
             or_(*(column.ilike(pattern, escape=_LIKE_ESCAPE_CHAR) for column in searchable))

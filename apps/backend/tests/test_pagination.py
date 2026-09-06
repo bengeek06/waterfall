@@ -180,6 +180,21 @@ def test_search_escapes_like_wildcard_characters(session: Session) -> None:
     assert [row.name for row in underscore_result.rows] == ["Contains 1_1 literally"]
 
 
+def test_q_without_any_searchable_column_is_rejected_not_ignored(session: Session) -> None:
+    # A resource that declares no `searchable` columns (e.g. rates/inflation, keyed
+    # only by year) must not silently accept and ignore `q`: a caller who thinks
+    # they filtered the list would get every row back with no error to say so.
+    query = session.query(CostType)
+    with pytest.raises(HTTPException) as exc_info:
+        apply_pagination(
+            query,
+            ListParams(limit=None, offset=0, sort=None, q="anything"),
+            sortable={"name": CostType.name},
+            tiebreaker=CostType.id,
+        )
+    assert exc_info.value.status_code == 400
+
+
 def test_pagination_replaces_a_pre_existing_order_by_instead_of_appending(
     session: Session,
 ) -> None:
