@@ -1050,4 +1050,125 @@ describe("ResourcesPage capacity table (E8-05)", () => {
     );
     expect(mocks.updateRoleCapacity).not.toHaveBeenCalled();
   });
+
+  it("does not mask a successful role creation as failed when the follow-up capacity-table refresh fails", async () => {
+    const laborCostType = {
+      id: 1,
+      code: "MO",
+      name: "Main d'œuvre",
+      kind: "labor",
+      is_active: true,
+      created_at: "2026-08-01T00:00:00Z",
+      updated_at: "2026-08-01T00:00:00Z",
+    } as CostType;
+    const category = {
+      id: 5,
+      accounting_code: "C1",
+      category_code: null,
+      name: "Catégorie 1",
+      cost_type_id: 1,
+      is_active: true,
+    } as never;
+    mocks.getCostTypes.mockResolvedValue({ items: [laborCostType], total: 1 });
+    mocks.getCostCategories.mockResolvedValue([category]);
+    let paginatedCallCount = 0;
+    mocks.getResourceRoles.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, _nodeId: unknown, _includeDescendants: unknown, listParams: unknown) => {
+        if (listParams === undefined) return Promise.resolve({ items: [], total: 0 });
+        paginatedCallCount += 1;
+        // First paginated call: the initial load, succeeds. Second paginated call: the
+        // reload triggered by the role creation below, fails transiently.
+        if (paginatedCallCount === 1) return Promise.resolve({ items: [], total: 0 });
+        return Promise.reject(new ApiError(500, "Actualisation impossible"));
+      },
+    );
+    mocks.createResourceRole.mockResolvedValue(resourceRoleFixture({ id: 9, name: "Nouveau rôle" }));
+
+    render(<ResourcesPage />);
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("tab", { name: "Ressources" }));
+    await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalledTimes(2));
+
+    const nameInput = screen.getByLabelText("Nom");
+    fireEvent.change(nameInput, { target: { value: "Nouveau rôle" } });
+    fireEvent.change(screen.getByLabelText("Code comptable"), { target: { value: "5" } });
+    const rolesForm = nameInput.closest("form");
+    if (!rolesForm) throw new Error("roles form not found");
+    fireEvent.click(within(rolesForm).getByRole("button", { name: "Ajouter" }));
+
+    await waitFor(() => expect(mocks.createResourceRole).toHaveBeenCalledTimes(1));
+    // The role creation itself succeeded and must be reported as such, even though
+    // the follow-up capacity-table refresh it triggers fails.
+    await waitFor(() => expect(screen.getByText("Rôle créé.")).toBeInTheDocument());
+    expect(screen.queryByText("Actualisation impossible")).not.toBeInTheDocument();
+  });
+
+  it("does not leave the capacity table's loading indicator stuck when a role creation's reload races an in-flight pagination fetch", async () => {
+    const laborCostType = {
+      id: 1,
+      code: "MO",
+      name: "Main d'œuvre",
+      kind: "labor",
+      is_active: true,
+      created_at: "2026-08-01T00:00:00Z",
+      updated_at: "2026-08-01T00:00:00Z",
+    } as CostType;
+    const category = {
+      id: 5,
+      accounting_code: "C1",
+      category_code: null,
+      name: "Catégorie 1",
+      cost_type_id: 1,
+      is_active: true,
+    } as never;
+    mocks.getCostTypes.mockResolvedValue({ items: [laborCostType], total: 1 });
+    mocks.getCostCategories.mockResolvedValue([category]);
+    let resolveStalePage!: (page: { items: ResourceRole[]; total: number }) => void;
+    const stalePagePromise = new Promise<{ items: ResourceRole[]; total: number }>((resolve) => {
+      resolveStalePage = resolve;
+    });
+    let paginatedCallCount = 0;
+    mocks.getResourceRoles.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, _nodeId: unknown, _includeDescendants: unknown, listParams: unknown) => {
+        if (listParams === undefined) return Promise.resolve({ items: [], total: 0 });
+        paginatedCallCount += 1;
+        if (paginatedCallCount === 1) return stalePagePromise;
+        return Promise.resolve({
+          items: [resourceRoleFixture({ id: 9, name: "Nouveau rôle" })],
+          total: 1,
+        });
+      },
+    );
+    mocks.createResourceRole.mockResolvedValue(resourceRoleFixture({ id: 9, name: "Nouveau rôle" }));
+
+    render(<ResourcesPage />);
+    fireEvent.click(screen.getByRole("tab", { name: "Ressources" }));
+    // Signaled by call count rather than the generic `status` role: the capacity
+    // table's own loading skeleton is also a `role="status"`, and stays mounted
+    // throughout this test by design, so it can't be used as a page-ready signal.
+    await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(within(capacityCard()).getByRole("status", { name: "Chargement des données" })).toBeInTheDocument(),
+    );
+
+    const nameInput = screen.getByLabelText("Nom");
+    fireEvent.change(nameInput, { target: { value: "Nouveau rôle" } });
+    fireEvent.change(screen.getByLabelText("Code comptable"), { target: { value: "5" } });
+    const rolesForm = nameInput.closest("form");
+    if (!rolesForm) throw new Error("roles form not found");
+    fireEvent.click(within(rolesForm).getByRole("button", { name: "Ajouter" }));
+
+    await waitFor(() => expect(mocks.createResourceRole).toHaveBeenCalledTimes(1));
+    // The role creation's own reload (2nd paginated call) resolves immediately and
+    // must clear the loading state on its own -- it must not wait for the stale call.
+    await waitFor(() =>
+      expect(within(capacityCard()).queryByRole("status", { name: "Chargement des données" })).not.toBeInTheDocument(),
+    );
+
+    // Releasing the stale initial fetch afterwards must not resurrect the loading
+    // state or overwrite the fresher data already committed.
+    resolveStalePage({ items: [], total: 0 });
+    await waitFor(() => expect(within(capacityCard()).getByText("Nouveau rôle — IT (#9)")).toBeInTheDocument());
+    expect(within(capacityCard()).queryByRole("status", { name: "Chargement des données" })).not.toBeInTheDocument();
+  });
 });
