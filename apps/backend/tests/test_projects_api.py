@@ -160,9 +160,10 @@ def test_get_projects_and_project_tasks() -> None:
 
         projects_response: Response = client.get("/projects", headers=headers)
         assert projects_response.status_code == 200
-        raw_projects_payload = projects_response.json()
-        assert isinstance(raw_projects_payload, list)
-        projects_payload = cast(list[dict[str, Any]], raw_projects_payload)
+        raw_projects_body = projects_response.json()
+        assert isinstance(raw_projects_body, dict)
+        projects_payload = cast(list[dict[str, Any]], raw_projects_body["items"])
+        assert raw_projects_body["total"] == len(projects_payload)
         assert len(projects_payload) >= 1
         assert any(project["id"] == project_id for project in projects_payload)
 
@@ -179,9 +180,9 @@ def test_get_projects_and_project_tasks() -> None:
             headers=headers,
         )
         assert tasks_response.status_code == 200
-        raw_tasks_payload = tasks_response.json()
-        assert isinstance(raw_tasks_payload, list)
-        tasks_payload = cast(list[dict[str, Any]], raw_tasks_payload)
+        raw_tasks_body = tasks_response.json()
+        assert isinstance(raw_tasks_body, dict)
+        tasks_payload = cast(list[dict[str, Any]], raw_tasks_body["items"])
         assert len(tasks_payload) == expected_tasks
         assert tasks_payload[0]["project_id"] == project_id
         assert all("description" in task for task in tasks_payload)
@@ -207,7 +208,7 @@ def test_patch_task_description_and_read_back() -> None:
             headers=headers,
         )
         assert tasks_response.status_code == 200
-        tasks_payload = cast(list[dict[str, Any]], tasks_response.json())
+        tasks_payload = cast(list[dict[str, Any]], tasks_response.json()["items"])
 
         task_by_uid = {task["uid"]: task for task in tasks_payload}
         assert task_by_uid[1001]["description"] == "Description enrichie depuis Waterfall"
@@ -288,7 +289,7 @@ def test_delete_planning_task_referenced_by_cost_line_conflicts_without_mutation
         tasks_response: Response = client.get(f"/projects/{project_id}/tasks", headers=headers)
         task_id = next(
             task["id"]
-            for task in cast(list[dict[str, Any]], tasks_response.json())
+            for task in cast(list[dict[str, Any]], tasks_response.json()["items"])
             if task["uid"] == 1001
         )
 
@@ -349,7 +350,7 @@ def test_delete_planning_task_referenced_by_parent_task_row_conflicts_without_mu
         project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
 
         tasks_response: Response = client.get(f"/projects/{project_id}/tasks", headers=headers)
-        task_rows = cast(list[dict[str, Any]], tasks_response.json())
+        task_rows = cast(list[dict[str, Any]], tasks_response.json()["items"])
         parent_task_id = cast(int, next(task["id"] for task in task_rows if task["uid"] == 1001))
         child_task_id = cast(int, next(task["id"] for task in task_rows if task["uid"] == 1002))
 
@@ -855,7 +856,7 @@ def test_projects_are_isolated_by_owner() -> None:
         other_headers = _auth_headers(client, "projects.other@example.com")
         list_response: Response = client.get("/projects", headers=other_headers)
         assert list_response.status_code == 200
-        other_projects = cast(list[dict[str, Any]], list_response.json())
+        other_projects = cast(list[dict[str, Any]], list_response.json()["items"])
         assert all(item["id"] != project_id for item in other_projects)
 
         for path in (
@@ -891,33 +892,312 @@ def test_user_can_create_manual_project() -> None:
         assert payload["currency_code"] == "EUR"
 
 
-def test_project_and_task_pagination() -> None:
+def test_project_pagination_reports_total_and_task_listing_is_never_truncated() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)
         owner_id = _current_user_id(client, headers)
-        first_project_id, _ = _seed_projects_and_tasks(owner_id)
+        first_project_id, expected_tasks = _seed_projects_and_tasks(owner_id)
         second_project_id, _ = _seed_projects_and_tasks(owner_id)
 
         first_page = client.get("/projects?limit=1&offset=0", headers=headers)
         second_page = client.get("/projects?limit=1&offset=1", headers=headers)
         assert first_page.status_code == 200
         assert second_page.status_code == 200
-        first_projects = cast(list[dict[str, Any]], first_page.json())
-        second_projects = cast(list[dict[str, Any]], second_page.json())
+        first_body = cast(dict[str, Any], first_page.json())
+        second_body = cast(dict[str, Any], second_page.json())
+        assert first_body["limit"] == 1
+        assert first_body["offset"] == 0
+        assert second_body["offset"] == 1
+        assert first_body["total"] == second_body["total"] == 2
+        first_projects = cast(list[dict[str, Any]], first_body["items"])
+        second_projects = cast(list[dict[str, Any]], second_body["items"])
         assert len(first_projects) == 1
         assert len(second_projects) == 1
         assert first_projects[0]["id"] != second_projects[0]["id"]
 
+        without_limit = client.get("/projects", headers=headers)
+        assert without_limit.status_code == 200
+        without_limit_body = cast(dict[str, Any], without_limit.json())
+        assert without_limit_body["limit"] is None
+        assert without_limit_body["total"] == len(without_limit_body["items"]) == 2
+
+        # /projects/{project_id}/tasks is intentionally not paginated (EPIC E7,
+        # issue #115): it feeds the planning editor, which needs the whole task
+        # tree, so any stray limit/offset a caller sends must be ignored rather
+        # than silently truncating the response.
         task_page = client.get(
             f"/projects/{first_project_id}/tasks?limit=1&offset=1",
             headers=headers,
         )
         assert task_page.status_code == 200
-        tasks = cast(list[dict[str, Any]], task_page.json())
-        assert len(tasks) == 1
-        assert tasks[0]["uid"] == 1002
+        task_body = cast(dict[str, Any], task_page.json())
+        assert task_body["limit"] is None
+        assert task_body["offset"] == 0
+        tasks = cast(list[dict[str, Any]], task_body["items"])
+        assert len(tasks) == expected_tasks == task_body["total"]
 
         assert first_project_id != second_project_id
+
+
+def test_list_projects_sort_and_rejects_unknown_sort_column() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client, "projects.sort@example.com")
+        owner_id = _current_user_id(client, headers)
+        _seed_projects_and_tasks(owner_id)
+        created = client.post("/projects", json={"name": "Aardvark project"}, headers=headers)
+        assert created.status_code == 201
+
+        ascending = client.get("/projects?sort=name", headers=headers)
+        assert ascending.status_code == 200
+        names = cast(list[str], [item["name"] for item in ascending.json()["items"]])
+        assert names == sorted(names)
+        assert names[0] == "Aardvark project"
+
+        invalid_sort = client.get("/projects?sort=unknown_column", headers=headers)
+        assert invalid_sort.status_code == 400
+
+
+def test_list_projects_reports_total_beyond_legacy_default_limit_of_50() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client, "projects.many@example.com")
+        for index in range(55):
+            created = client.post(
+                "/projects", json={"name": f"Bulk project {index:03d}"}, headers=headers
+            )
+            assert created.status_code == 201
+
+        # This is exactly the bug issue #115 fixes: GET /projects used to
+        # default to limit=50 with no `total` in the response, silently
+        # dropping anything past the 50th project with no signal to the
+        # caller that more rows existed.
+        response = client.get("/projects", headers=headers)
+        assert response.status_code == 200
+        body = cast(dict[str, Any], response.json())
+        assert body["limit"] is None
+        assert len(body["items"]) == 55
+        assert body["total"] == 55
+
+        capped = client.get("/projects?limit=10", headers=headers)
+        assert capped.status_code == 200
+        capped_body = cast(dict[str, Any], capped.json())
+        assert capped_body["limit"] == 10
+        assert len(capped_body["items"]) == 10
+        assert capped_body["total"] == 55
+
+
+def test_list_project_estimates_pagination_sort_and_validation() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        for _ in range(2):
+            created = client.post(
+                f"/projects/{project_id}/estimates",
+                json={"kind": "initial", "currency_code": "EUR"},
+                headers=headers,
+            )
+            assert created.status_code == 201
+
+        listed = client.get(f"/projects/{project_id}/estimates", headers=headers)
+        assert listed.status_code == 200
+        body = cast(dict[str, Any], listed.json())
+        assert body["limit"] is None
+        assert body["total"] == len(body["items"]) == 2
+
+        descending = client.get(
+            f"/projects/{project_id}/estimates?sort=-version_number", headers=headers
+        )
+        assert descending.status_code == 200
+        descending_versions = [item["version_number"] for item in descending.json()["items"]]
+        assert descending_versions == [2, 1]
+
+        invalid_sort = client.get(
+            f"/projects/{project_id}/estimates?sort=unknown_column", headers=headers
+        )
+        assert invalid_sort.status_code == 400
+
+
+def test_list_estimate_task_rows_pagination_sort_and_validation() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        estimate_id = cast(
+            int,
+            client.post(
+                f"/projects/{project_id}/estimates",
+                json={"kind": "initial", "currency_code": "EUR"},
+                headers=headers,
+            ).json()["id"],
+        )
+
+        listed = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
+        )
+        assert listed.status_code == 200
+        body = cast(dict[str, Any], listed.json())
+        assert body["limit"] is None
+        assert body["total"] == len(body["items"]) == 2
+
+        descending = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/task-rows?sort=-task_name",
+            headers=headers,
+        )
+        assert descending.status_code == 200
+        names = [row["task_name"] for row in descending.json()["items"]]
+        assert names == ["Task Two", "Task One"]
+
+        invalid_sort = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/task-rows?sort=unknown_column",
+            headers=headers,
+        )
+        assert invalid_sort.status_code == 400
+
+
+def test_list_estimate_cost_lines_pagination_sort_and_validation() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        estimate_id = cast(
+            int,
+            client.post(
+                f"/projects/{project_id}/estimates",
+                json={"kind": "initial", "currency_code": "EUR"},
+                headers=headers,
+            ).json()["id"],
+        )
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            cost_type = CostType(code=f"MAT-{uuid4().hex[:8]}", name="Materiel")
+            session.add(cost_type)
+            session.flush()
+            cost_category = CostCategory(
+                cost_type_id=cost_type.id,
+                accounting_code=f"MATCAT-{uuid4().hex[:8]}",
+                name="Materiel",
+            )
+            session.add(cost_category)
+            session.commit()
+            cost_category_id = cost_category.id
+
+        for label in ("Bravo", "Alpha"):
+            created = client.post(
+                f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+                json={
+                    "cost_category_id": cost_category_id,
+                    "label": label,
+                    "quantity": 1,
+                    "unit_cost": 10,
+                },
+                headers=headers,
+            )
+            assert created.status_code == 201
+
+        listed = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines", headers=headers
+        )
+        assert listed.status_code == 200
+        body = cast(dict[str, Any], listed.json())
+        assert body["limit"] is None
+        assert body["total"] == len(body["items"]) == 2
+
+        sorted_by_label = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines?sort=label",
+            headers=headers,
+        )
+        assert sorted_by_label.status_code == 200
+        labels = [line["label"] for line in sorted_by_label.json()["items"]]
+        assert labels == ["Alpha", "Bravo"]
+
+        invalid_sort = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines?sort=unknown_column",
+            headers=headers,
+        )
+        assert invalid_sort.status_code == 400
+
+
+def test_list_plannings_pagination_sort_and_validation() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        for _ in range(2):
+            created = client.post(f"/projects/{project_id}/plannings", json={}, headers=headers)
+            assert created.status_code == 201
+
+        listed = client.get(f"/projects/{project_id}/plannings", headers=headers)
+        assert listed.status_code == 200
+        body = cast(dict[str, Any], listed.json())
+        assert body["limit"] is None
+        assert body["total"] == len(body["items"]) == 2
+
+        descending = client.get(
+            f"/projects/{project_id}/plannings?sort=-version_number", headers=headers
+        )
+        assert descending.status_code == 200
+        versions = [item["version_number"] for item in descending.json()["items"]]
+        assert versions == [2, 1]
+
+        invalid_sort = client.get(
+            f"/projects/{project_id}/plannings?sort=unknown_column", headers=headers
+        )
+        assert invalid_sort.status_code == 400
+
+
+def test_list_task_role_assignments_pagination_sort_and_validation() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        labor_role_id, _ = _seed_roles()
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            labor_role = session.query(ResourceRole).filter(ResourceRole.id == labor_role_id).one()
+            second_role = ResourceRole(
+                node_id=labor_role.node_id,
+                cost_category_id=labor_role.cost_category_id,
+                name="Analyste",
+            )
+            session.add(second_role)
+            session.commit()
+            second_role_id = second_role.id
+
+        first_assignment = client.post(
+            f"/projects/{project_id}/tasks/1001/role-assignments",
+            json={"role_id": labor_role_id, "quantity": "1", "hours": "1"},
+            headers=headers,
+        )
+        assert first_assignment.status_code == 201
+        second_assignment = client.post(
+            f"/projects/{project_id}/tasks/1001/role-assignments",
+            json={"role_id": second_role_id, "quantity": "1", "hours": "1"},
+            headers=headers,
+        )
+        assert second_assignment.status_code == 201
+
+        listed = client.get(f"/projects/{project_id}/tasks/1001/role-assignments", headers=headers)
+        assert listed.status_code == 200
+        body = cast(dict[str, Any], listed.json())
+        assert body["limit"] is None
+        assert body["total"] == len(body["items"]) == 2
+        # Default sort is role_name ascending: "Analyste" precedes "Développeur".
+        assert [item["role_name"] for item in body["items"]] == ["Analyste", "Développeur"]
+
+        descending = client.get(
+            f"/projects/{project_id}/tasks/1001/role-assignments?sort=-role_name",
+            headers=headers,
+        )
+        assert descending.status_code == 200
+        assert [item["role_name"] for item in descending.json()["items"]] == [
+            "Développeur",
+            "Analyste",
+        ]
+
+        invalid_sort = client.get(
+            f"/projects/{project_id}/tasks/1001/role-assignments?sort=unknown_column",
+            headers=headers,
+        )
+        assert invalid_sort.status_code == 400
 
 
 def test_project_estimate_snapshots_tasks_and_validates() -> None:
@@ -941,7 +1221,7 @@ def test_project_estimate_snapshots_tasks_and_validates() -> None:
             headers=headers,
         )
         assert rows_response.status_code == 200
-        rows = cast(list[dict[str, Any]], rows_response.json())
+        rows = cast(list[dict[str, Any]], rows_response.json()["items"])
         assert [row["task_name"] for row in rows] == ["Task One", "Task Two"]
         assert [row["position"] for row in rows] == [1, 2]
 
@@ -1004,8 +1284,8 @@ def test_project_estimate_can_snapshot_planning_without_legacy_tasks() -> None:
             headers=headers,
         )
         assert rows_response.status_code == 200
-        assert rows_response.json()[0]["task_id"] is None
-        assert rows_response.json()[0]["task_name"] == "Snapshot task"
+        assert rows_response.json()["items"][0]["task_id"] is None
+        assert rows_response.json()["items"][0]["task_name"] == "Snapshot task"
 
 
 def test_planning_lifecycle_snapshots_reference_and_display_selection() -> None:
@@ -1075,7 +1355,7 @@ def test_planning_lifecycle_snapshots_reference_and_display_selection() -> None:
         assert displayed.status_code == 200
         tasks = client.get(f"/projects/{project_id}/tasks", headers=headers)
         assert tasks.status_code == 200
-        assert tasks.json()[0]["name"] == "Task One"
+        assert tasks.json()["items"][0]["name"] == "Task One"
 
 
 def test_project_status_requires_references_and_excludes_archived_by_default() -> None:
@@ -1104,12 +1384,12 @@ def test_project_status_requires_references_and_excludes_archived_by_default() -
         assert lost.status_code == 200
         assert lost.json()["status"] == "perdu"
         active_projects = cast(
-            list[dict[str, Any]], client.get("/projects", headers=headers).json()
+            list[dict[str, Any]], client.get("/projects", headers=headers).json()["items"]
         )
         assert all(item["id"] != project_id for item in active_projects)
         archived_projects = cast(
             list[dict[str, Any]],
-            client.get("/projects?include_archived=true", headers=headers).json(),
+            client.get("/projects?include_archived=true", headers=headers).json()["items"],
         )
         assert any(item["id"] == project_id for item in archived_projects)
 
@@ -1217,7 +1497,7 @@ def test_en_cours_transition_rejects_project_initialised_without_structure_via_s
             ).status_code
             == 200
         )
-        assert client.get(f"/projects/{project_id}/tasks", headers=headers).json() == []
+        assert client.get(f"/projects/{project_id}/tasks", headers=headers).json()["items"] == []
 
         estimate = client.post(
             f"/projects/{project_id}/estimates",
@@ -1603,7 +1883,7 @@ def test_task_role_assignment_lifecycle_and_labor_validation() -> None:
             headers=headers,
         )
         assert list_response.status_code == 200
-        assignments = cast(list[dict[str, Any]], list_response.json())
+        assignments = cast(list[dict[str, Any]], list_response.json()["items"])
         assert len(assignments) == 1
 
         update_response = client.patch(
@@ -1849,7 +2129,7 @@ def test_planning_tasks_are_returned_depth_first() -> None:
 
         tasks = cast(
             list[dict[str, Any]],
-            client.get(f"/projects/{project_id}/tasks", headers=headers).json(),
+            client.get(f"/projects/{project_id}/tasks", headers=headers).json()["items"],
         )
         outlines = [task["outline_number"] for task in tasks]
         # Parent immediately followed by its children, in local position order.
