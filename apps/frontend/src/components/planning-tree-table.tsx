@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -16,7 +16,6 @@ import {
   PLANNING_COLUMN_ORDER,
   PLANNING_MAX_COLUMN_WIDTH,
   PLANNING_MIN_COLUMN_WIDTHS,
-  PLANNING_NAME_INDENT_DEPTH_BUDGET,
   usePlanningColumnWidths,
   type PlanningColumnKey,
 } from "@/hooks/use-planning-column-widths";
@@ -108,6 +107,55 @@ function ColumnResizeHandle({
         className="h-full w-1 rounded-full bg-transparent transition-colors group-hover:bg-border group-focus-visible:bg-primary"
       />
     </span>
+  );
+}
+
+// Renders a task's name, interactive only when it is actually visually truncated: an ordinary,
+// non-truncated name stays a plain <span>, with no tab stop or button semantics, so keyboard/
+// screen-reader users navigating a large planning (including the supported 1000-row case) never
+// have to traverse a per-row control that does nothing beyond announcing the name they'd already
+// hear. Only once the text is truncated does it become a focusable Tooltip trigger, which is the
+// only way to reach the full name without a mouse hover in that case.
+function TaskNameLabel({ name, width, isMilestone }: { name: string; width: number; isMilestone: boolean }) {
+  const textRef = useRef<HTMLSpanElement>(null);
+  const [isTruncated, setIsTruncated] = useState(false);
+
+  // Re-checked whenever the name text or the Name column's own width changes -- either can flip
+  // whether the text actually overflows its box. `width` (usePlanningColumnWidths' committed value
+  // for the "name" column) also updates while a resize drag is in progress, not just once it ends:
+  // the hook commits at most one width per animation frame during a drag (see its own rAF-
+  // coalescing comment), so this re-measures at that same, already-throttled cadence rather than on
+  // every raw mousemove.
+  useEffect(() => {
+    const element = textRef.current;
+    if (!element) {
+      return;
+    }
+    setIsTruncated(element.scrollWidth > element.clientWidth);
+  }, [name, width]);
+
+  const label = (
+    <>
+      {isMilestone ? "◆ " : ""}
+      {name}
+    </>
+  );
+
+  if (!isTruncated) {
+    return (
+      <span ref={textRef} className="min-w-0 truncate text-left">
+        {label}
+      </span>
+    );
+  }
+
+  return (
+    <Tooltip>
+      <TooltipTrigger ref={textRef} type="button" className="min-w-0 truncate text-left">
+        {label}
+      </TooltipTrigger>
+      <TooltipContent>{name}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -324,17 +372,15 @@ export function PlanningTreeTable({
                     <TableCell className="overflow-hidden">
                       <div
                         className="flex min-w-0 items-center gap-1"
-                        // Capped at PLANNING_NAME_INDENT_DEPTH_BUDGET (depth 4): the tree builder
-                        // allows arbitrary nesting, but PLANNING_MIN_COLUMN_WIDTHS.name only budgets
-                        // indentation headroom through that depth (see the cross-referenced comment
-                        // there). Without this cap, a deeper row (a real MS Project import can
-                        // exceed depth 4) would push its indentation past what the column's minimum
-                        // width can fit, clipping the expand/collapse chevron and name again at
-                        // exactly the width that floor is supposed to keep usable. Rows deeper than
-                        // this budget simply share the same indentation as depth 4 -- expand/collapse
-                        // and selection remain fully functional, only the visual nesting cue flattens
-                        // out past this point.
-                        style={{ paddingLeft: `${Math.min(row.depth, PLANNING_NAME_INDENT_DEPTH_BUDGET) * 1.25}rem` }}
+                        // Deliberately uncapped: the tree builder allows arbitrary nesting depth (a
+                        // real MS Project import can exceed a handful of levels), and the visual
+                        // indentation must keep reflecting the actual hierarchy rather than flattening
+                        // past some arbitrary depth. PLANNING_MIN_COLUMN_WIDTHS.name (in
+                        // use-planning-column-widths.ts) only comfortably budgets indentation headroom
+                        // up to a typical depth of 4 -- a tree nested deeper than that may need the
+                        // Name column widened via its resize handle to keep the chevron/text fully
+                        // visible, which is expected, not a bug.
+                        style={{ paddingLeft: `${row.depth * 1.25}rem` }}
                       >
                         {row.hasChildren ? (
                           <button
@@ -351,16 +397,11 @@ export function PlanningTreeTable({
                         ) : (
                           <span className="size-6 shrink-0" />
                         )}
-                        <Tooltip>
-                          <TooltipTrigger
-                            type="button"
-                            className="min-w-0 truncate text-left"
-                          >
-                            {row.is_milestone ? "◆ " : ""}
-                            {row.name}
-                          </TooltipTrigger>
-                          <TooltipContent>{row.name}</TooltipContent>
-                        </Tooltip>
+                        <TaskNameLabel
+                          name={row.name}
+                          width={columnWidths.widths.name}
+                          isMilestone={row.is_milestone}
+                        />
                       </div>
                     </TableCell>
                     <TableCell>{taskTypeLabel(row)}</TableCell>

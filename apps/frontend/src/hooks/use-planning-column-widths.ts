@@ -54,22 +54,20 @@ export const PLANNING_COLUMN_WIDTHS_STORAGE_KEY = "waterfall:planning-tree-table
 // the column narrows below their combined width the chevron itself gets clipped by the cell's
 // `overflow-hidden` -- not just the text -- making the expand/collapse control invisible/unusable
 // for deeply nested rows. Budget: 16px TableCell padding (p-2) + 24px chevron + 4px gap = 44px,
-// plus indentation headroom up to depth 4 (a plausible nesting level one level past the
+// plus indentation headroom up to a typical nesting depth of 4 (one level past the
 // Lot > Sous-lot > Tâche > Sous-tâche example that originally exposed this) = 4 * 20px = 80px,
 // plus a 40px margin so a few characters of the truncated name plus an ellipsis remain visible
 // even at the floor. Total: 44 + 80 + 40 = 164.
 //
-// This is also why the visual indentation itself is capped at this same depth in
-// PlanningTreeTable (`Math.min(row.depth, PLANNING_NAME_INDENT_DEPTH_BUDGET) * 1.25rem` on the
-// Name cell's inner div): the tree builder allows arbitrary nesting (a real MS Project import can
-// exceed depth 4), but this 164px floor only budgets indentation headroom through depth 4. Without
-// a matching visual cap, a deeper row's indentation would grow past what the column's minimum
-// width can fit, clipping the chevron/text again at exactly the width this floor is supposed to
-// guarantee stays usable. Capping indentation past this depth is a deliberate, bounded regression
-// in visual nesting cues (rows past depth 4 all indent the same as depth 4) in exchange for the
-// chevron and name always staying visible/usable at the column's minimum width, regardless of how
-// deep the underlying data actually goes.
-export const PLANNING_NAME_INDENT_DEPTH_BUDGET = 4;
+// This floor is comfortable through that depth-4 example, not a hard guarantee for arbitrary
+// nesting: the tree builder allows deeper nesting (a real MS Project import can exceed depth 4),
+// and the row's indentation itself is intentionally left uncapped (see PlanningTreeTable's Name
+// cell, `row.depth * 1.25rem`) so the visual nesting cue always reflects the actual hierarchy
+// rather than flattening past some arbitrary depth. A tree nested deep enough can therefore still
+// push the chevron/text past what this floor budgets for at the column's minimum width -- the
+// expected fix at that point is for the user to widen the Name column with its resize handle
+// (the very capability this hook exists to provide), not a lower ceiling on how deep the
+// indentation is allowed to visually represent.
 
 export const PLANNING_MIN_COLUMN_WIDTHS: PlanningColumnWidths = {
   uid: 60,
@@ -255,12 +253,19 @@ export function usePlanningColumnWidths() {
     store.setSnapshot({ ...store.getSnapshot(), [pending.column]: pending.width });
   }, [store]);
 
-  const stopResize = useCallback(() => {
+  // Shared by stopResize and the unmount cleanup below: both need to end an active drag the same
+  // way -- flush whatever width the last buffered mousemove computed, then persist the store's
+  // current snapshot -- so this is factored out once instead of duplicated between the two.
+  const commitDrag = useCallback(() => {
     dragStateRef.current = null;
-    window.removeEventListener("mousemove", handleMouseMove);
     flushPendingWidth();
     persistColumnWidths(store.getSnapshot());
-  }, [handleMouseMove, store, flushPendingWidth]);
+  }, [flushPendingWidth, store]);
+
+  const stopResize = useCallback(() => {
+    window.removeEventListener("mousemove", handleMouseMove);
+    commitDrag();
+  }, [handleMouseMove, commitDrag]);
 
   useEffect(() => {
     stopResizeRef.current = stopResize;
@@ -270,12 +275,21 @@ export function usePlanningColumnWidths() {
     return () => {
       window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mouseup", stopResize);
-      if (rafIdRef.current !== null) {
+      // A drag can still be active when this hook unmounts (e.g. navigating away from the
+      // planning page mid-resize, before the window's own "mouseup" ever fires): without this,
+      // the pending width computed by the last buffered mousemove -- or even an already-applied
+      // one -- would be silently discarded instead of persisted, contradicting the flush-on-
+      // unmount behavior the rest of this hook relies on. Mirror stopResize via the same
+      // commitDrag helper in that case; otherwise just cancel whatever frame (if any) is still
+      // pending.
+      if (dragStateRef.current !== null) {
+        commitDrag();
+      } else if (rafIdRef.current !== null) {
         cancelAnimationFrame(rafIdRef.current);
         rafIdRef.current = null;
       }
     };
-  }, [handleMouseMove, stopResize]);
+  }, [handleMouseMove, stopResize, commitDrag]);
 
   const startResize = useCallback(
     (column: PlanningColumnKey, event: ReactMouseEvent<HTMLElement>) => {

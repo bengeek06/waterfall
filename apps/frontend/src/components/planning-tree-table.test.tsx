@@ -1671,17 +1671,47 @@ describe("PlanningTreeTable", () => {
       expect(predecessorsCell).toHaveClass("whitespace-normal", "break-words", "align-top");
     });
 
+    // TaskNameLabel (in planning-tree-table.tsx) decides whether a name is interactive by comparing
+    // the rendered text element's `scrollWidth`/`clientWidth`, the standard CSS-truncation-detection
+    // pattern. jsdom never runs real layout, so both are always 0 there (0 > 0 is false) unless
+    // stubbed -- these helpers simulate the two cases the component itself has to distinguish.
+    function stubNameOverflow(isTruncated: boolean) {
+      const scrollWidthSpy = vi
+        .spyOn(HTMLElement.prototype, "scrollWidth", "get")
+        .mockReturnValue(isTruncated ? 400 : 100);
+      const clientWidthSpy = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(100);
+      return () => {
+        scrollWidthSpy.mockRestore();
+        clientWidthSpy.mockRestore();
+      };
+    }
+
+    it("renders an ordinary, non-interactive name when it is not visually truncated", () => {
+      // Round 4 of this issue's review flagged the previous unconditional TooltipTrigger/<button>
+      // as an unnecessary control and tab stop on every row, including the supported 1000-row case,
+      // for names that never actually overflow. A name that fits must stay a plain, non-focusable
+      // <span> -- no button role, no tab stop.
+      const tasks: Task[] = [task({ uid: 1, name: "Tâche courte", parent_uid: null, position: 1 })];
+      render(<PlanningTreeTable tasks={tasks} versionKey={1} />);
+
+      expect(screen.getByText("Tâche courte").tagName).toBe("SPAN");
+      expect(screen.queryByRole("button", { name: "Tâche courte" })).not.toBeInTheDocument();
+    });
+
     it("truncates a long task name instead of letting it overflow into the next column", () => {
+      const restoreOverflow = stubNameOverflow(true);
       const longName = "Un nom de tâche extrêmement long qui dépasserait largement la largeur de la colonne";
       const tasks: Task[] = [task({ uid: 1, name: longName, parent_uid: null, position: 1 })];
       render(<PlanningTreeTable tasks={tasks} versionKey={1} />);
 
-      // The truncated name is now a focusable <button> (TooltipTrigger), not a plain <span>: see
-      // the dedicated accessibility test below for why.
+      // Only once actually truncated does the name become a focusable <button> (TooltipTrigger),
+      // not a plain <span>: see the dedicated accessibility test below for why.
       const nameTrigger = screen.getByRole("button", { name: longName });
       expect(nameTrigger.tagName).toBe("BUTTON");
       expect(nameTrigger).toHaveClass("truncate");
       expect(nameTrigger).toHaveTextContent(longName);
+
+      restoreOverflow();
     });
 
     it("keeps the full task name reachable by keyboard/touch, not just mouse hover, once it is truncated", () => {
@@ -1689,6 +1719,7 @@ describe("PlanningTreeTable", () => {
       // name (up to 512 chars per the API) on mouse hover. Wrapping it in the shared Tooltip/
       // TooltipTrigger/TooltipContent primitives (ui/tooltip.tsx) instead renders it as a real
       // <button>, which is focusable by keyboard/touch without any extra tabIndex plumbing.
+      const restoreOverflow = stubNameOverflow(true);
       const longName = "Un nom de tâche extrêmement long qui dépasserait largement la largeur de la colonne";
       const tasks: Task[] = [task({ uid: 1, name: longName, parent_uid: null, position: 1 })];
       render(<PlanningTreeTable tasks={tasks} versionKey={1} />);
@@ -1696,12 +1727,15 @@ describe("PlanningTreeTable", () => {
       const nameTrigger = screen.getByRole("button", { name: longName });
       nameTrigger.focus();
       expect(nameTrigger).toHaveFocus();
+
+      restoreOverflow();
     });
 
     it("shows the full task name in a tooltip when the truncated trigger receives keyboard focus", async () => {
       // The app always renders PlanningTreeTable under the root <TooltipProvider> (see
       // app/layout.tsx); reproduce that here rather than relying on TooltipTrigger's own
       // no-provider fallback delay, so this exercises the same open-on-focus path production uses.
+      const restoreOverflow = stubNameOverflow(true);
       const longName = "Un nom de tâche extrêmement long qui dépasserait largement la largeur de la colonne";
       const tasks: Task[] = [task({ uid: 1, name: longName, parent_uid: null, position: 1 })];
       render(
@@ -1714,6 +1748,8 @@ describe("PlanningTreeTable", () => {
       fireEvent.focus(nameTrigger);
 
       expect(await screen.findAllByText(longName)).not.toHaveLength(0);
+
+      restoreOverflow();
     });
 
     it("clips the Name cell so a deeply nested row's indentation and chevron cannot paint over the Type column", () => {
@@ -1727,17 +1763,16 @@ describe("PlanningTreeTable", () => {
       expect(nameCell).toHaveClass("overflow-hidden");
     });
 
-    it("caps the visual indentation at the same depth PLANNING_MIN_COLUMN_WIDTHS.name budgets for", () => {
-      // The tree builder allows arbitrary nesting depth (a real MS Project import can exceed the
-      // three-level Poste > Lot > Livrable fixture used elsewhere in this file), but the Name
-      // column's minimum width only budgets indentation headroom through depth 4 (see
-      // PLANNING_NAME_INDENT_DEPTH_BUDGET / PLANNING_MIN_COLUMN_WIDTHS.name's comment in
-      // use-planning-column-widths.ts). A row past that depth must indent exactly like a depth-4
-      // row -- not further -- so the expand/collapse chevron and name stay inside the column's
-      // budgeted minimum width instead of being clipped again.
+    it("keeps indenting deeper rows without a cap, so the tree's actual depth stays visually accurate", () => {
+      // Round 4 of this issue's review reversed an earlier decision (round 3) to cap the visual
+      // indentation at depth 4: flattening every deeper row to the same indentation as depth 4
+      // misrepresents an arbitrarily deep tree (a real MS Project import can exceed a handful of
+      // levels). The Name column's minimum width (PLANNING_MIN_COLUMN_WIDTHS.name in
+      // use-planning-column-widths.ts) only comfortably budgets headroom up to that typical depth --
+      // beyond it, the user is expected to widen the column with its resize handle, not have the
+      // indentation itself silently stop growing.
       // `walk` in lib/planning-tree.ts starts the root level at depth 0, so the Nth level task here
-      // sits at depth N-1: "Niveau 5" is depth 4 (exactly PLANNING_NAME_INDENT_DEPTH_BUDGET, the
-      // last uncapped depth) and "Niveau 7" is depth 6 (two levels past the cap).
+      // sits at depth N-1.
       const deepTasks: Task[] = [
         task({ uid: 1, name: "Niveau 1", parent_uid: null, position: 1 }),
         task({ uid: 2, name: "Niveau 2", parent_uid: 1, position: 1 }),
@@ -1749,13 +1784,18 @@ describe("PlanningTreeTable", () => {
       ];
       render(<PlanningTreeTable tasks={deepTasks} versionKey={1} />);
 
-      const depth4Container = screen.getByRole("button", { name: "Niveau 5" }).closest("div");
-      const depth6Container = screen.getByRole("button", { name: "Niveau 7" }).closest("div");
+      const depth4Container = screen.getByText("Niveau 5").closest("div");
+      const depth6Container = screen.getByText("Niveau 7").closest("div");
 
       expect(depth4Container).not.toBeNull();
       expect(depth6Container).not.toBeNull();
-      expect(depth6Container?.style.paddingLeft).toBe(depth4Container?.style.paddingLeft);
-      expect(depth6Container?.style.paddingLeft).toBe("5rem");
+      expect(depth4Container?.style.paddingLeft).toBe("5rem");
+      // Strictly greater, not just different: depth keeps growing linearly (depth * 1.25rem) with
+      // no ceiling.
+      expect(Number.parseFloat(depth6Container?.style.paddingLeft ?? "0")).toBeGreaterThan(
+        Number.parseFloat(depth4Container?.style.paddingLeft ?? "0"),
+      );
+      expect(depth6Container?.style.paddingLeft).toBe("7.5rem");
     });
 
     it("makes every resize handle focusable via the keyboard", () => {

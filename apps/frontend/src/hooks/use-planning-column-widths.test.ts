@@ -331,5 +331,30 @@ describe("usePlanningColumnWidths", () => {
 
       cancelSpy.mockRestore();
     });
+
+    it("flushes and persists the pending width when unmounting mid-drag instead of discarding it", () => {
+      // Regression guard (round 4 review): unmounting while a drag is still active used to only
+      // cancel the pending animation frame, silently losing the buffered mousemove's width -- and
+      // contradicting stopResize's own flush-then-persist behavior for an ordinary mouseup.
+      const { result, unmount } = renderHook(() => usePlanningColumnWidths());
+      const startWidth = result.current.widths.predecessors;
+
+      act(() => {
+        result.current.startResize("predecessors", {
+          clientX: 100,
+          button: 0,
+          preventDefault: () => {},
+        } as never);
+      });
+      act(() => {
+        // Never followed by a "mouseup": simulates navigating away mid-resize.
+        fireMouseEvent("mousemove", 160);
+      });
+
+      unmount();
+
+      const persisted = JSON.parse(window.localStorage.getItem(PLANNING_COLUMN_WIDTHS_STORAGE_KEY) ?? "{}");
+      expect(persisted.predecessors).toBe(startWidth + 60);
+    });
   });
 });
