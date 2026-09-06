@@ -6,6 +6,28 @@ export type PlanningMoveCommand = {
   position: number;
 };
 
+export type PlanningTreeRow = Task & { depth: number; hasChildren: boolean };
+
+// Flattens the task tree into the depth-first, indentation-ordered row list the tree table
+// renders, skipping the descendants of any uid in `collapsedUids`. Extracted from
+// planning-tree-table.tsx (E4-12 / #152) alongside use-planning-tree-selection, which owns
+// collapsedUids.
+export function buildVisibleRows(tasks: Task[], collapsedUids: ReadonlySet<number>): PlanningTreeRow[] {
+  const childrenByParent = buildChildrenByParent(tasks);
+  const rows: PlanningTreeRow[] = [];
+  function walk(parentUid: number | null, depth: number) {
+    for (const task of childrenByParent.get(parentUid) ?? []) {
+      const hasChildren = (childrenByParent.get(task.uid) ?? []).length > 0;
+      rows.push({ ...task, depth, hasChildren });
+      if (hasChildren && !collapsedUids.has(task.uid)) {
+        walk(task.uid, depth + 1);
+      }
+    }
+  }
+  walk(null, 0);
+  return rows;
+}
+
 type SiblingIndex = {
   parentUid: number | null;
   siblings: Task[];
