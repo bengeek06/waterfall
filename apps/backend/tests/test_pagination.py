@@ -11,11 +11,13 @@ covered at the same layer it actually runs in.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Generator
 
 import pytest
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.testclient import TestClient
+from sqlalchemy import event
 from sqlalchemy.orm import Session
 
 from waterfall.api.pagination import ListParams, list_params
@@ -100,6 +102,44 @@ def test_sort_ascending_and_descending(session: Session) -> None:
         tiebreaker=CostType.id,
     )
     assert [row.name for row in descending.rows] == ["C", "B", "A"]
+
+
+def test_descending_sort_keeps_the_tiebreaker_in_the_same_direction(session: Session) -> None:
+    # A single ascending B-tree index can satisfy `ORDER BY col ASC, id ASC` with a
+    # forward scan and `ORDER BY col DESC, id DESC` with a backward scan, but not a
+    # mixed `col DESC, id ASC` -- that direction combination can't be produced by
+    # either scan direction of a same-order composite index, so it forces an
+    # explicit sort step on every descending request regardless of how the index is
+    # built (Copilot finding on PR #173). Verified against the actual emitted SQL,
+    # not just row order, since row order alone can't distinguish a correctly
+    # single-directioned ORDER BY from a coincidentally-matching mixed one.
+    prefix = "e7-desc-tiebreak-"
+    _make_cost_type(session, f"{prefix}a", "A")
+    _make_cost_type(session, f"{prefix}b", "B")
+    session.commit()
+
+    engine = session.get_bind()
+    captured: list[str] = []
+
+    def _capture(_conn: object, _cursor: object, statement: str, *_args: object) -> None:
+        captured.append(statement)
+
+    event.listen(engine, "before_cursor_execute", _capture)
+    try:
+        query = session.query(CostType).filter(CostType.code.like(f"{prefix}%"))
+        apply_pagination(
+            query,
+            ListParams(limit=None, offset=0, sort="-name", q=None),
+            sortable={"name": CostType.name},
+            tiebreaker=CostType.id,
+        )
+    finally:
+        event.remove(engine, "before_cursor_execute", _capture)
+
+    order_by_statements = [statement for statement in captured if "ORDER BY" in statement.upper()]
+    assert order_by_statements
+    order_by_clause = order_by_statements[-1].upper()
+    assert re.search(r"ORDER BY .*NAME DESC.*ID DESC", order_by_clause)
 
 
 def test_unknown_sort_column_is_rejected_not_interpolated(session: Session) -> None:
