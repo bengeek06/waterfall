@@ -120,7 +120,9 @@ def test_admin_can_manage_resource_reference_data() -> None:
 
         roles_response = client.get("/resources/roles?node_id=" + str(node_id), headers=headers)
         assert roles_response.status_code == 200
-        roles = cast(list[dict[str, Any]], roles_response.json())
+        roles_payload = cast(dict[str, Any], roles_response.json())
+        assert roles_payload["total"] == 1
+        roles = cast(list[dict[str, Any]], roles_payload["items"])
         assert [role["name"] for role in roles] == ["Developpeur"]
 
 
@@ -192,14 +194,16 @@ def test_inactive_cost_category_hidden_unless_included() -> None:
         assert deactivate_response.json()["accounting_code"] == "FRAIS-CAT-I-RENAMED"
 
         active_only: Response = client.get("/resources/categories", headers=headers)
-        active_payload = cast(list[dict[str, Any]], active_only.json())
+        active_payload = cast(list[dict[str, Any]], active_only.json()["items"])
         assert all(item["id"] != category_id for item in active_payload)
 
         with_inactive: Response = client.get(
             "/resources/categories?include_inactive=true", headers=headers
         )
-        inactive_payload = cast(list[dict[str, Any]], with_inactive.json())
+        inactive_body = cast(dict[str, Any], with_inactive.json())
+        inactive_payload = cast(list[dict[str, Any]], inactive_body["items"])
         assert any(item["id"] == category_id for item in inactive_payload)
+        assert inactive_body["total"] == len(inactive_payload)
 
 
 def test_role_creation_rejects_inactive_category() -> None:
@@ -356,7 +360,7 @@ def test_resource_nodes_can_update_and_delete_leaf_nodes() -> None:
         delete_response = client.delete(f"/resources/nodes/{node_id}", headers=headers)
         assert delete_response.status_code == 204
         listed_codes = [
-            node["code"] for node in client.get("/resources/nodes", headers=headers).json()
+            node["code"] for node in client.get("/resources/nodes", headers=headers).json()["items"]
         ]
         assert "NEW" not in listed_codes
 
@@ -424,7 +428,11 @@ def test_calendar_create_read_and_list_include_weekdays() -> None:
 
         list_response: Response = client.get("/resources/calendars", headers=headers)
         assert list_response.status_code == 200
-        calendars = cast(list[dict[str, Any]], list_response.json())
+        list_payload = cast(dict[str, Any], list_response.json())
+        assert list_payload["total"] == 1
+        assert list_payload["limit"] is None
+        assert list_payload["offset"] == 0
+        calendars = cast(list[dict[str, Any]], list_payload["items"])
         assert [calendar["code"] for calendar in calendars] == ["STANDARD"]
         assert len(calendars[0]["weekdays"]) == 7
 
@@ -447,7 +455,10 @@ def test_first_calendar_created_becomes_default_automatically() -> None:
     a fresh install is never left without a default calendar."""
     with TestClient(app) as client:
         headers = _admin_headers(client)
-        assert client.get("/resources/calendars", headers=headers).json() == []
+        empty_payload = cast(
+            dict[str, Any], client.get("/resources/calendars", headers=headers).json()
+        )
+        assert empty_payload == {"items": [], "total": 0, "limit": None, "offset": 0}
 
         created: Response = client.post(
             "/resources/calendars",
@@ -653,7 +664,8 @@ def test_calendar_delete_deactivates_and_blocks_when_assigned() -> None:
         active_codes = [
             calendar["code"]
             for calendar in cast(
-                list[dict[str, Any]], client.get("/resources/calendars", headers=headers).json()
+                list[dict[str, Any]],
+                client.get("/resources/calendars", headers=headers).json()["items"],
             )
         ]
         assert "STANDARD" not in active_codes
@@ -661,7 +673,9 @@ def test_calendar_delete_deactivates_and_blocks_when_assigned() -> None:
             calendar["code"]
             for calendar in cast(
                 list[dict[str, Any]],
-                client.get("/resources/calendars?include_inactive=true", headers=headers).json(),
+                client.get("/resources/calendars?include_inactive=true", headers=headers).json()[
+                    "items"
+                ],
             )
         ]
         assert "STANDARD" in inactive_codes
@@ -704,7 +718,8 @@ def test_calendar_patch_deactivate_blocks_when_assigned() -> None:
         active_codes = [
             calendar["code"]
             for calendar in cast(
-                list[dict[str, Any]], client.get("/resources/calendars", headers=headers).json()
+                list[dict[str, Any]],
+                client.get("/resources/calendars", headers=headers).json()["items"],
             )
         ]
         assert "STANDARD-PATCH" in active_codes

@@ -1638,8 +1638,8 @@ def test_role_filter_can_include_descendant_nodes() -> None:
         )
         assert direct_response.status_code == 200
         assert descendants_response.status_code == 200
-        assert direct_response.json() == []
-        assert role.id in [item["id"] for item in descendants_response.json()]
+        assert direct_response.json()["items"] == []
+        assert role.id in [item["id"] for item in descendants_response.json()["items"]]
 
 
 def _draft_structure_payload() -> dict[str, Any]:
