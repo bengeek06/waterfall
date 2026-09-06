@@ -1,0 +1,13 @@
+name: q
+in: query
+required: false
+description: >-
+  Recherche plein texte simple (sous-chaine, insensible a la casse), sur
+  le sous-ensemble de colonnes documente par chaque ressource dans la
+  description de ce parametre au niveau de l'operation. A distinguer des
+  filtres structures deja existants sur certaines ressources
+  (`include_inactive`, `node_id`, `role_id`, ...), qui restent des
+  parametres dedies et se combinent avec `q`.
+schema:
+  type: string
+  minLength: 1

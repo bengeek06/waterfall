@@ -349,6 +349,10 @@ components:
       $ref: ./components/schemas/RoleCapacityUpdate.yaml
     RoleCapacityRead:
       $ref: ./components/schemas/RoleCapacityRead.yaml
+    PaginationMeta:
+      $ref: ./components/schemas/PaginationMeta.yaml
+    SortColumn:
+      $ref: ./components/schemas/SortColumn.yaml
   parameters:
     BatchId:
       $ref: ./components/parameters/BatchId.yaml
@@ -382,6 +386,12 @@ components:
       $ref: ./components/parameters/Year.yaml
     UserId:
       $ref: ./components/parameters/UserId.yaml
+    Limit:
+      $ref: ./components/parameters/Limit.yaml
+    Offset:
+      $ref: ./components/parameters/Offset.yaml
+    Search:
+      $ref: ./components/parameters/Search.yaml
   responses:
     BadRequest:
       $ref: ./components/responses/BadRequest.yaml

@@ -1,0 +1,27 @@
+type: string
+pattern: ^-?[A-Za-z_][A-Za-z0-9_]*$
+description: >-
+  Nom d'une colonne triable, optionnellement prefixe de `-` pour un tri
+  descendant (ex. `name`, `-created_at`). Un seul critere de tri par
+  requete : l'ordre total deterministe (necessaire a une pagination
+  stable) est complete par la cle primaire en repli, jamais par un
+  second critere explicite.
+
+  Ce schema documente uniquement la syntaxe generale ; il ne peut pas
+  etre reutilise comme composant Parameter Object partage, car OpenAPI
+  n'autorise pas de restreindre par un `enum` un `$ref` vers un
+  Parameter Object (les cles soeurs d'un `$ref` a ce niveau sont
+  ignorees). Chaque ressource declare donc son propre parametre `sort`
+  au niveau de l'operation, avec ce schema restreint par un `enum` aux
+  colonnes qu'elle expose au tri, par exemple :
+
+  - name: sort
+    in: query
+    required: false
+    schema:
+      allOf:
+        - $ref: SortColumn.yaml
+      enum: [name, -name, code, -code]
+
+  Une colonne absente de cet enum est rejetee avec la reponse
+  BadRequest.yaml, jamais interpolee dans le SQL.

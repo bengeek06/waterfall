@@ -1,0 +1,12 @@
+name: offset
+in: query
+required: false
+description: >-
+  Nombre de lignes a sauter avant le debut de la page. Requiert `limit` :
+  fourni sans `limit`, il serait sous-specifie (voir la note "Regle
+  offset/limit" dans PaginationMeta.yaml) et est donc rejete avec la
+  reponse BadRequest.yaml.
+schema:
+  type: integer
+  minimum: 0
+  default: 0
