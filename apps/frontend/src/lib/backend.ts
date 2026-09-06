@@ -410,22 +410,31 @@ export function deleteResourceNode(
   );
 }
 
+// `listParams` follows the `getCostTypes`/EPIC E8 convention: absent (no 5th
+// argument at all), it sends no pagination params and the backend returns every
+// matching row -- relied on by callers that need the complete, unfiltered/
+// unpaginated reference list (e.g. `CapacityTable`, `RoleCalendarsTable`). A
+// caller opting into server-driven pagination/sort/search (e.g. `RolesPanel`)
+// passes it explicitly, alongside `nodeId`/`includeDescendants` which remain the
+// structural, always-combined-with-search node filter.
 export async function getResourceRoles(
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
   nodeId?: number,
   includeDescendants = false,
-): Promise<ResourceRole[]> {
-  const query = nodeId
-    ? `?node_id=${nodeId}&include_descendants=${includeDescendants}`
-    : "";
+  listParams: ListQueryParams = {},
+): Promise<ListPage<ResourceRole>> {
+  const query = buildListQuery(
+    listParams,
+    nodeId ? { node_id: String(nodeId), include_descendants: String(includeDescendants) } : undefined,
+  );
   const page = await authRequest<components["schemas"]["ResourceRoleListRead"]>(
     `/resources/roles${query}`,
     tokens,
     { method: "GET" },
     onSessionRefresh,
   );
-  return page.items;
+  return { items: page.items, total: page.total };
 }
 
 export function createResourceRole(

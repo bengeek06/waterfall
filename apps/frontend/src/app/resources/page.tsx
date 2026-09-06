@@ -94,7 +94,23 @@ export default function ResourcesPage() {
   const [activeTab, setActiveTab] = useState<SettingsTab>("costs");
   const [nodes, setNodes] = useState<ResourceNode[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null);
+  // `roles` (full, unfiltered across every node) feeds CapacityTable and
+  // RoleCalendarsTable, which both need the complete reference list (they display
+  // every role, labelled with its own node code, not just the currently selected
+  // node's roles). Per the same EPIC E7/E8 guarantee as `costTypes` below, this must
+  // stay a plain unpaginated fetch. RolesPanel's own view -- scoped to the selected
+  // node, with server search/sort/pagination -- is a second, independent fetch
+  // (`rolesPanelPage` below), not a client-side slice of `roles`.
   const [roles, setRoles] = useState<ResourceRole[]>([]);
+  const [rolesPanelPage, setRolesPanelPage] = useState<{ items: ResourceRole[]; total: number }>({
+    items: [],
+    total: 0,
+  });
+  const [rolesPanelLoading, setRolesPanelLoading] = useState(false);
+  const [rolesPanelOffset, setRolesPanelOffset] = useState(0);
+  const [rolesPanelLimit] = useState(20);
+  const [rolesPanelSort, setRolesPanelSort] = useState<string | null>(null);
+  const [rolesPanelQuery, setRolesPanelQuery] = useState("");
   const [calendars, setCalendars] = useState<Calendar[]>([]);
   // `costTypes` (full, unfiltered) feeds other panels that need the complete list as
   // reference data (RolesPanel, CostCategoriesTable's type dropdown, ValuationPanel) --
@@ -217,7 +233,7 @@ export default function ResourcesPage() {
           usersData,
         ] = await Promise.all([
           getResourceNodes(session, onSessionRefresh),
-          getResourceRoles(session, onSessionRefresh),
+          getResourceRoles(session, onSessionRefresh).then((page) => page.items),
           getCalendars(session, onSessionRefresh, true),
           getCostTypes(session, onSessionRefresh, true).then((page) => page.items),
           getCostCategories(session, onSessionRefresh, true),
@@ -359,6 +375,103 @@ export default function ResourcesPage() {
     }
   }
 
+  // RolesPanel's own paginated view: scoped to the selected node (the panel's
+  // structural filter, sourced from the organization tree -- never overridden by
+  // free-text search) and refetched whenever the selected node, pagination, sort,
+  // or search change, plus once more after creating a role (`reloadRolesPanelPage`
+  // below), since that mutation only appends to the full `roles` list and has no
+  // way to patch this separate, server-ordered/filtered page in place.
+  //
+  // The backend applies `node_id` as a plain WHERE filter *before* the free-text
+  // search (see `list_roles` in resources.py: the node filter narrows the query,
+  // then `apply_pagination` searches only within what's left) -- so search here is
+  // scoped to the selected node's roles, never the whole organization. That keeps
+  // what's searched consistent with what's displayed (no need for a "node" column
+  // on results, since every row already belongs to the single node shown in the
+  // panel's heading) and matches how this panel has always behaved: a per-node
+  // view, not an organization-wide one.
+  //
+  // No fetch happens while no node is selected (`selectedNodeId === null`):
+  // mirrors the previous client-side-filtered behavior, where the list was simply
+  // empty until a node was picked.
+  const rolesPanelGenerationRef = useRef(0);
+
+  useEffect(() => {
+    const generation = ++rolesPanelGenerationRef.current;
+    const isCurrentGeneration = () => rolesPanelGenerationRef.current === generation;
+
+    async function load() {
+      if (!session || selectedNodeId === null) {
+        setRolesPanelPage({ items: [], total: 0 });
+        // Also clears any loading state a still-in-flight, now-obsolete fetch left
+        // behind (e.g. the selected node was deleted, or the session was cleared,
+        // while a request for it was pending): that fetch's own generation is now
+        // stale, so its `finally` block is guarded out and will never fire this
+        // itself, which would otherwise leave the indicator stuck forever.
+        setRolesPanelLoading(false);
+        return;
+      }
+      setRolesPanelLoading(true);
+      try {
+        const page = await getResourceRoles(session, onSessionRefresh, selectedNodeId, false, {
+          limit: rolesPanelLimit,
+          offset: rolesPanelOffset,
+          sort: rolesPanelSort,
+          q: rolesPanelQuery || undefined,
+        });
+        if (!isCurrentGeneration()) return;
+        setRolesPanelPage(page);
+      } catch (cause) {
+        if (!isCurrentGeneration()) return;
+        if (cause instanceof SessionExpiredError) {
+          clearSession();
+          router.push("/login");
+          return;
+        }
+        if (cause instanceof ApiError && cause.status === 401) {
+          clearSession();
+          router.push("/login");
+          return;
+        }
+        setNotice({
+          kind: "error",
+          message: cause instanceof ApiError ? cause.message : "Chargement des rôles impossible",
+        });
+      } finally {
+        if (isCurrentGeneration()) setRolesPanelLoading(false);
+      }
+    }
+
+    void load();
+  }, [session, onSessionRefresh, router, selectedNodeId, rolesPanelLimit, rolesPanelOffset, rolesPanelSort, rolesPanelQuery]);
+
+  // Mirrors `reloadCostTypesPage`: deliberately swallows its own non-session
+  // errors (see that function's comment for the full rationale) and sets
+  // `rolesPanelLoading` itself, guarded by the shared generation counter, so a
+  // mutation's reload racing an in-flight pagination/sort/search fetch can't leave
+  // the loading indicator stuck forever.
+  async function reloadRolesPanelPage() {
+    if (!session || selectedNodeId === null) return;
+    const generation = ++rolesPanelGenerationRef.current;
+    setRolesPanelLoading(true);
+    try {
+      const page = await getResourceRoles(session, onSessionRefresh, selectedNodeId, false, {
+        limit: rolesPanelLimit,
+        offset: rolesPanelOffset,
+        sort: rolesPanelSort,
+        q: rolesPanelQuery || undefined,
+      });
+      if (rolesPanelGenerationRef.current === generation) setRolesPanelPage(page);
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
+        clearSession();
+        router.push("/login");
+      }
+    } finally {
+      if (rolesPanelGenerationRef.current === generation) setRolesPanelLoading(false);
+    }
+  }
+
   async function submitAction(action: () => Promise<void>, success: string) {
     setActionBusy(true);
     setNotice(null);
@@ -415,7 +528,8 @@ export default function ResourcesPage() {
     await submitAction(async () => {
       await deleteResourceNode(node.id, session, onSessionRefresh);
       setNodes((previous) => previous.filter((item) => item.id !== node.id));
-      setSelectedNodeId((previous) => previous === node.id ? null : previous);
+      setSelectedNodeId((previous) => (previous === node.id ? null : previous));
+      if (selectedNodeId === node.id) setRolesPanelOffset(0);
     }, "Nœud supprimé.");
   }
 
@@ -542,6 +656,7 @@ export default function ResourcesPage() {
       );
       setRoles((prev) => [...prev, created].sort((left, right) => left.name.localeCompare(right.name)));
       setRoleName("");
+      await reloadRolesPanelPage();
     }, "Rôle créé.");
   }
 
@@ -767,11 +882,11 @@ export default function ResourcesPage() {
   );
   const organizationRows = useMemo(() => flattenOrganization(nodes, collapsedNodeIds), [nodes, collapsedNodeIds]);
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? null;
-  const selectedRoles = selectedNodeId === null ? [] : roles.filter((role) => role.node_id === selectedNodeId);
 
   function selectNode(nodeId: number) {
     setSelectedNodeId(nodeId);
     setRoleNodeId(String(nodeId));
+    setRolesPanelOffset(0);
   }
 
   function toggleNodeCollapsed(nodeId: number) {
@@ -878,7 +993,7 @@ export default function ResourcesPage() {
             onNodeChange={(field, value) => { if (field === "code") setNodeCode(value); if (field === "name") setNodeName(value); if (field === "parent") setNodeParentId(value); }}
           />
 
-          <RolesPanel selectedNode={selectedNode} selectedRoles={selectedRoles} nodes={nodes} categories={categories} costTypes={costTypes} roleName={roleName} roleNodeId={roleNodeId} roleCategoryId={roleCategoryId} actionBusy={actionBusy} categoryNames={categoryNameById} onSubmit={addRole} onNameChange={setRoleName} onNodeChange={(value) => { setRoleNodeId(value); setSelectedNodeId(Number(value)); }} onCategoryChange={setRoleCategoryId} />
+          <RolesPanel selectedNode={selectedNode} items={rolesPanelPage.items} pagination={{ total: rolesPanelPage.total, limit: rolesPanelLimit, offset: rolesPanelOffset }} onPaginationChange={(next) => setRolesPanelOffset(next.offset)} sort={rolesPanelSort} onSortChange={setRolesPanelSort} search={rolesPanelQuery} onSearchChange={(next) => { setRolesPanelQuery(next); setRolesPanelOffset(0); }} isLoading={rolesPanelLoading} nodes={nodes} categories={categories} costTypes={costTypes} roleName={roleName} roleNodeId={roleNodeId} roleCategoryId={roleCategoryId} actionBusy={actionBusy} categoryNames={categoryNameById} onSubmit={addRole} onNameChange={setRoleName} onNodeChange={(value) => { setRoleNodeId(value); setSelectedNodeId(Number(value)); setRolesPanelOffset(0); }} onCategoryChange={setRoleCategoryId} />
 
           </div>
           <CapacityTable roles={roles} drafts={capacityDrafts} actionBusy={actionBusy} nodeCodeById={nodeCodeById} onDraftChange={(roleId, draft) => setCapacityDrafts((previous) => ({ ...previous, [roleId]: draft }))} onSave={(roleId) => void saveRoleCapacity(roleId)} />
