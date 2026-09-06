@@ -41,9 +41,9 @@ s'applique en local, dans les hooks pre-commit et en CI (job
 `pyproject.toml`.
 
 Si une fonction dépasse légitimement ce seuil (cas résiduel documenté), la
-supprimer avec `# noqa: C901` doit obligatoirement s'accompagner d'un
-commentaire expliquant pourquoi une décomposition supplémentaire n'est pas
-souhaitable.
+suppression du diagnostic avec `# noqa: C901` doit obligatoirement
+s'accompagner d'un commentaire expliquant pourquoi une décomposition
+supplémentaire n'est pas souhaitable.
 
 ```bash
 ruff check --select C90 .
