@@ -604,6 +604,48 @@ def test_delete_project_cascades_related_data() -> None:
         assert tasks_response.status_code == 404
 
 
+def test_delete_project_with_displayed_planning_snapshot() -> None:
+    # Regression test: fk_ms_project_displayed_planning rejected the raw `DELETE FROM
+    # wf_planning` issued by delete_project's bulk delete (synchronize_session=False) because the
+    # session has autoflush disabled (db/session.py) and the preceding
+    # `project.displayed_planning_id = None` ORM-level update was never flushed before that raw
+    # delete ran. _seed_projects_and_tasks (used by test_delete_project_cascades_related_data
+    # above) never creates a WfPlanning row, so it never exercised this path -- this test targets
+    # exactly the wf_planning/wf_planning_task_snapshot model instead.
+    with TestClient(app) as client:
+        headers = _auth_headers(client, "projects.delete-displayed-planning@example.com")
+        project_id = cast(
+            int,
+            client.post(
+                "/projects", json={"name": "Delete with displayed planning"}, headers=headers
+            ).json()["id"],
+        )
+        with get_session_factory()() as session:
+            planning = WfPlanning(project_id=project_id, version_number=1, status="draft")
+            session.add(planning)
+            session.flush()
+            session.add(
+                WfPlanningTaskSnapshot(
+                    planning_id=planning.id,
+                    uid=1,
+                    name="Snapshot task",
+                    position=1,
+                    is_summary=False,
+                    is_milestone=False,
+                )
+            )
+            session.query(MsProject).filter(MsProject.id == project_id).update(
+                {MsProject.displayed_planning_id: planning.id}
+            )
+            session.commit()
+
+        response: Response = client.delete(f"/projects/{project_id}", headers=headers)
+        assert response.status_code == 204
+
+        project_response: Response = client.get(f"/projects/{project_id}", headers=headers)
+        assert project_response.status_code == 404
+
+
 def test_projects_are_isolated_by_owner() -> None:
     with TestClient(app) as client:
         owner_headers = _auth_headers(client)
