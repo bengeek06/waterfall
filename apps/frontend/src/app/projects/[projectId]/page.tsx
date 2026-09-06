@@ -246,7 +246,12 @@ export default function ProjectDetailsPage() {
   const [structureDraft, setStructureDraft] = useState<PlanningStructureDraftRow[]>([
     { rowId: "row-1", postKey: "post-1", postName: "", lotKey: "lot-1", lotName: "", deliverables: "" },
   ]);
-  const [structureBusy, setStructureBusy] = useState(false);
+  // A single shared flag (structureBusy) correctly disables all three actions while any one of
+  // them runs (they mutate the same project/structure state, so they must be mutually exclusive),
+  // but tracking *which* action is running lets each button show its own progress label instead
+  // of all three claiming to be busy at once.
+  const [structureAction, setStructureAction] = useState<"save" | "generate" | "skip" | null>(null);
+  const structureBusy = structureAction !== null;
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -1407,7 +1412,7 @@ export default function ProjectDetailsPage() {
       return;
     }
 
-    setStructureBusy(true);
+    setStructureAction("save");
     setError(null);
     try {
       await savePlanningStructureDraft(projectId, payload, session, onSessionRefresh);
@@ -1419,7 +1424,7 @@ export default function ProjectDetailsPage() {
       }
       setError(cause instanceof ApiError ? cause.message : "Impossible d'enregistrer la structure.");
     } finally {
-      setStructureBusy(false);
+      setStructureAction(null);
     }
   }
 
@@ -1429,7 +1434,7 @@ export default function ProjectDetailsPage() {
       return;
     }
 
-    setStructureBusy(true);
+    setStructureAction("generate");
     setError(null);
     try {
       await createPlanningStructure(projectId, payload, session, onSessionRefresh);
@@ -1455,7 +1460,7 @@ export default function ProjectDetailsPage() {
       }
       setError(cause instanceof ApiError ? cause.message : "Impossible de générer le squelette.");
     } finally {
-      setStructureBusy(false);
+      setStructureAction(null);
     }
   }
 
@@ -1463,7 +1468,7 @@ export default function ProjectDetailsPage() {
     if (!session || isReadOnlyProject) {
       return;
     }
-    setStructureBusy(true);
+    setStructureAction("skip");
     setError(null);
     try {
       const updatedProject = await skipPlanningStructure(projectId, session, onSessionRefresh);
@@ -1494,7 +1499,7 @@ export default function ProjectDetailsPage() {
       }
       setError(cause instanceof ApiError ? cause.message : "Impossible de passer cette étape.");
     } finally {
-      setStructureBusy(false);
+      setStructureAction(null);
     }
   }
 
@@ -1968,14 +1973,14 @@ export default function ProjectDetailsPage() {
                 onClick={() => void savePlanningStructure()}
               >
                 <Save aria-hidden="true" />
-                {structureBusy ? "Enregistrement..." : "Enregistrer"}
+                {structureAction === "save" ? "Enregistrement..." : "Enregistrer"}
               </Button>
               <Button
                 type="button"
                 disabled={structureBusy}
                 onClick={() => void generatePlanningStructure()}
               >
-                {structureBusy ? "Génération..." : "Générer le squelette"}
+                {structureAction === "generate" ? "Génération..." : "Générer le squelette"}
               </Button>
               {project?.status === "cree" &&
               project?.displayed_planning_id == null &&
@@ -1985,7 +1990,7 @@ export default function ProjectDetailsPage() {
                   disabled={structureBusy}
                   onClick={() => void skipStructure()}
                 >
-                  {structureBusy ? "Passage en cours..." : "Passer cette étape"}
+                  {structureAction === "skip" ? "Passage en cours..." : "Passer cette étape"}
                 </Button>
               ) : null}
             </div>

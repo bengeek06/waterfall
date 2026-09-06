@@ -255,6 +255,41 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     );
   });
 
+  it("only shows a progress label on the structure action actually running", async () => {
+    // Regression: the three structure actions share a single busy flag to stay mutually
+    // exclusive, but each button must only claim to be busy when it is the one actually running
+    // -- not all three at once.
+    mocks.getProject.mockResolvedValue(project());
+    mocks.listPlannings.mockResolvedValue([]);
+    let resolveGenerate!: (value: { tasks: never[] }) => void;
+    mocks.createPlanningStructure.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveGenerate = resolve;
+        }),
+    );
+
+    render(<ProjectDetailsPage />);
+
+    await screen.findByRole("heading", { name: "Lotissement du projet" });
+    fireEvent.change(screen.getByLabelText("Nom poste 1"), { target: { value: "Poste" } });
+    fireEvent.change(screen.getByLabelText("Nom lot 1.1"), { target: { value: "Lot" } });
+    fireEvent.change(screen.getByLabelText("Livrable 1.1.1"), { target: { value: "Livrable" } });
+    fireEvent.click(screen.getByRole("button", { name: "Générer le squelette" }));
+
+    await waitFor(() => expect(mocks.createPlanningStructure).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("button", { name: "Génération..." })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Enregistrer" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Passer cette étape" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Enregistrer" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Passer cette étape" })).toBeDisabled();
+
+    resolveGenerate({ tasks: [] });
+    await waitFor(() =>
+      expect(screen.queryByRole("heading", { name: "Lotissement du projet" })).not.toBeInTheDocument(),
+    );
+  });
+
   it("allows skipping the structure step even with empty post/lot/deliverable fields", async () => {
     mocks.getProject.mockResolvedValue(project());
     mocks.listPlannings.mockResolvedValue([]);
