@@ -67,6 +67,13 @@ export type DataTableProps<TData> = {
   // pagination or search.
   pinnedRow?: ReactNode;
 
+  // Optional class name for a data row's own <TableRow>, computed per row (e.g. a
+  // dimmed/"opacity-55" style for an inactive item). Column `cell` renderers can
+  // only style their own <TableCell>, not the row itself, so this is the only way
+  // for a caller to affect row-level styling without DataTable hard-coding a
+  // specific business meaning (like "is_active") into a shared component.
+  getRowClassName?: (row: TData) => string | undefined;
+
   isEditing?: boolean;
   editingReason?: string;
 
@@ -156,6 +163,7 @@ export function DataTable<TData>({
   onSortChange,
   search,
   pinnedRow,
+  getRowClassName,
   isEditing = false,
   editingReason,
   isLoading = false,
@@ -210,6 +218,18 @@ export function DataTable<TData>({
           value={searchValue}
           disabled={isEditing}
           onChange={(event) => setSearchValue(event.target.value)}
+          onKeyDown={(event) => {
+            // A caller commonly wraps the whole DataTable (search input included) in
+            // a <form> for the pinned create-row's own submit button. Per the HTML
+            // implicit-submission algorithm, Enter in any single-line text input
+            // inside that form -- including this one -- submits it. Search is
+            // already debounced on every keystroke, so Enter isn't needed to trigger
+            // it, and swallowing it here avoids an unrelated Enter-to-search
+            // keystroke accidentally submitting a filled-in create-row.
+            if (event.key === "Enter") {
+              event.preventDefault();
+            }
+          }}
           className="max-w-xs"
         />
       ) : null}
@@ -239,6 +259,7 @@ export function DataTable<TData>({
                       size="sm"
                       type="button"
                       className="-ml-2"
+                      disabled={isEditing}
                       onClick={() => onSortChange(getNextSort(sortColumn, sort))}
                     >
                       {content}
@@ -272,7 +293,7 @@ export function DataTable<TData>({
             </TableRow>
           ) : (
             rows.map((row) => (
-              <TableRow key={row.id}>
+              <TableRow key={row.id} className={getRowClassName?.(row.original)}>
                 {row.getVisibleCells().map((cell) => (
                   <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
                 ))}

@@ -532,19 +532,61 @@ export async function getCostCategories(
   return page.items;
 }
 
+// Generic envelope for a server-paginated list, and the query parameters a caller
+// supplies to request one page of it. `limit`/`offset` are known to the caller
+// already (it's what it asked for) and don't round-trip back through this type --
+// only `items`/`total` come from the response. Introduced for EPIC E8's DataTable
+// migrations (#120 onward): reuse this rather than a bespoke `{items, total}` shape
+// per endpoint.
+export interface ListPage<T> {
+  items: T[];
+  total: number;
+}
+
+// `offset` without `limit` mirrors the backend's own rule that such a request is
+// under-specified and rejected with 400 (see PaginationMeta.yaml): typing them as a
+// single all-or-nothing pair, rather than two independent optionals, turns a caller
+// passing one without the other into a compile error instead of a silently dropped
+// `offset` (buildListQuery would otherwise just omit both params rather than send an
+// invalid request, quietly defaulting to page one instead of surfacing the mistake).
+export type ListQueryParams = ({ limit?: undefined; offset?: undefined } | { limit: number; offset: number }) & {
+  sort?: string | null;
+  q?: string;
+};
+
+// Builds a query string for a paginated list endpoint. `offset` is only ever sent
+// alongside `limit` (never alone), matching the backend's rule that an `offset`
+// without `limit` is rejected as ambiguous.
+function buildListQuery(params: ListQueryParams, extra?: Record<string, string>): string {
+  const searchParams = new URLSearchParams(extra);
+  if (params.limit !== undefined) {
+    searchParams.set("limit", String(params.limit));
+    searchParams.set("offset", String(params.offset ?? 0));
+  }
+  if (params.sort) {
+    searchParams.set("sort", params.sort);
+  }
+  if (params.q) {
+    searchParams.set("q", params.q);
+  }
+  const queryString = searchParams.toString();
+  return queryString ? `?${queryString}` : "";
+}
+
 export async function getCostTypes(
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
   includeInactive = false,
-): Promise<CostType[]> {
-  const query = includeInactive ? "?include_inactive=true" : "";
+  listParams: ListQueryParams = {},
+): Promise<ListPage<CostType>> {
+  const query = buildListQuery(listParams, includeInactive ? { include_inactive: "true" } : undefined);
   const page = await authRequest<components["schemas"]["CostTypeListRead"]>(
     `/resources/cost-types${query}`,
     tokens,
     { method: "GET" },
     onSessionRefresh,
   );
-  return page.items;
+  return { items: page.items, total: page.total };
 }
 
 export function createCostType(

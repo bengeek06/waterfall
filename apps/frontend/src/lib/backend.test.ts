@@ -3,11 +3,74 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
   deletePlanningTasks,
+  getCostTypes,
   getPlanning,
   getPlanningTaskDeleteConflict,
   movePlanningTasks,
   updateResourceRole,
 } from "./backend";
+
+function jsonResponse(body: unknown): Response {
+  return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+}
+
+describe("getCostTypes query building", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("sends no query string at all when called with no listParams, for the unpaginated reference-list case", async () => {
+    const fetchMock = vi.fn<(input: RequestInfo | URL) => Promise<Response>>(async () => jsonResponse({ items: [], total: 0 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getCostTypes({ accessToken: "token" }, vi.fn());
+
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain("?");
+  });
+
+  it("sends limit, offset, sort, and q together, plus include_inactive as its own flag", async () => {
+    const fetchMock = vi.fn<(input: RequestInfo | URL) => Promise<Response>>(async () => jsonResponse({ items: [], total: 0 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getCostTypes({ accessToken: "token" }, vi.fn(), true, {
+      limit: 20,
+      offset: 40,
+      sort: "-name",
+      q: "abc",
+    });
+
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain("include_inactive=true");
+    expect(url).toContain("limit=20");
+    expect(url).toContain("offset=40");
+    expect(url).toContain("sort=-name");
+    expect(url).toContain("q=abc");
+  });
+
+  it("omits sort and q when absent, rather than sending them empty", async () => {
+    const fetchMock = vi.fn<(input: RequestInfo | URL) => Promise<Response>>(async () => jsonResponse({ items: [], total: 0 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getCostTypes({ accessToken: "token" }, vi.fn(), false, { limit: 5, offset: 0 });
+
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain("limit=5");
+    expect(url).toContain("offset=0");
+    expect(url).not.toContain("sort=");
+    expect(url).not.toContain("q=");
+    expect(url).not.toContain("include_inactive");
+  });
+
+  it("returns items and total from the response envelope", async () => {
+    const items = [{ id: 1, code: "MO", name: "Main d'œuvre", kind: "labor", is_active: true }];
+    const fetchMock = vi.fn(async () => jsonResponse({ items, total: 12 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const page = await getCostTypes({ accessToken: "token" }, vi.fn(), true, { limit: 1, offset: 0 });
+
+    expect(page).toEqual({ items, total: 12 });
+  });
+});
 
 describe("planning detail pagination", () => {
   afterEach(() => {

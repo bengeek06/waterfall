@@ -1,7 +1,14 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, type Calendar, type ResourceNode, type ResourceRole } from "@/lib/backend";
+import {
+  ApiError,
+  SessionExpiredError,
+  type Calendar,
+  type CostType,
+  type ResourceNode,
+  type ResourceRole,
+} from "@/lib/backend";
 import { defaultWeekdays } from "@/components/calendars-table";
 
 const mocks = vi.hoisted(() => ({
@@ -18,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   updateCalendar: vi.fn(),
   deleteCalendar: vi.fn(),
   updateResourceRole: vi.fn(),
+  createCostType: vi.fn(),
   router: { push: vi.fn() },
 }));
 
@@ -48,6 +56,7 @@ vi.mock("@/lib/backend", async () => {
     updateCalendar: mocks.updateCalendar,
     deleteCalendar: mocks.deleteCalendar,
     updateResourceRole: mocks.updateResourceRole,
+    createCostType: mocks.createCostType,
   };
 });
 
@@ -97,7 +106,7 @@ async function renderResourcesTab(calendars: Calendar[], roles: ResourceRole[] =
   mocks.getResourceNodes.mockResolvedValue(nodes);
   mocks.getResourceRoles.mockResolvedValue(roles);
   mocks.getCalendars.mockResolvedValue(calendars);
-  mocks.getCostTypes.mockResolvedValue([]);
+  mocks.getCostTypes.mockResolvedValue({ items: [], total: 0 });
   mocks.getCostCategories.mockResolvedValue([]);
   mocks.getCostRates.mockResolvedValue([]);
   mocks.getInflationRates.mockResolvedValue([]);
@@ -317,7 +326,7 @@ describe("ResourcesPage default calendar warning", () => {
     mocks.getResourceNodes.mockResolvedValue([]);
     mocks.getResourceRoles.mockResolvedValue([]);
     mocks.getCalendars.mockResolvedValue([activeCalendar]);
-    mocks.getCostTypes.mockResolvedValue([]);
+    mocks.getCostTypes.mockResolvedValue({ items: [], total: 0 });
     mocks.getCostCategories.mockResolvedValue([]);
     mocks.getCostRates.mockResolvedValue([]);
     mocks.getInflationRates.mockResolvedValue([]);
@@ -349,7 +358,7 @@ describe("ResourcesPage default calendar warning", () => {
     mocks.getResourceNodes.mockRejectedValue(new ApiError(500, "Chargement impossible"));
     mocks.getResourceRoles.mockResolvedValue([]);
     mocks.getCalendars.mockResolvedValue([]);
-    mocks.getCostTypes.mockResolvedValue([]);
+    mocks.getCostTypes.mockResolvedValue({ items: [], total: 0 });
     mocks.getCostCategories.mockResolvedValue([]);
     mocks.getCostRates.mockResolvedValue([]);
     mocks.getInflationRates.mockResolvedValue([]);
@@ -382,7 +391,7 @@ describe("ResourcesPage default calendar warning", () => {
     });
     mocks.getResourceRoles.mockResolvedValue([]);
     mocks.getCalendars.mockResolvedValue([activeCalendar]);
-    mocks.getCostTypes.mockResolvedValue([]);
+    mocks.getCostTypes.mockResolvedValue({ items: [], total: 0 });
     mocks.getCostCategories.mockResolvedValue([]);
     mocks.getCostRates.mockResolvedValue([]);
     mocks.getInflationRates.mockResolvedValue([]);
@@ -445,7 +454,7 @@ describe("ResourcesPage reload race", () => {
     );
 
     mocks.getCalendars.mockResolvedValue([]);
-    mocks.getCostTypes.mockResolvedValue([]);
+    mocks.getCostTypes.mockResolvedValue({ items: [], total: 0 });
     mocks.getCostCategories.mockResolvedValue([]);
     mocks.getCostRates.mockResolvedValue([]);
     mocks.getInflationRates.mockResolvedValue([]);
@@ -469,5 +478,297 @@ describe("ResourcesPage reload race", () => {
     // second reload's committed state.
     await waitFor(() => expect(screen.queryByText("GEN1")).not.toBeInTheDocument());
     expect(screen.getByText("GEN2")).toBeInTheDocument();
+  });
+});
+
+const costTypeFixture = (overrides: Partial<CostType> = {}): CostType =>
+  ({
+    id: 1,
+    code: "MO",
+    name: "Main d'œuvre",
+    kind: "labor",
+    is_active: true,
+    created_at: "2026-08-01T00:00:00Z",
+    updated_at: "2026-08-01T00:00:00Z",
+    ...overrides,
+  }) as CostType;
+
+describe("ResourcesPage cost types table (E8-02)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getResourceNodes.mockResolvedValue([]);
+    mocks.getResourceRoles.mockResolvedValue([]);
+    mocks.getCalendars.mockResolvedValue([]);
+    mocks.getCostCategories.mockResolvedValue([]);
+    mocks.getCostRates.mockResolvedValue([]);
+    mocks.getInflationRates.mockResolvedValue([]);
+    mocks.getRoleCapacities.mockResolvedValue([]);
+    mocks.getUsers.mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("requests the table's own paginated page independently from the unpaginated reference list other panels rely on, without either leaking into the other", async () => {
+    // Genuinely different item sets for the two call shapes -- if the paginated
+    // slice ever got wired into the reference-data consumers (or vice versa), this
+    // test would catch it by which codes show up where, not just by which params
+    // getCostTypes was called with.
+    const fullList = [
+      costTypeFixture({ id: 1, code: "MO", name: "Main d'œuvre" }),
+      costTypeFixture({ id: 2, code: "FN", name: "Fourniture" }),
+      costTypeFixture({ id: 3, code: "TR", name: "Transport" }),
+      costTypeFixture({ id: 4, code: "SS", name: "Sous-traitance" }),
+      costTypeFixture({ id: 5, code: "AU", name: "Autre" }),
+    ];
+    const paginatedSlice = [costTypeFixture({ id: 6, code: "PAGE1", name: "Page item" })];
+    mocks.getCostTypes.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, _includeInactive: unknown, listParams: unknown) =>
+        Promise.resolve(
+          listParams === undefined
+            ? { items: fullList, total: fullList.length }
+            : { items: paginatedSlice, total: 25 },
+        ),
+    );
+
+    render(<ResourcesPage />);
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    await waitFor(() => expect(mocks.getCostTypes).toHaveBeenCalledTimes(2));
+
+    const calls = mocks.getCostTypes.mock.calls as [unknown, unknown, unknown, unknown][];
+    // The full reference list (feeds RolesPanel/CostCategoriesTable/ValuationPanel) is
+    // requested with no pagination params at all -- absence of `limit` must return
+    // everything, per EPIC E7/E8.
+    expect(calls.some(([, , , listParams]) => listParams === undefined)).toBe(true);
+    // The table's own view is requested separately, with an explicit page size.
+    expect(
+      calls.some(
+        ([, , , listParams]) =>
+          typeof listParams === "object" &&
+          listParams !== null &&
+          (listParams as { limit?: number }).limit === 20 &&
+          (listParams as { offset?: number }).offset === 0,
+      ),
+    ).toBe(true);
+
+    // The cost-categories create-row's type dropdown (fed by the full, unpaginated
+    // list) must offer every reference type, not just the cost-types table's page.
+    const typeSelect = screen.getByLabelText("Type de la nouvelle catégorie");
+    for (const type of fullList) {
+      expect(within(typeSelect).getByRole("option", { name: `${type.code} - ${type.name}` })).toBeInTheDocument();
+    }
+    expect(within(typeSelect).queryByRole("option", { name: /PAGE1/ })).not.toBeInTheDocument();
+
+    // The cost-types table itself shows only its own paginated slice, not the full list.
+    expect(screen.getByText("PAGE1")).toBeInTheDocument();
+    expect(screen.queryByText("MO")).not.toBeInTheDocument();
+  });
+
+  it("paginates: clicking Suivant refetches the table with the next offset, leaving the reference-list call untouched", async () => {
+    mocks.getCostTypes.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, _includeInactive: unknown, listParams: unknown) =>
+        Promise.resolve(
+          listParams === undefined
+            ? { items: [], total: 0 }
+            : { items: [costTypeFixture({})], total: 25 },
+        ),
+    );
+
+    render(<ResourcesPage />);
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    const suivant = await screen.findByRole("button", { name: "Suivant" });
+    await waitFor(() => expect(suivant).toBeEnabled());
+
+    fireEvent.click(suivant);
+
+    await waitFor(() =>
+      expect(mocks.getCostTypes).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        true,
+        expect.objectContaining({ limit: 20, offset: 20 }),
+      ),
+    );
+  });
+
+  it("searches: typing in the cost-types search box debounces then refetches with q, resetting to offset 0", async () => {
+    mocks.getCostTypes.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, _includeInactive: unknown, listParams: unknown) =>
+        Promise.resolve(
+          listParams === undefined
+            ? { items: [], total: 0 }
+            : { items: [costTypeFixture({})], total: 1 },
+        ),
+    );
+
+    render(<ResourcesPage />);
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    const searchInput = await screen.findByLabelText("Rechercher un type de coût");
+
+    fireEvent.change(searchInput, { target: { value: "main" } });
+
+    await waitFor(() =>
+      expect(mocks.getCostTypes).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        true,
+        expect.objectContaining({ q: "main", offset: 0 }),
+      ),
+    );
+  });
+
+  it("sorts: clicking the Code column header refetches with sort=code", async () => {
+    mocks.getCostTypes.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, _includeInactive: unknown, listParams: unknown) =>
+        Promise.resolve(
+          listParams === undefined
+            ? { items: [], total: 0 }
+            : { items: [costTypeFixture({})], total: 1 },
+        ),
+    );
+
+    render(<ResourcesPage />);
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    await screen.findByRole("columnheader", { name: "Code" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Code" }));
+
+    await waitFor(() =>
+      expect(mocks.getCostTypes).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        true,
+        expect.objectContaining({ sort: "code" }),
+      ),
+    );
+  });
+
+  it("refetches the table's page after creating a cost type, on top of the existing local list update", async () => {
+    mocks.getCostTypes.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, _includeInactive: unknown, listParams: unknown) =>
+        Promise.resolve(
+          listParams === undefined
+            ? { items: [], total: 0 }
+            : { items: [], total: 0 },
+        ),
+    );
+    mocks.createCostType.mockResolvedValue(costTypeFixture({ id: 3, code: "NEW", name: "Nouveau" }));
+
+    render(<ResourcesPage />);
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    await waitFor(() => expect(mocks.getCostTypes).toHaveBeenCalledTimes(2));
+
+    const codeInput = screen.getByLabelText("Code du nouveau type");
+    fireEvent.change(codeInput, { target: { value: "NEW" } });
+    fireEvent.change(screen.getByLabelText("Nom du nouveau type"), { target: { value: "Nouveau" } });
+    const addRow = codeInput.closest("tr");
+    if (!addRow) throw new Error("add row not found");
+    fireEvent.click(within(addRow).getByRole("button", { name: "Ajouter" }));
+
+    await waitFor(() => expect(mocks.createCostType).toHaveBeenCalledTimes(1));
+    // The initial load made 2 calls (reference list + table page); creating a cost
+    // type must trigger a 3rd, to refresh the table's own paginated view.
+    await waitFor(() => expect(mocks.getCostTypes).toHaveBeenCalledTimes(3));
+  });
+
+  it("redirects to login when the cost-types table's own paginated fetch reports session expiry", async () => {
+    mocks.getCostTypes.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, _includeInactive: unknown, listParams: unknown) =>
+        listParams === undefined
+          ? Promise.resolve({ items: [], total: 0 })
+          : Promise.reject(new SessionExpiredError()),
+    );
+
+    render(<ResourcesPage />);
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+
+    await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith("/login"));
+  });
+
+  it("does not mask a successful mutation as failed when the follow-up table refresh fails", async () => {
+    let costTypesCallCount = 0;
+    mocks.getCostTypes.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, _includeInactive: unknown, listParams: unknown) => {
+        if (listParams === undefined) return Promise.resolve({ items: [], total: 0 });
+        costTypesCallCount += 1;
+        // First paginated call: the initial load, succeeds. Second paginated call:
+        // the reload triggered by the mutation below, fails transiently.
+        if (costTypesCallCount === 1) return Promise.resolve({ items: [], total: 0 });
+        return Promise.reject(new ApiError(500, "Actualisation impossible"));
+      },
+    );
+    mocks.createCostType.mockResolvedValue(costTypeFixture({ id: 3, code: "NEW", name: "Nouveau" }));
+
+    render(<ResourcesPage />);
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    await waitFor(() => expect(mocks.getCostTypes).toHaveBeenCalledTimes(2));
+
+    const codeInput = screen.getByLabelText("Code du nouveau type");
+    fireEvent.change(codeInput, { target: { value: "NEW" } });
+    fireEvent.change(screen.getByLabelText("Nom du nouveau type"), { target: { value: "Nouveau" } });
+    const addRow = codeInput.closest("tr");
+    if (!addRow) throw new Error("add row not found");
+    fireEvent.click(within(addRow).getByRole("button", { name: "Ajouter" }));
+
+    await waitFor(() => expect(mocks.createCostType).toHaveBeenCalledTimes(1));
+    // The mutation itself succeeded and must be reported as such, even though the
+    // follow-up table-page refresh it triggers fails.
+    await waitFor(() => expect(screen.getByText("Type de coût créé.")).toBeInTheDocument());
+    expect(screen.queryByText("Actualisation impossible")).not.toBeInTheDocument();
+  });
+
+  it("does not leave the table's loading indicator stuck when a mutation's reload races an in-flight pagination fetch", async () => {
+    // The initial paginated fetch is left pending on purpose (released at the end of
+    // the test), simulating a mutation firing while a pagination/sort/search fetch
+    // is still in flight. The mutation's own reload uses a fresh generation number
+    // and resolves immediately; without its own loading-state handling, the stale
+    // fetch's eventual resolution would be the only thing ever touching
+    // `costTypesLoading`, and it's guarded out by the generation check -- leaving
+    // the loading indicator stuck forever.
+    let resolveStalePage!: (page: { items: CostType[]; total: number }) => void;
+    const stalePagePromise = new Promise<{ items: CostType[]; total: number }>((resolve) => {
+      resolveStalePage = resolve;
+    });
+    let paginatedCallCount = 0;
+    mocks.getCostTypes.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, _includeInactive: unknown, listParams: unknown) => {
+        if (listParams === undefined) return Promise.resolve({ items: [], total: 0 });
+        paginatedCallCount += 1;
+        if (paginatedCallCount === 1) return stalePagePromise;
+        return Promise.resolve({
+          items: [costTypeFixture({ id: 3, code: "NEW", name: "Nouveau" })],
+          total: 1,
+        });
+      },
+    );
+    mocks.createCostType.mockResolvedValue(costTypeFixture({ id: 3, code: "NEW", name: "Nouveau" }));
+
+    render(<ResourcesPage />);
+    // Signaled by call count rather than the generic `status` role: the cost-types
+    // table's own loading skeleton is also a `role="status"`, and stays mounted
+    // throughout this test by design, so it can't be used as a page-ready signal.
+    await waitFor(() => expect(mocks.getCostTypes).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByRole("status", { name: "Chargement des données" })).toBeInTheDocument());
+
+    const codeInput = screen.getByLabelText("Code du nouveau type");
+    fireEvent.change(codeInput, { target: { value: "NEW" } });
+    fireEvent.change(screen.getByLabelText("Nom du nouveau type"), { target: { value: "Nouveau" } });
+    const addRow = codeInput.closest("tr");
+    if (!addRow) throw new Error("add row not found");
+    fireEvent.click(within(addRow).getByRole("button", { name: "Ajouter" }));
+
+    await waitFor(() => expect(mocks.createCostType).toHaveBeenCalledTimes(1));
+    // The mutation's own reload (2nd paginated call) resolves immediately and must
+    // clear the loading state on its own -- it must not wait for the stale 1st call.
+    await waitFor(() =>
+      expect(screen.queryByRole("status", { name: "Chargement des données" })).not.toBeInTheDocument(),
+    );
+
+    // Releasing the stale initial fetch afterwards must not resurrect the loading
+    // state or overwrite the fresher data already committed.
+    resolveStalePage({ items: [], total: 0 });
+    await waitFor(() => expect(screen.getByText("NEW")).toBeInTheDocument());
+    expect(screen.queryByRole("status", { name: "Chargement des données" })).not.toBeInTheDocument();
   });
 });
