@@ -203,6 +203,12 @@ def _validate_outline(
 ) -> None:
     if outline is None:
         return
+    if uid == 0 and outline == "0" and (level is None or level == 0):
+        # MS Project's project summary task (UID 0) uses OutlineNumber "0" /
+        # OutlineLevel 0; this is not a real outline position. Restricted to
+        # UID 0 so an ordinary task with a malformed outline of "0" is still
+        # rejected.
+        return
     segments = outline.split(".")
     if not all(segment.isdigit() and int(segment) > 0 for segment in segments):
         issues.append(
@@ -347,7 +353,21 @@ def _parse_tasks(
             )
             continue
         task_uids.add(uid)
-        tasks.append(_parse_task(task_node, uid, minutes_per_day, issues))
+        parsed_task = _parse_task(task_node, uid, minutes_per_day, issues)
+        if (
+            uid == 0
+            and parsed_task.outline_number == "0"
+            and (parsed_task.outline_level is None or parsed_task.outline_level == 0)
+        ):
+            # MS Project's project summary task (UID 0): not a schedulable task,
+            # so it must not become a snapshot row (position/parent_uid checks
+            # require positive values). Excluded from task_uids too, so a
+            # predecessor link pointing at it is reported as ORPHAN_LINK
+            # instead of silently reaching a snapshot insert with a
+            # nonexistent predecessor.
+            task_uids.discard(uid)
+            continue
+        tasks.append(parsed_task)
         links.extend(_parse_task_links(task_node, uid, issues))
     return tasks, links, task_uids
 
