@@ -1752,6 +1752,36 @@ describe("PlanningTreeTable", () => {
       restoreOverflow();
     });
 
+    it("does not select the row when clicking or pressing keys on the truncated name's tooltip trigger", () => {
+      // Round of Copilot review on this issue flagged that, unlike the expand/collapse chevron
+      // (which already stops propagation for this exact reason, see the chevron button below and
+      // PlanningScheduleCells' SelectTrigger for another established instance of the same pattern),
+      // the truncated-name TooltipTrigger let click/keydown events reach the row's own
+      // onClick/onKeyDown handlers, incidentally selecting the row or triggering tree
+      // navigation/selection shortcuts just from interacting with the tooltip.
+      const restoreOverflow = stubNameOverflow(true);
+      const longName = "Un nom de tâche extrêmement long qui dépasserait largement la largeur de la colonne";
+      const tasks: Task[] = [task({ uid: 1, name: longName, parent_uid: null, position: 1 })];
+      render(<PlanningTreeTable tasks={tasks} versionKey={1} />);
+
+      const row = screen.getAllByRole("row")[1];
+      expect(row).toHaveAttribute("aria-selected", "false");
+
+      const nameTrigger = screen.getByRole("button", { name: longName });
+      fireEvent.click(nameTrigger);
+      expect(row).toHaveAttribute("aria-selected", "false");
+
+      fireEvent.keyDown(nameTrigger, { key: "Enter" });
+      expect(row).toHaveAttribute("aria-selected", "false");
+
+      // Sanity check: clicking elsewhere on the same row still selects it as expected, confirming
+      // the assertions above are actually exercising stopped propagation and not a broken row.
+      fireEvent.click(row);
+      expect(row).toHaveAttribute("aria-selected", "true");
+
+      restoreOverflow();
+    });
+
     it("clips the Name cell so a deeply nested row's indentation and chevron cannot paint over the Type column", () => {
       // Regression guard: `min-w-0` on the inner flex container only lets the name text shrink to
       // truncate, it does not clip content -- a deep enough hierarchy (indentation `depth * 1.25rem`

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -151,7 +151,13 @@ function TaskNameLabel({ name, width, isMilestone }: { name: string; width: numb
 
   return (
     <Tooltip>
-      <TooltipTrigger ref={textRef} type="button" className="min-w-0 truncate text-left">
+      <TooltipTrigger
+        ref={textRef}
+        type="button"
+        className="min-w-0 truncate text-left"
+        onClick={(event: MouseEvent<HTMLButtonElement>) => event.stopPropagation()}
+        onKeyDown={(event: KeyboardEvent<HTMLButtonElement>) => event.stopPropagation()}
+      >
         {label}
       </TooltipTrigger>
       <TooltipContent>{name}</TooltipContent>
