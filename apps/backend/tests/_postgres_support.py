@@ -27,6 +27,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 
 import psycopg
+import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 
@@ -82,3 +83,37 @@ def ephemeral_postgres_database(admin_url: str) -> Generator[str]:
                 connection.execute(text(f'DROP DATABASE IF EXISTS "{database_name}" WITH (FORCE)'))
     finally:
         admin_engine.dispose()
+
+
+@pytest.fixture
+def postgres_app_database_url() -> Generator[str]:
+    """An ephemeral PostgreSQL database with the full application schema created via
+    `Base.metadata.create_all`, for application-level tests that need a real PostgreSQL
+    backend rather than the SQLite database TestClient is wired to for the whole test
+    session. Skips the test if PostgreSQL is not reachable. Factored out of
+    test_resources_calendar_locking.py so other application-level PostgreSQL tests
+    (e.g. planning hierarchy cloning) can reuse it instead of duplicating the setup.
+    """
+    admin_url = postgres_admin_url()
+    if not postgres_reachable(admin_url):
+        pytest.skip(
+            "PostgreSQL is not reachable; set TEST_POSTGRES_URL or start the "
+            "docker-compose postgres service to run this test."
+        )
+    with ephemeral_postgres_database(admin_url) as database_url:
+        # Importing the models package registers every mapped class on Base.metadata,
+        # so create_all below produces the full application schema -- consistent with
+        # how test_migrations.py's _assert_schema_matches_orm_metadata triggers the
+        # same registration (referencing an attribute, not just importing the module,
+        # keeps this from being flagged as an unused import).
+        from waterfall.models import User
+
+        _ = User.__tablename__
+        from waterfall.db.base import Base
+
+        engine = create_engine(database_url, future=True)
+        try:
+            Base.metadata.create_all(bind=engine)
+        finally:
+            engine.dispose()
+        yield database_url

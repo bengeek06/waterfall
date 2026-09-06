@@ -13,25 +13,31 @@ means driving the guarded helper functions directly instead of going through the
 FastAPI `Depends(get_db)` request lifecycle, so each side's transaction can be
 started, held open, and committed/rolled back independently and on cue.
 
-The PostgreSQL reachability check and ephemeral-database helpers come from the
-shared tests/_postgres_support.py module (also used by test_migrations.py)
+The PostgreSQL reachability check, ephemeral-database helpers, and the
+`postgres_app_database_url` fixture itself come from the shared
+tests/_postgres_support.py module (also used by test_migrations.py and, for
+the planning-hierarchy clone regression, test_planning_clone_postgres.py)
 rather than being duplicated here -- see that module's docstring for why it is
 a standalone, non-underscore-prefixed helper module instead of importing
-test_migrations.py's private helpers directly. What is *not* reused from
+test_migrations.py's private helpers directly. `postgres_app_database_url` is
+registered as a fixture for the whole test session via `pytest_plugins` in
+tests/conftest.py, so test modules request it as an ordinary parameter without
+importing it by name -- importing a `@pytest.fixture`-decorated callable into
+a module that also takes it as a test parameter trips ruff's F811. What is
+*not* reused from
 test_migrations.py is its `postgres_database_url` fixture: that fixture
 migrates the ephemeral database to head via an `alembic upgrade` subprocess,
 which is the right tool for migration tests but is an unnecessary subprocess
-round-trip here. This test only needs the application schema, so it builds its
-own ephemeral database and populates it directly with `Base.metadata.create_all`,
-matching the "normal test session" schema-setup style used by
-tests/conftest.py's `reset_database` fixture.
+round-trip here. `postgres_app_database_url` only needs the application
+schema, so it builds its own ephemeral database and populates it directly
+with `Base.metadata.create_all`, matching the "normal test session"
+schema-setup style used by tests/conftest.py's `reset_database` fixture.
 """
 
 from __future__ import annotations
 
 import threading
 import time
-from collections.abc import Generator
 from typing import Any, cast
 
 import pytest
@@ -39,39 +45,6 @@ from fastapi import HTTPException, status
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
-
-from _postgres_support import (
-    ephemeral_postgres_database,
-    postgres_admin_url,
-    postgres_reachable,
-)
-
-
-@pytest.fixture
-def postgres_app_database_url() -> Generator[str]:
-    admin_url = postgres_admin_url()
-    if not postgres_reachable(admin_url):
-        pytest.skip(
-            "PostgreSQL is not reachable; set TEST_POSTGRES_URL or start the "
-            "docker-compose postgres service to run this test."
-        )
-    with ephemeral_postgres_database(admin_url) as database_url:
-        # Importing the models package registers every mapped class on Base.metadata,
-        # so create_all below produces the full application schema -- consistent with
-        # how test_migrations.py's _assert_schema_matches_orm_metadata triggers the
-        # same registration (referencing an attribute, not just importing the module,
-        # keeps this from being flagged as an unused import).
-        from waterfall.models import User
-
-        _ = User.__tablename__
-        from waterfall.db.base import Base
-
-        engine = create_engine(database_url, future=True)
-        try:
-            Base.metadata.create_all(bind=engine)
-        finally:
-            engine.dispose()
-        yield database_url
 
 
 def _seed_calendar(session: Session) -> int:

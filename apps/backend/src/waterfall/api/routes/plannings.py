@@ -141,36 +141,46 @@ def create_planning(
             .filter(WfPlanningLinkSnapshot.planning_id == source.id)
             .all()
         )
-        db.add_all(
-            [
-                WfPlanningTaskSnapshot(
-                    planning_id=planning.id,
-                    uid=task.uid,
-                    id_display=task.id_display,
-                    structure_key=task.structure_key,
-                    structure_kind=task.structure_kind,
-                    parent_uid=task.parent_uid,
-                    position=task.position,
-                    name=task.name,
-                    notes=task.notes,
-                    task_type=task.task_type,
-                    outline_number=task.outline_number,
-                    outline_level=task.outline_level,
-                    wbs=task.wbs,
-                    start_at=task.start_at,
-                    finish_at=task.finish_at,
-                    duration_minutes=task.duration_minutes,
-                    duration_format=task.duration_format,
-                    work_minutes=task.work_minutes,
-                    percent_complete=task.percent_complete,
-                    is_summary=task.is_summary,
-                    is_milestone=task.is_milestone,
-                    is_manual=task.is_manual,
-                    calendar_uid=task.calendar_uid,
-                )
-                for task in source_tasks
-            ]
-        )
+        # parent_uid is a composite self-reference onto (planning_id, uid) within this same
+        # batch: inserting it directly here risks a child snapshot landing before its parent in
+        # PostgreSQL's per-row FK check order, since `source_tasks` carries no hierarchy-aware
+        # ordering guarantee. Insert every clone with parent_uid=None first (a flushed, real uid
+        # with no parent is always valid), then backfill the real parent_uid in a second pass once
+        # every row already exists -- mirrors reopen_planning_structure below.
+        cloned_tasks = [
+            WfPlanningTaskSnapshot(
+                planning_id=planning.id,
+                uid=task.uid,
+                id_display=task.id_display,
+                structure_key=task.structure_key,
+                structure_kind=task.structure_kind,
+                parent_uid=None,
+                position=task.position,
+                name=task.name,
+                notes=task.notes,
+                task_type=task.task_type,
+                outline_number=task.outline_number,
+                outline_level=task.outline_level,
+                wbs=task.wbs,
+                start_at=task.start_at,
+                finish_at=task.finish_at,
+                duration_minutes=task.duration_minutes,
+                duration_format=task.duration_format,
+                work_minutes=task.work_minutes,
+                percent_complete=task.percent_complete,
+                is_summary=task.is_summary,
+                is_milestone=task.is_milestone,
+                is_manual=task.is_manual,
+                calendar_uid=task.calendar_uid,
+            )
+            for task in source_tasks
+        ]
+        db.add_all(cloned_tasks)
+        db.flush()
+        parent_by_uid = {task.uid: task.parent_uid for task in source_tasks}
+        for cloned_task in cloned_tasks:
+            cloned_task.parent_uid = parent_by_uid[cloned_task.uid]
+        db.flush()
         db.add_all(
             [
                 WfPlanningLinkSnapshot(

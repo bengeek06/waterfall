@@ -4,6 +4,13 @@ from pathlib import Path
 
 import pytest
 
+# Registers _postgres_support's `postgres_app_database_url` fixture globally, so test
+# modules can request it by parameter name without importing it -- importing a
+# @pytest.fixture-decorated callable by name into a module that also takes it as a test
+# parameter trips ruff's F811 ("redefinition of unused import"), which doesn't recognize
+# that pattern as pytest's normal cross-module fixture sharing.
+pytest_plugins = ["_postgres_support"]
+
 SRC = Path(__file__).resolve().parents[1] / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
