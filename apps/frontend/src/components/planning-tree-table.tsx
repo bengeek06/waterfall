@@ -298,7 +298,7 @@ export function PlanningTreeTable({
                     onKeyDown={(event) => selection.onRowKeyDown(event, row)}
                   >
                     <TableCell>{row.id_display ?? row.uid}</TableCell>
-                    <TableCell>
+                    <TableCell className="overflow-hidden">
                       <div
                         className="flex min-w-0 items-center gap-1"
                         style={{ paddingLeft: `${row.depth * 1.25}rem` }}

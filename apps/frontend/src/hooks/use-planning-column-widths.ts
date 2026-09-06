@@ -36,15 +36,36 @@ export const PLANNING_COLUMN_WIDTHS_STORAGE_KEY = "waterfall:planning-tree-table
 // truncate/wrap cleanly (see Table's `whitespace-nowrap` default on TableCell) -- start/end show a
 // fixed-format date, type shows a short but non-abbreviatable label, and mode hosts a `w-fit`
 // Select trigger -- so their minimum must stay wide enough to avoid painting over the next column.
-// Name and predecessors can shrink further because they truncate/wrap their content instead.
+// Predecessors can shrink further than those because it truncates/wraps its content instead. Name
+// also truncates its text, but its floor still ends up the highest of all: unlike the others, it
+// has to additionally budget for a non-shrinking chevron plus tree indentation ahead of that text
+// (see the dedicated comment below), which the shallower columns don't carry.
+//
+// `mode`'s floor is measured, not guessed, because its intrinsic content (the "sm" SelectTrigger
+// in ui/select.tsx, `w-fit whitespace-nowrap`) cannot shrink below its own content width: 16px
+// TableCell padding (p-2) + 2px trigger border + 18px trigger padding (pl-2.5 + pr-2) + 6px
+// value/icon gap (gap-1.5) + 16px chevron icon (size-4) + ~78px for its longest option's label,
+// "Automatique", at text-sm ≈ 136px, rounded up for safety.
+//
+// `name`'s floor also has to be measured rather than guessed, even though its text itself truncates
+// cleanly: the cell also hosts a `shrink-0` expand/collapse chevron (`size-6` = 24px) plus a
+// `gap-1` (4px) before that text, and the row's tree indentation (`row.depth * 1.25rem` = depth *
+// 20px) sits in front of both. None of the chevron, the gap, or the indentation can shrink, so if
+// the column narrows below their combined width the chevron itself gets clipped by the cell's
+// `overflow-hidden` -- not just the text -- making the expand/collapse control invisible/unusable
+// for deeply nested rows. Budget: 16px TableCell padding (p-2) + 24px chevron + 4px gap = 44px,
+// plus indentation headroom up to depth 4 (a plausible nesting level one level past the
+// Lot > Sous-lot > Tâche > Sous-tâche example that originally exposed this) = 4 * 20px = 80px,
+// plus a 40px margin so a few characters of the truncated name plus an ellipsis remain visible
+// even at the floor. Total: 44 + 80 + 40 = 164.
 export const PLANNING_MIN_COLUMN_WIDTHS: PlanningColumnWidths = {
   uid: 60,
-  name: 100,
+  name: 164,
   type: 90,
   start: 100,
   end: 100,
   duration: 80,
-  mode: 90,
+  mode: 140,
   predecessors: 90,
 };
 
@@ -60,7 +81,7 @@ export const DEFAULT_PLANNING_COLUMN_WIDTHS: PlanningColumnWidths = {
   start: 112,
   end: 112,
   duration: 88,
-  mode: 96,
+  mode: 150,
   predecessors: 240,
 };
 
@@ -179,6 +200,12 @@ export function usePlanningColumnWidths() {
 
   const startResize = useCallback(
     (column: PlanningColumnKey, event: ReactMouseEvent<HTMLElement>) => {
+      // Ignore right-/middle-button presses: only the primary (left) button should start a drag,
+      // otherwise preventDefault below would suppress the browser's native context menu/paste
+      // behavior for a gesture that was never meant to resize anything.
+      if (event.button !== 0) {
+        return;
+      }
       event.preventDefault();
       dragStateRef.current = { column, startX: event.clientX, startWidth: store.getSnapshot()[column] };
       window.addEventListener("mousemove", handleMouseMove);

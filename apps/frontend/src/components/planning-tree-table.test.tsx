@@ -1616,6 +1616,20 @@ describe("PlanningTreeTable", () => {
       expect(predecessorsCol.style.width).toBe("360px");
     });
 
+    it("ignores a right- or middle-click on a resize handle instead of starting a drag", () => {
+      const { container } = render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+
+      const predecessorsCol = container.querySelectorAll("colgroup col")[7] as HTMLElement;
+      const initialWidth = predecessorsCol.style.width;
+      const handle = screen.getByTestId("resize-handle-predecessors");
+
+      fireEvent.mouseDown(handle, { clientX: 100, button: 2 });
+      fireEvent.mouseMove(window, { clientX: 220 });
+      fireEvent.mouseUp(window, { clientX: 220 });
+
+      expect(predecessorsCol.style.width).toBe(initialWidth);
+    });
+
     it("wraps the predecessors column content instead of truncating it", () => {
       render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
 
@@ -1640,6 +1654,17 @@ describe("PlanningTreeTable", () => {
       expect(nameSpan).toHaveTextContent(longName);
     });
 
+    it("clips the Name cell so a deeply nested row's indentation and chevron cannot paint over the Type column", () => {
+      // Regression guard: `min-w-0` on the inner flex container only lets the name text shrink to
+      // truncate, it does not clip content -- a deep enough hierarchy (indentation `depth * 1.25rem`
+      // plus the `shrink-0` chevron) can still exceed the cell's width before reaching the text.
+      // `overflow-hidden` on the cell itself is what actually clips it.
+      render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+
+      const nameCell = screen.getAllByRole("row")[1].querySelectorAll("td")[1];
+      expect(nameCell).toHaveClass("overflow-hidden");
+    });
+
     it("makes every resize handle focusable via the keyboard", () => {
       render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
 
@@ -1651,16 +1676,17 @@ describe("PlanningTreeTable", () => {
 
       const handle = screen.getByTestId("resize-handle-name");
       expect(handle).toHaveAttribute("aria-valuenow", "220");
-      // "name" tolerates a lower floor than uid/type/start/end/mode since its content truncates
-      // cleanly instead of overflowing into the next column.
-      expect(handle).toHaveAttribute("aria-valuemin", "100");
+      // "name" text truncates cleanly, but its floor still has to budget for the non-shrinking
+      // expand/collapse chevron plus tree indentation ahead of that text (see
+      // PLANNING_MIN_COLUMN_WIDTHS.name's comment), so it ends up higher than uid/type/predecessors.
+      expect(handle).toHaveAttribute("aria-valuemin", "164");
       expect(handle).toHaveAttribute("aria-valuemax", "480");
     });
 
     it("gives a column hosting non-truncatable content (the mode selector) a higher minimum than uid", () => {
       render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
 
-      expect(screen.getByTestId("resize-handle-mode")).toHaveAttribute("aria-valuemin", "90");
+      expect(screen.getByTestId("resize-handle-mode")).toHaveAttribute("aria-valuemin", "140");
       expect(screen.getByTestId("resize-handle-uid")).toHaveAttribute("aria-valuemin", "60");
     });
 

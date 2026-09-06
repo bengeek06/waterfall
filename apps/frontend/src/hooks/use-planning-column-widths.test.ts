@@ -77,6 +77,7 @@ describe("usePlanningColumnWidths", () => {
     act(() => {
       result.current.startResize("predecessors", {
         clientX: 100,
+        button: 0,
         preventDefault: () => {},
       } as never);
     });
@@ -93,12 +94,35 @@ describe("usePlanningColumnWidths", () => {
     expect(persisted.predecessors).toBe(startWidth + 60);
   });
 
+  it("ignores a non-primary mouse button and does not start a drag", () => {
+    const { result } = renderHook(() => usePlanningColumnWidths());
+    const startWidth = result.current.widths.predecessors;
+    const preventDefault = () => {
+      throw new Error("preventDefault should not be called for a non-primary button");
+    };
+
+    act(() => {
+      // button: 2 is the right button, button: 1 is the middle button -- neither should start a
+      // resize drag or suppress the browser's native handling (context menu, autoscroll, ...).
+      result.current.startResize("predecessors", { clientX: 100, button: 2, preventDefault } as never);
+    });
+    act(() => {
+      fireMouseEvent("mousemove", 220);
+    });
+    act(() => {
+      fireMouseEvent("mouseup", 220);
+    });
+
+    expect(result.current.widths.predecessors).toBe(startWidth);
+  });
+
   it("clamps the resized width to the column's configured minimum", () => {
     const { result } = renderHook(() => usePlanningColumnWidths());
 
     act(() => {
       result.current.startResize("uid", {
         clientX: 100,
+        button: 0,
         preventDefault: () => {},
       } as never);
     });
@@ -118,6 +142,7 @@ describe("usePlanningColumnWidths", () => {
     act(() => {
       result.current.startResize("predecessors", {
         clientX: 100,
+        button: 0,
         preventDefault: () => {},
       } as never);
     });
