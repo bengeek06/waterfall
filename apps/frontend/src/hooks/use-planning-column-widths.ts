@@ -58,6 +58,19 @@ export const PLANNING_COLUMN_WIDTHS_STORAGE_KEY = "waterfall:planning-tree-table
 // Lot > Sous-lot > Tâche > Sous-tâche example that originally exposed this) = 4 * 20px = 80px,
 // plus a 40px margin so a few characters of the truncated name plus an ellipsis remain visible
 // even at the floor. Total: 44 + 80 + 40 = 164.
+//
+// This is also why the visual indentation itself is capped at this same depth in
+// PlanningTreeTable (`Math.min(row.depth, PLANNING_NAME_INDENT_DEPTH_BUDGET) * 1.25rem` on the
+// Name cell's inner div): the tree builder allows arbitrary nesting (a real MS Project import can
+// exceed depth 4), but this 164px floor only budgets indentation headroom through depth 4. Without
+// a matching visual cap, a deeper row's indentation would grow past what the column's minimum
+// width can fit, clipping the chevron/text again at exactly the width this floor is supposed to
+// guarantee stays usable. Capping indentation past this depth is a deliberate, bounded regression
+// in visual nesting cues (rows past depth 4 all indent the same as depth 4) in exchange for the
+// chevron and name always staying visible/usable at the column's minimum width, regardless of how
+// deep the underlying data actually goes.
+export const PLANNING_NAME_INDENT_DEPTH_BUDGET = 4;
+
 export const PLANNING_MIN_COLUMN_WIDTHS: PlanningColumnWidths = {
   uid: 60,
   name: 164,
@@ -172,29 +185,95 @@ export function usePlanningColumnWidths() {
   const widths = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getServerSnapshot);
   const dragStateRef = useRef<DragState | null>(null);
 
+  // Raw "mousemove" fires far more often than the display can repaint (well past 60fps on some
+  // systems), and every store.setSnapshot re-renders the whole PlanningTreeTable (all visible rows)
+  // via useSyncExternalStore. Coalescing to one store update per animation frame keeps the drag
+  // O(rows × frames) instead of O(rows × mouse events) without changing the final width: the latest
+  // computed width for the in-progress drag is buffered here and only committed to the store from
+  // the scheduled rAF callback (or flushed immediately by stopResize/unmount, see below), so the
+  // gesture never applies a value older than the pointer's current position.
+  const rafIdRef = useRef<number | null>(null);
+  const pendingWidthRef = useRef<{ column: PlanningColumnKey; width: number } | null>(null);
+
+  // "Latest ref" for stopResize, populated by the effect below: handleMouseMove needs to call
+  // stopResize (see the "button released outside the window" branch below), and stopResize needs to
+  // remove the exact handleMouseMove listener it was registered with, which would otherwise be a
+  // circular dependency between the two useCallbacks. The ref breaks the cycle without either
+  // callback needing the other in its dependency array. It is kept in sync via a `useEffect` rather
+  // than a plain write in the render body: mutating a ref's `.current` during render itself is
+  // exactly what the react-hooks lint rule (and eventually the React Compiler) flags as unsafe,
+  // even though this particular ref is never read during render.
+  const stopResizeRef = useRef<() => void>(() => {});
+
   const handleMouseMove = useCallback(
     (event: MouseEvent) => {
       const drag = dragStateRef.current;
       if (!drag) {
         return;
       }
+      // A drag only ever ends via this window's own "mouseup" listener (see startResize below). If
+      // the primary button is released while the pointer is outside the browser window/tab, that
+      // "mouseup" never reaches us, so dragStateRef and the listener stay alive; moving the pointer
+      // back over the page would then resume resizing with no button pressed. `event.buttons` is
+      // the live snapshot of which buttons are held *during this move event*, independent of what
+      // started the drag, so checking it here reliably detects that the primary button (bit 0) is
+      // no longer down and ends the drag as soon as the first mousemove after the missed mouseup
+      // arrives, instead of leaving the column "stuck" resizing.
+      if ((event.buttons & 1) === 0) {
+        stopResizeRef.current();
+        return;
+      }
       const delta = event.clientX - drag.startX;
       const nextWidth = clampColumnWidth(drag.column, drag.startWidth + delta);
-      store.setSnapshot({ ...store.getSnapshot(), [drag.column]: nextWidth });
+      pendingWidthRef.current = { column: drag.column, width: nextWidth };
+      rafIdRef.current ??= requestAnimationFrame(() => {
+        rafIdRef.current = null;
+        const pending = pendingWidthRef.current;
+        if (!pending) {
+          return;
+        }
+        pendingWidthRef.current = null;
+        store.setSnapshot({ ...store.getSnapshot(), [pending.column]: pending.width });
+      });
     },
     [store],
   );
 
+  // Applies whatever width the still-pending (not yet rAF-flushed) mousemove computed, then cancels
+  // the scheduled frame so it can't re-apply a now-stale value afterwards. Used both to end a drag
+  // "on time" (stopResize) and to avoid leaking a pending frame past unmount.
+  const flushPendingWidth = useCallback(() => {
+    if (rafIdRef.current !== null) {
+      cancelAnimationFrame(rafIdRef.current);
+      rafIdRef.current = null;
+    }
+    const pending = pendingWidthRef.current;
+    if (!pending) {
+      return;
+    }
+    pendingWidthRef.current = null;
+    store.setSnapshot({ ...store.getSnapshot(), [pending.column]: pending.width });
+  }, [store]);
+
   const stopResize = useCallback(() => {
     dragStateRef.current = null;
     window.removeEventListener("mousemove", handleMouseMove);
+    flushPendingWidth();
     persistColumnWidths(store.getSnapshot());
-  }, [handleMouseMove, store]);
+  }, [handleMouseMove, store, flushPendingWidth]);
+
+  useEffect(() => {
+    stopResizeRef.current = stopResize;
+  }, [stopResize]);
 
   useEffect(() => {
     return () => {
       window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mouseup", stopResize);
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
     };
   }, [handleMouseMove, stopResize]);
 

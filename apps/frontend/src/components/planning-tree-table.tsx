@@ -11,10 +11,12 @@ import { PlanningCreateTaskDialog } from "@/components/planning-create-task-dial
 import { PlanningScheduleCells } from "@/components/planning-schedule-cells";
 import { PlanningTaskLinksDialog } from "@/components/planning-task-links-dialog";
 import { PlanningTreeToolbar } from "@/components/planning-tree-toolbar";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   PLANNING_COLUMN_ORDER,
   PLANNING_MAX_COLUMN_WIDTH,
   PLANNING_MIN_COLUMN_WIDTHS,
+  PLANNING_NAME_INDENT_DEPTH_BUDGET,
   usePlanningColumnWidths,
   type PlanningColumnKey,
 } from "@/hooks/use-planning-column-widths";
@@ -73,7 +75,14 @@ function ColumnResizeHandle({
       aria-valuemax={PLANNING_MAX_COLUMN_WIDTH}
       tabIndex={0}
       data-testid={`resize-handle-${column}`}
-      className="absolute right-0 top-0 h-full w-1 cursor-col-resize select-none"
+      // `group` + a wider (w-3 = 12px) hit area than what's visually painted (the inner bar below
+      // stays w-1 = 4px, flush against the column boundary via justify-end): a plain 4px strip is
+      // only discoverable by accidentally hovering exactly on the column boundary, and is a fiddly
+      // mouse/touch target. The outer box stays entirely inside the TableHead's own bounds (right-0,
+      // extending leftward into the current column, never past its right edge), so none of it is
+      // clipped by the parent's `overflow-hidden` (needed so the handle never visually spills into
+      // the next header).
+      className="group absolute right-0 top-0 z-10 flex h-full w-3 cursor-col-resize items-center justify-end select-none outline-none"
       onMouseDown={(event) => onResizeStart(column, event)}
       onKeyDown={(event) => {
         if (event.key === "ArrowLeft") {
@@ -84,7 +93,21 @@ function ColumnResizeHandle({
           onResizeBy(column, COLUMN_RESIZE_KEYBOARD_STEP);
         }
       }}
-    />
+    >
+      {/*
+        Visible handle bar, separate from the interactive span above: `hover:bg-border` gives
+        sighted mouse users a discoverable affordance instead of an invisible strip.
+        `group-focus-visible:bg-primary` is a background-color change rather than an
+        `outline`/`ring` utility on the handle itself, because that would be clipped by the parent
+        TableHead's `overflow-hidden` if it extended outside the handle's own box -- a background
+        change painted inside the bar's own bounds stays visible under that clipping, so keyboard
+        focus is never silently invisible.
+      */}
+      <span
+        aria-hidden="true"
+        className="h-full w-1 rounded-full bg-transparent transition-colors group-hover:bg-border group-focus-visible:bg-primary"
+      />
+    </span>
   );
 }
 
@@ -301,7 +324,17 @@ export function PlanningTreeTable({
                     <TableCell className="overflow-hidden">
                       <div
                         className="flex min-w-0 items-center gap-1"
-                        style={{ paddingLeft: `${row.depth * 1.25}rem` }}
+                        // Capped at PLANNING_NAME_INDENT_DEPTH_BUDGET (depth 4): the tree builder
+                        // allows arbitrary nesting, but PLANNING_MIN_COLUMN_WIDTHS.name only budgets
+                        // indentation headroom through that depth (see the cross-referenced comment
+                        // there). Without this cap, a deeper row (a real MS Project import can
+                        // exceed depth 4) would push its indentation past what the column's minimum
+                        // width can fit, clipping the expand/collapse chevron and name again at
+                        // exactly the width that floor is supposed to keep usable. Rows deeper than
+                        // this budget simply share the same indentation as depth 4 -- expand/collapse
+                        // and selection remain fully functional, only the visual nesting cue flattens
+                        // out past this point.
+                        style={{ paddingLeft: `${Math.min(row.depth, PLANNING_NAME_INDENT_DEPTH_BUDGET) * 1.25}rem` }}
                       >
                         {row.hasChildren ? (
                           <button
@@ -318,10 +351,16 @@ export function PlanningTreeTable({
                         ) : (
                           <span className="size-6 shrink-0" />
                         )}
-                        <span className="truncate" title={row.name}>
-                          {row.is_milestone ? "◆ " : ""}
-                          {row.name}
-                        </span>
+                        <Tooltip>
+                          <TooltipTrigger
+                            type="button"
+                            className="min-w-0 truncate text-left"
+                          >
+                            {row.is_milestone ? "◆ " : ""}
+                            {row.name}
+                          </TooltipTrigger>
+                          <TooltipContent>{row.name}</TooltipContent>
+                        </Tooltip>
                       </div>
                     </TableCell>
                     <TableCell>{taskTypeLabel(row)}</TableCell>

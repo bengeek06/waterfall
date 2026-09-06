@@ -1,5 +1,5 @@
 import { act, renderHook } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   DEFAULT_PLANNING_COLUMN_WIDTHS,
@@ -9,8 +9,12 @@ import {
   usePlanningColumnWidths,
 } from "@/hooks/use-planning-column-widths";
 
-function fireMouseEvent(type: "mousemove" | "mouseup", clientX: number) {
-  const event = new MouseEvent(type, { clientX, bubbles: true });
+// `buttons` defaults to 1 (primary button held), matching every native "mousemove" fired mid-drag
+// by a real browser: handleMouseMove now reads `event.buttons` to detect a mouseup that happened
+// outside the window (see the dedicated describe block below), so tests simulating an ongoing drag
+// must set it, or every such mousemove would look like the button was already released.
+function fireMouseEvent(type: "mousemove" | "mouseup", clientX: number, buttons = 1) {
+  const event = new MouseEvent(type, { clientX, bubbles: true, buttons });
   window.dispatchEvent(event);
 }
 
@@ -204,5 +208,128 @@ describe("usePlanningColumnWidths", () => {
       expect(width).toBeGreaterThanOrEqual(min);
       expect(width).toBeLessThanOrEqual(PLANNING_MAX_COLUMN_WIDTH);
     }
+  });
+
+  describe("mouseup outside the window", () => {
+    // A drag only ever completes via this window's own "mouseup" listener. If the user releases
+    // the primary button while the pointer is outside the browser window/tab (or even outside the
+    // page content, over a devtools panel, etc.), that "mouseup" never reaches us: without checking
+    // `event.buttons`, dragStateRef and the "mousemove" listener would stay alive, and moving the
+    // pointer back over the page would resume resizing with no button held anymore.
+    it("stops resizing as soon as a mousemove reports the primary button is no longer pressed", () => {
+      const { result } = renderHook(() => usePlanningColumnWidths());
+      const startWidth = result.current.widths.predecessors;
+
+      act(() => {
+        result.current.startResize("predecessors", {
+          clientX: 100,
+          button: 0,
+          preventDefault: () => {},
+        } as never);
+      });
+      // The button is released off-window; the browser never delivers a "mouseup" here, but the
+      // next "mousemove" the page does receive (e.g. once the pointer re-enters it) reports
+      // buttons: 0.
+      act(() => {
+        fireMouseEvent("mousemove", 130, 0);
+      });
+
+      // The drag ended exactly where it was frozen (delta of 30 from the missed-mouseup move is
+      // never applied), not wherever the pointer happened to be when the button was actually
+      // released.
+      expect(result.current.widths.predecessors).toBe(startWidth);
+
+      // A later, unrelated mousemove with the button reported held again must not resume the
+      // now-finished drag.
+      act(() => {
+        fireMouseEvent("mousemove", 400, 1);
+      });
+      expect(result.current.widths.predecessors).toBe(startWidth);
+
+      // The frozen width was also persisted, exactly like a normal in-window mouseup would.
+      const persisted = JSON.parse(window.localStorage.getItem(PLANNING_COLUMN_WIDTHS_STORAGE_KEY) ?? "{}");
+      expect(persisted.predecessors).toBe(startWidth);
+    });
+  });
+
+  describe("drag re-render coalescing", () => {
+    // Every raw "mousemove" used to call store.setSnapshot directly, re-rendering the whole
+    // PlanningTreeTable (every visible row) once per browser mousemove event -- easily far more
+    // than 60 times a second on some systems. handleMouseMove now only buffers the computed width
+    // and schedules a single requestAnimationFrame per frame to apply it, so a burst of moves within
+    // the same frame must not schedule more than one.
+    it("schedules a single animation frame for a burst of mousemove events in the same tick", () => {
+      const rafSpy = vi.spyOn(window, "requestAnimationFrame");
+      const { result } = renderHook(() => usePlanningColumnWidths());
+
+      act(() => {
+        result.current.startResize("predecessors", {
+          clientX: 100,
+          button: 0,
+          preventDefault: () => {},
+        } as never);
+      });
+      act(() => {
+        fireMouseEvent("mousemove", 120);
+        fireMouseEvent("mousemove", 140);
+        fireMouseEvent("mousemove", 160);
+      });
+
+      expect(rafSpy).toHaveBeenCalledTimes(1);
+
+      rafSpy.mockRestore();
+    });
+
+    it("still resolves to the exact cursor position at mouseup, not a stale coalesced value", () => {
+      const { result } = renderHook(() => usePlanningColumnWidths());
+      const startWidth = result.current.widths.predecessors;
+
+      act(() => {
+        result.current.startResize("predecessors", {
+          clientX: 100,
+          button: 0,
+          preventDefault: () => {},
+        } as never);
+      });
+      // A burst of moves, none of which have necessarily been flushed to the store yet (the
+      // scheduled animation frame may not have run within this same synchronous tick).
+      act(() => {
+        fireMouseEvent("mousemove", 120);
+        fireMouseEvent("mousemove", 140);
+        fireMouseEvent("mousemove", 160);
+      });
+      act(() => {
+        fireMouseEvent("mouseup", 160);
+      });
+
+      // stopResize flushes whatever the last pending mousemove computed before persisting, so the
+      // final width matches the pointer's last reported position exactly, even though the
+      // per-mousemove store updates were coalesced away.
+      expect(result.current.widths.predecessors).toBe(startWidth + 60);
+      const persisted = JSON.parse(window.localStorage.getItem(PLANNING_COLUMN_WIDTHS_STORAGE_KEY) ?? "{}");
+      expect(persisted.predecessors).toBe(startWidth + 60);
+    });
+
+    it("cancels a still-pending animation frame on unmount", () => {
+      const cancelSpy = vi.spyOn(window, "cancelAnimationFrame");
+      const { result, unmount } = renderHook(() => usePlanningColumnWidths());
+
+      act(() => {
+        result.current.startResize("predecessors", {
+          clientX: 100,
+          button: 0,
+          preventDefault: () => {},
+        } as never);
+      });
+      act(() => {
+        fireMouseEvent("mousemove", 160);
+      });
+
+      unmount();
+
+      expect(cancelSpy).toHaveBeenCalled();
+
+      cancelSpy.mockRestore();
+    });
   });
 });

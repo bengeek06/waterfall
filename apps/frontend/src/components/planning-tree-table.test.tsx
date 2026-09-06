@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_PLANNING_COLUMN_WIDTHS } from "@/hooks/use-planning-column-widths";
 import { ApiError, type Task } from "@/lib/backend";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { PlanningTreeTable } from "./planning-tree-table";
 
 function task(overrides: Partial<Task>): Task {
@@ -1588,7 +1589,11 @@ describe("PlanningTreeTable", () => {
       expect(table.style.width).toBe(`${initialTotal}px`);
 
       fireEvent.mouseDown(screen.getByTestId("resize-handle-predecessors"), { clientX: 100 });
-      fireEvent.mouseMove(window, { clientX: 220 });
+      // `buttons: 1` mirrors every native "mousemove" fired mid-drag by a real browser (the primary
+      // button held down); handleMouseMove now reads `event.buttons` to detect a mouseup that
+      // happened outside the window (see the dedicated tests below), so omitting it here would make
+      // this look like the button was already released and no resize would ever apply.
+      fireEvent.mouseMove(window, { clientX: 220, buttons: 1 });
       fireEvent.mouseUp(window, { clientX: 220 });
 
       expect(table.style.width).toBe(`${initialTotal + 120}px`);
@@ -1609,11 +1614,33 @@ describe("PlanningTreeTable", () => {
       const initialWidth = predecessorsCol.style.width;
 
       fireEvent.mouseDown(screen.getByTestId("resize-handle-predecessors"), { clientX: 100 });
-      fireEvent.mouseMove(window, { clientX: 220 });
+      fireEvent.mouseMove(window, { clientX: 220, buttons: 1 });
       fireEvent.mouseUp(window, { clientX: 220 });
 
       expect(predecessorsCol.style.width).not.toBe(initialWidth);
       expect(predecessorsCol.style.width).toBe("360px");
+    });
+
+    it("ends the drag as soon as a mousemove reports the primary button released outside the window", () => {
+      // Regression guard: without checking `event.buttons`, releasing the mouse outside the browser
+      // window (so no "mouseup" is ever delivered) would leave the drag "stuck" -- moving the
+      // pointer back over the page would resume resizing with no button pressed.
+      const { container } = render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+
+      const predecessorsCol = container.querySelectorAll("colgroup col")[7] as HTMLElement;
+      const initialWidth = predecessorsCol.style.width;
+
+      fireEvent.mouseDown(screen.getByTestId("resize-handle-predecessors"), { clientX: 100 });
+      // The button was actually released off-window; the next "mousemove" the page does receive
+      // reports buttons: 0.
+      fireEvent.mouseMove(window, { clientX: 160, buttons: 0 });
+
+      expect(predecessorsCol.style.width).toBe(initialWidth);
+
+      // Moving the pointer back over the page, even with the button reported held again, must not
+      // resume the already-finished drag.
+      fireEvent.mouseMove(window, { clientX: 400, buttons: 1 });
+      expect(predecessorsCol.style.width).toBe(initialWidth);
     });
 
     it("ignores a right- or middle-click on a resize handle instead of starting a drag", () => {
@@ -1649,9 +1676,44 @@ describe("PlanningTreeTable", () => {
       const tasks: Task[] = [task({ uid: 1, name: longName, parent_uid: null, position: 1 })];
       render(<PlanningTreeTable tasks={tasks} versionKey={1} />);
 
-      const nameSpan = screen.getByTitle(longName);
-      expect(nameSpan).toHaveClass("truncate");
-      expect(nameSpan).toHaveTextContent(longName);
+      // The truncated name is now a focusable <button> (TooltipTrigger), not a plain <span>: see
+      // the dedicated accessibility test below for why.
+      const nameTrigger = screen.getByRole("button", { name: longName });
+      expect(nameTrigger.tagName).toBe("BUTTON");
+      expect(nameTrigger).toHaveClass("truncate");
+      expect(nameTrigger).toHaveTextContent(longName);
+    });
+
+    it("keeps the full task name reachable by keyboard/touch, not just mouse hover, once it is truncated", () => {
+      // Regression guard: a plain `title` attribute on a non-focusable <span> only reveals the full
+      // name (up to 512 chars per the API) on mouse hover. Wrapping it in the shared Tooltip/
+      // TooltipTrigger/TooltipContent primitives (ui/tooltip.tsx) instead renders it as a real
+      // <button>, which is focusable by keyboard/touch without any extra tabIndex plumbing.
+      const longName = "Un nom de tâche extrêmement long qui dépasserait largement la largeur de la colonne";
+      const tasks: Task[] = [task({ uid: 1, name: longName, parent_uid: null, position: 1 })];
+      render(<PlanningTreeTable tasks={tasks} versionKey={1} />);
+
+      const nameTrigger = screen.getByRole("button", { name: longName });
+      nameTrigger.focus();
+      expect(nameTrigger).toHaveFocus();
+    });
+
+    it("shows the full task name in a tooltip when the truncated trigger receives keyboard focus", async () => {
+      // The app always renders PlanningTreeTable under the root <TooltipProvider> (see
+      // app/layout.tsx); reproduce that here rather than relying on TooltipTrigger's own
+      // no-provider fallback delay, so this exercises the same open-on-focus path production uses.
+      const longName = "Un nom de tâche extrêmement long qui dépasserait largement la largeur de la colonne";
+      const tasks: Task[] = [task({ uid: 1, name: longName, parent_uid: null, position: 1 })];
+      render(
+        <TooltipProvider>
+          <PlanningTreeTable tasks={tasks} versionKey={1} />
+        </TooltipProvider>,
+      );
+
+      const nameTrigger = screen.getByRole("button", { name: longName });
+      fireEvent.focus(nameTrigger);
+
+      expect(await screen.findAllByText(longName)).not.toHaveLength(0);
     });
 
     it("clips the Name cell so a deeply nested row's indentation and chevron cannot paint over the Type column", () => {
@@ -1663,6 +1725,37 @@ describe("PlanningTreeTable", () => {
 
       const nameCell = screen.getAllByRole("row")[1].querySelectorAll("td")[1];
       expect(nameCell).toHaveClass("overflow-hidden");
+    });
+
+    it("caps the visual indentation at the same depth PLANNING_MIN_COLUMN_WIDTHS.name budgets for", () => {
+      // The tree builder allows arbitrary nesting depth (a real MS Project import can exceed the
+      // three-level Poste > Lot > Livrable fixture used elsewhere in this file), but the Name
+      // column's minimum width only budgets indentation headroom through depth 4 (see
+      // PLANNING_NAME_INDENT_DEPTH_BUDGET / PLANNING_MIN_COLUMN_WIDTHS.name's comment in
+      // use-planning-column-widths.ts). A row past that depth must indent exactly like a depth-4
+      // row -- not further -- so the expand/collapse chevron and name stay inside the column's
+      // budgeted minimum width instead of being clipped again.
+      // `walk` in lib/planning-tree.ts starts the root level at depth 0, so the Nth level task here
+      // sits at depth N-1: "Niveau 5" is depth 4 (exactly PLANNING_NAME_INDENT_DEPTH_BUDGET, the
+      // last uncapped depth) and "Niveau 7" is depth 6 (two levels past the cap).
+      const deepTasks: Task[] = [
+        task({ uid: 1, name: "Niveau 1", parent_uid: null, position: 1 }),
+        task({ uid: 2, name: "Niveau 2", parent_uid: 1, position: 1 }),
+        task({ uid: 3, name: "Niveau 3", parent_uid: 2, position: 1 }),
+        task({ uid: 4, name: "Niveau 4", parent_uid: 3, position: 1 }),
+        task({ uid: 5, name: "Niveau 5", parent_uid: 4, position: 1 }),
+        task({ uid: 6, name: "Niveau 6", parent_uid: 5, position: 1 }),
+        task({ uid: 7, name: "Niveau 7", parent_uid: 6, position: 1 }),
+      ];
+      render(<PlanningTreeTable tasks={deepTasks} versionKey={1} />);
+
+      const depth4Container = screen.getByRole("button", { name: "Niveau 5" }).closest("div");
+      const depth6Container = screen.getByRole("button", { name: "Niveau 7" }).closest("div");
+
+      expect(depth4Container).not.toBeNull();
+      expect(depth6Container).not.toBeNull();
+      expect(depth6Container?.style.paddingLeft).toBe(depth4Container?.style.paddingLeft);
+      expect(depth6Container?.style.paddingLeft).toBe("5rem");
     });
 
     it("makes every resize handle focusable via the keyboard", () => {
