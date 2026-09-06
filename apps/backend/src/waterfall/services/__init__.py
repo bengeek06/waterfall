@@ -14,6 +14,7 @@ from waterfall.services.estimate_calculation import (
     calculate_estimate_lines,
 )
 from waterfall.services.estimate_export import build_estimate_workbook
+from waterfall.services.pagination import PaginationResult, apply_pagination
 from waterfall.services.planning_links import (
     PlanningLinkError,
     PlanningLinkInvariantError,
@@ -51,6 +52,8 @@ __all__ = [
     "calculate_estimate_lines",
     "calculate_estimate_aggregates",
     "build_estimate_workbook",
+    "PaginationResult",
+    "apply_pagination",
     "generate_planning_snapshot",
     "generate_planning_structure",
     "load_planning_structure_draft",
