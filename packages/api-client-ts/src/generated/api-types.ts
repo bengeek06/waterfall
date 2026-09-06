@@ -1714,6 +1714,9 @@ export interface components {
             updated_at: string;
             weekdays?: components["schemas"]["CalendarWeekdayRead"][];
         };
+        CalendarListRead: components["schemas"]["PaginationMeta"] & {
+            items: components["schemas"]["CalendarRead"][];
+        };
         ResourceNodeCreate: {
             code: string;
             name: string;
@@ -1732,6 +1735,9 @@ export interface components {
             created_at: string;
             /** Format: date-time */
             updated_at: string;
+        };
+        ResourceNodeListRead: components["schemas"]["PaginationMeta"] & {
+            items: components["schemas"]["ResourceNodeRead"][];
         };
         ResourceRoleCreate: {
             node_id: number;
@@ -1755,6 +1761,9 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
         };
+        ResourceRoleListRead: components["schemas"]["PaginationMeta"] & {
+            items: components["schemas"]["ResourceRoleRead"][];
+        };
         CostTypeCreate: {
             code: string;
             name: string;
@@ -1773,6 +1782,9 @@ export interface components {
             created_at: string;
             /** Format: date-time */
             updated_at: string;
+        };
+        CostTypeListRead: components["schemas"]["PaginationMeta"] & {
+            items: components["schemas"]["CostTypeRead"][];
         };
         CostCategoryCreate: {
             cost_type_id: number;
@@ -1795,6 +1807,9 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
         };
+        CostCategoryListRead: components["schemas"]["PaginationMeta"] & {
+            items: components["schemas"]["CostCategoryRead"][];
+        };
         CostRateCreate: {
             cost_category_id: number;
             year: number;
@@ -1812,6 +1827,9 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
         };
+        CostRateListRead: components["schemas"]["PaginationMeta"] & {
+            items: components["schemas"]["CostRateRead"][];
+        };
         InflationRateUpdate: {
             coefficient: number;
         };
@@ -1823,6 +1841,9 @@ export interface components {
             created_at: string;
             /** Format: date-time */
             updated_at: string;
+        };
+        InflationRateListRead: components["schemas"]["PaginationMeta"] & {
+            items: components["schemas"]["InflationRateRead"][];
         };
         RoleCapacityCreate: {
             role_id: number;
@@ -1839,6 +1860,9 @@ export interface components {
             created_at: string;
             /** Format: date-time */
             updated_at: string;
+        };
+        RoleCapacityListRead: components["schemas"]["PaginationMeta"] & {
+            items: components["schemas"]["RoleCapacityRead"][];
         };
         /**
          * @description Metadonnees de pagination communes a toutes les enveloppes de liste (EPIC E7). OpenAPI 3.1 ne supportant pas les schemas generiques, ce fragment est reutilise via allOf par chaque schema `<Resource>ListRead` propre a une ressource, qui ajoute sa propre propriete `items` :
@@ -4044,6 +4068,13 @@ export interface operations {
         parameters: {
             query?: {
                 include_inactive?: boolean;
+                /** @description Nombre maximum de lignes renvoyees. Absent, l'endpoint renvoie l'integralite des lignes du jeu filtre (voir PaginationMeta.yaml) : il n'y a pas de valeur par defaut qui tronquerait silencieusement une liste. */
+                limit?: components["parameters"]["Limit"];
+                /** @description Nombre de lignes a sauter avant le debut de la page. Requiert `limit` : fourni sans `limit`, il serait sous-specifie (voir la note "Regle offset/limit" dans PaginationMeta.yaml) et est donc rejete avec la reponse BadRequest.yaml. */
+                offset?: components["parameters"]["Offset"];
+                /** @description Recherche plein texte simple (sous-chaine, insensible a la casse), sur le sous-ensemble de colonnes documente par chaque ressource dans la description de ce parametre au niveau de l'operation. A distinguer des filtres structures deja existants sur certaines ressources (`include_inactive`, `node_id`, `role_id`, ...), qui restent des parametres dedies et se combinent avec `q`. */
+                q?: components["parameters"]["Search"];
+                sort?: "code" | "-code" | "name" | "-name";
             };
             header?: never;
             path?: never;
@@ -4057,9 +4088,10 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CalendarRead"][];
+                    "application/json": components["schemas"]["CalendarListRead"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
         };
     };
@@ -4181,13 +4213,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Liste des noeuds */
+            /** @description Arbre complet des noeuds de ressources actifs. Non paginable (EPIC E7) : l'arbre doit toujours etre renvoye en entier, jamais tronque, sous peine de laisser le client reconstruire un arbre incomplet. `limit` est donc toujours `null` et `total` egale `items.length`. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ResourceNodeRead"][];
+                    "application/json": components["schemas"]["ResourceNodeListRead"];
                 };
             };
             401: components["responses"]["Unauthorized"];
@@ -4306,6 +4338,13 @@ export interface operations {
             query?: {
                 node_id?: number;
                 include_descendants?: boolean;
+                /** @description Nombre maximum de lignes renvoyees. Absent, l'endpoint renvoie l'integralite des lignes du jeu filtre (voir PaginationMeta.yaml) : il n'y a pas de valeur par defaut qui tronquerait silencieusement une liste. */
+                limit?: components["parameters"]["Limit"];
+                /** @description Nombre de lignes a sauter avant le debut de la page. Requiert `limit` : fourni sans `limit`, il serait sous-specifie (voir la note "Regle offset/limit" dans PaginationMeta.yaml) et est donc rejete avec la reponse BadRequest.yaml. */
+                offset?: components["parameters"]["Offset"];
+                /** @description Recherche plein texte simple (sous-chaine, insensible a la casse), sur le sous-ensemble de colonnes documente par chaque ressource dans la description de ce parametre au niveau de l'operation. A distinguer des filtres structures deja existants sur certaines ressources (`include_inactive`, `node_id`, `role_id`, ...), qui restent des parametres dedies et se combinent avec `q`. */
+                q?: components["parameters"]["Search"];
+                sort?: "name" | "-name";
             };
             header?: never;
             path?: never;
@@ -4319,9 +4358,10 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ResourceRoleRead"][];
+                    "application/json": components["schemas"]["ResourceRoleListRead"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
         };
     };
@@ -4414,6 +4454,13 @@ export interface operations {
         parameters: {
             query?: {
                 include_inactive?: boolean;
+                /** @description Nombre maximum de lignes renvoyees. Absent, l'endpoint renvoie l'integralite des lignes du jeu filtre (voir PaginationMeta.yaml) : il n'y a pas de valeur par defaut qui tronquerait silencieusement une liste. */
+                limit?: components["parameters"]["Limit"];
+                /** @description Nombre de lignes a sauter avant le debut de la page. Requiert `limit` : fourni sans `limit`, il serait sous-specifie (voir la note "Regle offset/limit" dans PaginationMeta.yaml) et est donc rejete avec la reponse BadRequest.yaml. */
+                offset?: components["parameters"]["Offset"];
+                /** @description Recherche plein texte simple (sous-chaine, insensible a la casse), sur le sous-ensemble de colonnes documente par chaque ressource dans la description de ce parametre au niveau de l'operation. A distinguer des filtres structures deja existants sur certaines ressources (`include_inactive`, `node_id`, `role_id`, ...), qui restent des parametres dedies et se combinent avec `q`. */
+                q?: components["parameters"]["Search"];
+                sort?: "accounting_code" | "-accounting_code" | "category_code" | "-category_code" | "name" | "-name";
             };
             header?: never;
             path?: never;
@@ -4427,9 +4474,10 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CostCategoryRead"][];
+                    "application/json": components["schemas"]["CostCategoryListRead"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
         };
     };
@@ -4464,6 +4512,13 @@ export interface operations {
         parameters: {
             query?: {
                 include_inactive?: boolean;
+                /** @description Nombre maximum de lignes renvoyees. Absent, l'endpoint renvoie l'integralite des lignes du jeu filtre (voir PaginationMeta.yaml) : il n'y a pas de valeur par defaut qui tronquerait silencieusement une liste. */
+                limit?: components["parameters"]["Limit"];
+                /** @description Nombre de lignes a sauter avant le debut de la page. Requiert `limit` : fourni sans `limit`, il serait sous-specifie (voir la note "Regle offset/limit" dans PaginationMeta.yaml) et est donc rejete avec la reponse BadRequest.yaml. */
+                offset?: components["parameters"]["Offset"];
+                /** @description Recherche plein texte simple (sous-chaine, insensible a la casse), sur le sous-ensemble de colonnes documente par chaque ressource dans la description de ce parametre au niveau de l'operation. A distinguer des filtres structures deja existants sur certaines ressources (`include_inactive`, `node_id`, `role_id`, ...), qui restent des parametres dedies et se combinent avec `q`. */
+                q?: components["parameters"]["Search"];
+                sort?: "code" | "-code" | "name" | "-name";
             };
             header?: never;
             path?: never;
@@ -4477,9 +4532,10 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CostTypeRead"][];
+                    "application/json": components["schemas"]["CostTypeListRead"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
         };
     };
@@ -4597,7 +4653,13 @@ export interface operations {
     };
     listCostCategoryRates: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Nombre maximum de lignes renvoyees. Absent, l'endpoint renvoie l'integralite des lignes du jeu filtre (voir PaginationMeta.yaml) : il n'y a pas de valeur par defaut qui tronquerait silencieusement une liste. */
+                limit?: components["parameters"]["Limit"];
+                /** @description Nombre de lignes a sauter avant le debut de la page. Requiert `limit` : fourni sans `limit`, il serait sous-specifie (voir la note "Regle offset/limit" dans PaginationMeta.yaml) et est donc rejete avec la reponse BadRequest.yaml. */
+                offset?: components["parameters"]["Offset"];
+                sort?: "year" | "-year";
+            };
             header?: never;
             path: {
                 /** @description Identifiant technique de la categorie de cout */
@@ -4613,16 +4675,23 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CostRateRead"][];
+                    "application/json": components["schemas"]["CostRateListRead"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["ResourceNotFound"];
         };
     };
     listCostRates: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Nombre maximum de lignes renvoyees. Absent, l'endpoint renvoie l'integralite des lignes du jeu filtre (voir PaginationMeta.yaml) : il n'y a pas de valeur par defaut qui tronquerait silencieusement une liste. */
+                limit?: components["parameters"]["Limit"];
+                /** @description Nombre de lignes a sauter avant le debut de la page. Requiert `limit` : fourni sans `limit`, il serait sous-specifie (voir la note "Regle offset/limit" dans PaginationMeta.yaml) et est donc rejete avec la reponse BadRequest.yaml. */
+                offset?: components["parameters"]["Offset"];
+                sort?: "year" | "-year";
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -4635,9 +4704,10 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CostRateRead"][];
+                    "application/json": components["schemas"]["CostRateListRead"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
         };
     };
@@ -4701,7 +4771,13 @@ export interface operations {
     };
     listInflationRates: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Nombre maximum de lignes renvoyees. Absent, l'endpoint renvoie l'integralite des lignes du jeu filtre (voir PaginationMeta.yaml) : il n'y a pas de valeur par defaut qui tronquerait silencieusement une liste. */
+                limit?: components["parameters"]["Limit"];
+                /** @description Nombre de lignes a sauter avant le debut de la page. Requiert `limit` : fourni sans `limit`, il serait sous-specifie (voir la note "Regle offset/limit" dans PaginationMeta.yaml) et est donc rejete avec la reponse BadRequest.yaml. */
+                offset?: components["parameters"]["Offset"];
+                sort?: "year" | "-year";
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -4714,9 +4790,10 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["InflationRateRead"][];
+                    "application/json": components["schemas"]["InflationRateListRead"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
         };
     };
@@ -4753,6 +4830,12 @@ export interface operations {
         parameters: {
             query?: {
                 role_id?: number;
+                /** @description Nombre maximum de lignes renvoyees. Absent, l'endpoint renvoie l'integralite des lignes du jeu filtre (voir PaginationMeta.yaml) : il n'y a pas de valeur par defaut qui tronquerait silencieusement une liste. */
+                limit?: components["parameters"]["Limit"];
+                /** @description Nombre de lignes a sauter avant le debut de la page. Requiert `limit` : fourni sans `limit`, il serait sous-specifie (voir la note "Regle offset/limit" dans PaginationMeta.yaml) et est donc rejete avec la reponse BadRequest.yaml. */
+                offset?: components["parameters"]["Offset"];
+                /** @description RoleCapacity ne porte pas de colonne `year` (une seule ligne de capacite par role, cf. uq_wf_role_capacity_role) : `role_id` est la seule cle de tri naturelle exposee. */
+                sort?: "role_id" | "-role_id";
             };
             header?: never;
             path?: never;
@@ -4766,9 +4849,10 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RoleCapacityRead"][];
+                    "application/json": components["schemas"]["RoleCapacityListRead"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
         };
     };
