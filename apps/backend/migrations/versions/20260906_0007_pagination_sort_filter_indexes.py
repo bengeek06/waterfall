@@ -24,6 +24,19 @@ description): `wf_cost_rate` (both `/resources/categories/{id}/rates` via
 `GET .../role-assignments` to a handful of rows per task before the sort/join
 against `ResourceRole.name` even runs).
 
+`include_inactive=true` (calendars, categories, cost-types) drops the
+`is_active` equality filter entirely, turning the query into an unfiltered
+global sort. An `is_active`-prefixed composite can't serve that: it groups
+rows by `is_active` first, so a global `ORDER BY name`/`category_code` can't
+be read off it without an extra sort step. Standalone, non-prefixed indexes
+cover that path for every such column that isn't already globally unique
+(`code`/`accounting_code` are, via their own `unique=True`, so they need no
+counterpart). Likewise, `wf_estimate_cost_line` has no `default_sort`, so an
+absent `?sort=` falls back to the tiebreaker alone (`WHERE estimate_id = ?
+ORDER BY id`) -- the pre-existing single-column `idx_wf_estimate_cost_line_estimate`
+doesn't include `id`, so that default path needed its own composite too
+(caught by Copilot review on PR #173, both points).
+
 Revision ID: 20260906_0007
 Revises: 20260903_0006
 Create Date: 2026-09-06 00:00:00.000000
@@ -45,6 +58,9 @@ def upgrade() -> None:
     # GET /resources/calendars: filter is_active, sort code|name.
     op.create_index("idx_wf_calendar_is_active_code", "wf_calendar", ["is_active", "code"])
     op.create_index("idx_wf_calendar_is_active_name", "wf_calendar", ["is_active", "name", "id"])
+    # include_inactive=true drops the is_active filter: a global sort-by-name needs
+    # its own non-prefixed index (code is already global via uq_wf_calendar_code).
+    op.create_index("idx_wf_calendar_name", "wf_calendar", ["name", "id"])
 
     # GET /resources/roles: filter is_active (always), sort name.
     op.create_index(
@@ -65,10 +81,20 @@ def upgrade() -> None:
     op.create_index(
         "idx_wf_cost_category_is_active_name", "wf_cost_category", ["is_active", "name", "id"]
     )
+    # include_inactive=true drops the is_active filter: global sorts by
+    # category_code/name each need their own non-prefixed index (accounting_code is
+    # already global via its own unique=True).
+    op.create_index(
+        "idx_wf_cost_category_category_code", "wf_cost_category", ["category_code", "id"]
+    )
+    op.create_index("idx_wf_cost_category_name", "wf_cost_category", ["name", "id"])
 
     # GET /resources/cost-types: filter is_active, sort code|name.
     op.create_index("idx_wf_cost_type_is_active_code", "wf_cost_type", ["is_active", "code"])
     op.create_index("idx_wf_cost_type_is_active_name", "wf_cost_type", ["is_active", "name", "id"])
+    # include_inactive=true drops the is_active filter: a global sort-by-name needs
+    # its own non-prefixed index (code is already global via its own unique=True).
+    op.create_index("idx_wf_cost_type_name", "wf_cost_type", ["name", "id"])
 
     # GET /projects/{id}/estimates: filter project_id (always), sort
     # kind|status|created_at (version_number, the default sort, is already covered by
@@ -99,7 +125,13 @@ def upgrade() -> None:
     )
 
     # GET /projects/{id}/estimates/{id}/cost-lines: filter estimate_id (always), no
-    # default_sort -- every sortable column needs its own composite.
+    # default_sort -- every sortable column needs its own composite. An absent
+    # ?sort= falls back to the tiebreaker alone (ORDER BY id): the pre-existing
+    # single-column idx_wf_estimate_cost_line_estimate doesn't include id, so that
+    # default path needs this composite too.
+    op.create_index(
+        "idx_wf_estimate_cost_line_estimate_id", "wf_estimate_cost_line", ["estimate_id", "id"]
+    )
     op.create_index(
         "idx_wf_estimate_cost_line_estimate_label",
         "wf_estimate_cost_line",
@@ -167,6 +199,7 @@ def downgrade() -> None:
     )
     op.drop_index("idx_wf_estimate_cost_line_estimate_quantity", table_name="wf_estimate_cost_line")
     op.drop_index("idx_wf_estimate_cost_line_estimate_label", table_name="wf_estimate_cost_line")
+    op.drop_index("idx_wf_estimate_cost_line_estimate_id", table_name="wf_estimate_cost_line")
 
     op.drop_index(
         "idx_wf_estimate_task_row_estimate_outline_level", table_name="wf_estimate_task_row"
@@ -180,14 +213,18 @@ def downgrade() -> None:
     op.drop_index("idx_wf_estimate_project_status", table_name="wf_estimate")
     op.drop_index("idx_wf_estimate_project_kind", table_name="wf_estimate")
 
+    op.drop_index("idx_wf_cost_type_name", table_name="wf_cost_type")
     op.drop_index("idx_wf_cost_type_is_active_name", table_name="wf_cost_type")
     op.drop_index("idx_wf_cost_type_is_active_code", table_name="wf_cost_type")
 
+    op.drop_index("idx_wf_cost_category_name", table_name="wf_cost_category")
+    op.drop_index("idx_wf_cost_category_category_code", table_name="wf_cost_category")
     op.drop_index("idx_wf_cost_category_is_active_name", table_name="wf_cost_category")
     op.drop_index("idx_wf_cost_category_is_active_category_code", table_name="wf_cost_category")
     op.drop_index("idx_wf_cost_category_is_active_accounting_code", table_name="wf_cost_category")
 
     op.drop_index("idx_wf_resource_role_is_active_name", table_name="wf_resource_role")
 
+    op.drop_index("idx_wf_calendar_name", table_name="wf_calendar")
     op.drop_index("idx_wf_calendar_is_active_name", table_name="wf_calendar")
     op.drop_index("idx_wf_calendar_is_active_code", table_name="wf_calendar")

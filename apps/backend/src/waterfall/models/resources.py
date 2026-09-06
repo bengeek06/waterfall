@@ -47,6 +47,12 @@ class Calendar(Base):
         # name (unlike code) is not unique and ties must be broken deterministically.
         Index("idx_wf_calendar_is_active_code", "is_active", "code"),
         Index("idx_wf_calendar_is_active_name", "is_active", "name", "id"),
+        # include_inactive=true drops the is_active filter entirely, so a plain
+        # ORDER BY name (no filter at all) can no longer be served by the
+        # is_active-prefixed index above -- it groups rows by is_active first, so a
+        # global name order can't be read off it without an extra sort step. code
+        # needs no such counterpart: uq_wf_calendar_code already covers it globally.
+        Index("idx_wf_calendar_name", "name", "id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -154,6 +160,11 @@ class CostType(Base):
         # composite carries the id tiebreaker.
         Index("idx_wf_cost_type_is_active_code", "is_active", "code"),
         Index("idx_wf_cost_type_is_active_name", "is_active", "name", "id"),
+        # include_inactive=true drops the is_active filter, so a global ORDER BY name
+        # can't be served by the is_active-prefixed index above (grouped by
+        # is_active first). code needs no counterpart: its own unique=True already
+        # covers it globally.
+        Index("idx_wf_cost_type_name", "name", "id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -179,6 +190,12 @@ class CostCategory(Base):
         Index("idx_wf_cost_category_is_active_accounting_code", "is_active", "accounting_code"),
         Index("idx_wf_cost_category_is_active_category_code", "is_active", "category_code", "id"),
         Index("idx_wf_cost_category_is_active_name", "is_active", "name", "id"),
+        # include_inactive=true drops the is_active filter, so global ORDER BY
+        # category_code/name can't be served by the is_active-prefixed indexes above
+        # (grouped by is_active first). accounting_code needs no counterpart: its
+        # own unique=True already covers it globally.
+        Index("idx_wf_cost_category_category_code", "category_code", "id"),
+        Index("idx_wf_cost_category_name", "name", "id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -371,7 +388,11 @@ class EstimateCostLine(Base):
         # Issue #116 (E7-05): GET .../cost-lines always filters on estimate_id and has
         # no default_sort (any of label/quantity/unit_cost/purchase_cost/created_at
         # can be requested via ?sort=, none is unique per estimate), so each needs its
-        # own composite with the id tiebreaker.
+        # own composite with the id tiebreaker. An absent `?sort=` falls back to the
+        # tiebreaker alone (`WHERE estimate_id = ? ORDER BY id`); the pre-existing
+        # single-column idx_wf_estimate_cost_line_estimate above doesn't include id,
+        # so that default path still needs its own composite too.
+        Index("idx_wf_estimate_cost_line_estimate_id", "estimate_id", "id"),
         Index("idx_wf_estimate_cost_line_estimate_label", "estimate_id", "label", "id"),
         Index("idx_wf_estimate_cost_line_estimate_quantity", "estimate_id", "quantity", "id"),
         Index("idx_wf_estimate_cost_line_estimate_unit_cost", "estimate_id", "unit_cost", "id"),
