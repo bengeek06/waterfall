@@ -424,13 +424,14 @@ export function PlanningTreeTable({
                       onFieldKeyDown={scheduleDrafts.onScheduleFieldKeyDown}
                     />
                     <TableCell className="whitespace-normal break-words align-top">
-                      <div className="flex items-center gap-2">
-                        <span>{predecessorsLabel(row)}</span>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="min-w-0">{predecessorsLabel(row)}</span>
                         {!readOnly && onEditLinks ? (
                           <Button
                             type="button"
                             variant="outline"
                             size="sm"
+                            className="shrink-0"
                             disabled={mutationBusy}
                             aria-label={`Éditer les prédécesseurs de ${row.name}`}
                             onClick={(event: MouseEvent<HTMLButtonElement>) => {

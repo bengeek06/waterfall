@@ -1671,6 +1671,18 @@ describe("PlanningTreeTable", () => {
       expect(predecessorsCell).toHaveClass("whitespace-normal", "break-words", "align-top");
     });
 
+    it("lets the predecessors cell content wrap and shrink instead of overflowing at the minimum column width", () => {
+      render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+
+      const firstDataRow = screen.getAllByRole("row")[1];
+      const predecessorsCell = firstDataRow.querySelectorAll("td")[7];
+      const flexContainer = predecessorsCell.querySelector("div");
+      expect(flexContainer).toHaveClass("flex", "flex-wrap", "items-center", "gap-2");
+
+      const label = flexContainer?.querySelector("span");
+      expect(label).toHaveClass("min-w-0");
+    });
+
     // TaskNameLabel (in planning-tree-table.tsx) decides whether a name is interactive by comparing
     // the rendered text element's `scrollWidth`/`clientWidth`, the standard CSS-truncation-detection
     // pattern. jsdom never runs real layout, so both are always 0 there (0 > 0 is false) unless
