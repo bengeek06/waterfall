@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { DEFAULT_PLANNING_COLUMN_WIDTHS } from "@/hooks/use-planning-column-widths";
 import { ApiError, type Task } from "@/lib/backend";
 import { PlanningTreeTable } from "./planning-tree-table";
 
@@ -1565,6 +1566,34 @@ describe("PlanningTreeTable", () => {
       expect(container.querySelectorAll("colgroup col")).toHaveLength(8);
     });
 
+    it("pins the table's own width to the sum of the configured column widths instead of stretching to w-full", () => {
+      // Table contributes `w-full` by default; under table-fixed layout that lets the browser
+      // redistribute any surplus (container wider than the configured total) across the columns,
+      // making the rendered widths drift from the persisted ones and coupling one column's resize
+      // to its neighbors. Pinning an explicit width equal to the configured total keeps every
+      // handle in sole control of its own column.
+      const { container } = render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+
+      const table = container.querySelector("table") as HTMLTableElement;
+      const expectedTotal = Object.values(DEFAULT_PLANNING_COLUMN_WIDTHS).reduce((sum, width) => sum + width, 0);
+      expect(table.style.width).toBe(`${expectedTotal}px`);
+      expect(table).not.toHaveClass("w-full");
+    });
+
+    it("grows the table's pinned width when a column is resized wider", () => {
+      const { container } = render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+
+      const table = container.querySelector("table") as HTMLTableElement;
+      const initialTotal = Object.values(DEFAULT_PLANNING_COLUMN_WIDTHS).reduce((sum, width) => sum + width, 0);
+      expect(table.style.width).toBe(`${initialTotal}px`);
+
+      fireEvent.mouseDown(screen.getByTestId("resize-handle-predecessors"), { clientX: 100 });
+      fireEvent.mouseMove(window, { clientX: 220 });
+      fireEvent.mouseUp(window, { clientX: 220 });
+
+      expect(table.style.width).toBe(`${initialTotal + 120}px`);
+    });
+
     it("renders a resize handle on every column header", () => {
       render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
 
@@ -1617,12 +1646,22 @@ describe("PlanningTreeTable", () => {
       expect(screen.getByTestId("resize-handle-name")).toHaveAttribute("tabIndex", "0");
     });
 
-    it("exposes the current width and minimum on the resize handle for assistive tech", () => {
+    it("exposes the current width, minimum and maximum on the resize handle for assistive tech", () => {
       render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
 
       const handle = screen.getByTestId("resize-handle-name");
       expect(handle).toHaveAttribute("aria-valuenow", "220");
-      expect(handle).toHaveAttribute("aria-valuemin", "60");
+      // "name" tolerates a lower floor than uid/type/start/end/mode since its content truncates
+      // cleanly instead of overflowing into the next column.
+      expect(handle).toHaveAttribute("aria-valuemin", "100");
+      expect(handle).toHaveAttribute("aria-valuemax", "480");
+    });
+
+    it("gives a column hosting non-truncatable content (the mode selector) a higher minimum than uid", () => {
+      render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+
+      expect(screen.getByTestId("resize-handle-mode")).toHaveAttribute("aria-valuemin", "90");
+      expect(screen.getByTestId("resize-handle-uid")).toHaveAttribute("aria-valuemin", "60");
     });
 
     it("widens a column by a fixed step on ArrowRight and persists it", () => {

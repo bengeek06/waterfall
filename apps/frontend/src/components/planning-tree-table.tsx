@@ -12,7 +12,9 @@ import { PlanningScheduleCells } from "@/components/planning-schedule-cells";
 import { PlanningTaskLinksDialog } from "@/components/planning-task-links-dialog";
 import { PlanningTreeToolbar } from "@/components/planning-tree-toolbar";
 import {
-  PLANNING_MIN_COLUMN_WIDTH,
+  PLANNING_COLUMN_ORDER,
+  PLANNING_MAX_COLUMN_WIDTH,
+  PLANNING_MIN_COLUMN_WIDTHS,
   usePlanningColumnWidths,
   type PlanningColumnKey,
 } from "@/hooks/use-planning-column-widths";
@@ -50,12 +52,14 @@ function ColumnResizeHandle({
   column,
   label,
   width,
+  min,
   onResizeStart,
   onResizeBy,
 }: {
   column: PlanningColumnKey;
   label: string;
   width: number;
+  min: number;
   onResizeStart: (column: PlanningColumnKey, event: MouseEvent<HTMLSpanElement>) => void;
   onResizeBy: (column: PlanningColumnKey, delta: number) => void;
 }) {
@@ -65,7 +69,8 @@ function ColumnResizeHandle({
       aria-orientation="vertical"
       aria-label={`Redimensionner la colonne ${label}`}
       aria-valuenow={width}
-      aria-valuemin={PLANNING_MIN_COLUMN_WIDTH}
+      aria-valuemin={min}
+      aria-valuemax={PLANNING_MAX_COLUMN_WIDTH}
       tabIndex={0}
       data-testid={`resize-handle-${column}`}
       className="absolute right-0 top-0 h-full w-1 cursor-col-resize select-none"
@@ -159,6 +164,16 @@ export function PlanningTreeTable({
   const tasksByUid = useMemo(() => new Map(tasks.map((task) => [task.uid, task])), [tasks]);
 
   const columnWidths = usePlanningColumnWidths();
+  // Table renders `w-full`, which under table-fixed layout redistributes any surplus between the
+  // container and this sum across the columns -- making rendered widths drift from the persisted
+  // ones and coupling a resize on one column to its neighbors. Pinning the table's own width to
+  // exactly this sum (see the inline style below) keeps each handle in sole control of its column;
+  // the existing overflow-x-auto wrapper still takes over and scrolls once this exceeds the
+  // viewport.
+  const totalColumnWidth = useMemo(
+    () => PLANNING_COLUMN_ORDER.reduce((total, key) => total + columnWidths.widths[key], 0),
+    [columnWidths.widths],
+  );
   const selection = usePlanningTreeSelection(tasks);
   const scheduleDrafts = usePlanningScheduleDrafts({ onScheduleUpdate, mutationBusy });
   const taskLinks = usePlanningTaskLinks({ tasks, onEditLinks });
@@ -228,7 +243,7 @@ export function PlanningTreeTable({
         {selection.rows.length === 0 ? (
           <p className="py-6 text-sm text-muted-foreground">Le planning ne contient aucune tâche.</p>
         ) : (
-          <Table className="table-fixed">
+          <Table className="table-fixed w-auto" style={{ width: totalColumnWidth }}>
             <colgroup>
               {COLUMN_HEADERS.map(({ key }) => (
                 <col key={key} style={{ width: `${columnWidths.widths[key]}px` }} />
@@ -249,6 +264,7 @@ export function PlanningTreeTable({
                       column={key}
                       label={label}
                       width={columnWidths.widths[key]}
+                      min={PLANNING_MIN_COLUMN_WIDTHS[key]}
                       onResizeStart={columnWidths.startResize}
                       onResizeBy={columnWidths.resizeBy}
                     />

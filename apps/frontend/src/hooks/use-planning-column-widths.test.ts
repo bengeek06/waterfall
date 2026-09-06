@@ -4,7 +4,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_PLANNING_COLUMN_WIDTHS,
   PLANNING_COLUMN_WIDTHS_STORAGE_KEY,
-  PLANNING_MIN_COLUMN_WIDTH,
+  PLANNING_MAX_COLUMN_WIDTH,
+  PLANNING_MIN_COLUMN_WIDTHS,
   usePlanningColumnWidths,
 } from "@/hooks/use-planning-column-widths";
 
@@ -29,6 +30,12 @@ describe("usePlanningColumnWidths", () => {
   });
 
   it("loads persisted widths from localStorage when present and valid", () => {
+    // Backed by useSyncExternalStore rather than a synchronous useState initializer: React only
+    // calls getServerSnapshot (always DEFAULT_PLANNING_COLUMN_WIDTHS) while hydrating server-
+    // rendered markup, and getSnapshot (this localStorage-backed read) on every plain client
+    // render, including the very first one in this jsdom-only test -- so this still resolves in a
+    // single render here, while a real SSR/hydration pass would render defaults first and only
+    // pick up this value in the following client-only render.
     const stored = { ...DEFAULT_PLANNING_COLUMN_WIDTHS, predecessors: 320 };
     window.localStorage.setItem(PLANNING_COLUMN_WIDTHS_STORAGE_KEY, JSON.stringify(stored));
 
@@ -43,6 +50,24 @@ describe("usePlanningColumnWidths", () => {
     const { result } = renderHook(() => usePlanningColumnWidths());
 
     expect(result.current.widths).toEqual(DEFAULT_PLANNING_COLUMN_WIDTHS);
+  });
+
+  it("clamps a persisted width below its column's minimum instead of discarding it", () => {
+    const stored = { ...DEFAULT_PLANNING_COLUMN_WIDTHS, uid: 1 };
+    window.localStorage.setItem(PLANNING_COLUMN_WIDTHS_STORAGE_KEY, JSON.stringify(stored));
+
+    const { result } = renderHook(() => usePlanningColumnWidths());
+
+    expect(result.current.widths.uid).toBe(PLANNING_MIN_COLUMN_WIDTHS.uid);
+  });
+
+  it("clamps a persisted width above the shared maximum", () => {
+    const stored = { ...DEFAULT_PLANNING_COLUMN_WIDTHS, predecessors: 10_000 };
+    window.localStorage.setItem(PLANNING_COLUMN_WIDTHS_STORAGE_KEY, JSON.stringify(stored));
+
+    const { result } = renderHook(() => usePlanningColumnWidths());
+
+    expect(result.current.widths.predecessors).toBe(PLANNING_MAX_COLUMN_WIDTH);
   });
 
   it("updates and persists a column's width when dragging its resize handle", () => {
@@ -68,7 +93,7 @@ describe("usePlanningColumnWidths", () => {
     expect(persisted.predecessors).toBe(startWidth + 60);
   });
 
-  it("clamps the resized width to the configured minimum", () => {
+  it("clamps the resized width to the column's configured minimum", () => {
     const { result } = renderHook(() => usePlanningColumnWidths());
 
     act(() => {
@@ -84,7 +109,26 @@ describe("usePlanningColumnWidths", () => {
       fireMouseEvent("mouseup", -1000);
     });
 
-    expect(result.current.widths.uid).toBe(PLANNING_MIN_COLUMN_WIDTH);
+    expect(result.current.widths.uid).toBe(PLANNING_MIN_COLUMN_WIDTHS.uid);
+  });
+
+  it("clamps the resized width to the shared maximum", () => {
+    const { result } = renderHook(() => usePlanningColumnWidths());
+
+    act(() => {
+      result.current.startResize("predecessors", {
+        clientX: 100,
+        preventDefault: () => {},
+      } as never);
+    });
+    act(() => {
+      fireMouseEvent("mousemove", 100_000);
+    });
+    act(() => {
+      fireMouseEvent("mouseup", 100_000);
+    });
+
+    expect(result.current.widths.predecessors).toBe(PLANNING_MAX_COLUMN_WIDTH);
   });
 
   it("adjusts and persists a column's width by a fixed delta via resizeBy", () => {
@@ -100,13 +144,40 @@ describe("usePlanningColumnWidths", () => {
     expect(persisted.name).toBe(startWidth + 10);
   });
 
-  it("clamps resizeBy to the configured minimum instead of going negative", () => {
+  it("clamps resizeBy to the column's configured minimum instead of going negative", () => {
     const { result } = renderHook(() => usePlanningColumnWidths());
 
     act(() => {
       result.current.resizeBy("uid", -1000);
     });
 
-    expect(result.current.widths.uid).toBe(PLANNING_MIN_COLUMN_WIDTH);
+    expect(result.current.widths.uid).toBe(PLANNING_MIN_COLUMN_WIDTHS.uid);
+  });
+
+  it("clamps resizeBy to the shared maximum", () => {
+    const { result } = renderHook(() => usePlanningColumnWidths());
+
+    act(() => {
+      result.current.resizeBy("predecessors", 10_000);
+    });
+
+    expect(result.current.widths.predecessors).toBe(PLANNING_MAX_COLUMN_WIDTH);
+  });
+
+  it("gives columns with non-truncatable content (dates, type, the mode selector) a higher minimum than uid/name/predecessors", () => {
+    // Regression guard for the shared 60px minimum previously letting e.g. the mode column's w-fit
+    // Select trigger paint over the next column when shrunk all the way down.
+    expect(PLANNING_MIN_COLUMN_WIDTHS.start).toBeGreaterThan(PLANNING_MIN_COLUMN_WIDTHS.uid);
+    expect(PLANNING_MIN_COLUMN_WIDTHS.end).toBeGreaterThan(PLANNING_MIN_COLUMN_WIDTHS.uid);
+    expect(PLANNING_MIN_COLUMN_WIDTHS.type).toBeGreaterThan(PLANNING_MIN_COLUMN_WIDTHS.uid);
+    expect(PLANNING_MIN_COLUMN_WIDTHS.mode).toBeGreaterThan(PLANNING_MIN_COLUMN_WIDTHS.uid);
+  });
+
+  it("keeps every default width within its column's [minimum, maximum] range", () => {
+    for (const [key, width] of Object.entries(DEFAULT_PLANNING_COLUMN_WIDTHS)) {
+      const min = PLANNING_MIN_COLUMN_WIDTHS[key as keyof typeof PLANNING_MIN_COLUMN_WIDTHS];
+      expect(width).toBeGreaterThanOrEqual(min);
+      expect(width).toBeLessThanOrEqual(PLANNING_MAX_COLUMN_WIDTH);
+    }
   });
 });
