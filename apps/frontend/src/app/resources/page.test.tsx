@@ -102,9 +102,28 @@ const roleFixture: ResourceRole = {
   is_active: true,
 } as never;
 
+// `getResourceRoles` is called twice per load, like `getCostTypes`: once unpaginated
+// (no 5th `listParams` argument) for the full reference list other panels rely on
+// (RolesPanel, CapacityTable, `calendarIdsInUseByActiveRoles`), and once with
+// `listParams` for the role-calendars table's own paginated/sortable/searchable
+// page (see the `costTypes`/`costTypesPage` split this mirrors). Most tests in this
+// file don't care about pagination and just want the same roles to show up either
+// way, hence this shared helper instead of a bare `mockResolvedValue`.
+function mockGetResourceRoles(roles: ResourceRole[]) {
+  mocks.getResourceRoles.mockImplementation(
+    (
+      _tokens: unknown,
+      _onSessionRefresh: unknown,
+      _nodeId: unknown,
+      _includeDescendants: unknown,
+      listParams: unknown,
+    ) => Promise.resolve(listParams === undefined ? roles : { items: roles, total: roles.length }),
+  );
+}
+
 async function renderResourcesTab(calendars: Calendar[], roles: ResourceRole[] = [], nodes: ResourceNode[] = []) {
   mocks.getResourceNodes.mockResolvedValue(nodes);
-  mocks.getResourceRoles.mockResolvedValue(roles);
+  mockGetResourceRoles(roles);
   mocks.getCalendars.mockResolvedValue(calendars);
   mocks.getCostTypes.mockResolvedValue({ items: [], total: 0 });
   mocks.getCostCategories.mockResolvedValue([]);
@@ -253,10 +272,23 @@ describe("ResourcesPage calendar mutations", () => {
     mocks.updateResourceRole.mockResolvedValue(updatedRole);
     await renderResourcesTab([activeCalendar, otherCalendar], [roleFixture], [nodeFixture]);
 
-    const select = screen.getByLabelText(`Calendrier de ${roleFixture.name} — ${nodeFixture.code} (#${roleFixture.id})`);
+    // The role-calendars table's own paginated fetch (see E8-06) resolves separately
+    // from the reference lists driving the rest of the "Ressources" tab, so the
+    // select isn't guaranteed to exist yet just because that tab is showing --
+    // `findByLabelText` waits for it instead of asserting synchronously.
+    const roleCalendarSelectLabel = `Calendrier de ${roleFixture.name} — ${nodeFixture.code} (#${roleFixture.id})`;
+    const select = await screen.findByLabelText(roleCalendarSelectLabel);
     fireEvent.change(select, { target: { value: String(otherCalendar.id) } });
 
-    const roleRow = select.closest("tr");
+    // Re-queries the select rather than reusing the pre-change DOM reference: the
+    // DataTable columns array is recreated on every render, and TanStack's
+    // `flexRender` treats each cell's function identity as its own component type,
+    // so this draft-change re-render remounts the cell's DOM node instead of
+    // updating it in place. CapacityTable renders an "Enregistrer" button per role
+    // too, so the button lookup must stay scoped to this row.
+    await waitFor(() => expect(screen.getByLabelText(roleCalendarSelectLabel)).toHaveValue(String(otherCalendar.id)));
+    const refreshedSelect = screen.getByLabelText(roleCalendarSelectLabel);
+    const roleRow = refreshedSelect.closest("tr");
     if (!roleRow) throw new Error("role row not found");
     fireEvent.click(within(roleRow).getByRole("button", { name: "Enregistrer" }));
 
@@ -269,7 +301,7 @@ describe("ResourcesPage calendar mutations", () => {
       ),
     );
 
-    await waitFor(() => expect(select).toHaveValue(String(otherCalendar.id)));
+    await waitFor(() => expect(screen.getByLabelText(roleCalendarSelectLabel)).toHaveValue(String(otherCalendar.id)));
   });
 
   it("promotes a calendar as default and locally demotes the previous default without a reload", async () => {
@@ -324,7 +356,7 @@ describe("ResourcesPage default calendar warning", () => {
 
   it("shows the warning on initial render, before switching to the Ressources tab", async () => {
     mocks.getResourceNodes.mockResolvedValue([]);
-    mocks.getResourceRoles.mockResolvedValue([]);
+    mockGetResourceRoles([]);
     mocks.getCalendars.mockResolvedValue([activeCalendar]);
     mocks.getCostTypes.mockResolvedValue({ items: [], total: 0 });
     mocks.getCostCategories.mockResolvedValue([]);
@@ -356,7 +388,7 @@ describe("ResourcesPage default calendar warning", () => {
 
   it("does not show the warning when the initial load fails, and surfaces the load error instead", async () => {
     mocks.getResourceNodes.mockRejectedValue(new ApiError(500, "Chargement impossible"));
-    mocks.getResourceRoles.mockResolvedValue([]);
+    mockGetResourceRoles([]);
     mocks.getCalendars.mockResolvedValue([]);
     mocks.getCostTypes.mockResolvedValue({ items: [], total: 0 });
     mocks.getCostCategories.mockResolvedValue([]);
@@ -389,7 +421,7 @@ describe("ResourcesPage default calendar warning", () => {
       }
       return Promise.reject(new ApiError(500, "Rechargement impossible"));
     });
-    mocks.getResourceRoles.mockResolvedValue([]);
+    mockGetResourceRoles([]);
     mocks.getCalendars.mockResolvedValue([activeCalendar]);
     mocks.getCostTypes.mockResolvedValue({ items: [], total: 0 });
     mocks.getCostCategories.mockResolvedValue([]);
@@ -441,7 +473,13 @@ describe("ResourcesPage reload race", () => {
 
     let rolesCallCount = 0;
     mocks.getResourceRoles.mockImplementation(
-      (_tokens: unknown, onSessionRefresh: (next: { accessToken: string }) => void) => {
+      (
+        _tokens: unknown,
+        onSessionRefresh: (next: { accessToken: string }) => void,
+        _nodeId: unknown,
+        _includeDescendants: unknown,
+        listParams: unknown,
+      ) => {
         rolesCallCount += 1;
         if (rolesCallCount === 1) {
           // Fires mid-flight during the first reload's still-pending Promise.all,
@@ -449,7 +487,7 @@ describe("ResourcesPage reload race", () => {
           // request settles. This starts a second, more recently triggered reload.
           onSessionRefresh({ accessToken: "refreshed-token" });
         }
-        return Promise.resolve([]);
+        return Promise.resolve(listParams === undefined ? [] : { items: [], total: 0 });
       },
     );
 
@@ -497,7 +535,7 @@ describe("ResourcesPage cost types table (E8-02)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getResourceNodes.mockResolvedValue([]);
-    mocks.getResourceRoles.mockResolvedValue([]);
+    mockGetResourceRoles([]);
     mocks.getCalendars.mockResolvedValue([]);
     mocks.getCostCategories.mockResolvedValue([]);
     mocks.getCostRates.mockResolvedValue([]);
@@ -769,6 +807,278 @@ describe("ResourcesPage cost types table (E8-02)", () => {
     // state or overwrite the fresher data already committed.
     resolveStalePage({ items: [], total: 0 });
     await waitFor(() => expect(screen.getByText("NEW")).toBeInTheDocument());
+    expect(screen.queryByRole("status", { name: "Chargement des données" })).not.toBeInTheDocument();
+  });
+});
+
+async function renderRoleCalendarsTab() {
+  mocks.getResourceNodes.mockResolvedValue([nodeFixture]);
+  mocks.getCalendars.mockResolvedValue([activeCalendar]);
+  mocks.getCostTypes.mockResolvedValue({ items: [], total: 0 });
+  mocks.getCostCategories.mockResolvedValue([]);
+  mocks.getCostRates.mockResolvedValue([]);
+  mocks.getInflationRates.mockResolvedValue([]);
+  mocks.getRoleCapacities.mockResolvedValue([]);
+  mocks.getUsers.mockResolvedValue([]);
+
+  render(<ResourcesPage />);
+  await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+  fireEvent.click(screen.getByRole("tab", { name: "Ressources" }));
+}
+
+describe("ResourcesPage role calendars table (E8-06)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("requests the table's own paginated page independently from the unpaginated reference list other panels rely on, without either leaking into the other", async () => {
+    // Genuinely different role sets for the two call shapes, so this test catches a
+    // wiring mistake by which roles show up where, not just by which params
+    // getResourceRoles was called with.
+    const fullList = [roleFixture];
+    const pagedRole: ResourceRole = { ...roleFixture, id: 99, name: "Page role" } as never;
+    mocks.getResourceRoles.mockImplementation(
+      (
+        _tokens: unknown,
+        _refresh: unknown,
+        _nodeId: unknown,
+        _includeDescendants: unknown,
+        listParams: unknown,
+      ) =>
+        Promise.resolve(
+          listParams === undefined ? fullList : { items: [pagedRole], total: 25 },
+        ),
+    );
+
+    await renderRoleCalendarsTab();
+    await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalledTimes(2));
+
+    const calls = mocks.getResourceRoles.mock.calls as [unknown, unknown, unknown, unknown, unknown][];
+    expect(calls.some(([, , , , listParams]) => listParams === undefined)).toBe(true);
+    expect(
+      calls.some(
+        ([, , , , listParams]) =>
+          typeof listParams === "object" &&
+          listParams !== null &&
+          (listParams as { limit?: number }).limit === 20 &&
+          (listParams as { offset?: number }).offset === 0,
+      ),
+    ).toBe(true);
+
+    // The role-calendars table itself shows only its own paginated slice, not the
+    // full reference list -- checked via each role's calendar-select label rather
+    // than plain text, since CapacityTable renders the exact same
+    // "name — node (#id)" label format from the full reference list and would
+    // otherwise make an ordinary text query ambiguous.
+    await waitFor(() =>
+      expect(
+        screen.getByLabelText(`Calendrier de ${pagedRole.name} — ${nodeFixture.code} (#${pagedRole.id})`),
+      ).toBeInTheDocument(),
+    );
+    expect(
+      screen.queryByLabelText(`Calendrier de ${roleFixture.name} — ${nodeFixture.code} (#${roleFixture.id})`),
+    ).not.toBeInTheDocument();
+  });
+
+  it("paginates: clicking Suivant refetches the table with the next offset", async () => {
+    mocks.getResourceRoles.mockImplementation(
+      (
+        _tokens: unknown,
+        _refresh: unknown,
+        _nodeId: unknown,
+        _includeDescendants: unknown,
+        listParams: unknown,
+      ) => Promise.resolve(listParams === undefined ? [] : { items: [roleFixture], total: 25 }),
+    );
+
+    await renderRoleCalendarsTab();
+    const suivantButtons = await screen.findAllByRole("button", { name: "Suivant" });
+    const roleCalendarsSuivant = suivantButtons[suivantButtons.length - 1];
+    await waitFor(() => expect(roleCalendarsSuivant).toBeEnabled());
+
+    fireEvent.click(roleCalendarsSuivant);
+
+    await waitFor(() =>
+      expect(mocks.getResourceRoles).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        undefined,
+        undefined,
+        expect.objectContaining({ limit: 20, offset: 20 }),
+      ),
+    );
+  });
+
+  it("searches: typing in the role-calendars search box debounces then refetches with q, resetting to offset 0", async () => {
+    mocks.getResourceRoles.mockImplementation(
+      (
+        _tokens: unknown,
+        _refresh: unknown,
+        _nodeId: unknown,
+        _includeDescendants: unknown,
+        listParams: unknown,
+      ) => Promise.resolve(listParams === undefined ? [] : { items: [roleFixture], total: 1 }),
+    );
+
+    await renderRoleCalendarsTab();
+    const searchInput = await screen.findByLabelText("Rechercher un rôle");
+
+    fireEvent.change(searchInput, { target: { value: "dev" } });
+
+    await waitFor(() =>
+      expect(mocks.getResourceRoles).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        undefined,
+        undefined,
+        expect.objectContaining({ q: "dev", offset: 0 }),
+      ),
+    );
+  });
+
+  it("sorts: clicking the Rôle column header refetches with sort=name", async () => {
+    mocks.getResourceRoles.mockImplementation(
+      (
+        _tokens: unknown,
+        _refresh: unknown,
+        _nodeId: unknown,
+        _includeDescendants: unknown,
+        listParams: unknown,
+      ) => Promise.resolve(listParams === undefined ? [] : { items: [roleFixture], total: 1 }),
+    );
+
+    await renderRoleCalendarsTab();
+    // CapacityTable also has a plain (non-sortable) "Rôle" column header, so only
+    // the sortable header's own wrapping Button -- unique to this table -- is a
+    // safe target here.
+    await screen.findByRole("button", { name: "Rôle" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Rôle" }));
+
+    await waitFor(() =>
+      expect(mocks.getResourceRoles).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        undefined,
+        undefined,
+        expect.objectContaining({ sort: "name" }),
+      ),
+    );
+  });
+
+  it("refetches the role-calendars page after saving a role's calendar, on top of the existing local roles update", async () => {
+    mocks.getResourceRoles.mockImplementation(
+      (
+        _tokens: unknown,
+        _refresh: unknown,
+        _nodeId: unknown,
+        _includeDescendants: unknown,
+        listParams: unknown,
+      ) => Promise.resolve(listParams === undefined ? [roleFixture] : { items: [roleFixture], total: 1 }),
+    );
+    mocks.updateResourceRole.mockResolvedValue({ ...roleFixture, calendar_id: activeCalendar.id } as never);
+
+    await renderRoleCalendarsTab();
+    await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalledTimes(2));
+
+    const roleCalendarSelectLabel = `Calendrier de ${roleFixture.name} — ${nodeFixture.code} (#${roleFixture.id})`;
+    const select = await screen.findByLabelText(roleCalendarSelectLabel);
+    fireEvent.change(select, { target: { value: String(activeCalendar.id) } });
+
+    // Re-queries the select rather than reusing the pre-change DOM reference: the
+    // DataTable columns array is recreated on every render (see `data-table.tsx`),
+    // and TanStack's `flexRender` treats each cell's function identity as its own
+    // component type, so a re-render (triggered here by the draft-change re-render
+    // of the whole table) remounts the cell's DOM node instead of just updating it.
+    // CapacityTable renders an "Enregistrer" button per role too, so the button
+    // lookup must stay scoped to this row rather than the page as a whole.
+    await waitFor(() => expect(screen.getByLabelText(roleCalendarSelectLabel)).toHaveValue(String(activeCalendar.id)));
+    const refreshedSelect = screen.getByLabelText(roleCalendarSelectLabel);
+    fireEvent.click(within(refreshedSelect.closest("tr")!).getByRole("button", { name: "Enregistrer" }));
+
+    await waitFor(() => expect(mocks.updateResourceRole).toHaveBeenCalledTimes(1));
+    // The initial load made 2 calls (reference list + table page); saving a role's
+    // calendar must trigger a 3rd, to refresh the table's own paginated view.
+    await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalledTimes(3));
+  });
+
+  it("redirects to login when the role-calendars table's own paginated fetch reports session expiry", async () => {
+    mocks.getResourceRoles.mockImplementation(
+      (
+        _tokens: unknown,
+        _refresh: unknown,
+        _nodeId: unknown,
+        _includeDescendants: unknown,
+        listParams: unknown,
+      ) =>
+        listParams === undefined
+          ? Promise.resolve([])
+          : Promise.reject(new SessionExpiredError()),
+    );
+
+    await renderRoleCalendarsTab();
+
+    await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith("/login"));
+  });
+
+  it("does not leave the role-calendars table's loading indicator stuck when a newer pagination fetch resolves before an older, obsolete one", async () => {
+    // Unlike the cost-types table (which has an always-visible pinned create row to
+    // drive a race from), every interactive element in this table lives inside the
+    // same loading-gated body as its data -- so the generation guard is exercised
+    // here directly through two overlapping pagination fetches instead of through a
+    // mutation's own reload, but it's the same "stale finally must not stomp a
+    // fresher generation's loading flag" bug class as `reloadCostTypesPage`'s.
+    let resolveFirstPage!: (page: { items: ResourceRole[]; total: number }) => void;
+    const firstPagePromise = new Promise<{ items: ResourceRole[]; total: number }>((resolve) => {
+      resolveFirstPage = resolve;
+    });
+    let paginatedCallCount = 0;
+    mocks.getResourceRoles.mockImplementation(
+      (
+        _tokens: unknown,
+        _refresh: unknown,
+        _nodeId: unknown,
+        _includeDescendants: unknown,
+        listParams: unknown,
+      ) => {
+        if (listParams === undefined) return Promise.resolve([roleFixture]);
+        paginatedCallCount += 1;
+        // First paginated call: the initial mount fetch. Kept pending on purpose,
+        // simulating an older reload that resolves after a newer one triggered
+        // below.
+        if (paginatedCallCount === 1) return firstPagePromise;
+        return Promise.resolve({ items: [roleFixture], total: 1 });
+      },
+    );
+
+    await renderRoleCalendarsTab();
+    await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByRole("status", { name: "Chargement des données" })).toBeInTheDocument());
+
+    // Triggers a second, more recent pagination fetch while the first is still
+    // in-flight -- resolves immediately, well before the first is released below.
+    const searchInput = await screen.findByLabelText("Rechercher un rôle");
+    fireEvent.change(searchInput, { target: { value: "dev" } });
+
+    await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalledTimes(3));
+    // The newer fetch resolving must clear the loading state on its own -- it must
+    // not wait for the stale first call.
+    await waitFor(() =>
+      expect(screen.queryByRole("status", { name: "Chargement des données" })).not.toBeInTheDocument(),
+    );
+
+    // Releasing the stale initial fetch afterwards must not resurrect the loading
+    // state or overwrite the fresher data already committed.
+    resolveFirstPage({ items: [], total: 0 });
+    await waitFor(() =>
+      expect(
+        screen.getByLabelText(`Calendrier de ${roleFixture.name} — ${nodeFixture.code} (#${roleFixture.id})`),
+      ).toBeInTheDocument(),
+    );
     expect(screen.queryByRole("status", { name: "Chargement des données" })).not.toBeInTheDocument();
   });
 });

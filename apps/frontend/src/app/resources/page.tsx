@@ -114,6 +114,20 @@ export default function ResourcesPage() {
   const [costTypesLimit] = useState(20);
   const [costTypesSort, setCostTypesSort] = useState<string | null>(null);
   const [costTypesQuery, setCostTypesQuery] = useState("");
+  // The role-calendars table's own paginated/sortable/searchable-by-name view --
+  // independent of the full `roles` list above (still needed unpaginated by
+  // RolesPanel/CapacityTable/`calendarIdsInUseByActiveRoles`), mirroring the
+  // `costTypes` vs `costTypesPage` split for the same reason: slicing `roles`
+  // client-side would silently violate "recherche et tri delegues au serveur".
+  const [roleCalendarsPage, setRoleCalendarsPage] = useState<{ items: ResourceRole[]; total: number }>({
+    items: [],
+    total: 0,
+  });
+  const [roleCalendarsLoading, setRoleCalendarsLoading] = useState(false);
+  const [roleCalendarsOffset, setRoleCalendarsOffset] = useState(0);
+  const [roleCalendarsLimit] = useState(20);
+  const [roleCalendarsSort, setRoleCalendarsSort] = useState<string | null>(null);
+  const [roleCalendarsQuery, setRoleCalendarsQuery] = useState("");
   const [categories, setCategories] = useState<CostCategory[]>([]);
   const [rates, setRates] = useState<CostRate[]>([]);
   const [capacities, setCapacities] = useState<RoleCapacity[]>([]);
@@ -356,6 +370,84 @@ export default function ResourcesPage() {
       }
     } finally {
       if (costTypesGenerationRef.current === generation) setCostTypesLoading(false);
+    }
+  }
+
+  // The role-calendars table's own paginated view, independent of the full `roles`
+  // list above -- refetched whenever pagination, sort, or search change, and again
+  // after `saveRoleCalendar` (see `reloadRoleCalendarsPage` below), since that
+  // mutates `roles` directly but has no way to patch this separate, server-ordered
+  // page in place. Guarded by its own generation counter, for the same reason as
+  // the main load and the cost-types page above.
+  const roleCalendarsGenerationRef = useRef(0);
+
+  useEffect(() => {
+    const generation = ++roleCalendarsGenerationRef.current;
+    const isCurrentGeneration = () => roleCalendarsGenerationRef.current === generation;
+
+    async function load() {
+      if (!session) return;
+      setRoleCalendarsLoading(true);
+      try {
+        const page = await getResourceRoles(session, onSessionRefresh, undefined, undefined, {
+          limit: roleCalendarsLimit,
+          offset: roleCalendarsOffset,
+          sort: roleCalendarsSort,
+          q: roleCalendarsQuery || undefined,
+        });
+        if (!isCurrentGeneration()) return;
+        setRoleCalendarsPage(page);
+      } catch (cause) {
+        if (!isCurrentGeneration()) return;
+        if (cause instanceof SessionExpiredError) {
+          clearSession();
+          router.push("/login");
+          return;
+        }
+        if (cause instanceof ApiError && cause.status === 401) {
+          clearSession();
+          router.push("/login");
+          return;
+        }
+        setNotice({
+          kind: "error",
+          message: cause instanceof ApiError ? cause.message : "Chargement des calendriers de rôles impossible",
+        });
+      } finally {
+        if (isCurrentGeneration()) setRoleCalendarsLoading(false);
+      }
+    }
+
+    void load();
+  }, [session, onSessionRefresh, router, roleCalendarsLimit, roleCalendarsOffset, roleCalendarsSort, roleCalendarsQuery]);
+
+  // Deliberately swallows its own non-session errors, like `reloadCostTypesPage`
+  // above, for the same reason: called from `saveRoleCalendar`, itself wrapped in
+  // `submitAction`, which already reports success/failure of the mutation itself.
+  // Also sets `roleCalendarsLoading` itself under the same generation counter, to
+  // avoid the same "stuck true forever" bug class documented on
+  // `reloadCostTypesPage`: a mutation reload can race an in-flight pagination/sort/
+  // search fetch, and only whichever one owns the current generation may touch the
+  // loading flag in its `finally`.
+  async function reloadRoleCalendarsPage() {
+    if (!session) return;
+    const generation = ++roleCalendarsGenerationRef.current;
+    setRoleCalendarsLoading(true);
+    try {
+      const page = await getResourceRoles(session, onSessionRefresh, undefined, undefined, {
+        limit: roleCalendarsLimit,
+        offset: roleCalendarsOffset,
+        sort: roleCalendarsSort,
+        q: roleCalendarsQuery || undefined,
+      });
+      if (roleCalendarsGenerationRef.current === generation) setRoleCalendarsPage(page);
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
+        clearSession();
+        router.push("/login");
+      }
+    } finally {
+      if (roleCalendarsGenerationRef.current === generation) setRoleCalendarsLoading(false);
     }
   }
 
@@ -631,6 +723,7 @@ export default function ResourcesPage() {
         onSessionRefresh,
       );
       setRoles((previous) => previous.map((role) => (role.id === updated.id ? updated : role)));
+      await reloadRoleCalendarsPage();
     }, "Calendrier du rôle enregistré.");
   }
 
@@ -882,7 +975,7 @@ export default function ResourcesPage() {
 
           </div>
           <CapacityTable roles={roles} drafts={capacityDrafts} actionBusy={actionBusy} nodeCodeById={nodeCodeById} onDraftChange={(roleId, draft) => setCapacityDrafts((previous) => ({ ...previous, [roleId]: draft }))} onSave={(roleId) => void saveRoleCapacity(roleId)} />
-          <RoleCalendarsTable roles={roles} calendars={calendars} drafts={roleCalendarDrafts} actionBusy={actionBusy} nodeCodeById={nodeCodeById} onDraftChange={(roleId, calendarId) => setRoleCalendarDrafts((previous) => ({ ...previous, [roleId]: calendarId }))} onSave={(roleId) => void saveRoleCalendar(roleId)} />
+          <RoleCalendarsTable roles={roleCalendarsPage.items} calendars={calendars} pagination={{ total: roleCalendarsPage.total, limit: roleCalendarsLimit, offset: roleCalendarsOffset }} onPaginationChange={(next) => setRoleCalendarsOffset(next.offset)} sort={roleCalendarsSort} onSortChange={setRoleCalendarsSort} search={roleCalendarsQuery} onSearchChange={(next) => { setRoleCalendarsQuery(next); setRoleCalendarsOffset(0); }} isLoading={roleCalendarsLoading} drafts={roleCalendarDrafts} actionBusy={actionBusy} nodeCodeById={nodeCodeById} onDraftChange={(roleId, calendarId) => setRoleCalendarDrafts((previous) => ({ ...previous, [roleId]: calendarId }))} onSave={(roleId) => void saveRoleCalendar(roleId)} />
           <CalendarsTable
             items={calendars}
             code={calendarCode}

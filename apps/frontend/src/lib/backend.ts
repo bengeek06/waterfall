@@ -410,22 +410,44 @@ export function deleteResourceNode(
   );
 }
 
+// Overloaded rather than always returning `ListPage<ResourceRole>` (unlike
+// getCostTypes, which has no legacy array-returning caller to preserve): RolesPanel
+// and CapacityTable still need the full, unpaginated `roles` list as reference data
+// (see the `costTypes` vs `costTypesPage` split in app/resources/page.tsx for the
+// same reasoning applied to cost types), so the no-`listParams` call keeps returning
+// a plain array. Only a caller that opts in with `listParams` (role-calendars-table's
+// own paginated/sortable/searchable page) gets the `{items, total}` envelope back.
+export async function getResourceRoles(
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+  nodeId?: number,
+  includeDescendants?: boolean,
+): Promise<ResourceRole[]>;
+export async function getResourceRoles(
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+  nodeId: number | undefined,
+  includeDescendants: boolean | undefined,
+  listParams: ListQueryParams,
+): Promise<ListPage<ResourceRole>>;
 export async function getResourceRoles(
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
   nodeId?: number,
   includeDescendants = false,
-): Promise<ResourceRole[]> {
-  const query = nodeId
-    ? `?node_id=${nodeId}&include_descendants=${includeDescendants}`
-    : "";
+  listParams?: ListQueryParams,
+): Promise<ResourceRole[] | ListPage<ResourceRole>> {
+  const extra = nodeId
+    ? { node_id: String(nodeId), include_descendants: String(includeDescendants) }
+    : undefined;
+  const query = buildListQuery(listParams ?? {}, extra);
   const page = await authRequest<components["schemas"]["ResourceRoleListRead"]>(
     `/resources/roles${query}`,
     tokens,
     { method: "GET" },
     onSessionRefresh,
   );
-  return page.items;
+  return listParams ? { items: page.items, total: page.total } : page.items;
 }
 
 export function createResourceRole(
