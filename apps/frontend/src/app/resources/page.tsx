@@ -95,7 +95,25 @@ export default function ResourcesPage() {
   const [nodes, setNodes] = useState<ResourceNode[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null);
   const [roles, setRoles] = useState<ResourceRole[]>([]);
+  // `calendars` (full, unfiltered) feeds other panels that need the complete list as
+  // reference data (RoleCalendarsTable's assignment dropdown, the
+  // `calendarIdsInUseByActiveRoles` set, and the missing-default-calendar banner) --
+  // per EPIC E7/E8, that guarantee ("absent limit, tout est renvoye") must not be
+  // broken by pagination. The calendars table's own paginated view is therefore a
+  // second, independent fetch (`calendarsPage` below), not a client-side slice of
+  // `calendars` -- slicing it locally would silently violate the "recherche et tri
+  // delegues au serveur" requirement even though today's dataset happens to be small
+  // enough that it would look correct.
   const [calendars, setCalendars] = useState<Calendar[]>([]);
+  const [calendarsPage, setCalendarsPage] = useState<{ items: Calendar[]; total: number }>({
+    items: [],
+    total: 0,
+  });
+  const [calendarsLoading, setCalendarsLoading] = useState(false);
+  const [calendarsOffset, setCalendarsOffset] = useState(0);
+  const [calendarsLimit] = useState(20);
+  const [calendarsSort, setCalendarsSort] = useState<string | null>(null);
+  const [calendarsQuery, setCalendarsQuery] = useState("");
   // `costTypes` (full, unfiltered) feeds other panels that need the complete list as
   // reference data (RolesPanel, CostCategoriesTable's type dropdown, ValuationPanel) --
   // per EPIC E7/E8, that guarantee ("absent limit, tout est renvoye") must not be
@@ -218,7 +236,7 @@ export default function ResourcesPage() {
         ] = await Promise.all([
           getResourceNodes(session, onSessionRefresh),
           getResourceRoles(session, onSessionRefresh),
-          getCalendars(session, onSessionRefresh, true),
+          getCalendars(session, onSessionRefresh, true).then((page) => page.items),
           getCostTypes(session, onSessionRefresh, true).then((page) => page.items),
           getCostCategories(session, onSessionRefresh, true),
           getCostRates(session, onSessionRefresh),
@@ -269,6 +287,95 @@ export default function ResourcesPage() {
 
     void load();
   }, [onSessionRefresh, router, session]);
+
+  // The calendars table's own paginated view: independent of the full `calendars`
+  // list above, refetched whenever pagination, sort, or search change, and again
+  // after any create/update/toggle/set-default mutation (see `reloadCalendarsPage`
+  // below) since those mutate `calendars` directly but have no way to patch this
+  // separate, server-ordered page in place. Guarded by its own generation counter for
+  // the same reason as the main load above (a session refresh, rapid paging, or a
+  // mutation's reload racing an in-flight fetch must not let a stale response win).
+  const calendarsGenerationRef = useRef(0);
+
+  useEffect(() => {
+    const generation = ++calendarsGenerationRef.current;
+    const isCurrentGeneration = () => calendarsGenerationRef.current === generation;
+
+    async function load() {
+      if (!session) return;
+      setCalendarsLoading(true);
+      try {
+        const page = await getCalendars(session, onSessionRefresh, true, {
+          limit: calendarsLimit,
+          offset: calendarsOffset,
+          sort: calendarsSort,
+          q: calendarsQuery || undefined,
+        });
+        if (!isCurrentGeneration()) return;
+        setCalendarsPage(page);
+      } catch (cause) {
+        if (!isCurrentGeneration()) return;
+        if (cause instanceof SessionExpiredError) {
+          clearSession();
+          router.push("/login");
+          return;
+        }
+        if (cause instanceof ApiError && cause.status === 401) {
+          clearSession();
+          router.push("/login");
+          return;
+        }
+        setNotice({
+          kind: "error",
+          message: cause instanceof ApiError ? cause.message : "Chargement des calendriers impossible",
+        });
+      } finally {
+        if (isCurrentGeneration()) setCalendarsLoading(false);
+      }
+    }
+
+    void load();
+  }, [session, onSessionRefresh, router, calendarsLimit, calendarsOffset, calendarsSort, calendarsQuery]);
+
+  // Deliberately swallows its own non-session errors rather than letting them
+  // propagate: this is called as the last step of `addCalendar`/`saveCalendar`/
+  // `toggleCalendarActive`/`setDefaultCalendar`, all wrapped in `submitAction`, which
+  // sets its own success notice right after `action()` returns -- a `setNotice` call
+  // here would just be overwritten by that success notice a moment later, while
+  // *throwing* would make `submitAction` report the whole operation as failed even
+  // though the actual mutation (already applied to `calendars` and the server)
+  // succeeded. The table's own view simply stays one refresh behind until the next
+  // pagination/sort/search interaction. Session expiry is the one exception: it must
+  // still force a logout like every other data source on this page, regardless of
+  // where it's detected.
+  //
+  // Also sets `calendarsLoading` itself (guarded by the shared generation counter,
+  // like the effect above): a mutation can race an in-flight pagination/sort/search
+  // fetch, bumping `calendarsGenerationRef` and making that fetch's own result
+  // (including its `finally`'s `setCalendarsLoading(false)`) obsolete. Without this,
+  // `calendarsLoading` could get stuck `true` forever -- set by the now-abandoned
+  // effect fetch, never reset by anyone, since this function didn't touch it at all.
+  async function reloadCalendarsPage() {
+    if (!session) return;
+    const generation = ++calendarsGenerationRef.current;
+    setCalendarsLoading(true);
+    try {
+      const page = await getCalendars(session, onSessionRefresh, true, {
+        limit: calendarsLimit,
+        offset: calendarsOffset,
+        sort: calendarsSort,
+        q: calendarsQuery || undefined,
+      });
+      if (calendarsGenerationRef.current === generation) setCalendarsPage(page);
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
+        clearSession();
+        router.push("/login");
+      }
+    } finally {
+      if (calendarsGenerationRef.current === generation) setCalendarsLoading(false);
+    }
+  }
 
   // The cost-types table's own paginated view: independent of the full `costTypes`
   // list above, refetched whenever pagination, sort, or search change, and again
@@ -564,6 +671,7 @@ export default function ResourcesPage() {
       setCalendarName("");
       setCalendarWeeksPerYear("47");
       setCalendarWeekdays(defaultWeekdays());
+      await reloadCalendarsPage();
     }, "Calendrier créé.");
   }
 
@@ -593,6 +701,7 @@ export default function ResourcesPage() {
       );
       setCalendars((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
       setEditingCalendarId(null);
+      await reloadCalendarsPage();
     }, "Calendrier modifié.");
   }
 
@@ -606,6 +715,7 @@ export default function ResourcesPage() {
         const updated = await updateCalendar(calendar.id, { is_active: true }, session, onSessionRefresh);
         setCalendars((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
       }
+      await reloadCalendarsPage();
     }, calendar.is_active ? "Calendrier désactivé." : "Calendrier réactivé.");
   }
 
@@ -617,6 +727,7 @@ export default function ResourcesPage() {
         if (item.id === updated.id) return updated;
         return item.is_default ? { ...item, is_default: false } : item;
       }));
+      await reloadCalendarsPage();
     }, "Calendrier par défaut mis à jour.");
   }
 
@@ -884,7 +995,14 @@ export default function ResourcesPage() {
           <CapacityTable roles={roles} drafts={capacityDrafts} actionBusy={actionBusy} nodeCodeById={nodeCodeById} onDraftChange={(roleId, draft) => setCapacityDrafts((previous) => ({ ...previous, [roleId]: draft }))} onSave={(roleId) => void saveRoleCapacity(roleId)} />
           <RoleCalendarsTable roles={roles} calendars={calendars} drafts={roleCalendarDrafts} actionBusy={actionBusy} nodeCodeById={nodeCodeById} onDraftChange={(roleId, calendarId) => setRoleCalendarDrafts((previous) => ({ ...previous, [roleId]: calendarId }))} onSave={(roleId) => void saveRoleCalendar(roleId)} />
           <CalendarsTable
-            items={calendars}
+            items={calendarsPage.items}
+            pagination={{ total: calendarsPage.total, limit: calendarsLimit, offset: calendarsOffset }}
+            onPaginationChange={(next) => setCalendarsOffset(next.offset)}
+            sort={calendarsSort}
+            onSortChange={setCalendarsSort}
+            search={calendarsQuery}
+            onSearchChange={(next) => { setCalendarsQuery(next); setCalendarsOffset(0); }}
+            isLoading={calendarsLoading}
             code={calendarCode}
             name={calendarName}
             weeksPerYear={calendarWeeksPerYear}
