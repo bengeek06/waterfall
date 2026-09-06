@@ -1,0 +1,12 @@
+name: limit
+in: query
+required: false
+description: >-
+  Nombre maximum de lignes renvoyees. Absent, l'endpoint renvoie
+  l'integralite des lignes du jeu filtre (voir PaginationMeta.yaml) : il
+  n'y a pas de valeur par defaut qui tronquerait silencieusement une
+  liste.
+schema:
+  type: integer
+  minimum: 1
+  maximum: 500

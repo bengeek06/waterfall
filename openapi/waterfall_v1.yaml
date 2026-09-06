@@ -4415,6 +4415,39 @@ components:
             updated_at:
               type: string
               format: date-time
+    PaginationMeta:
+      type: object
+      description: |-
+        Metadonnees de pagination communes a toutes les enveloppes de liste (EPIC E7). OpenAPI 3.1 ne supportant pas les schemas generiques, ce fragment est reutilise via allOf par chaque schema `<Resource>ListRead` propre a une ressource, qui ajoute sa propre propriete `items` :
+        allOf:
+          - $ref: PaginationMeta.yaml
+          - type: object
+            required: [items]
+            properties:
+              items:
+                type: array
+                items:
+                  $ref: <ResourceRead>.yaml
+
+        `total` refere toujours au jeu filtre complet, jamais a la page renvoyee. `limit` est `null` lorsque la requete n'en fournissait pas : dans ce cas `items` contient l'integralite des lignes et `total` lui est egal. Un appel sans `limit` ne doit donc jamais tronquer silencieusement une liste.
+      required:
+        - total
+        - offset
+      properties:
+        total:
+          type: integer
+          minimum: 0
+          description: Nombre total de lignes du jeu filtre, avant pagination.
+        limit:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
+          description: 'Limite effectivement appliquee. `null` si la requete ne fournissait pas de `limit` : `items` contient alors toutes les lignes.'
+        offset:
+          type: integer
+          minimum: 0
+          description: Decalage effectivement applique (0 si absent de la requete).
     PlanningTaskDeleteConflict:
       type: object
       required:
@@ -4659,6 +4692,42 @@ components:
         type: integer
         minimum: 1
       description: Identifiant technique de l'utilisateur
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: 'Nombre maximum de lignes renvoyees. Absent, l''endpoint renvoie l''integralite des lignes du jeu filtre (voir PaginationMeta.yaml) : il n''y a pas de valeur par defaut qui tronquerait silencieusement une liste.'
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 500
+    Offset:
+      name: offset
+      in: query
+      required: false
+      description: Nombre de lignes a sauter avant le debut de la page.
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+    Sort:
+      name: sort
+      in: query
+      required: false
+      description: |-
+        Nom d'une colonne triable, optionnellement prefixe de `-` pour un tri descendant (ex. `name`, `-created_at`). Un seul critere de tri par requete : l'ordre total deterministe (necessaire a une pagination stable) est complete par la cle primaire en repli, jamais par un second critere explicite.
+        Chaque ressource documente sa propre liste de colonnes triables via un `enum` sur ce parametre au niveau de l'operation ; une colonne absente de cette liste est rejetee avec la reponse BadRequest.yaml, jamais interpolee dans le SQL.
+      schema:
+        type: string
+        pattern: ^-?[A-Za-z_][A-Za-z0-9_]*$
+    Search:
+      name: q
+      in: query
+      required: false
+      description: Recherche plein texte simple (sous-chaine, insensible a la casse), sur le sous-ensemble de colonnes documente par chaque ressource dans la description de ce parametre au niveau de l'operation. A distinguer des filtres structures deja existants sur certaines ressources (`include_inactive`, `node_id`, `role_id`, ...), qui restent des parametres dedies et se combinent avec `q`.
+      schema:
+        type: string
+        minLength: 1
   responses:
     BadRequest:
       description: Requete invalide

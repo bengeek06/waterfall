@@ -1,0 +1,40 @@
+type: object
+description: >-
+  Metadonnees de pagination communes a toutes les enveloppes de liste
+  (EPIC E7). OpenAPI 3.1 ne supportant pas les schemas generiques, ce
+  fragment est reutilise via allOf par chaque schema `<Resource>ListRead`
+  propre a une ressource, qui ajoute sa propre propriete `items` :
+
+  allOf:
+    - $ref: PaginationMeta.yaml
+    - type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: <ResourceRead>.yaml
+
+  `total` refere toujours au jeu filtre complet, jamais a la page
+  renvoyee. `limit` est `null` lorsque la requete n'en fournissait pas :
+  dans ce cas `items` contient l'integralite des lignes et `total` lui
+  est egal. Un appel sans `limit` ne doit donc jamais tronquer
+  silencieusement une liste.
+required:
+- total
+- offset
+properties:
+  total:
+    type: integer
+    minimum: 0
+    description: Nombre total de lignes du jeu filtre, avant pagination.
+  limit:
+    type: [integer, "null"]
+    minimum: 1
+    description: >-
+      Limite effectivement appliquee. `null` si la requete ne fournissait
+      pas de `limit` : `items` contient alors toutes les lignes.
+  offset:
+    type: integer
+    minimum: 0
+    description: Decalage effectivement applique (0 si absent de la requete).
