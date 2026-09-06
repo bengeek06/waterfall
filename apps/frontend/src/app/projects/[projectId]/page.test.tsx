@@ -182,9 +182,9 @@ describe("ProjectDetailsPage planning lifecycle", () => {
 
     render(<ProjectDetailsPage />);
 
-    expect(await screen.findByRole("heading", { name: "Structure initiale" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Lotissement du projet" })).toBeInTheDocument();
     expect(screen.queryByText("Aucune tâche.")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Enregistrer la structure" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Enregistrer" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Générer le squelette" })).toBeInTheDocument();
   });
 
@@ -212,11 +212,11 @@ describe("ProjectDetailsPage planning lifecycle", () => {
 
     render(<ProjectDetailsPage />);
 
-    await screen.findByRole("heading", { name: "Structure initiale" });
+    await screen.findByRole("heading", { name: "Lotissement du projet" });
     fireEvent.change(screen.getByLabelText("Nom poste 1"), { target: { value: "Poste" } });
     fireEvent.change(screen.getByLabelText("Nom lot 1.1"), { target: { value: "Lot" } });
     fireEvent.change(screen.getByLabelText("Livrable 1.1.1"), { target: { value: "Livrable" } });
-    fireEvent.click(screen.getByRole("button", { name: "Enregistrer la structure" }));
+    fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
 
     await waitFor(() => expect(mocks.savePlanningStructureDraft).toHaveBeenCalledTimes(1));
     expect(mocks.savePlanningStructureDraft).toHaveBeenCalledWith(
@@ -226,7 +226,7 @@ describe("ProjectDetailsPage planning lifecycle", () => {
       expect.anything(),
     );
     expect(mocks.createPlanningStructure).not.toHaveBeenCalled();
-    expect(screen.getByRole("heading", { name: "Structure initiale" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Lotissement du projet" })).toBeInTheDocument();
   });
 
   it("uses the generation action and closes the structure form", async () => {
@@ -236,7 +236,7 @@ describe("ProjectDetailsPage planning lifecycle", () => {
 
     render(<ProjectDetailsPage />);
 
-    await screen.findByRole("heading", { name: "Structure initiale" });
+    await screen.findByRole("heading", { name: "Lotissement du projet" });
     fireEvent.change(screen.getByLabelText("Nom poste 1"), { target: { value: "Poste" } });
     fireEvent.change(screen.getByLabelText("Nom lot 1.1"), { target: { value: "Lot" } });
     fireEvent.change(screen.getByLabelText("Livrable 1.1.1"), { target: { value: "Livrable" } });
@@ -251,7 +251,42 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     );
     expect(mocks.savePlanningStructureDraft).not.toHaveBeenCalled();
     await waitFor(() =>
-      expect(screen.queryByRole("heading", { name: "Structure initiale" })).not.toBeInTheDocument(),
+      expect(screen.queryByRole("heading", { name: "Lotissement du projet" })).not.toBeInTheDocument(),
+    );
+  });
+
+  it("only shows a progress label on the structure action actually running", async () => {
+    // Regression: the three structure actions share a single busy flag to stay mutually
+    // exclusive, but each button must only claim to be busy when it is the one actually running
+    // -- not all three at once.
+    mocks.getProject.mockResolvedValue(project());
+    mocks.listPlannings.mockResolvedValue([]);
+    let resolveGenerate!: (value: { tasks: never[] }) => void;
+    mocks.createPlanningStructure.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveGenerate = resolve;
+        }),
+    );
+
+    render(<ProjectDetailsPage />);
+
+    await screen.findByRole("heading", { name: "Lotissement du projet" });
+    fireEvent.change(screen.getByLabelText("Nom poste 1"), { target: { value: "Poste" } });
+    fireEvent.change(screen.getByLabelText("Nom lot 1.1"), { target: { value: "Lot" } });
+    fireEvent.change(screen.getByLabelText("Livrable 1.1.1"), { target: { value: "Livrable" } });
+    fireEvent.click(screen.getByRole("button", { name: "Générer le squelette" }));
+
+    await waitFor(() => expect(mocks.createPlanningStructure).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("button", { name: "Génération..." })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Enregistrer" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Passer cette étape" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Enregistrer" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Passer cette étape" })).toBeDisabled();
+
+    resolveGenerate({ tasks: [] });
+    await waitFor(() =>
+      expect(screen.queryByRole("heading", { name: "Lotissement du projet" })).not.toBeInTheDocument(),
     );
   });
 
@@ -265,7 +300,7 @@ describe("ProjectDetailsPage planning lifecycle", () => {
 
     render(<ProjectDetailsPage />);
 
-    await screen.findByRole("heading", { name: "Structure initiale" });
+    await screen.findByRole("heading", { name: "Lotissement du projet" });
     fireEvent.click(screen.getByRole("button", { name: "Passer cette étape" }));
 
     await waitFor(() => expect(mocks.skipPlanningStructure).toHaveBeenCalledTimes(1));
@@ -273,7 +308,7 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     expect(mocks.createPlanningStructure).not.toHaveBeenCalled();
     expect(mocks.savePlanningStructureDraft).not.toHaveBeenCalled();
     await waitFor(() =>
-      expect(screen.queryByRole("heading", { name: "Structure initiale" })).not.toBeInTheDocument(),
+      expect(screen.queryByRole("heading", { name: "Lotissement du projet" })).not.toBeInTheDocument(),
     );
   });
 
@@ -287,7 +322,7 @@ describe("ProjectDetailsPage planning lifecycle", () => {
 
     render(<ProjectDetailsPage />);
 
-    await screen.findByRole("heading", { name: "Structure initiale" });
+    await screen.findByRole("heading", { name: "Lotissement du projet" });
     fireEvent.click(screen.getByRole("button", { name: "Passer cette étape" }));
 
     expect(await screen.findByLabelText("Importer un planning MS Project (.xml)")).toBeInTheDocument();
@@ -302,11 +337,11 @@ describe("ProjectDetailsPage planning lifecycle", () => {
 
     render(<ProjectDetailsPage />);
 
-    await screen.findByRole("heading", { name: "Structure initiale" });
+    await screen.findByRole("heading", { name: "Lotissement du projet" });
     fireEvent.click(screen.getByRole("button", { name: "Passer cette étape" }));
 
     await waitFor(() =>
-      expect(screen.queryByRole("heading", { name: "Structure initiale" })).not.toBeInTheDocument(),
+      expect(screen.queryByRole("heading", { name: "Lotissement du projet" })).not.toBeInTheDocument(),
     );
     expect(
       await screen.findByText("Passage effectué, mais impossible de recharger le planning. Recharge la page."),
@@ -328,17 +363,17 @@ describe("ProjectDetailsPage planning lifecycle", () => {
 
     render(<ProjectDetailsPage />);
 
-    await screen.findByRole("heading", { name: "Structure initiale" });
+    await screen.findByRole("heading", { name: "Lotissement du projet" });
     expect(screen.getByRole("button", { name: "Passer cette étape" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Passer cette étape" }));
 
     await waitFor(() =>
-      expect(screen.queryByRole("heading", { name: "Structure initiale" })).not.toBeInTheDocument(),
+      expect(screen.queryByRole("heading", { name: "Lotissement du projet" })).not.toBeInTheDocument(),
     );
 
     fireEvent.click(await screen.findByRole("button", { name: "Rouvrir la structure" }));
 
-    expect(await screen.findByRole("heading", { name: "Structure initiale" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Lotissement du projet" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Passer cette étape" })).not.toBeInTheDocument();
   });
 
@@ -351,7 +386,7 @@ describe("ProjectDetailsPage planning lifecycle", () => {
 
     render(<ProjectDetailsPage />);
 
-    await screen.findByRole("heading", { name: "Structure initiale" });
+    await screen.findByRole("heading", { name: "Lotissement du projet" });
     expect(screen.queryByRole("button", { name: "Passer cette étape" })).not.toBeInTheDocument();
   });
 
@@ -373,11 +408,11 @@ describe("ProjectDetailsPage planning lifecycle", () => {
 
     render(<ProjectDetailsPage />);
 
-    await screen.findByRole("heading", { name: "Structure initiale" });
+    await screen.findByRole("heading", { name: "Lotissement du projet" });
     fireEvent.click(screen.getByRole("button", { name: "Passer cette étape" }));
 
     await waitFor(() =>
-      expect(screen.queryByRole("heading", { name: "Structure initiale" })).not.toBeInTheDocument(),
+      expect(screen.queryByRole("heading", { name: "Lotissement du projet" })).not.toBeInTheDocument(),
     );
 
     fireEvent.click(await screen.findByRole("button", { name: "Ajouter une tâche" }));
@@ -461,7 +496,7 @@ describe("ProjectDetailsPage planning lifecycle", () => {
 
     render(<ProjectDetailsPage />);
 
-    await screen.findByRole("heading", { name: "Structure initiale" });
+    await screen.findByRole("heading", { name: "Lotissement du projet" });
     fireEvent.change(screen.getByLabelText("Nom poste 1"), { target: { value: "Poste" } });
     fireEvent.change(screen.getByLabelText("Nom lot 1.1"), { target: { value: "Lot" } });
     fireEvent.change(screen.getByLabelText("Livrable 1.1.1"), { target: { value: "Livrable" } });

@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { Save } from "lucide-react";
+
 import {
   AlertDialog,
   AlertDialogAction,
@@ -244,7 +246,12 @@ export default function ProjectDetailsPage() {
   const [structureDraft, setStructureDraft] = useState<PlanningStructureDraftRow[]>([
     { rowId: "row-1", postKey: "post-1", postName: "", lotKey: "lot-1", lotName: "", deliverables: "" },
   ]);
-  const [structureBusy, setStructureBusy] = useState(false);
+  // A single shared flag (structureBusy) correctly disables all three actions while any one of
+  // them runs (they mutate the same project/structure state, so they must be mutually exclusive),
+  // but tracking *which* action is running lets each button show its own progress label instead
+  // of all three claiming to be busy at once.
+  const [structureAction, setStructureAction] = useState<"save" | "generate" | "skip" | null>(null);
+  const structureBusy = structureAction !== null;
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -1405,7 +1412,7 @@ export default function ProjectDetailsPage() {
       return;
     }
 
-    setStructureBusy(true);
+    setStructureAction("save");
     setError(null);
     try {
       await savePlanningStructureDraft(projectId, payload, session, onSessionRefresh);
@@ -1417,7 +1424,7 @@ export default function ProjectDetailsPage() {
       }
       setError(cause instanceof ApiError ? cause.message : "Impossible d'enregistrer la structure.");
     } finally {
-      setStructureBusy(false);
+      setStructureAction(null);
     }
   }
 
@@ -1427,7 +1434,7 @@ export default function ProjectDetailsPage() {
       return;
     }
 
-    setStructureBusy(true);
+    setStructureAction("generate");
     setError(null);
     try {
       await createPlanningStructure(projectId, payload, session, onSessionRefresh);
@@ -1451,9 +1458,9 @@ export default function ProjectDetailsPage() {
         router.push("/login");
         return;
       }
-      setError(cause instanceof ApiError ? cause.message : "Impossible d'enregistrer la structure.");
+      setError(cause instanceof ApiError ? cause.message : "Impossible de générer le squelette.");
     } finally {
-      setStructureBusy(false);
+      setStructureAction(null);
     }
   }
 
@@ -1461,7 +1468,7 @@ export default function ProjectDetailsPage() {
     if (!session || isReadOnlyProject) {
       return;
     }
-    setStructureBusy(true);
+    setStructureAction("skip");
     setError(null);
     try {
       const updatedProject = await skipPlanningStructure(projectId, session, onSessionRefresh);
@@ -1492,7 +1499,7 @@ export default function ProjectDetailsPage() {
       }
       setError(cause instanceof ApiError ? cause.message : "Impossible de passer cette étape.");
     } finally {
-      setStructureBusy(false);
+      setStructureAction(null);
     }
   }
 
@@ -1861,9 +1868,11 @@ export default function ProjectDetailsPage() {
         {activeTab === "planning" && structureOpen && !isReadOnlyProject ? (
           <Card className="mb-4">
             <CardContent className="pt-6">
-            <h2 className="text-lg font-semibold">Structure initiale</h2>
+            <h2 className="text-lg font-semibold">Lotissement du projet</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              Définis les postes, lots et livrables. L&apos;API enregistre la structure en générant le squelette.
+              Décris la décomposition du projet en postes, lots et livrables. « Enregistrer »
+              sauvegarde un brouillon sans quitter cet écran ; « Générer le squelette » crée le
+              planning à partir de cette décomposition et t&apos;amène sur sa page.
             </p>
             {postGroups.map((group, postIndex) => (
               <div className="mt-4 rounded-lg border p-4" key={group.groupId}>
@@ -1952,34 +1961,36 @@ export default function ProjectDetailsPage() {
                 </Button>
               </div>
             ))}
-            <div className="mt-4 flex flex-wrap gap-2">
-              <Button variant="outline" type="button" onClick={addPost}>
-                Ajouter un poste
-              </Button>
+            <Button variant="outline" size="sm" type="button" className="mt-4 w-fit" onClick={addPost}>
+              Ajouter un poste
+            </Button>
+
+            <div className="mt-6 flex flex-wrap gap-2 border-t pt-4">
               <Button
+                variant="outline"
                 type="button"
                 disabled={structureBusy}
                 onClick={() => void savePlanningStructure()}
               >
-                {structureBusy ? "Enregistrement..." : "Enregistrer la structure"}
+                <Save aria-hidden="true" />
+                {structureAction === "save" ? "Enregistrement..." : "Enregistrer"}
               </Button>
               <Button
                 type="button"
                 disabled={structureBusy}
                 onClick={() => void generatePlanningStructure()}
               >
-                {structureBusy ? "Génération..." : "Générer le squelette"}
+                {structureAction === "generate" ? "Génération..." : "Générer le squelette"}
               </Button>
               {project?.status === "cree" &&
               project?.displayed_planning_id == null &&
               project?.planning_reference_id == null ? (
                 <Button
-                  variant="outline"
                   type="button"
                   disabled={structureBusy}
                   onClick={() => void skipStructure()}
                 >
-                  {structureBusy ? "Passage en cours..." : "Passer cette étape"}
+                  {structureAction === "skip" ? "Passage en cours..." : "Passer cette étape"}
                 </Button>
               ) : null}
             </div>

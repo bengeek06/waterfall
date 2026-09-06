@@ -357,6 +357,11 @@ def delete_project(
     if planning_ids:
         project.planning_reference_id = None
         project.displayed_planning_id = None
+        # Autoflush is disabled on this session (see db/session.py): without an explicit flush,
+        # these ORM-level updates stay pending while the raw deletes below run directly against
+        # the database, so ms_project.displayed_planning_id still points at the about-to-be-deleted
+        # wf_planning row and fk_ms_project_displayed_planning rejects the DELETE.
+        db.flush()
         db.query(Estimate).filter(Estimate.project_id == project_id).update(
             {Estimate.planning_id: None}, synchronize_session=False
         )
