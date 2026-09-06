@@ -1,6 +1,7 @@
 "use client";
 
 import type { FormEventHandler } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
 
 import { Button } from "@/components/ui/button";
@@ -39,96 +40,147 @@ export type CostCategoriesTableProps = {
   onToggle: (item: CostCategory) => void;
 };
 
+// A stable-identity input for one editable field of one category's edit row.
+// `columns` in `CostCategoriesTable` below is memoized (deps: `editingId`/
+// `busy`/`types`, not `draft`) so TanStack Table's `flexRender` keeps passing
+// the *same* component type across renders while the user types -- otherwise
+// (a fresh `cell` closure on every keystroke, since it closed over `draft`)
+// React would unmount/remount the input after every character, dropping focus
+// (same bug class found in the parallel EPIC E8 migrations #123/#124/#125).
+// Since the memo doesn't depend on `draft`, the value displayed while typing
+// can't be read fresh from it either -- this component owns its value as
+// local state instead, seeded once when the row enters edit mode (which *is*
+// a memo dependency, via `editingId`, so the seed is always the value at that
+// transition), reporting every keystroke upward via `onChange` for
+// `draft`/"Enregistrer" to use.
+function CostCategoryEditableField(props: { ariaLabel: string; initialValue: string; onChange: (value: string) => void }) {
+  const [value, setValue] = useState(props.initialValue);
+  return (
+    <Input
+      aria-label={props.ariaLabel}
+      value={value}
+      onChange={(event) => {
+        setValue(event.target.value);
+        props.onChange(event.target.value);
+      }}
+    />
+  );
+}
+
 export function CostCategoriesTable(props: CostCategoriesTableProps) {
-  const columns: ColumnDef<CostCategory>[] = [
-    {
-      id: "type",
-      header: "Type",
-      cell: ({ row }) => props.types.find((type) => type.id === row.original.cost_type_id)?.name ?? "?",
-    },
-    {
-      accessorKey: "accounting_code",
-      header: "Code comptable",
-      meta: { sortColumn: "accounting_code" },
-      cell: ({ row }) => {
-        const item = row.original;
-        return props.editingId === item.id ? (
-          <Input
-            aria-label={`Code comptable de ${item.accounting_code}`}
-            value={props.draft.code}
-            onChange={(event) => props.onDraftChange("code", event.target.value)}
-          />
-        ) : (
-          <span className="font-medium">{item.accounting_code}</span>
-        );
+  // Kept fresh on every render via `useLayoutEffect` (React forbids writing to
+  // a ref during render, `react-hooks/refs`) rather than read directly, so the
+  // cell renderers below -- built once per `columns` memoization, not every
+  // render -- can still reach the *current* mutation callbacks at the moment
+  // they're actually invoked (an event handler firing always runs after the
+  // most recent commit's layout effect has already flushed, so there's no
+  // staleness risk there, unlike reading the ref for a value used in the
+  // render output itself -- see `CostCategoryEditableField` for that case).
+  const propsRef = useRef(props);
+  useLayoutEffect(() => {
+    propsRef.current = props;
+  });
+
+  // Memoized so cell renderers keep a stable identity across renders -- see
+  // `CostCategoryEditableField`'s comment for why. Deliberately excludes
+  // `props.draft` (changes per keystroke) from the dependency array; includes
+  // `editingId`/`busy`/`types` since those govern which mode each cell renders
+  // in, whether an action is disabled, or the "Type" column's lookup, and
+  // change far less often (only on explicit user actions or an actual cost-
+  // types reload, not per keystroke).
+  const columns = useMemo<ColumnDef<CostCategory>[]>(
+    () => [
+      {
+        id: "type",
+        header: "Type",
+        cell: ({ row }) => props.types.find((type) => type.id === row.original.cost_type_id)?.name ?? "?",
       },
-    },
-    {
-      accessorKey: "category_code",
-      header: "Catégorie comptable",
-      meta: { sortColumn: "category_code" },
-      cell: ({ row }) => {
-        const item = row.original;
-        return props.editingId === item.id ? (
-          <Input
-            aria-label={`Catégorie comptable de ${item.accounting_code}`}
-            value={props.draft.accountingCode}
-            onChange={(event) => props.onDraftChange("accountingCode", event.target.value)}
-          />
-        ) : (
-          (item.category_code ?? "Sans catégorie")
-        );
+      {
+        accessorKey: "accounting_code",
+        header: "Code comptable",
+        meta: { sortColumn: "accounting_code" },
+        cell: ({ row }) => {
+          const item = row.original;
+          return props.editingId === item.id ? (
+            <CostCategoryEditableField
+              ariaLabel={`Code comptable de ${item.accounting_code}`}
+              initialValue={props.draft.code}
+              onChange={(value) => propsRef.current.onDraftChange("code", value)}
+            />
+          ) : (
+            <span className="font-medium">{item.accounting_code}</span>
+          );
+        },
       },
-    },
-    {
-      accessorKey: "name",
-      header: "Nom",
-      meta: { sortColumn: "name" },
-      cell: ({ row }) => {
-        const item = row.original;
-        return props.editingId === item.id ? (
-          <Input
-            aria-label={`Nom de ${item.accounting_code}`}
-            value={props.draft.name}
-            onChange={(event) => props.onDraftChange("name", event.target.value)}
-          />
-        ) : (
-          item.name
-        );
+      {
+        accessorKey: "category_code",
+        header: "Catégorie comptable",
+        meta: { sortColumn: "category_code" },
+        cell: ({ row }) => {
+          const item = row.original;
+          return props.editingId === item.id ? (
+            <CostCategoryEditableField
+              ariaLabel={`Catégorie comptable de ${item.accounting_code}`}
+              initialValue={props.draft.accountingCode}
+              onChange={(value) => propsRef.current.onDraftChange("accountingCode", value)}
+            />
+          ) : (
+            (item.category_code ?? "Sans catégorie")
+          );
+        },
       },
-    },
-    {
-      id: "actions",
-      header: "Actions",
-      cell: ({ row }) => {
-        const item = row.original;
-        const editing = props.editingId === item.id;
-        return (
-          <div className="flex justify-end gap-2">
-            {item.is_active ? (
-              editing ? (
-                <>
-                  <Button size="sm" type="button" disabled={props.busy} onClick={() => props.onSave(item)}>
-                    Enregistrer
+      {
+        accessorKey: "name",
+        header: "Nom",
+        meta: { sortColumn: "name" },
+        cell: ({ row }) => {
+          const item = row.original;
+          return props.editingId === item.id ? (
+            <CostCategoryEditableField
+              ariaLabel={`Nom de ${item.accounting_code}`}
+              initialValue={props.draft.name}
+              onChange={(value) => propsRef.current.onDraftChange("name", value)}
+            />
+          ) : (
+            item.name
+          );
+        },
+      },
+      {
+        id: "actions",
+        header: "Actions",
+        cell: ({ row }) => {
+          const item = row.original;
+          const editing = props.editingId === item.id;
+          return (
+            <div className="flex justify-end gap-2">
+              {item.is_active ? (
+                editing ? (
+                  <>
+                    <Button size="sm" type="button" disabled={props.busy} onClick={() => propsRef.current.onSave(item)}>
+                      Enregistrer
+                    </Button>
+                    <Button size="sm" variant="outline" type="button" onClick={() => propsRef.current.onCancel()}>
+                      Annuler
+                    </Button>
+                  </>
+                ) : (
+                  <Button size="sm" variant="outline" type="button" onClick={() => propsRef.current.onStartEdit(item)}>
+                    Modifier
                   </Button>
-                  <Button size="sm" variant="outline" type="button" onClick={props.onCancel}>
-                    Annuler
-                  </Button>
-                </>
-              ) : (
-                <Button size="sm" variant="outline" type="button" onClick={() => props.onStartEdit(item)}>
-                  Modifier
-                </Button>
-              )
-            ) : null}
-            <Button size="sm" variant="outline" type="button" disabled={props.busy} onClick={() => props.onToggle(item)}>
-              {item.is_active ? "Désactiver" : "Réactiver"}
-            </Button>
-          </div>
-        );
+                )
+              ) : null}
+              <Button size="sm" variant="outline" type="button" disabled={props.busy} onClick={() => propsRef.current.onToggle(item)}>
+                {item.is_active ? "Désactiver" : "Réactiver"}
+              </Button>
+            </div>
+          );
+        },
       },
-    },
-  ];
+    ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [props.editingId, props.busy, props.types],
+  );
 
   const pinnedRow = (
     <TableRow>
