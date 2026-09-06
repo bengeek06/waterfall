@@ -51,10 +51,12 @@ const project = (overrides: Partial<Project>): Project =>
     ...overrides,
   }) as Project;
 
+const page = (items: Project[]) => ({ items, total: items.length });
+
 describe("ProjectsPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    getProjects.mockResolvedValue([project({})]);
+    getProjects.mockResolvedValue(page([project({})]));
   });
 
   afterEach(() => {
@@ -64,9 +66,11 @@ describe("ProjectsPage", () => {
   it("loads active projects by default and includes archived projects on demand", async () => {
     getProjects.mockImplementation((_tokens, _refresh, _limit, _offset, includeArchived) =>
       Promise.resolve(
-        includeArchived
-          ? [project({}), project({ id: 2, name: "Projet terminé", status: "termine" })]
-          : [project({})],
+        page(
+          includeArchived
+            ? [project({}), project({ id: 2, name: "Projet terminé", status: "termine" })]
+            : [project({})],
+        ),
       ),
     );
 
@@ -82,9 +86,11 @@ describe("ProjectsPage", () => {
   it("renders accessible status labels and keeps archived projects read-only", async () => {
     getProjects.mockImplementation((_tokens, _refresh, _limit, _offset, includeArchived) =>
       Promise.resolve(
-        includeArchived
-          ? [project({}), project({ id: 2, name: "Projet perdu", status: "perdu" })]
-          : [project({})],
+        page(
+          includeArchived
+            ? [project({}), project({ id: 2, name: "Projet perdu", status: "perdu" })]
+            : [project({})],
+        ),
       ),
     );
 
@@ -100,8 +106,8 @@ describe("ProjectsPage", () => {
   });
 
   it("ignores a stale response after changing the archived filter", async () => {
-    let resolveActive!: (projects: Project[]) => void;
-    let resolveArchived!: (projects: Project[]) => void;
+    let resolveActive!: (result: { items: Project[]; total: number }) => void;
+    let resolveArchived!: (result: { items: Project[]; total: number }) => void;
     getProjects.mockImplementation((_tokens, _refresh, _limit, _offset, includeArchived) =>
       new Promise((resolve) => {
         if (includeArchived) {
@@ -115,10 +121,10 @@ describe("ProjectsPage", () => {
     render(<ProjectsPage />);
     fireEvent.click(screen.getByRole("checkbox", { name: /Inclure les projets/ }));
     await waitFor(() => expect(getProjects).toHaveBeenCalledTimes(2));
-    resolveArchived([project({ id: 2, name: "Projet archivé", status: "termine" })]);
+    resolveArchived(page([project({ id: 2, name: "Projet archivé", status: "termine" })]));
     await waitFor(() => expect(screen.getByText("Projet archivé")).toBeInTheDocument());
 
-    resolveActive([project({ id: 3, name: "Réponse obsolète" })]);
+    resolveActive(page([project({ id: 3, name: "Réponse obsolète" })]));
     await waitFor(() => expect(screen.queryByText("Réponse obsolète")).not.toBeInTheDocument());
     expect(screen.getByText("Projet archivé")).toBeInTheDocument();
   });

@@ -763,20 +763,25 @@ export function setUserRole(
   );
 }
 
+export interface ProjectPage {
+  items: Project[];
+  total: number;
+}
+
 export async function getProjects(
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
   limit = 50,
   offset = 0,
   includeArchived = false,
-): Promise<Project[]> {
+): Promise<ProjectPage> {
   const page = await authRequest<components["schemas"]["ProjectListRead"]>(
     `/projects?limit=${limit}&offset=${offset}&include_archived=${includeArchived}`,
     tokens,
     { method: "GET" },
     onSessionRefresh,
   );
-  return page.items;
+  return { items: page.items, total: page.total };
 }
 
 export function getProject(
@@ -1102,11 +1107,9 @@ export async function getProjectTasks(
   projectId: number,
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
-  limit = 200,
-  offset = 0,
 ): Promise<Task[]> {
   const page = await authRequest<components["schemas"]["TaskListRead"]>(
-    `/projects/${projectId}/tasks?limit=${limit}&offset=${offset}`,
+    `/projects/${projectId}/tasks`,
     tokens,
     { method: "GET" },
     onSessionRefresh,
