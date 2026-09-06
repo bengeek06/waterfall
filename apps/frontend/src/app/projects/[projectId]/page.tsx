@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { Save } from "lucide-react";
+
 import {
   AlertDialog,
   AlertDialogAction,
@@ -1861,9 +1863,11 @@ export default function ProjectDetailsPage() {
         {activeTab === "planning" && structureOpen && !isReadOnlyProject ? (
           <Card className="mb-4">
             <CardContent className="pt-6">
-            <h2 className="text-lg font-semibold">Structure initiale</h2>
+            <h2 className="text-lg font-semibold">Lotissement du projet</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              Définis les postes, lots et livrables. L&apos;API enregistre la structure en générant le squelette.
+              Décris la décomposition du projet en postes, lots et livrables. « Enregistrer la
+              structure » sauvegarde un brouillon sans quitter cet écran ; « Générer le squelette »
+              crée le planning à partir de cette décomposition et t&apos;amène sur sa page.
             </p>
             {postGroups.map((group, postIndex) => (
               <div className="mt-4 rounded-lg border p-4" key={group.groupId}>
@@ -1952,16 +1956,19 @@ export default function ProjectDetailsPage() {
                 </Button>
               </div>
             ))}
-            <div className="mt-4 flex flex-wrap gap-2">
-              <Button variant="outline" type="button" onClick={addPost}>
-                Ajouter un poste
-              </Button>
+            <Button variant="outline" size="sm" type="button" className="mt-4 w-fit" onClick={addPost}>
+              Ajouter un poste
+            </Button>
+
+            <div className="mt-6 flex flex-wrap gap-2 border-t pt-4">
               <Button
+                variant="outline"
                 type="button"
                 disabled={structureBusy}
                 onClick={() => void savePlanningStructure()}
               >
-                {structureBusy ? "Enregistrement..." : "Enregistrer la structure"}
+                <Save aria-hidden="true" />
+                {structureBusy ? "Enregistrement..." : "Enregistrer"}
               </Button>
               <Button
                 type="button"
@@ -1974,7 +1981,6 @@ export default function ProjectDetailsPage() {
               project?.displayed_planning_id == null &&
               project?.planning_reference_id == null ? (
                 <Button
-                  variant="outline"
                   type="button"
                   disabled={structureBusy}
                   onClick={() => void skipStructure()}
