@@ -153,15 +153,26 @@
     operationId: listUsers
     security:
     - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/Limit.yaml
+    - $ref: ../components/parameters/Offset.yaml
+    - $ref: ../components/parameters/Search.yaml
+    - name: sort
+      in: query
+      required: false
+      schema:
+        allOf:
+        - $ref: ../components/schemas/SortColumn.yaml
+        enum: [email, -email, created_at, -created_at, is_active, -is_active]
     responses:
       '200':
         description: Utilisateurs
         content:
           application/json:
             schema:
-              type: array
-              items:
-                $ref: ../components/schemas/UserAdminRead.yaml
+              $ref: ../components/schemas/UserAdminListRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
       '401':
         $ref: ../components/responses/Unauthorized.yaml
       '403':
