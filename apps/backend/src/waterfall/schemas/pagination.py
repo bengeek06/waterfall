@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Generic, TypeVar
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 ItemT = TypeVar("ItemT")
 
@@ -22,6 +22,6 @@ class PaginatedList(BaseModel, Generic[ItemT]):
     model_config = ConfigDict(from_attributes=True)
 
     items: list[ItemT]
-    total: int
-    limit: int | None
-    offset: int
+    total: int = Field(ge=0)
+    limit: int | None = Field(ge=1)
+    offset: int = Field(ge=0)

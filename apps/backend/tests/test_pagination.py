@@ -114,6 +114,22 @@ def test_unknown_sort_column_is_rejected_not_interpolated(session: Session) -> N
     assert exc_info.value.status_code == 400
 
 
+def test_empty_sort_value_is_rejected_like_any_unknown_column(session: Session) -> None:
+    # `?sort=` (explicitly empty, distinct from omitting the parameter entirely) must
+    # not silently bypass the allowlist and fall back to the default order: an empty
+    # name is not a declared sortable column any more than a garbage one is.
+    query = session.query(CostType)
+    with pytest.raises(HTTPException) as exc_info:
+        apply_pagination(
+            query,
+            ListParams(limit=None, offset=0, sort="", q=None),
+            sortable={"name": CostType.name},
+            tiebreaker=CostType.id,
+            default_sort=CostType.id,
+        )
+    assert exc_info.value.status_code == 400
+
+
 def test_search_filters_on_declared_columns(session: Session) -> None:
     prefix = "e7-search-"
     _make_cost_type(session, f"{prefix}1", "Findable widget")
@@ -131,6 +147,67 @@ def test_search_filters_on_declared_columns(session: Session) -> None:
 
     assert result.total == 1
     assert result.rows[0].name == "Findable widget"
+
+
+def test_search_escapes_like_wildcard_characters(session: Session) -> None:
+    # `%` and `_` are SQL LIKE wildcards: unescaped, `q="%"` would match every
+    # non-null value in the searched columns instead of rows containing a literal
+    # percent sign, and `q="1_1"` would match "1a1", "1b1", etc. as well as "1_1".
+    prefix = "e7-escape-"
+    _make_cost_type(session, f"{prefix}1", "Contains % literally")
+    _make_cost_type(session, f"{prefix}2", "Contains 1_1 literally")
+    _make_cost_type(session, f"{prefix}3", "No special characters here")
+    session.commit()
+
+    query = session.query(CostType).filter(CostType.code.like(f"{prefix}%"))
+
+    percent_result = apply_pagination(
+        query,
+        ListParams(limit=None, offset=0, sort=None, q="%"),
+        sortable={"name": CostType.name},
+        tiebreaker=CostType.id,
+        searchable=[CostType.name],
+    )
+    assert [row.name for row in percent_result.rows] == ["Contains % literally"]
+
+    underscore_result = apply_pagination(
+        query,
+        ListParams(limit=None, offset=0, sort=None, q="1_1"),
+        sortable={"name": CostType.name},
+        tiebreaker=CostType.id,
+        searchable=[CostType.name],
+    )
+    assert [row.name for row in underscore_result.rows] == ["Contains 1_1 literally"]
+
+
+def test_pagination_replaces_a_pre_existing_order_by_instead_of_appending(
+    session: Session,
+) -> None:
+    # SQLAlchemy's Query.order_by() appends on each call rather than replacing the
+    # previous ordering. A caller-supplied query that already carries an ORDER BY (its
+    # own default, or a prior .order_by() call) must not leave that clause primary:
+    # apply_pagination's requested `sort` (and its tiebreaker) has to be the one that
+    # actually determines row order and page boundaries.
+    prefix = "e7-preordered-"
+    _make_cost_type(session, f"{prefix}b", "B")
+    _make_cost_type(session, f"{prefix}a", "A")
+    _make_cost_type(session, f"{prefix}c", "C")
+    session.commit()
+
+    pre_ordered_query = (
+        session.query(CostType)
+        .filter(CostType.code.like(f"{prefix}%"))
+        .order_by(CostType.name.desc())
+    )
+
+    result = apply_pagination(
+        pre_ordered_query,
+        ListParams(limit=None, offset=0, sort="name", q=None),
+        sortable={"name": CostType.name},
+        tiebreaker=CostType.id,
+    )
+
+    assert [row.name for row in result.rows] == ["A", "B", "C"]
 
 
 def test_pagination_is_stable_on_a_non_unique_sort_column(session: Session) -> None:

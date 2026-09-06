@@ -14,6 +14,23 @@ from waterfall.api.pagination import ListParams
 RowT = TypeVar("RowT")
 SortableColumn = InstrumentedAttribute[Any]
 
+_LIKE_ESCAPE_CHAR = "\\"
+
+
+def _escape_like(value: str) -> str:
+    """Escape `%`, `_` and the escape character itself for a LIKE/ILIKE pattern.
+
+    Without this, `%`/`_` in a user's search term are interpreted as SQL
+    wildcards rather than the literal characters the contract promises
+    (`q=%` would otherwise match every non-null value instead of rows
+    containing a literal percent sign).
+    """
+    return (
+        value.replace(_LIKE_ESCAPE_CHAR, _LIKE_ESCAPE_CHAR * 2)
+        .replace("%", f"{_LIKE_ESCAPE_CHAR}%")
+        .replace("_", f"{_LIKE_ESCAPE_CHAR}_")
+    )
+
 
 @dataclass(frozen=True)
 class PaginationResult(Generic[RowT]):
@@ -53,12 +70,21 @@ def apply_pagination(
     which is what makes arbitrary column names safe to accept from a client
     in the first place.
     """
+    # Drop any ordering already present on `query` up front: apply_pagination owns
+    # ordering entirely, and Query.order_by() *appends* rather than replaces on each
+    # call -- leaving a caller-supplied order in place would keep it primary, silently
+    # overriding the requested `sort`/tiebreaker that is supposed to define page
+    # boundaries.
+    query = query.order_by(None)
+
     if params.q and searchable:
-        pattern = f"%{params.q}%"
-        query = query.filter(or_(*(column.ilike(pattern) for column in searchable)))
+        pattern = f"%{_escape_like(params.q)}%"
+        query = query.filter(
+            or_(*(column.ilike(pattern, escape=_LIKE_ESCAPE_CHAR) for column in searchable))
+        )
 
     order_columns: list[SortableColumn | ColumnElement[Any]]
-    if params.sort:
+    if params.sort is not None:
         descending = params.sort.startswith("-")
         column_name = params.sort[1:] if descending else params.sort
         column = sortable.get(column_name)
@@ -73,7 +99,6 @@ def apply_pagination(
     else:
         order_columns = [tiebreaker]
 
-    # order_by(None) drops any ordering already present on `query` before counting:
     # ORDER BY has no effect on COUNT(*) but needlessly complicates the query plan.
     total = query.order_by(None).count()
 
