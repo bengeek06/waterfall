@@ -4430,8 +4430,10 @@ components:
                   $ref: <ResourceRead>.yaml
 
         `total` refere toujours au jeu filtre complet, jamais a la page renvoyee. `limit` est `null` lorsque la requete n'en fournissait pas : dans ce cas `items` contient l'integralite des lignes et `total` lui est egal. Un appel sans `limit` ne doit donc jamais tronquer silencieusement une liste.
+        Regle offset/limit (evite toute ambiguite avec la garantie ci-dessus) : `offset` sans `limit` est invalide et rejete par le parametre Offset.yaml avec la reponse BadRequest.yaml. Sans cette regle, un appel avec `offset` seul serait sous-specifie : `items` couvrirait-il tout de meme le jeu filtre (contredisant `offset`), ou seulement la partie suivant le decalage (contredisant la garantie "sans limit, tout est renvoye") ? `limit` doit donc toujours accompagner un `offset` non nul.
       required:
         - total
+        - limit
         - offset
       properties:
         total:
@@ -4448,6 +4450,21 @@ components:
           type: integer
           minimum: 0
           description: Decalage effectivement applique (0 si absent de la requete).
+    SortColumn:
+      type: string
+      pattern: ^-?[A-Za-z_][A-Za-z0-9_]*$
+      description: |-
+        Nom d'une colonne triable, optionnellement prefixe de `-` pour un tri descendant (ex. `name`, `-created_at`). Un seul critere de tri par requete : l'ordre total deterministe (necessaire a une pagination stable) est complete par la cle primaire en repli, jamais par un second critere explicite.
+        Ce schema documente uniquement la syntaxe generale ; il ne peut pas etre reutilise comme composant Parameter Object partage, car OpenAPI n'autorise pas de restreindre par un `enum` un `$ref` vers un Parameter Object (les cles soeurs d'un `$ref` a ce niveau sont ignorees). Chaque ressource declare donc son propre parametre `sort` au niveau de l'operation, avec ce schema restreint par un `enum` aux colonnes qu'elle expose au tri, par exemple :
+        - name: sort
+          in: query
+          required: false
+          schema:
+            allOf:
+              - $ref: SortColumn.yaml
+            enum: [name, -name, code, -code]
+
+        Une colonne absente de cet enum est rejetee avec la reponse BadRequest.yaml, jamais interpolee dans le SQL.
     PlanningTaskDeleteConflict:
       type: object
       required:
@@ -4705,21 +4722,11 @@ components:
       name: offset
       in: query
       required: false
-      description: Nombre de lignes a sauter avant le debut de la page.
+      description: 'Nombre de lignes a sauter avant le debut de la page. Requiert `limit` : fourni sans `limit`, il serait sous-specifie (voir la note "Regle offset/limit" dans PaginationMeta.yaml) et est donc rejete avec la reponse BadRequest.yaml.'
       schema:
         type: integer
         minimum: 0
         default: 0
-    Sort:
-      name: sort
-      in: query
-      required: false
-      description: |-
-        Nom d'une colonne triable, optionnellement prefixe de `-` pour un tri descendant (ex. `name`, `-created_at`). Un seul critere de tri par requete : l'ordre total deterministe (necessaire a une pagination stable) est complete par la cle primaire en repli, jamais par un second critere explicite.
-        Chaque ressource documente sa propre liste de colonnes triables via un `enum` sur ce parametre au niveau de l'operation ; une colonne absente de cette liste est rejetee avec la reponse BadRequest.yaml, jamais interpolee dans le SQL.
-      schema:
-        type: string
-        pattern: ^-?[A-Za-z_][A-Za-z0-9_]*$
     Search:
       name: q
       in: query

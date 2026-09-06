@@ -20,8 +20,17 @@ description: >-
   dans ce cas `items` contient l'integralite des lignes et `total` lui
   est egal. Un appel sans `limit` ne doit donc jamais tronquer
   silencieusement une liste.
+
+  Regle offset/limit (evite toute ambiguite avec la garantie ci-dessus) :
+  `offset` sans `limit` est invalide et rejete par le parametre Offset.yaml
+  avec la reponse BadRequest.yaml. Sans cette regle, un appel avec
+  `offset` seul serait sous-specifie : `items` couvrirait-il tout de
+  meme le jeu filtre (contredisant `offset`), ou seulement la partie
+  suivant le decalage (contredisant la garantie "sans limit, tout est
+  renvoye") ? `limit` doit donc toujours accompagner un `offset` non nul.
 required:
 - total
+- limit
 - offset
 properties:
   total:

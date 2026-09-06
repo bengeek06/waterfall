@@ -1840,6 +1840,43 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
         };
+        /**
+         * @description Metadonnees de pagination communes a toutes les enveloppes de liste (EPIC E7). OpenAPI 3.1 ne supportant pas les schemas generiques, ce fragment est reutilise via allOf par chaque schema `<Resource>ListRead` propre a une ressource, qui ajoute sa propre propriete `items` :
+         *     allOf:
+         *       - $ref: PaginationMeta.yaml
+         *       - type: object
+         *         required: [items]
+         *         properties:
+         *           items:
+         *             type: array
+         *             items:
+         *               $ref: <ResourceRead>.yaml
+         *
+         *     `total` refere toujours au jeu filtre complet, jamais a la page renvoyee. `limit` est `null` lorsque la requete n'en fournissait pas : dans ce cas `items` contient l'integralite des lignes et `total` lui est egal. Un appel sans `limit` ne doit donc jamais tronquer silencieusement une liste.
+         *     Regle offset/limit (evite toute ambiguite avec la garantie ci-dessus) : `offset` sans `limit` est invalide et rejete par le parametre Offset.yaml avec la reponse BadRequest.yaml. Sans cette regle, un appel avec `offset` seul serait sous-specifie : `items` couvrirait-il tout de meme le jeu filtre (contredisant `offset`), ou seulement la partie suivant le decalage (contredisant la garantie "sans limit, tout est renvoye") ? `limit` doit donc toujours accompagner un `offset` non nul.
+         */
+        PaginationMeta: {
+            /** @description Nombre total de lignes du jeu filtre, avant pagination. */
+            total: number;
+            /** @description Limite effectivement appliquee. `null` si la requete ne fournissait pas de `limit` : `items` contient alors toutes les lignes. */
+            limit: number | null;
+            /** @description Decalage effectivement applique (0 si absent de la requete). */
+            offset: number;
+        };
+        /**
+         * @description Nom d'une colonne triable, optionnellement prefixe de `-` pour un tri descendant (ex. `name`, `-created_at`). Un seul critere de tri par requete : l'ordre total deterministe (necessaire a une pagination stable) est complete par la cle primaire en repli, jamais par un second critere explicite.
+         *     Ce schema documente uniquement la syntaxe generale ; il ne peut pas etre reutilise comme composant Parameter Object partage, car OpenAPI n'autorise pas de restreindre par un `enum` un `$ref` vers un Parameter Object (les cles soeurs d'un `$ref` a ce niveau sont ignorees). Chaque ressource declare donc son propre parametre `sort` au niveau de l'operation, avec ce schema restreint par un `enum` aux colonnes qu'elle expose au tri, par exemple :
+         *     - name: sort
+         *       in: query
+         *       required: false
+         *       schema:
+         *         allOf:
+         *           - $ref: SortColumn.yaml
+         *         enum: [name, -name, code, -code]
+         *
+         *     Une colonne absente de cet enum est rejetee avec la reponse BadRequest.yaml, jamais interpolee dans le SQL.
+         */
+        SortColumn: string;
         PlanningTaskDeleteConflict: {
             detail: {
                 /** @enum {string} */
@@ -2192,6 +2229,12 @@ export interface components {
         Year: number;
         /** @description Identifiant technique de l'utilisateur */
         UserId: number;
+        /** @description Nombre maximum de lignes renvoyees. Absent, l'endpoint renvoie l'integralite des lignes du jeu filtre (voir PaginationMeta.yaml) : il n'y a pas de valeur par defaut qui tronquerait silencieusement une liste. */
+        Limit: number;
+        /** @description Nombre de lignes a sauter avant le debut de la page. Requiert `limit` : fourni sans `limit`, il serait sous-specifie (voir la note "Regle offset/limit" dans PaginationMeta.yaml) et est donc rejete avec la reponse BadRequest.yaml. */
+        Offset: number;
+        /** @description Recherche plein texte simple (sous-chaine, insensible a la casse), sur le sous-ensemble de colonnes documente par chaque ressource dans la description de ce parametre au niveau de l'operation. A distinguer des filtres structures deja existants sur certaines ressources (`include_inactive`, `node_id`, `role_id`, ...), qui restent des parametres dedies et se combinent avec `q`. */
+        Search: string;
     };
     requestBodies: never;
     headers: never;
