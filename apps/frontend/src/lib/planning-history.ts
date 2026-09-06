@@ -8,41 +8,93 @@ export type PlanningSnapshotDelta = {
   links: PlanningLinkSnapshotWrite[];
 };
 
+// Champs de structure et de position dans l'arbre du planning.
+function taskIdentityFields(
+  task: PlanningDetail["tasks"][number],
+): Pick<
+  PlanningTaskSnapshotWrite,
+  | "uid"
+  | "id_display"
+  | "structure_key"
+  | "structure_kind"
+  | "parent_uid"
+  | "position"
+  | "name"
+  | "outline_number"
+  | "outline_level"
+  | "wbs"
+> {
+  return {
+    uid: task.uid,
+    id_display: task.id_display ?? null,
+    structure_key: task.structure_key ?? null,
+    structure_kind: task.structure_kind ?? null,
+    parent_uid: task.parent_uid ?? null,
+    position: task.position ?? null,
+    name: task.name,
+    outline_number: task.outline_number ?? null,
+    outline_level: task.outline_level ?? null,
+    wbs: task.wbs ?? null,
+  };
+}
+
+// Champs d'ordonnancement, de durée et de statut d'exécution.
+function taskScheduleFields(
+  task: PlanningDetail["tasks"][number],
+): Pick<
+  PlanningTaskSnapshotWrite,
+  | "start_at"
+  | "finish_at"
+  | "duration_minutes"
+  | "duration_format"
+  | "work_minutes"
+  | "task_type"
+  | "percent_complete"
+  | "is_summary"
+  | "is_milestone"
+  | "is_manual"
+  | "calendar_uid"
+  | "notes"
+> {
+  return {
+    start_at: task.start_at ?? null,
+    finish_at: task.finish_at ?? null,
+    duration_minutes: task.duration_minutes ?? null,
+    duration_format: task.duration_format ?? null,
+    work_minutes: task.work_minutes ?? null,
+    task_type: task.task_type ?? null,
+    percent_complete: task.percent_complete ?? null,
+    is_summary: task.is_summary,
+    is_milestone: task.is_milestone,
+    is_manual: task.is_manual ?? null,
+    calendar_uid: task.calendar_uid ?? null,
+    notes: task.description ?? null,
+  };
+}
+
+function taskToSnapshotWrite(task: PlanningDetail["tasks"][number]): PlanningTaskSnapshotWrite {
+  return {
+    ...taskIdentityFields(task),
+    ...taskScheduleFields(task),
+  };
+}
+
+function linkToSnapshotWrite(link: PlanningDetail["links"][number]): PlanningLinkSnapshotWrite {
+  return {
+    task_uid: link.task_uid,
+    predecessor_uid: link.predecessor_uid,
+    link_type: link.link_type,
+    lag_tenth_minute: link.lag_tenth_minute ?? null,
+    lag_format: link.lag_format ?? null,
+  };
+}
+
 export function snapshotFromPlanningDetail(
   detail: Pick<PlanningDetail, "tasks" | "links">,
 ): PlanningSnapshotDelta {
   return {
-    tasks: detail.tasks.map((task) => ({
-      uid: task.uid,
-      id_display: task.id_display ?? null,
-      structure_key: task.structure_key ?? null,
-      structure_kind: task.structure_kind ?? null,
-      parent_uid: task.parent_uid ?? null,
-      position: task.position ?? null,
-      name: task.name,
-      outline_number: task.outline_number ?? null,
-      outline_level: task.outline_level ?? null,
-      wbs: task.wbs ?? null,
-      start_at: task.start_at ?? null,
-      finish_at: task.finish_at ?? null,
-      duration_minutes: task.duration_minutes ?? null,
-      duration_format: task.duration_format ?? null,
-      work_minutes: task.work_minutes ?? null,
-      task_type: task.task_type ?? null,
-      percent_complete: task.percent_complete ?? null,
-      is_summary: task.is_summary,
-      is_milestone: task.is_milestone,
-      is_manual: task.is_manual ?? null,
-      calendar_uid: task.calendar_uid ?? null,
-      notes: task.description ?? null,
-    })),
-    links: detail.links.map((link) => ({
-      task_uid: link.task_uid,
-      predecessor_uid: link.predecessor_uid,
-      link_type: link.link_type,
-      lag_tenth_minute: link.lag_tenth_minute ?? null,
-      lag_format: link.lag_format ?? null,
-    })),
+    tasks: detail.tasks.map(taskToSnapshotWrite),
+    links: detail.links.map(linkToSnapshotWrite),
   };
 }
 
