@@ -226,15 +226,32 @@ paths:
       operationId: listUsers
       security:
         - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/Search'
+        - name: sort
+          in: query
+          required: false
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/SortColumn'
+            enum:
+              - email
+              - -email
+              - created_at
+              - -created_at
+              - is_active
+              - -is_active
       responses:
         '200':
           description: Utilisateurs
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/UserAdminRead'
+                $ref: '#/components/schemas/UserAdminListRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -532,36 +549,37 @@ paths:
       security:
         - bearerAuth: []
       parameters:
-        - name: limit
-          in: query
-          required: false
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 500
-            default: 50
-        - name: offset
-          in: query
-          required: false
-          schema:
-            type: integer
-            minimum: 0
-            default: 0
         - name: include_archived
           in: query
           required: false
           schema:
             type: boolean
             default: false
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/Search'
+        - name: sort
+          in: query
+          required: false
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/SortColumn'
+            enum:
+              - name
+              - -name
+              - status
+              - -status
+              - id
+              - -id
       responses:
         '200':
           description: Liste de projets
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/ProjectRead'
+                $ref: '#/components/schemas/ProjectListRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
     post:
@@ -692,15 +710,31 @@ paths:
         - bearerAuth: []
       parameters:
         - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/Search'
+        - name: sort
+          in: query
+          required: false
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/SortColumn'
+            enum:
+              - version_number
+              - -version_number
+              - status
+              - -status
+              - created_at
+              - -created_at
       responses:
         '200':
           description: Versions de planning
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/PlanningRead'
+                $ref: '#/components/schemas/PlanningListRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -1068,21 +1102,6 @@ paths:
         - bearerAuth: []
       parameters:
         - $ref: '#/components/parameters/ProjectId'
-        - name: limit
-          in: query
-          required: false
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 2000
-            default: 200
-        - name: offset
-          in: query
-          required: false
-          schema:
-            type: integer
-            minimum: 0
-            default: 0
         - name: planning_id
           in: query
           required: false
@@ -1093,13 +1112,11 @@ paths:
             minimum: 1
       responses:
         '200':
-          description: Liste de taches
+          description: 'Integralite des taches du projet (non pagine : cet endpoint alimente l''editeur de planning, qui a besoin de l''arbre complet pour reconstruire la hierarchie et calculer les durees des taches synthese -- une troncature produirait des parents orphelins et des agregats faux).'
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/TaskRead'
+                $ref: '#/components/schemas/TaskListRead'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -1298,15 +1315,31 @@ paths:
       parameters:
         - $ref: '#/components/parameters/ProjectId'
         - $ref: '#/components/parameters/TaskUid'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/Search'
+        - name: sort
+          in: query
+          required: false
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/SortColumn'
+            enum:
+              - role_name
+              - -role_name
+              - quantity
+              - -quantity
+              - hours
+              - -hours
       responses:
         '200':
           description: Affectations de rôles
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/TaskRoleAssignmentRead'
+                $ref: '#/components/schemas/TaskRoleAssignmentListRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -1399,15 +1432,33 @@ paths:
         - bearerAuth: []
       parameters:
         - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/Search'
+        - name: sort
+          in: query
+          required: false
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/SortColumn'
+            enum:
+              - version_number
+              - -version_number
+              - kind
+              - -kind
+              - status
+              - -status
+              - created_at
+              - -created_at
       responses:
         '200':
           description: Versions de devis
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/ProjectEstimateRead'
+                $ref: '#/components/schemas/ProjectEstimateListRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -1473,15 +1524,33 @@ paths:
       parameters:
         - $ref: '#/components/parameters/ProjectId'
         - $ref: '#/components/parameters/EstimateId'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/Search'
+        - name: sort
+          in: query
+          required: false
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/SortColumn'
+            enum:
+              - position
+              - -position
+              - task_name
+              - -task_name
+              - outline_number
+              - -outline_number
+              - outline_level
+              - -outline_level
       responses:
         '200':
           description: Lignes de tâches du devis
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/EstimateTaskRowRead'
+                $ref: '#/components/schemas/EstimateTaskRowListRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -1497,15 +1566,35 @@ paths:
       parameters:
         - $ref: '#/components/parameters/ProjectId'
         - $ref: '#/components/parameters/EstimateId'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/Search'
+        - name: sort
+          in: query
+          required: false
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/SortColumn'
+            enum:
+              - label
+              - -label
+              - quantity
+              - -quantity
+              - unit_cost
+              - -unit_cost
+              - purchase_cost
+              - -purchase_cost
+              - created_at
+              - -created_at
       responses:
         '200':
           description: Lignes de coût du devis
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/EstimateCostLineRead'
+                $ref: '#/components/schemas/EstimateCostLineListRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -4465,6 +4554,94 @@ components:
             enum: [name, -name, code, -code]
 
         Une colonne absente de cet enum est rejetee avec la reponse BadRequest.yaml, jamais interpolee dans le SQL.
+    ProjectListRead:
+      allOf:
+        - $ref: '#/components/schemas/PaginationMeta'
+        - type: object
+          required:
+            - items
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/ProjectRead'
+    TaskListRead:
+      allOf:
+        - $ref: '#/components/schemas/PaginationMeta'
+        - type: object
+          required:
+            - items
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/TaskRead'
+    PlanningListRead:
+      allOf:
+        - $ref: '#/components/schemas/PaginationMeta'
+        - type: object
+          required:
+            - items
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/PlanningRead'
+    ProjectEstimateListRead:
+      allOf:
+        - $ref: '#/components/schemas/PaginationMeta'
+        - type: object
+          required:
+            - items
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/ProjectEstimateRead'
+    EstimateTaskRowListRead:
+      allOf:
+        - $ref: '#/components/schemas/PaginationMeta'
+        - type: object
+          required:
+            - items
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/EstimateTaskRowRead'
+    EstimateCostLineListRead:
+      allOf:
+        - $ref: '#/components/schemas/PaginationMeta'
+        - type: object
+          required:
+            - items
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/EstimateCostLineRead'
+    TaskRoleAssignmentListRead:
+      allOf:
+        - $ref: '#/components/schemas/PaginationMeta'
+        - type: object
+          required:
+            - items
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/TaskRoleAssignmentRead'
+    UserAdminListRead:
+      allOf:
+        - $ref: '#/components/schemas/PaginationMeta'
+        - type: object
+          required:
+            - items
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/UserAdminRead'
     PlanningTaskDeleteConflict:
       type: object
       required:
