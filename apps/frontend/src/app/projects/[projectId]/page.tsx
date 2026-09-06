@@ -316,11 +316,13 @@ export default function ProjectDetailsPage() {
         return;
       }
       try {
-        const [categories, types] = await Promise.all([
+        const [categories, typesPage] = await Promise.all([
           getCostCategories(session, onSessionRefresh),
           getCostTypes(session, onSessionRefresh),
         ]);
-        const laborTypeIds = new Set(types.filter((type) => type.kind === "labor").map((type) => type.id));
+        const laborTypeIds = new Set(
+          typesPage.items.filter((type) => type.kind === "labor").map((type) => type.id),
+        );
         setCostCategories(categories.filter((category) => !laborTypeIds.has(category.cost_type_id)));
       } catch {
         // Non-blocking: the add-line form simply stays disabled without categories.

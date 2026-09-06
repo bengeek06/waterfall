@@ -96,7 +96,24 @@ export default function ResourcesPage() {
   const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null);
   const [roles, setRoles] = useState<ResourceRole[]>([]);
   const [calendars, setCalendars] = useState<Calendar[]>([]);
+  // `costTypes` (full, unfiltered) feeds other panels that need the complete list as
+  // reference data (RolesPanel, CostCategoriesTable's type dropdown, ValuationPanel) --
+  // per EPIC E7/E8, that guarantee ("absent limit, tout est renvoye") must not be
+  // broken by pagination. The cost-types table's own paginated view is therefore a
+  // second, independent fetch (`costTypesPage` below), not a client-side slice of
+  // `costTypes` -- slicing it locally would silently violate the "recherche et tri
+  // delegues au serveur" requirement even though today's dataset happens to be small
+  // enough that it would look correct.
   const [costTypes, setCostTypes] = useState<CostType[]>([]);
+  const [costTypesPage, setCostTypesPage] = useState<{ items: CostType[]; total: number }>({
+    items: [],
+    total: 0,
+  });
+  const [costTypesLoading, setCostTypesLoading] = useState(false);
+  const [costTypesOffset, setCostTypesOffset] = useState(0);
+  const [costTypesLimit] = useState(20);
+  const [costTypesSort, setCostTypesSort] = useState<string | null>(null);
+  const [costTypesQuery, setCostTypesQuery] = useState("");
   const [categories, setCategories] = useState<CostCategory[]>([]);
   const [rates, setRates] = useState<CostRate[]>([]);
   const [capacities, setCapacities] = useState<RoleCapacity[]>([]);
@@ -202,7 +219,7 @@ export default function ResourcesPage() {
           getResourceNodes(session, onSessionRefresh),
           getResourceRoles(session, onSessionRefresh),
           getCalendars(session, onSessionRefresh, true),
-          getCostTypes(session, onSessionRefresh, true),
+          getCostTypes(session, onSessionRefresh, true).then((page) => page.items),
           getCostCategories(session, onSessionRefresh, true),
           getCostRates(session, onSessionRefresh),
           getInflationRates(session, onSessionRefresh),
@@ -252,6 +269,85 @@ export default function ResourcesPage() {
 
     void load();
   }, [onSessionRefresh, router, session]);
+
+  // The cost-types table's own paginated view: independent of the full `costTypes`
+  // list above, refetched whenever pagination, sort, or search change, and again
+  // after any create/update/toggle mutation (see `reloadCostTypesPage` below) since
+  // those mutate `costTypes` directly but have no way to patch this separate,
+  // server-ordered page in place. Guarded by its own generation counter for the same
+  // reason as the main load above (a session refresh, rapid paging, or a mutation's
+  // reload racing an in-flight fetch must not let a stale response win).
+  const costTypesGenerationRef = useRef(0);
+
+  useEffect(() => {
+    const generation = ++costTypesGenerationRef.current;
+    const isCurrentGeneration = () => costTypesGenerationRef.current === generation;
+
+    async function load() {
+      if (!session) return;
+      setCostTypesLoading(true);
+      try {
+        const page = await getCostTypes(session, onSessionRefresh, true, {
+          limit: costTypesLimit,
+          offset: costTypesOffset,
+          sort: costTypesSort,
+          q: costTypesQuery || undefined,
+        });
+        if (!isCurrentGeneration()) return;
+        setCostTypesPage(page);
+      } catch (cause) {
+        if (!isCurrentGeneration()) return;
+        if (cause instanceof SessionExpiredError) {
+          clearSession();
+          router.push("/login");
+          return;
+        }
+        if (cause instanceof ApiError && cause.status === 401) {
+          clearSession();
+          router.push("/login");
+          return;
+        }
+        setNotice({
+          kind: "error",
+          message: cause instanceof ApiError ? cause.message : "Chargement des types de coût impossible",
+        });
+      } finally {
+        if (isCurrentGeneration()) setCostTypesLoading(false);
+      }
+    }
+
+    void load();
+  }, [session, onSessionRefresh, router, costTypesLimit, costTypesOffset, costTypesSort, costTypesQuery]);
+
+  // Deliberately swallows its own non-session errors rather than letting them
+  // propagate: this is called as the last step of `addCostType`/`saveCostType`/
+  // `toggleCostTypeActive`, all wrapped in `submitAction`, which sets its own
+  // success notice right after `action()` returns -- a `setNotice` call here would
+  // just be overwritten by that success notice a moment later, while *throwing*
+  // would make `submitAction` report the whole operation as failed even though the
+  // actual mutation (already applied to `costTypes` and the server) succeeded. The
+  // table's own view simply stays one refresh behind until the next pagination/
+  // sort/search interaction. Session expiry is the one exception: it must still
+  // force a logout like every other data source on this page, regardless of where
+  // it's detected.
+  async function reloadCostTypesPage() {
+    if (!session) return;
+    const generation = ++costTypesGenerationRef.current;
+    try {
+      const page = await getCostTypes(session, onSessionRefresh, true, {
+        limit: costTypesLimit,
+        offset: costTypesOffset,
+        sort: costTypesSort,
+        q: costTypesQuery || undefined,
+      });
+      if (costTypesGenerationRef.current === generation) setCostTypesPage(page);
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
+        clearSession();
+        router.push("/login");
+      }
+    }
+  }
 
   async function submitAction(action: () => Promise<void>, success: string) {
     setActionBusy(true);
@@ -347,6 +443,7 @@ export default function ResourcesPage() {
       setCostTypeCode("");
       setCostTypeName("");
       setCostTypeKind("other");
+      await reloadCostTypesPage();
     }, "Type de coût créé.");
   }
 
@@ -366,6 +463,7 @@ export default function ResourcesPage() {
       );
       setCostTypes((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
       setEditingCostTypeId(null);
+      await reloadCostTypesPage();
     }, "Type de coût modifié.");
   }
 
@@ -379,6 +477,7 @@ export default function ResourcesPage() {
         onSessionRefresh,
       );
       setCostTypes((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+      await reloadCostTypesPage();
     }, costType.is_active ? "Type de coût désactivé." : "Type de coût réactivé.");
   }
 
@@ -802,7 +901,7 @@ export default function ResourcesPage() {
 
       {!busy && activeTab === "costs" ? (
         <>
-          <CostTypesTable items={costTypes} code={costTypeCode} name={costTypeName} kind={costTypeKind} draft={costTypeDraft} editingId={editingCostTypeId} busy={actionBusy} labels={costTypeKindLabels} onSubmit={addCostType} onCodeChange={setCostTypeCode} onNameChange={setCostTypeName} onKindChange={setCostTypeKind} onStartEdit={startEditCostType} onDraftChange={setCostTypeDraft} onSave={(item) => void saveCostType(item)} onCancel={() => setEditingCostTypeId(null)} onToggle={(item) => void toggleCostTypeActive(item)} />
+          <CostTypesTable items={costTypesPage.items} pagination={{ total: costTypesPage.total, limit: costTypesLimit, offset: costTypesOffset }} onPaginationChange={(next) => setCostTypesOffset(next.offset)} sort={costTypesSort} onSortChange={setCostTypesSort} search={costTypesQuery} onSearchChange={(next) => { setCostTypesQuery(next); setCostTypesOffset(0); }} isLoading={costTypesLoading} code={costTypeCode} name={costTypeName} kind={costTypeKind} draft={costTypeDraft} editingId={editingCostTypeId} busy={actionBusy} labels={costTypeKindLabels} onSubmit={addCostType} onCodeChange={setCostTypeCode} onNameChange={setCostTypeName} onKindChange={setCostTypeKind} onStartEdit={startEditCostType} onDraftChange={setCostTypeDraft} onSave={(item) => void saveCostType(item)} onCancel={() => setEditingCostTypeId(null)} onToggle={(item) => void toggleCostTypeActive(item)} />
 
           <CostCategoriesTable items={categories} types={costTypes} typeId={categoryCostTypeId} accountingCode={categoryCode} categoryCode={accountingCode} name={categoryName} draft={categoryDraft} editingId={editingCategoryId} busy={actionBusy} onSubmit={addCategory} onTypeChange={setCategoryCostTypeId} onAccountingCodeChange={setCategoryCode} onCategoryCodeChange={setAccountingCode} onNameChange={setCategoryName} onStartEdit={startEditCategory} onDraftChange={(field, value) => setCategoryDraft((previous) => ({ ...previous, [field]: value }))} onSave={(item) => void saveCategory(item)} onCancel={() => setEditingCategoryId(null)} onToggle={(item) => void toggleCategoryActive(item)} />
 

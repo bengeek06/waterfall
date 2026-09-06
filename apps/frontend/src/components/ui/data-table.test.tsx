@@ -171,6 +171,29 @@ describe("DataTable", () => {
     expect(
       screen.getByText("Terminez l'édition en cours pour changer de page ou filtrer."),
     ).toBeInTheDocument();
+    // Sort must be frozen too: re-sorting mid-edit can drop the edited row off the
+    // page with no way to reach its Enregistrer/Annuler controls again.
+    expect(screen.getByRole("button", { name: "Nom" })).toBeDisabled();
+  });
+
+  it("calls preventDefault on Enter in the search input, so it can't submit a wrapping form", () => {
+    // A caller commonly wraps the whole DataTable (search box included) in a <form>
+    // for its own pinned create-row submit button. Per the HTML implicit-submission
+    // algorithm, Enter in any single-line text input inside that form submits it --
+    // search must not let an unrelated Enter-to-search keystroke trigger that.
+    //
+    // jsdom does not implement that implicit-submission algorithm at all (verified:
+    // a real <form onSubmit> around this exact render still never fires on Enter,
+    // fix or no fix), so asserting on a submit handler would pass either way and
+    // prove nothing. `fireEvent.keyDown` returns `dispatchEvent`'s own result --
+    // `false` iff some handler called `preventDefault()` on the (cancelable)
+    // keydown event -- which does exercise the actual code path this component
+    // controls, regardless of what jsdom does or doesn't do with it afterwards.
+    renderTable({ search: { value: "", onChange: vi.fn() } });
+
+    const notCancelled = fireEvent.keyDown(screen.getByLabelText("Rechercher"), { key: "Enter" });
+
+    expect(notCancelled).toBe(false);
   });
 
   it("shows a loading state distinct from the empty-data render", () => {

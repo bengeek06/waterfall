@@ -210,6 +210,18 @@ export function DataTable<TData>({
           value={searchValue}
           disabled={isEditing}
           onChange={(event) => setSearchValue(event.target.value)}
+          onKeyDown={(event) => {
+            // A caller commonly wraps the whole DataTable (search input included) in
+            // a <form> for the pinned create-row's own submit button. Per the HTML
+            // implicit-submission algorithm, Enter in any single-line text input
+            // inside that form -- including this one -- submits it. Search is
+            // already debounced on every keystroke, so Enter isn't needed to trigger
+            // it, and swallowing it here avoids an unrelated Enter-to-search
+            // keystroke accidentally submitting a filled-in create-row.
+            if (event.key === "Enter") {
+              event.preventDefault();
+            }
+          }}
           className="max-w-xs"
         />
       ) : null}
@@ -239,6 +251,7 @@ export function DataTable<TData>({
                       size="sm"
                       type="button"
                       className="-ml-2"
+                      disabled={isEditing}
                       onClick={() => onSortChange(getNextSort(sortColumn, sort))}
                     >
                       {content}
