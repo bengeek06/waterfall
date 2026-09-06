@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, String
+from sqlalchemy import Boolean, DateTime, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from waterfall.db.base import Base
@@ -8,6 +8,14 @@ from waterfall.db.base import Base
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (
+        # Issue #116 (E7-05): GET /auth/users has no WHERE filter and sorts by email
+        # (already covered by the column's own unique+index below), created_at, or
+        # is_active. Neither of the latter two is unique, so both composites carry
+        # the id tiebreaker.
+        Index("idx_users_created_at", "created_at", "id"),
+        Index("idx_users_is_active", "is_active", "id"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)

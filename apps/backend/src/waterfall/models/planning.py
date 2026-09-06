@@ -6,6 +6,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
+    Index,
     Integer,
     SmallInteger,
     String,
@@ -27,6 +28,13 @@ class WfPlanning(Base):
         ),
         UniqueConstraint("project_id", "version_number", name="uq_wf_planning_project_version"),
         UniqueConstraint("project_id", "id", name="uq_wf_planning_project_id"),
+        # Issue #116 (E7-05): GET /projects/{id}/plannings always filters on
+        # project_id. uq_wf_planning_project_version already covers the default
+        # sort-by-version_number path (unique per project, no tiebreaker needed);
+        # status and created_at are also reachable via ?sort=, are not unique per
+        # project, and so carry the id tiebreaker.
+        Index("idx_wf_planning_project_status", "project_id", "status", "id"),
+        Index("idx_wf_planning_project_created_at", "project_id", "created_at", "id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)

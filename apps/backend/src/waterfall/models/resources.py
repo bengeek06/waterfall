@@ -39,6 +39,14 @@ class Calendar(Base):
             postgresql_where=text("is_default"),
             sqlite_where=text("is_default"),
         ),
+        # Issue #116 (E7-05): GET /resources/calendars filters on is_active and sorts
+        # by code or name. uq_wf_calendar_code already covers the unfiltered
+        # sort-by-code case (code is globally unique, so no tiebreaker column is
+        # needed there); these two composites cover the WHERE is_active = ? ORDER BY
+        # ... path -- the id tiebreaker column is only needed on the name index since
+        # name (unlike code) is not unique and ties must be broken deterministically.
+        Index("idx_wf_calendar_is_active_code", "is_active", "code"),
+        Index("idx_wf_calendar_is_active_name", "is_active", "name", "id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -109,6 +117,13 @@ class ResourceRole(Base):
     __table_args__ = (
         Index("idx_wf_resource_role_node", "node_id"),
         Index("idx_wf_resource_role_calendar", "calendar_id"),
+        # Issue #116 (E7-05): GET /resources/roles always filters is_active and
+        # defaults (and only) sorts by name. node_id is an optional extra equality/IN
+        # filter, but it stays served by idx_wf_resource_role_node above rather than a
+        # 3-column composite -- the roles under a single node are few enough that
+        # applying it as a residual filter on top of this index is not worth doubling
+        # the composite's write cost.
+        Index("idx_wf_resource_role_is_active_name", "is_active", "name", "id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -132,6 +147,13 @@ class CostType(Base):
             "kind IN ('labor', 'supply', 'other')",
             name="ck_wf_cost_type_kind",
         ),
+        # Issue #116 (E7-05): GET /resources/cost-types filters on is_active and sorts
+        # by code or name. code's own unique=True already covers the unfiltered
+        # sort-by-code case, so idx_wf_cost_type_is_active_code (also unique-in-effect
+        # since code alone is unique) needs no tiebreaker; name is not unique so its
+        # composite carries the id tiebreaker.
+        Index("idx_wf_cost_type_is_active_code", "is_active", "code"),
+        Index("idx_wf_cost_type_is_active_name", "is_active", "name", "id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -149,6 +171,15 @@ class CostType(Base):
 
 class CostCategory(Base):
     __tablename__ = "wf_cost_category"
+    __table_args__ = (
+        # Issue #116 (E7-05): GET /resources/categories filters on is_active and sorts
+        # by accounting_code, category_code, or name. accounting_code is globally
+        # unique (unique=True below) so its composite needs no tiebreaker; the other
+        # two are not unique and carry the id tiebreaker.
+        Index("idx_wf_cost_category_is_active_accounting_code", "is_active", "accounting_code"),
+        Index("idx_wf_cost_category_is_active_category_code", "is_active", "category_code", "id"),
+        Index("idx_wf_cost_category_is_active_name", "is_active", "name", "id"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     cost_type_id: Mapped[int] = mapped_column(ForeignKey("wf_cost_type.id"), nullable=False)
@@ -260,6 +291,15 @@ class Estimate(Base):
             "status IN ('draft', 'validated', 'superseded', 'archived')",
             name="ck_wf_estimate_status",
         ),
+        # Issue #116 (E7-05): GET /projects/{id}/estimates always filters on
+        # project_id. uq_wf_estimate_project_version already covers the default
+        # sort-by-version_number path (version_number is unique per project, so no
+        # ties, no tiebreaker column needed); kind, status and created_at are each
+        # reachable via ?sort= and are not unique per project, so their composites
+        # carry the id tiebreaker.
+        Index("idx_wf_estimate_project_kind", "project_id", "kind", "id"),
+        Index("idx_wf_estimate_project_status", "project_id", "status", "id"),
+        Index("idx_wf_estimate_project_created_at", "project_id", "created_at", "id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -284,6 +324,23 @@ class EstimateTaskRow(Base):
     __table_args__ = (
         UniqueConstraint("estimate_id", "task_id", name="uq_wf_estimate_task_row"),
         Index("idx_wf_estimate_task_row_estimate_position", "estimate_id", "position"),
+        # Issue #116 (E7-05): task_name, outline_number and outline_level are also
+        # reachable via ?sort= on GET .../task-rows (position, the default sort, is
+        # already covered above). None of the three is unique per estimate, so each
+        # composite carries the id tiebreaker.
+        Index("idx_wf_estimate_task_row_estimate_task_name", "estimate_id", "task_name", "id"),
+        Index(
+            "idx_wf_estimate_task_row_estimate_outline_number",
+            "estimate_id",
+            "outline_number",
+            "id",
+        ),
+        Index(
+            "idx_wf_estimate_task_row_estimate_outline_level",
+            "estimate_id",
+            "outline_level",
+            "id",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -311,6 +368,20 @@ class EstimateCostLine(Base):
         Index("idx_wf_estimate_cost_line_estimate", "estimate_id"),
         Index("idx_wf_estimate_cost_line_task", "task_id"),
         Index("idx_wf_estimate_cost_line_category", "cost_category_id"),
+        # Issue #116 (E7-05): GET .../cost-lines always filters on estimate_id and has
+        # no default_sort (any of label/quantity/unit_cost/purchase_cost/created_at
+        # can be requested via ?sort=, none is unique per estimate), so each needs its
+        # own composite with the id tiebreaker.
+        Index("idx_wf_estimate_cost_line_estimate_label", "estimate_id", "label", "id"),
+        Index("idx_wf_estimate_cost_line_estimate_quantity", "estimate_id", "quantity", "id"),
+        Index("idx_wf_estimate_cost_line_estimate_unit_cost", "estimate_id", "unit_cost", "id"),
+        Index(
+            "idx_wf_estimate_cost_line_estimate_purchase_cost",
+            "estimate_id",
+            "purchase_cost",
+            "id",
+        ),
+        Index("idx_wf_estimate_cost_line_estimate_created_at", "estimate_id", "created_at", "id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
