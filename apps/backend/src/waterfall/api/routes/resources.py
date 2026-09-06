@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from waterfall.api.dependencies import get_current_active_user, get_current_admin_user
+from waterfall.api.pagination import ListParams, list_params
 from waterfall.db.session import get_db
 from waterfall.models.resources import (
     Calendar,
@@ -26,31 +27,40 @@ from waterfall.models.resources import (
 from waterfall.models.user import User
 from waterfall.schemas.resources import (
     CalendarCreate,
+    CalendarListRead,
     CalendarRead,
     CalendarUpdate,
     CalendarWeekdayCreate,
     CalendarWeekdayRead,
     CostCategoryCreate,
+    CostCategoryListRead,
     CostCategoryRead,
     CostCategoryUpdate,
     CostRateCreate,
+    CostRateListRead,
     CostRateRead,
     CostRateUpdate,
     CostTypeCreate,
+    CostTypeListRead,
     CostTypeRead,
     CostTypeUpdate,
+    InflationRateListRead,
     InflationRateRead,
     InflationRateUpdate,
     ResourceNodeCreate,
+    ResourceNodeListRead,
     ResourceNodeRead,
     ResourceNodeUpdate,
     ResourceRoleCreate,
+    ResourceRoleListRead,
     ResourceRoleRead,
     ResourceRoleUpdate,
     RoleCapacityCreate,
+    RoleCapacityListRead,
     RoleCapacityRead,
     RoleCapacityUpdate,
 )
+from waterfall.services import apply_pagination
 
 router = APIRouter(prefix="/resources", tags=["resources"])
 ModelType = TypeVar("ModelType")
@@ -296,18 +306,31 @@ def _promote_as_default_if_unclaimed(db: Session, calendar: Calendar) -> None:
         calendar.is_default = True
 
 
-@router.get("/calendars", response_model=list[CalendarRead])
+@router.get("/calendars", response_model=CalendarListRead)
 def list_calendars(
     include_inactive: bool = Query(default=False),
+    params: ListParams = Depends(list_params),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_active_user),
-) -> list[CalendarRead]:
+) -> CalendarListRead:
     query = db.query(Calendar)
     if not include_inactive:
         query = query.filter(Calendar.is_active.is_(True))
-    calendars = query.order_by(Calendar.code).all()
-    grouped = _weekdays_by_calendar(db, [calendar.id for calendar in calendars])
-    return [_calendar_read(calendar, grouped.get(calendar.id, [])) for calendar in calendars]
+    result = apply_pagination(
+        query,
+        params,
+        sortable={"code": Calendar.code, "name": Calendar.name},
+        searchable=(Calendar.code, Calendar.name),
+        tiebreaker=Calendar.id,
+        default_sort=Calendar.code,
+    )
+    grouped = _weekdays_by_calendar(db, [calendar.id for calendar in result.rows])
+    return CalendarListRead(
+        items=[_calendar_read(calendar, grouped.get(calendar.id, [])) for calendar in result.rows],
+        total=result.total,
+        limit=result.limit,
+        offset=result.offset,
+    )
 
 
 @router.post("/calendars", response_model=CalendarRead, status_code=status.HTTP_201_CREATED)
@@ -444,17 +467,22 @@ def delete_calendar(
     _commit(db, "Calendar deletion conflicts with existing data")
 
 
-@router.get("/nodes", response_model=list[ResourceNodeRead])
+@router.get("/nodes", response_model=ResourceNodeListRead)
 def list_nodes(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_active_user),
-) -> list[ResourceNode]:
-    return (
+) -> ResourceNodeListRead:
+    # Deliberately not paginated (EPIC E7 explicitly excludes tree structures):
+    # callers rebuild the full resource-node tree client-side and a truncated
+    # page would silently produce an incomplete/broken tree.
+    nodes = (
         db.query(ResourceNode)
         .filter(ResourceNode.is_active.is_(True))
         .order_by(ResourceNode.code)
         .all()
     )
+    items = [ResourceNodeRead.model_validate(node) for node in nodes]
+    return ResourceNodeListRead(items=items, total=len(items), limit=None, offset=0)
 
 
 @router.post("/nodes", response_model=ResourceNodeRead, status_code=status.HTTP_201_CREATED)
@@ -522,13 +550,14 @@ def delete_node(
     _commit(db, "Resource node deletion conflicts with existing data")
 
 
-@router.get("/roles", response_model=list[ResourceRoleRead])
+@router.get("/roles", response_model=ResourceRoleListRead)
 def list_roles(
     node_id: int | None = Query(default=None, gt=0),
     include_descendants: bool = Query(default=False),
+    params: ListParams = Depends(list_params),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_active_user),
-) -> list[ResourceRole]:
+) -> ResourceRoleListRead:
     query = db.query(ResourceRole).filter(ResourceRole.is_active.is_(True))
     if node_id is not None:
         _get_or_404(db, ResourceNode, node_id, "Resource node")
@@ -536,7 +565,20 @@ def list_roles(
             query = query.filter(ResourceRole.node_id.in_(_descendant_node_ids(db, node_id)))
         else:
             query = query.filter(ResourceRole.node_id == node_id)
-    return query.order_by(ResourceRole.name).all()
+    result = apply_pagination(
+        query,
+        params,
+        sortable={"name": ResourceRole.name},
+        searchable=(ResourceRole.name,),
+        tiebreaker=ResourceRole.id,
+        default_sort=ResourceRole.name,
+    )
+    return ResourceRoleListRead(
+        items=[ResourceRoleRead.model_validate(role) for role in result.rows],
+        total=result.total,
+        limit=result.limit,
+        offset=result.offset,
+    )
 
 
 @router.post("/roles", response_model=ResourceRoleRead, status_code=status.HTTP_201_CREATED)
@@ -600,28 +642,60 @@ def update_role(
     )
 
 
-@router.get("/categories", response_model=list[CostCategoryRead])
+@router.get("/categories", response_model=CostCategoryListRead)
 def list_categories(
     include_inactive: bool = Query(default=False),
+    params: ListParams = Depends(list_params),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_active_user),
-) -> list[CostCategory]:
+) -> CostCategoryListRead:
     query = db.query(CostCategory)
     if not include_inactive:
         query = query.filter(CostCategory.is_active.is_(True))
-    return query.order_by(CostCategory.accounting_code).all()
+    result = apply_pagination(
+        query,
+        params,
+        sortable={
+            "accounting_code": CostCategory.accounting_code,
+            "category_code": CostCategory.category_code,
+            "name": CostCategory.name,
+        },
+        searchable=(CostCategory.accounting_code, CostCategory.category_code, CostCategory.name),
+        tiebreaker=CostCategory.id,
+        default_sort=CostCategory.accounting_code,
+    )
+    return CostCategoryListRead(
+        items=[CostCategoryRead.model_validate(category) for category in result.rows],
+        total=result.total,
+        limit=result.limit,
+        offset=result.offset,
+    )
 
 
-@router.get("/cost-types", response_model=list[CostTypeRead])
+@router.get("/cost-types", response_model=CostTypeListRead)
 def list_cost_types(
     include_inactive: bool = Query(default=False),
+    params: ListParams = Depends(list_params),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_active_user),
-) -> list[CostType]:
+) -> CostTypeListRead:
     query = db.query(CostType)
     if not include_inactive:
         query = query.filter(CostType.is_active.is_(True))
-    return query.order_by(CostType.code).all()
+    result = apply_pagination(
+        query,
+        params,
+        sortable={"code": CostType.code, "name": CostType.name},
+        searchable=(CostType.code, CostType.name),
+        tiebreaker=CostType.id,
+        default_sort=CostType.code,
+    )
+    return CostTypeListRead(
+        items=[CostTypeRead.model_validate(cost_type) for cost_type in result.rows],
+        total=result.total,
+        limit=result.limit,
+        offset=result.offset,
+    )
 
 
 @router.post("/cost-types", response_model=CostTypeRead, status_code=status.HTTP_201_CREATED)
@@ -705,18 +779,27 @@ def update_category(
     )
 
 
-@router.get("/categories/{category_id}/rates", response_model=list[CostRateRead])
+@router.get("/categories/{category_id}/rates", response_model=CostRateListRead)
 def list_category_rates(
     category_id: int,
+    params: ListParams = Depends(list_params),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_active_user),
-) -> list[CostRate]:
+) -> CostRateListRead:
     _get_or_404(db, CostCategory, category_id, "Cost category")
-    return (
-        db.query(CostRate)
-        .filter(CostRate.cost_category_id == category_id)
-        .order_by(CostRate.year)
-        .all()
+    query = db.query(CostRate).filter(CostRate.cost_category_id == category_id)
+    result = apply_pagination(
+        query,
+        params,
+        sortable={"year": CostRate.year},
+        tiebreaker=CostRate.id,
+        default_sort=CostRate.year,
+    )
+    return CostRateListRead(
+        items=[CostRateRead.model_validate(rate) for rate in result.rows],
+        total=result.total,
+        limit=result.limit,
+        offset=result.offset,
     )
 
 
@@ -736,12 +819,26 @@ def create_rate(
     )
 
 
-@router.get("/rates", response_model=list[CostRateRead])
+@router.get("/rates", response_model=CostRateListRead)
 def list_rates(
+    params: ListParams = Depends(list_params),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_active_user),
-) -> list[CostRate]:
-    return db.query(CostRate).order_by(CostRate.year, CostRate.cost_category_id).all()
+) -> CostRateListRead:
+    query = db.query(CostRate)
+    result = apply_pagination(
+        query,
+        params,
+        sortable={"year": CostRate.year},
+        tiebreaker=CostRate.id,
+        default_sort=CostRate.year,
+    )
+    return CostRateListRead(
+        items=[CostRateRead.model_validate(rate) for rate in result.rows],
+        total=result.total,
+        limit=result.limit,
+        offset=result.offset,
+    )
 
 
 @router.patch("/rates/{rate_id}", response_model=CostRateRead)
@@ -762,12 +859,26 @@ def update_rate(
     )
 
 
-@router.get("/inflation", response_model=list[InflationRateRead])
+@router.get("/inflation", response_model=InflationRateListRead)
 def list_inflation_rates(
+    params: ListParams = Depends(list_params),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_active_user),
-) -> list[InflationRate]:
-    return db.query(InflationRate).order_by(InflationRate.year).all()
+) -> InflationRateListRead:
+    query = db.query(InflationRate)
+    result = apply_pagination(
+        query,
+        params,
+        sortable={"year": InflationRate.year},
+        tiebreaker=InflationRate.id,
+        default_sort=InflationRate.year,
+    )
+    return InflationRateListRead(
+        items=[InflationRateRead.model_validate(rate) for rate in result.rows],
+        total=result.total,
+        limit=result.limit,
+        offset=result.offset,
+    )
 
 
 @router.put("/inflation/{year}", response_model=InflationRateRead)
@@ -792,16 +903,31 @@ def put_inflation_rate(
     )
 
 
-@router.get("/capacities", response_model=list[RoleCapacityRead])
+@router.get("/capacities", response_model=RoleCapacityListRead)
 def list_capacities(
     role_id: int | None = Query(default=None, gt=0),
+    params: ListParams = Depends(list_params),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_active_user),
-) -> list[RoleCapacity]:
+) -> RoleCapacityListRead:
     query = db.query(RoleCapacity)
     if role_id is not None:
         query = query.filter(RoleCapacity.role_id == role_id)
-    return query.order_by(RoleCapacity.role_id).all()
+    result = apply_pagination(
+        query,
+        params,
+        # RoleCapacity has no "year" column (one capacity row per role, enforced by
+        # uq_wf_role_capacity_role): role_id is the only meaningful natural sort key.
+        sortable={"role_id": RoleCapacity.role_id},
+        tiebreaker=RoleCapacity.id,
+        default_sort=RoleCapacity.role_id,
+    )
+    return RoleCapacityListRead(
+        items=[RoleCapacityRead.model_validate(capacity) for capacity in result.rows],
+        total=result.total,
+        limit=result.limit,
+        offset=result.offset,
+    )
 
 
 @router.post("/capacities", response_model=RoleCapacityRead, status_code=status.HTTP_201_CREATED)

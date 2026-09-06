@@ -307,18 +307,24 @@ components:
       $ref: ./components/schemas/CalendarUpdate.yaml
     CalendarRead:
       $ref: ./components/schemas/CalendarRead.yaml
+    CalendarListRead:
+      $ref: ./components/schemas/CalendarListRead.yaml
     ResourceNodeCreate:
       $ref: ./components/schemas/ResourceNodeCreate.yaml
     ResourceNodeUpdate:
       $ref: ./components/schemas/ResourceNodeUpdate.yaml
     ResourceNodeRead:
       $ref: ./components/schemas/ResourceNodeRead.yaml
+    ResourceNodeListRead:
+      $ref: ./components/schemas/ResourceNodeListRead.yaml
     ResourceRoleCreate:
       $ref: ./components/schemas/ResourceRoleCreate.yaml
     ResourceRoleUpdate:
       $ref: ./components/schemas/ResourceRoleUpdate.yaml
     ResourceRoleRead:
       $ref: ./components/schemas/ResourceRoleRead.yaml
+    ResourceRoleListRead:
+      $ref: ./components/schemas/ResourceRoleListRead.yaml
     CostTypeCreate:
       $ref: ./components/schemas/CostTypeCreate.yaml
     CostTypeKind:
@@ -327,28 +333,38 @@ components:
       $ref: ./components/schemas/CostTypeUpdate.yaml
     CostTypeRead:
       $ref: ./components/schemas/CostTypeRead.yaml
+    CostTypeListRead:
+      $ref: ./components/schemas/CostTypeListRead.yaml
     CostCategoryCreate:
       $ref: ./components/schemas/CostCategoryCreate.yaml
     CostCategoryUpdate:
       $ref: ./components/schemas/CostCategoryUpdate.yaml
     CostCategoryRead:
       $ref: ./components/schemas/CostCategoryRead.yaml
+    CostCategoryListRead:
+      $ref: ./components/schemas/CostCategoryListRead.yaml
     CostRateCreate:
       $ref: ./components/schemas/CostRateCreate.yaml
     CostRateUpdate:
       $ref: ./components/schemas/CostRateUpdate.yaml
     CostRateRead:
       $ref: ./components/schemas/CostRateRead.yaml
+    CostRateListRead:
+      $ref: ./components/schemas/CostRateListRead.yaml
     InflationRateUpdate:
       $ref: ./components/schemas/InflationRateUpdate.yaml
     InflationRateRead:
       $ref: ./components/schemas/InflationRateRead.yaml
+    InflationRateListRead:
+      $ref: ./components/schemas/InflationRateListRead.yaml
     RoleCapacityCreate:
       $ref: ./components/schemas/RoleCapacityCreate.yaml
     RoleCapacityUpdate:
       $ref: ./components/schemas/RoleCapacityUpdate.yaml
     RoleCapacityRead:
       $ref: ./components/schemas/RoleCapacityRead.yaml
+    RoleCapacityListRead:
+      $ref: ./components/schemas/RoleCapacityListRead.yaml
     PaginationMeta:
       $ref: ./components/schemas/PaginationMeta.yaml
     SortColumn:

@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from waterfall.schemas.pagination import PaginatedList
+
 EstimateKind = Literal["initial", "remaining"]
 EstimateStatus = Literal["draft", "validated", "superseded", "archived"]
 
@@ -103,6 +105,10 @@ class CalendarRead(CalendarBase):
     weekdays: list[CalendarWeekdayRead] = Field(default_factory=list)
 
 
+class CalendarListRead(PaginatedList[CalendarRead]):
+    pass
+
+
 class ResourceNodeBase(BaseModel):
     code: str = Field(min_length=1, max_length=64)
     name: str = Field(min_length=1, max_length=255)
@@ -133,6 +139,10 @@ class ResourceNodeRead(ResourceNodeBase):
     is_active: bool
     created_at: datetime
     updated_at: datetime
+
+
+class ResourceNodeListRead(PaginatedList[ResourceNodeRead]):
+    pass
 
 
 class ResourceRoleBase(BaseModel):
@@ -169,6 +179,10 @@ class ResourceRoleRead(ResourceRoleBase):
     updated_at: datetime
 
 
+class ResourceRoleListRead(PaginatedList[ResourceRoleRead]):
+    pass
+
+
 class CostTypeBase(BaseModel):
     code: str = Field(min_length=1, max_length=32)
     name: str = Field(min_length=1, max_length=255)
@@ -196,6 +210,10 @@ class CostTypeRead(CostTypeBase):
     is_active: bool
     created_at: datetime
     updated_at: datetime
+
+
+class CostTypeListRead(PaginatedList[CostTypeRead]):
+    pass
 
 
 class CostCategoryBase(BaseModel):
@@ -248,6 +266,10 @@ class CostCategoryRead(CostCategoryBase):
     updated_at: datetime
 
 
+class CostCategoryListRead(PaginatedList[CostCategoryRead]):
+    pass
+
+
 class CostRateBase(BaseModel):
     year: int = Field(ge=2000, le=9999)
     hourly_rate: Decimal = Field(ge=0, max_digits=14, decimal_places=4)
@@ -284,6 +306,10 @@ class CostRateRead(CostRateBase):
     updated_at: datetime
 
 
+class CostRateListRead(PaginatedList[CostRateRead]):
+    pass
+
+
 class InflationRateBase(BaseModel):
     year: int = Field(ge=2000, le=9999)
     coefficient: Decimal = Field(gt=0, max_digits=12, decimal_places=8)
@@ -303,6 +329,10 @@ class InflationRateRead(InflationRateBase):
     id: int
     created_at: datetime
     updated_at: datetime
+
+
+class InflationRateListRead(PaginatedList[InflationRateRead]):
+    pass
 
 
 class RoleCapacityBase(BaseModel):
@@ -331,6 +361,10 @@ class RoleCapacityRead(RoleCapacityBase):
     role_id: int
     created_at: datetime
     updated_at: datetime
+
+
+class RoleCapacityListRead(PaginatedList[RoleCapacityRead]):
+    pass
 
 
 class TaskRoleAssignmentBase(BaseModel):

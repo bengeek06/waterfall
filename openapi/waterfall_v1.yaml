@@ -1707,15 +1707,29 @@ paths:
           schema:
             type: boolean
             default: false
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/Search'
+        - name: sort
+          in: query
+          required: false
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/SortColumn'
+            enum:
+              - code
+              - -code
+              - name
+              - -name
       responses:
         '200':
           description: Liste des calendriers
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/CalendarRead'
+                $ref: '#/components/schemas/CalendarListRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
     post:
@@ -1828,13 +1842,11 @@ paths:
         - bearerAuth: []
       responses:
         '200':
-          description: Liste des noeuds
+          description: 'Arbre complet des noeuds de ressources actifs. Non paginable (EPIC E7) : l''arbre doit toujours etre renvoye en entier, jamais tronque, sous peine de laisser le client reconstruire un arbre incomplet. `limit` est donc toujours `null` et `total` egale `items.length`.'
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/ResourceNodeRead'
+                $ref: '#/components/schemas/ResourceNodeListRead'
         '401':
           $ref: '#/components/responses/Unauthorized'
     post:
@@ -1955,15 +1967,27 @@ paths:
           schema:
             type: boolean
             default: false
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/Search'
+        - name: sort
+          in: query
+          required: false
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/SortColumn'
+            enum:
+              - name
+              - -name
       responses:
         '200':
           description: Liste des roles
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/ResourceRoleRead'
+                $ref: '#/components/schemas/ResourceRoleListRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
     post:
@@ -2062,15 +2086,31 @@ paths:
           schema:
             type: boolean
             default: false
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/Search'
+        - name: sort
+          in: query
+          required: false
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/SortColumn'
+            enum:
+              - accounting_code
+              - -accounting_code
+              - category_code
+              - -category_code
+              - name
+              - -name
       responses:
         '200':
           description: Liste des categories
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/CostCategoryRead'
+                $ref: '#/components/schemas/CostCategoryListRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
     post:
@@ -2114,15 +2154,29 @@ paths:
           schema:
             type: boolean
             default: false
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/Search'
+        - name: sort
+          in: query
+          required: false
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/SortColumn'
+            enum:
+              - code
+              - -code
+              - name
+              - -name
       responses:
         '200':
           description: Liste des types de coût
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/CostTypeRead'
+                $ref: '#/components/schemas/CostTypeListRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
     post:
@@ -2239,15 +2293,26 @@ paths:
         - bearerAuth: []
       parameters:
         - $ref: '#/components/parameters/CategoryId'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - name: sort
+          in: query
+          required: false
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/SortColumn'
+            enum:
+              - year
+              - -year
       responses:
         '200':
           description: Taux horaires annuels
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/CostRateRead'
+                $ref: '#/components/schemas/CostRateListRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -2260,15 +2325,27 @@ paths:
       operationId: listCostRates
       security:
         - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - name: sort
+          in: query
+          required: false
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/SortColumn'
+            enum:
+              - year
+              - -year
       responses:
         '200':
           description: Liste des taux horaires annuels
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/CostRateRead'
+                $ref: '#/components/schemas/CostRateListRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
     post:
@@ -2336,15 +2413,27 @@ paths:
       operationId: listInflationRates
       security:
         - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - name: sort
+          in: query
+          required: false
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/SortColumn'
+            enum:
+              - year
+              - -year
       responses:
         '200':
           description: Coefficients annuels
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/InflationRateRead'
+                $ref: '#/components/schemas/InflationRateListRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
   /resources/inflation/{year}:
@@ -2389,15 +2478,27 @@ paths:
           schema:
             type: integer
             minimum: 1
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - name: sort
+          in: query
+          required: false
+          description: 'RoleCapacity ne porte pas de colonne `year` (une seule ligne de capacite par role, cf. uq_wf_role_capacity_role) : `role_id` est la seule cle de tri naturelle exposee.'
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/SortColumn'
+            enum:
+              - role_id
+              - -role_id
       responses:
         '200':
           description: Capacites par periode
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/RoleCapacityRead'
+                $ref: '#/components/schemas/RoleCapacityListRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
     post:
@@ -4042,6 +4143,17 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/CalendarWeekdayRead'
+    CalendarListRead:
+      allOf:
+        - $ref: '#/components/schemas/PaginationMeta'
+        - type: object
+          required:
+            - items
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/CalendarRead'
     ResourceNodeCreate:
       type: object
       required:
@@ -4100,6 +4212,17 @@ components:
             updated_at:
               type: string
               format: date-time
+    ResourceNodeListRead:
+      allOf:
+        - $ref: '#/components/schemas/PaginationMeta'
+        - type: object
+          required:
+            - items
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/ResourceNodeRead'
     ResourceRoleCreate:
       type: object
       required:
@@ -4169,6 +4292,17 @@ components:
             updated_at:
               type: string
               format: date-time
+    ResourceRoleListRead:
+      allOf:
+        - $ref: '#/components/schemas/PaginationMeta'
+        - type: object
+          required:
+            - items
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/ResourceRoleRead'
     CostTypeCreate:
       type: object
       required:
@@ -4222,6 +4356,17 @@ components:
             updated_at:
               type: string
               format: date-time
+    CostTypeListRead:
+      allOf:
+        - $ref: '#/components/schemas/PaginationMeta'
+        - type: object
+          required:
+            - items
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/CostTypeRead'
     CostCategoryCreate:
       type: object
       required:
@@ -4291,6 +4436,17 @@ components:
             updated_at:
               type: string
               format: date-time
+    CostCategoryListRead:
+      allOf:
+        - $ref: '#/components/schemas/PaginationMeta'
+        - type: object
+          required:
+            - items
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/CostCategoryRead'
     CostRateCreate:
       type: object
       required:
@@ -4339,6 +4495,17 @@ components:
             updated_at:
               type: string
               format: date-time
+    CostRateListRead:
+      allOf:
+        - $ref: '#/components/schemas/PaginationMeta'
+        - type: object
+          required:
+            - items
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/CostRateRead'
     InflationRateUpdate:
       type: object
       required:
@@ -4372,6 +4539,17 @@ components:
         updated_at:
           type: string
           format: date-time
+    InflationRateListRead:
+      allOf:
+        - $ref: '#/components/schemas/PaginationMeta'
+        - type: object
+          required:
+            - items
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/InflationRateRead'
     RoleCapacityCreate:
       type: object
       required:
@@ -4415,6 +4593,17 @@ components:
             updated_at:
               type: string
               format: date-time
+    RoleCapacityListRead:
+      allOf:
+        - $ref: '#/components/schemas/PaginationMeta'
+        - type: object
+          required:
+            - items
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/RoleCapacityRead'
     PaginationMeta:
       type: object
       description: |-
