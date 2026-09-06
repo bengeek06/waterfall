@@ -41,7 +41,6 @@ import {
   getCostCategories,
   getCostTypes,
   getEstimateAggregates,
-  getImportBatchStatus,
   getImportBatchDiff,
   getPlanning,
   getPlanningStructureDraft,
@@ -58,7 +57,6 @@ import {
   movePlanningTasks,
   ProjectEstimate,
   replaceTaskPredecessorLinks,
-  restorePlanningSnapshot,
   runImportBatch,
   savePlanningStructureDraft,
   SessionExpiredError,
@@ -89,12 +87,8 @@ import type { PlanningMoveCommand } from "@/lib/planning-tree";
 import {
   canRedo,
   canUndo,
-  commitRedo,
-  commitUndo,
   getPlanningHistory,
   nextPlanningCommandId,
-  peekRedo,
-  peekUndo,
   pushCommand,
   resetPlanningHistory,
   setPlanningHistory,
@@ -105,6 +99,9 @@ import {
 } from "@/lib/planning-history";
 import { ReadOnlyGantt } from "@/components/read-only-gantt";
 import { ProjectTabs, type ProjectTab } from "@/components/project-tabs";
+import { usePlanningDetailEffect } from "@/hooks/use-planning-detail";
+import { usePlanningHistoryCommand } from "@/hooks/use-planning-history-command";
+import { usePlanningImport } from "@/hooks/use-planning-import";
 
 const MAX_IMPORT_FILE_SIZE = 25 * 1024 * 1024;
 let nextStructureRowId = 2;
@@ -336,79 +333,21 @@ export default function ProjectDetailsPage() {
     };
   }, [onSessionRefresh, projectId, router, session]);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadPlanningDetail() {
-      const loadGeneration = ++planningLoadGenerationRef.current;
-      if (!session || selectedPlanningId === null) {
-        setPlanningDetail(null);
-        setPlanningDetailBusy(false);
-        return;
-      }
-      setPlanningDetail(null);
-      setPlanningDetailBusy(true);
-      try {
-        const detail = await getPlanning(projectId, selectedPlanningId, session, onSessionRefresh);
-        const savedDraft = await getPlanningStructureDraft(projectId, session, onSessionRefresh);
-        if (
-          !cancelled &&
-          loadGeneration === planningLoadGenerationRef.current &&
-          selectedPlanningIdRef.current === selectedPlanningId
-        ) {
-          const history = getPlanningHistory(historyByPlanningIdRef.current, selectedPlanningId);
-          const historyRevision = history.revision;
-          if (historyRevision !== null && historyRevision !== detail.revision) {
-            setPlanningConflictByPlanningId((previous) => ({
-              ...previous,
-              [selectedPlanningId]: {
-                projectId,
-                expectedRevision: historyRevision,
-                currentRevision: detail.revision,
-                message: "Ce planning a été modifié entre-temps : recharge-le avant de continuer.",
-              },
-            }));
-          }
-          setPlanningDetail(detail);
-          const rows = savedDraft
-            ? structureToDraftRows(savedDraft.structure)
-            : getPlanningStructureDraftRows(detail);
-          if (
-            rows.length &&
-            rows.every(
-              (row) =>
-                row.postKey.trim() &&
-                row.postName.trim() &&
-                row.lotKey.trim() &&
-                row.lotName.trim() &&
-                row.deliverables.trim(),
-            )
-          ) {
-            setStructureDraft(rows);
-          }
-        }
-      } catch (cause) {
-        if (cancelled || loadGeneration !== planningLoadGenerationRef.current) {
-          return;
-        }
-        if (cause instanceof SessionExpiredError) {
-          clearSession();
-          router.push("/login");
-          return;
-        }
-        setError(cause instanceof ApiError ? cause.message : "Impossible de charger le planning.");
-      } finally {
-        if (!cancelled && loadGeneration === planningLoadGenerationRef.current) {
-          setPlanningDetailBusy(false);
-        }
-      }
-    }
-
-    void loadPlanningDetail();
-    return () => {
-      cancelled = true;
-    };
-  }, [onSessionRefresh, projectId, router, selectedPlanningId, session]);
+  usePlanningDetailEffect({
+    session,
+    selectedPlanningId,
+    projectId,
+    onSessionRefresh,
+    router,
+    planningLoadGenerationRef,
+    selectedPlanningIdRef,
+    historyByPlanningIdRef,
+    setPlanningDetail,
+    setPlanningDetailBusy,
+    setPlanningConflictByPlanningId,
+    setStructureDraft,
+    setError,
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -653,78 +592,24 @@ export default function ProjectDetailsPage() {
     }
   }
 
-  async function applyPlanningHistoryCommand(direction: "undo" | "redo") {
-    if (
-      !session ||
-      !selectedPlanning ||
-      selectedPlanning.status !== "draft" ||
-      isReadOnlyProject ||
-      !planningDetail ||
-      planningDetail.id !== selectedPlanning.id
-    ) {
-      return;
-    }
-    const planningId = selectedPlanning.id;
-    const history = getPlanningHistory(historyByPlanningId, planningId);
-    const command = direction === "undo" ? peekUndo(history) : peekRedo(history);
-    if (!command) {
-      return;
-    }
-    const delta = direction === "undo" ? command.before : command.after;
-    setPlanningMutationBusy(true);
-    setError(null);
-    setRetryableAction(null);
-    try {
-      const updated = await restorePlanningSnapshot(
-        projectId,
-        planningId,
-        { ...delta, expected_revision: planningDetail.revision },
-        session,
-        onSessionRefresh,
-      );
-      // The stack transition is unconditional: the undo/redo genuinely succeeded server-side
-      // for this planning_id, so the command must move between stacks regardless of which
-      // planning is currently displayed -- only the visible detail update is guarded.
-      if (selectedPlanningIdRef.current === planningId) {
-        setPlanningDetail(updated);
-      }
-      setHistoryByPlanningId((current) => {
-        const currentHistory = getPlanningHistory(current, planningId);
-        const nextHistory = direction === "undo" ? commitUndo(currentHistory) : commitRedo(currentHistory);
-        return setPlanningHistory(current, planningId, { ...nextHistory, revision: updated.revision });
-      });
-    } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
-        clearSession();
-        router.push("/login");
-        return;
-      }
-      const revisionConflict = getPlanningRevisionConflict(cause);
-      if (revisionConflict) {
-        setPlanningConflictByPlanningId((prev) => ({
-          ...prev,
-          [planningId]: {
-            projectId: revisionConflict.projectId,
-            expectedRevision: revisionConflict.expectedRevision,
-            currentRevision: revisionConflict.currentRevision,
-            message: "Ce planning a été modifié entre-temps : recharge-le avant de continuer.",
-          },
-        }));
-        return;
-      }
-      if (selectedPlanningIdRef.current === planningId) {
-        const message =
-          cause instanceof ApiError
-            ? cause.message
-            : direction === "undo"
-              ? "Impossible d'annuler la dernière modification."
-              : "Impossible de rétablir la modification annulée.";
-        setRetryableError(message, () => void applyPlanningHistoryCommand(direction));
-      }
-    } finally {
-      setPlanningMutationBusy(false);
-    }
-  }
+  const applyPlanningHistoryCommand = usePlanningHistoryCommand({
+    session,
+    selectedPlanning,
+    isReadOnlyProject,
+    planningDetail,
+    historyByPlanningId,
+    projectId,
+    onSessionRefresh,
+    router,
+    selectedPlanningIdRef,
+    setPlanningMutationBusy,
+    setError,
+    setRetryableAction,
+    setPlanningDetail,
+    setPlanningConflictByPlanningId,
+    setHistoryByPlanningId,
+    setRetryableError,
+  });
 
   async function reloadPlanningAfterConflict() {
     if (!selectedPlanning || !session || !planningConflictByPlanningId[selectedPlanning.id]) {
@@ -1599,93 +1484,24 @@ export default function ProjectDetailsPage() {
     }
   }
 
-  async function confirmPlanningImport() {
-    if (!session || !project || !importReview) {
-      return;
-    }
-    setImportBusy(true);
-    setError(null);
-    setImportFeedback(null);
-    try {
-      await runImportBatch(importReview.batchId, session, onSessionRefresh, false, true);
-      let batchStatus = await getImportBatchStatus(importReview.batchId, session, onSessionRefresh);
-      for (let index = 0; index < 20; index += 1) {
-        if (batchStatus.status === "success" || batchStatus.status === "failed") {
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 300));
-        batchStatus = await getImportBatchStatus(importReview.batchId, session, onSessionRefresh);
-      }
-      if (batchStatus.status !== "success") {
-        throw new Error(batchStatus.errorMessage ?? "Import en échec.");
-      }
-
-      setImportReview(null);
-      setImportFile(null);
-      setImportFeedback("Import réussi. Actualisation du projet en cours...");
-
-      const [projectRefresh, planningsRefresh] = await Promise.allSettled([
-        getProject(projectId, session, onSessionRefresh),
-        listPlannings(projectId, session, onSessionRefresh),
-      ]);
-      const refreshFailures: string[] = [];
-      if (projectRefresh.status === "fulfilled") {
-        setProject(projectRefresh.value);
-      } else {
-        if (projectRefresh.reason instanceof SessionExpiredError) {
-          clearSession();
-          router.push("/login");
-          return;
-        }
-        refreshFailures.push("le projet");
-      }
-      if (planningsRefresh.status === "fulfilled") {
-        setPlannings(planningsRefresh.value);
-      } else {
-        if (planningsRefresh.reason instanceof SessionExpiredError) {
-          clearSession();
-          router.push("/login");
-          return;
-        }
-        refreshFailures.push("les versions de planning");
-      }
-
-      const refreshedProject = projectRefresh.status === "fulfilled" ? projectRefresh.value : project;
-      const refreshedPlannings = planningsRefresh.status === "fulfilled" ? planningsRefresh.value : plannings;
-      const nextPlanningId =
-        refreshedProject?.displayed_planning_id ?? refreshedPlannings.at(-1)?.id ?? null;
-      if (nextPlanningId) {
-        try {
-          const updatedDetail = await getPlanning(projectId, nextPlanningId, session, onSessionRefresh);
-          setPlanningDetail(updatedDetail);
-        } catch (cause) {
-          if (cause instanceof SessionExpiredError) {
-            clearSession();
-            router.push("/login");
-            return;
-          }
-          refreshFailures.push("le détail du planning");
-        }
-      } else {
-        setPlanningDetail(null);
-      }
-      updateSelectedPlanningId(nextPlanningId);
-      setImportFeedback(
-        refreshFailures.length
-          ? `Import réussi, mais ${refreshFailures.join(" et ")} n'ont pas pu être actualisés. Recharge la page pour voir l'état à jour.`
-          : "Import réussi. Le planning affiché a été actualisé.",
-      );
-    } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
-        clearSession();
-        router.push("/login");
-        return;
-      }
-      setError(cause instanceof ApiError ? cause.message : "Impossible d'importer le planning.");
-    } finally {
-      setImportBusy(false);
-    }
-  }
+  const confirmPlanningImport = usePlanningImport({
+    session,
+    project,
+    importReview,
+    projectId,
+    onSessionRefresh,
+    router,
+    plannings,
+    setProject,
+    setPlannings,
+    setPlanningDetail,
+    updateSelectedPlanningId,
+    setImportReview,
+    setImportFile,
+    setImportFeedback,
+    setImportBusy,
+    setError,
+  });
 
   if (initialLoadFailed) {
     return (
