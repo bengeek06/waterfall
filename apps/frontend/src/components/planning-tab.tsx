@@ -28,6 +28,7 @@ export type PlanningTabProps = {
   importFile: File | null;
   importBusy: boolean;
   onFileChange: (event: ChangeEvent<HTMLInputElement>) => void;
+  onFilesDrop: (files: FileList) => void;
   onPreviewImport: () => void;
   planningExportBusy: boolean;
   onExportXml: () => void;
@@ -136,6 +137,7 @@ export function PlanningTab({
   importFile,
   importBusy,
   onFileChange,
+  onFilesDrop,
   onPreviewImport,
   planningExportBusy,
   onExportXml,
@@ -192,6 +194,7 @@ export function PlanningTab({
         importFile={importFile}
         importBusy={importBusy}
         onFileChange={onFileChange}
+        onFilesDrop={onFilesDrop}
         onPreview={onPreviewImport}
         planningExportBusy={planningExportBusy}
         onExportXml={onExportXml}

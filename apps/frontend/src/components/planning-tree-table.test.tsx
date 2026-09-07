@@ -1,7 +1,9 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { DEFAULT_PLANNING_COLUMN_WIDTHS } from "@/hooks/use-planning-column-widths";
 import { ApiError, type Task } from "@/lib/backend";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { PlanningTreeTable } from "./planning-tree-table";
 
 function task(overrides: Partial<Task>): Task {
@@ -1736,6 +1738,363 @@ describe("PlanningTreeTable", () => {
       // displays its own copy of the raw error message.
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
       expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("column resizing", () => {
+    afterEach(() => window.localStorage.clear());
+
+    it("renders a colgroup with one column per header", () => {
+      const { container } = render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+
+      expect(container.querySelectorAll("colgroup col")).toHaveLength(8);
+    });
+
+    it("pins the table's own width to the sum of the configured column widths instead of stretching to w-full", () => {
+      // Table contributes `w-full` by default; under table-fixed layout that lets the browser
+      // redistribute any surplus (container wider than the configured total) across the columns,
+      // making the rendered widths drift from the persisted ones and coupling one column's resize
+      // to its neighbors. Pinning an explicit width equal to the configured total keeps every
+      // handle in sole control of its own column.
+      const { container } = render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+
+      const table = container.querySelector("table") as HTMLTableElement;
+      const expectedTotal = Object.values(DEFAULT_PLANNING_COLUMN_WIDTHS).reduce((sum, width) => sum + width, 0);
+      expect(table.style.width).toBe(`${expectedTotal}px`);
+      expect(table).not.toHaveClass("w-full");
+    });
+
+    it("grows the table's pinned width when a column is resized wider", () => {
+      const { container } = render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+
+      const table = container.querySelector("table") as HTMLTableElement;
+      const initialTotal = Object.values(DEFAULT_PLANNING_COLUMN_WIDTHS).reduce((sum, width) => sum + width, 0);
+      expect(table.style.width).toBe(`${initialTotal}px`);
+
+      fireEvent.mouseDown(screen.getByTestId("resize-handle-predecessors"), { clientX: 100 });
+      // `buttons: 1` mirrors every native "mousemove" fired mid-drag by a real browser (the primary
+      // button held down); handleMouseMove now reads `event.buttons` to detect a mouseup that
+      // happened outside the window (see the dedicated tests below), so omitting it here would make
+      // this look like the button was already released and no resize would ever apply.
+      fireEvent.mouseMove(window, { clientX: 220, buttons: 1 });
+      fireEvent.mouseUp(window, { clientX: 220 });
+
+      expect(table.style.width).toBe(`${initialTotal + 120}px`);
+    });
+
+    it("renders a resize handle on every column header", () => {
+      render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+
+      expect(screen.getByTestId("resize-handle-uid")).toBeInTheDocument();
+      expect(screen.getByTestId("resize-handle-name")).toBeInTheDocument();
+      expect(screen.getByTestId("resize-handle-predecessors")).toBeInTheDocument();
+    });
+
+    it("resizes the predecessors column by dragging its handle and persists the width", () => {
+      const { container } = render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+
+      const predecessorsCol = container.querySelectorAll("colgroup col")[7] as HTMLElement;
+      const initialWidth = predecessorsCol.style.width;
+
+      fireEvent.mouseDown(screen.getByTestId("resize-handle-predecessors"), { clientX: 100 });
+      fireEvent.mouseMove(window, { clientX: 220, buttons: 1 });
+      fireEvent.mouseUp(window, { clientX: 220 });
+
+      expect(predecessorsCol.style.width).not.toBe(initialWidth);
+      expect(predecessorsCol.style.width).toBe("360px");
+    });
+
+    it("ends the drag as soon as a mousemove reports the primary button released outside the window", () => {
+      // Regression guard: without checking `event.buttons`, releasing the mouse outside the browser
+      // window (so no "mouseup" is ever delivered) would leave the drag "stuck" -- moving the
+      // pointer back over the page would resume resizing with no button pressed.
+      const { container } = render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+
+      const predecessorsCol = container.querySelectorAll("colgroup col")[7] as HTMLElement;
+      const initialWidth = predecessorsCol.style.width;
+
+      fireEvent.mouseDown(screen.getByTestId("resize-handle-predecessors"), { clientX: 100 });
+      // The button was actually released off-window; the next "mousemove" the page does receive
+      // reports buttons: 0.
+      fireEvent.mouseMove(window, { clientX: 160, buttons: 0 });
+
+      expect(predecessorsCol.style.width).toBe(initialWidth);
+
+      // Moving the pointer back over the page, even with the button reported held again, must not
+      // resume the already-finished drag.
+      fireEvent.mouseMove(window, { clientX: 400, buttons: 1 });
+      expect(predecessorsCol.style.width).toBe(initialWidth);
+    });
+
+    it("ignores a right- or middle-click on a resize handle instead of starting a drag", () => {
+      const { container } = render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+
+      const predecessorsCol = container.querySelectorAll("colgroup col")[7] as HTMLElement;
+      const initialWidth = predecessorsCol.style.width;
+      const handle = screen.getByTestId("resize-handle-predecessors");
+
+      fireEvent.mouseDown(handle, { clientX: 100, button: 2 });
+      fireEvent.mouseMove(window, { clientX: 220 });
+      fireEvent.mouseUp(window, { clientX: 220 });
+
+      expect(predecessorsCol.style.width).toBe(initialWidth);
+    });
+
+    it("wraps the predecessors column content instead of truncating it", () => {
+      render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+
+      expect(screen.getByText("Prédécesseurs").closest("th")).toHaveClass(
+        "whitespace-normal",
+        "break-words",
+        "align-top",
+      );
+
+      const firstDataRow = screen.getAllByRole("row")[1];
+      const predecessorsCell = firstDataRow.querySelectorAll("td")[7];
+      expect(predecessorsCell).toHaveClass("whitespace-normal", "break-words", "align-top");
+    });
+
+    it("lets the predecessors cell content wrap and shrink instead of overflowing at the minimum column width", () => {
+      render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+
+      const firstDataRow = screen.getAllByRole("row")[1];
+      const predecessorsCell = firstDataRow.querySelectorAll("td")[7];
+      const flexContainer = predecessorsCell.querySelector("div");
+      expect(flexContainer).toHaveClass("flex", "flex-wrap", "items-center", "gap-2");
+
+      const label = flexContainer?.querySelector("span");
+      expect(label).toHaveClass("min-w-0");
+    });
+
+    // TaskNameLabel (in planning-tree-table.tsx) decides whether a name is interactive by comparing
+    // the rendered text element's `scrollWidth`/`clientWidth`, the standard CSS-truncation-detection
+    // pattern. jsdom never runs real layout, so both are always 0 there (0 > 0 is false) unless
+    // stubbed -- these helpers simulate the two cases the component itself has to distinguish.
+    function stubNameOverflow(isTruncated: boolean) {
+      const scrollWidthSpy = vi
+        .spyOn(HTMLElement.prototype, "scrollWidth", "get")
+        .mockReturnValue(isTruncated ? 400 : 100);
+      const clientWidthSpy = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(100);
+      return () => {
+        scrollWidthSpy.mockRestore();
+        clientWidthSpy.mockRestore();
+      };
+    }
+
+    it("renders an ordinary, non-interactive name when it is not visually truncated", () => {
+      // Round 4 of this issue's review flagged the previous unconditional TooltipTrigger/<button>
+      // as an unnecessary control and tab stop on every row, including the supported 1000-row case,
+      // for names that never actually overflow. A name that fits must stay a plain, non-focusable
+      // <span> -- no button role, no tab stop.
+      const tasks: Task[] = [task({ uid: 1, name: "Tâche courte", parent_uid: null, position: 1 })];
+      render(<PlanningTreeTable tasks={tasks} versionKey={1} />);
+
+      expect(screen.getByText("Tâche courte").tagName).toBe("SPAN");
+      expect(screen.queryByRole("button", { name: "Tâche courte" })).not.toBeInTheDocument();
+    });
+
+    it("truncates a long task name instead of letting it overflow into the next column", () => {
+      const restoreOverflow = stubNameOverflow(true);
+      const longName = "Un nom de tâche extrêmement long qui dépasserait largement la largeur de la colonne";
+      const tasks: Task[] = [task({ uid: 1, name: longName, parent_uid: null, position: 1 })];
+      render(<PlanningTreeTable tasks={tasks} versionKey={1} />);
+
+      // Only once actually truncated does the name become a focusable <button> (TooltipTrigger),
+      // not a plain <span>: see the dedicated accessibility test below for why.
+      const nameTrigger = screen.getByRole("button", { name: longName });
+      expect(nameTrigger.tagName).toBe("BUTTON");
+      expect(nameTrigger).toHaveClass("truncate");
+      expect(nameTrigger).toHaveTextContent(longName);
+
+      restoreOverflow();
+    });
+
+    it("keeps the full task name reachable by keyboard/touch, not just mouse hover, once it is truncated", () => {
+      // Regression guard: a plain `title` attribute on a non-focusable <span> only reveals the full
+      // name (up to 512 chars per the API) on mouse hover. Wrapping it in the shared Tooltip/
+      // TooltipTrigger/TooltipContent primitives (ui/tooltip.tsx) instead renders it as a real
+      // <button>, which is focusable by keyboard/touch without any extra tabIndex plumbing.
+      const restoreOverflow = stubNameOverflow(true);
+      const longName = "Un nom de tâche extrêmement long qui dépasserait largement la largeur de la colonne";
+      const tasks: Task[] = [task({ uid: 1, name: longName, parent_uid: null, position: 1 })];
+      render(<PlanningTreeTable tasks={tasks} versionKey={1} />);
+
+      const nameTrigger = screen.getByRole("button", { name: longName });
+      nameTrigger.focus();
+      expect(nameTrigger).toHaveFocus();
+
+      restoreOverflow();
+    });
+
+    it("shows the full task name in a tooltip when the truncated trigger receives keyboard focus", async () => {
+      // The app always renders PlanningTreeTable under the root <TooltipProvider> (see
+      // app/layout.tsx); reproduce that here rather than relying on TooltipTrigger's own
+      // no-provider fallback delay, so this exercises the same open-on-focus path production uses.
+      const restoreOverflow = stubNameOverflow(true);
+      const longName = "Un nom de tâche extrêmement long qui dépasserait largement la largeur de la colonne";
+      const tasks: Task[] = [task({ uid: 1, name: longName, parent_uid: null, position: 1 })];
+      render(
+        <TooltipProvider>
+          <PlanningTreeTable tasks={tasks} versionKey={1} />
+        </TooltipProvider>,
+      );
+
+      const nameTrigger = screen.getByRole("button", { name: longName });
+      fireEvent.focus(nameTrigger);
+
+      expect(await screen.findAllByText(longName)).not.toHaveLength(0);
+
+      restoreOverflow();
+    });
+
+    it("does not select the row when clicking or pressing keys on the truncated name's tooltip trigger", () => {
+      // Round of Copilot review on this issue flagged that, unlike the expand/collapse chevron
+      // (which already stops propagation for this exact reason, see the chevron button below and
+      // PlanningScheduleCells' SelectTrigger for another established instance of the same pattern),
+      // the truncated-name TooltipTrigger let click/keydown events reach the row's own
+      // onClick/onKeyDown handlers, incidentally selecting the row or triggering tree
+      // navigation/selection shortcuts just from interacting with the tooltip.
+      const restoreOverflow = stubNameOverflow(true);
+      const longName = "Un nom de tâche extrêmement long qui dépasserait largement la largeur de la colonne";
+      const tasks: Task[] = [task({ uid: 1, name: longName, parent_uid: null, position: 1 })];
+      render(<PlanningTreeTable tasks={tasks} versionKey={1} />);
+
+      const row = screen.getAllByRole("row")[1];
+      expect(row).toHaveAttribute("aria-selected", "false");
+
+      const nameTrigger = screen.getByRole("button", { name: longName });
+      fireEvent.click(nameTrigger);
+      expect(row).toHaveAttribute("aria-selected", "false");
+
+      fireEvent.keyDown(nameTrigger, { key: "Enter" });
+      expect(row).toHaveAttribute("aria-selected", "false");
+
+      // Sanity check: clicking elsewhere on the same row still selects it as expected, confirming
+      // the assertions above are actually exercising stopped propagation and not a broken row.
+      fireEvent.click(row);
+      expect(row).toHaveAttribute("aria-selected", "true");
+
+      restoreOverflow();
+    });
+
+    it("clips the Name cell so a deeply nested row's indentation and chevron cannot paint over the Type column", () => {
+      // Regression guard: `min-w-0` on the inner flex container only lets the name text shrink to
+      // truncate, it does not clip content -- a deep enough hierarchy (indentation `depth * 1.25rem`
+      // plus the `shrink-0` chevron) can still exceed the cell's width before reaching the text.
+      // `overflow-hidden` on the cell itself is what actually clips it.
+      render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+
+      const nameCell = screen.getAllByRole("row")[1].querySelectorAll("td")[1];
+      expect(nameCell).toHaveClass("overflow-hidden");
+    });
+
+    it("keeps indenting deeper rows without a cap, so the tree's actual depth stays visually accurate", () => {
+      // Round 4 of this issue's review reversed an earlier decision (round 3) to cap the visual
+      // indentation at depth 4: flattening every deeper row to the same indentation as depth 4
+      // misrepresents an arbitrarily deep tree (a real MS Project import can exceed a handful of
+      // levels). The Name column's minimum width (PLANNING_MIN_COLUMN_WIDTHS.name in
+      // use-planning-column-widths.ts) only comfortably budgets headroom up to that typical depth --
+      // beyond it, the user is expected to widen the column with its resize handle, not have the
+      // indentation itself silently stop growing.
+      // `walk` in lib/planning-tree.ts starts the root level at depth 0, so the Nth level task here
+      // sits at depth N-1.
+      const deepTasks: Task[] = [
+        task({ uid: 1, name: "Niveau 1", parent_uid: null, position: 1 }),
+        task({ uid: 2, name: "Niveau 2", parent_uid: 1, position: 1 }),
+        task({ uid: 3, name: "Niveau 3", parent_uid: 2, position: 1 }),
+        task({ uid: 4, name: "Niveau 4", parent_uid: 3, position: 1 }),
+        task({ uid: 5, name: "Niveau 5", parent_uid: 4, position: 1 }),
+        task({ uid: 6, name: "Niveau 6", parent_uid: 5, position: 1 }),
+        task({ uid: 7, name: "Niveau 7", parent_uid: 6, position: 1 }),
+      ];
+      render(<PlanningTreeTable tasks={deepTasks} versionKey={1} />);
+
+      const depth4Container = screen.getByText("Niveau 5").closest("div");
+      const depth6Container = screen.getByText("Niveau 7").closest("div");
+
+      expect(depth4Container).not.toBeNull();
+      expect(depth6Container).not.toBeNull();
+      expect(depth4Container?.style.paddingLeft).toBe("5rem");
+      // Strictly greater, not just different: depth keeps growing linearly (depth * 1.25rem) with
+      // no ceiling.
+      expect(Number.parseFloat(depth6Container?.style.paddingLeft ?? "0")).toBeGreaterThan(
+        Number.parseFloat(depth4Container?.style.paddingLeft ?? "0"),
+      );
+      expect(depth6Container?.style.paddingLeft).toBe("7.5rem");
+    });
+
+    it("makes every resize handle focusable via the keyboard", () => {
+      render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+
+      expect(screen.getByTestId("resize-handle-name")).toHaveAttribute("tabIndex", "0");
+    });
+
+    it("exposes the current width, minimum and maximum on the resize handle for assistive tech", () => {
+      render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+
+      const handle = screen.getByTestId("resize-handle-name");
+      expect(handle).toHaveAttribute("aria-valuenow", "220");
+      // "name" text truncates cleanly, but its floor still has to budget for the non-shrinking
+      // expand/collapse chevron plus tree indentation ahead of that text (see
+      // PLANNING_MIN_COLUMN_WIDTHS.name's comment), so it ends up higher than uid/type/predecessors.
+      expect(handle).toHaveAttribute("aria-valuemin", "164");
+      expect(handle).toHaveAttribute("aria-valuemax", "480");
+    });
+
+    it("gives a column hosting non-truncatable content (the mode selector) a higher minimum than uid", () => {
+      render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+
+      expect(screen.getByTestId("resize-handle-mode")).toHaveAttribute("aria-valuemin", "140");
+      expect(screen.getByTestId("resize-handle-uid")).toHaveAttribute("aria-valuemin", "60");
+    });
+
+    it("widens a column by a fixed step on ArrowRight and persists it", () => {
+      const { container } = render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+
+      const handle = screen.getByTestId("resize-handle-name");
+      const nameCol = container.querySelectorAll("colgroup col")[1] as HTMLElement;
+      expect(nameCol.style.width).toBe("220px");
+
+      fireEvent.keyDown(handle, { key: "ArrowRight" });
+
+      expect(nameCol.style.width).toBe("230px");
+      expect(handle).toHaveAttribute("aria-valuenow", "230");
+    });
+
+    it("narrows a column by a fixed step on ArrowLeft, clamped to the minimum width", () => {
+      const { container } = render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+
+      const handle = screen.getByTestId("resize-handle-uid");
+      const uidCol = container.querySelectorAll("colgroup col")[0] as HTMLElement;
+      expect(uidCol.style.width).toBe("64px");
+
+      fireEvent.keyDown(handle, { key: "ArrowLeft" });
+      expect(uidCol.style.width).toBe("60px");
+
+      // 64 - 10 would go below the 60px minimum on a second press: it must clamp, not go negative.
+      fireEvent.keyDown(handle, { key: "ArrowLeft" });
+      expect(uidCol.style.width).toBe("60px");
+    });
+
+    it("does not scroll the page when adjusting a column width with the arrow keys", () => {
+      render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+
+      const handle = screen.getByTestId("resize-handle-name");
+      const event = new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true });
+      handle.dispatchEvent(event);
+
+      expect(event.defaultPrevented).toBe(true);
+    });
+
+    it("ignores unrelated keys on the resize handle", () => {
+      const { container } = render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+
+      const handle = screen.getByTestId("resize-handle-name");
+      const nameCol = container.querySelectorAll("colgroup col")[1] as HTMLElement;
+
+      fireEvent.keyDown(handle, { key: "Enter" });
+
+      expect(nameCol.style.width).toBe("220px");
     });
   });
 });
