@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any, TypeVar, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import exists, update
+from sqlalchemy import String, exists, update
+from sqlalchemy import cast as sql_cast
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -558,18 +560,34 @@ def list_roles(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_active_user),
 ) -> ResourceRoleListRead:
-    query = db.query(ResourceRole).filter(ResourceRole.is_active.is_(True))
+    query = (
+        db.query(ResourceRole)
+        .join(ResourceNode, ResourceRole.node_id == ResourceNode.id)
+        .filter(ResourceRole.is_active.is_(True))
+    )
     if node_id is not None:
         _get_or_404(db, ResourceNode, node_id, "Resource node")
         if include_descendants:
             query = query.filter(ResourceRole.node_id.in_(_descendant_node_ids(db, node_id)))
         else:
             query = query.filter(ResourceRole.node_id == node_id)
+    # The role's displayed label is "name -- node code (#id)" (see
+    # capacity-table.tsx / role-calendars-table.tsx), so `q` must match all
+    # three, not just `name`. A leading "#" is stripped before matching: it is
+    # only ever a decorative prefix on the id in that label, never a
+    # character a real name or node code would start with, so stripping it
+    # unconditionally lets both "#99" and "99" find role id 99 without any
+    # extra logic on the frontend side. If stripping would leave nothing to
+    # search for (`q="#"`), the original text is kept instead of falling
+    # through to an empty pattern that would match every row.
+    search_params = params
+    if params.q is not None and params.q.startswith("#") and params.q.lstrip("#"):
+        search_params = replace(params, q=params.q.lstrip("#"))
     result = apply_pagination(
         query,
-        params,
+        search_params,
         sortable={"name": ResourceRole.name},
-        searchable=(ResourceRole.name,),
+        searchable=(ResourceRole.name, ResourceNode.code, sql_cast(ResourceRole.id, String)),
         tiebreaker=ResourceRole.id,
         default_sort=ResourceRole.name,
     )
