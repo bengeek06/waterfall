@@ -45,6 +45,17 @@ export type UsersTabProps = {
   // effect once painted, one render later. The confirmation also always carries
   // the exact user object it was opened with, never re-deriving "the user at
   // this row" from current data, as a second, independent guard.
+  //
+  // Deliberately not folded together with `actionBusy` into this same freeze:
+  // `actionBusy` covers the window right after confirmation (the dialog closes
+  // immediately on confirm, before the mutation's own request -- and the reload
+  // it triggers -- have resolved), and this table's pagination/sort/search do
+  // stay interactive during that window, same as every other tab on this page
+  // whose mutations go through `submitAction`/`actionBusy` (roles panel,
+  // role-calendars). Correctness there instead relies on `reloadUsersPage`
+  // reading live `usersOffsetRef`/`usersSortRef`/`usersQueryRef` values (see
+  // that function's comment in `page.tsx`), not on making the table
+  // unreachable for the mutation's whole round trip.
   isActionPending: boolean;
   usersError: string | null;
   createUserMode: boolean;

@@ -2989,6 +2989,59 @@ describe("ResourcesPage users table (E8-09)", () => {
     );
   });
 
+  it("does not apply a stale offset/sort/search to the reload triggered by a user status update, if the admin navigated away while the update was in flight", async () => {
+    // Unlike the destructive-confirmation window (guarded by `isActionPending`,
+    // which freezes pagination/search while the alert dialog is open),
+    // `confirmPendingUserAction` clears `pendingUserAction` synchronously on
+    // confirm -- the dialog closes, and the table becomes interactive again,
+    // well before `setUserStatus`'s own request (and the `reloadUsersPage` it
+    // triggers) resolve. Responses are distinguished by which offset they were
+    // actually requested with, not by call order.
+    const userA = userFixture({ id: 1, email: "alice@example.com", is_active: true });
+    const pageAtOffset20 = [userFixture({ id: 2, email: "page2@example.com" })];
+    mocks.getUsers.mockImplementation((_tokens: unknown, _refresh: unknown, listParams: unknown) => {
+      const offset = (listParams as { offset?: number } | undefined)?.offset ?? 0;
+      return Promise.resolve({ items: offset === 0 ? [userA] : pageAtOffset20, total: 25 });
+    });
+    let resolveStatus!: (user: AuthUserAdmin) => void;
+    mocks.setUserStatus.mockReturnValue(
+      new Promise<AuthUserAdmin>((resolve) => {
+        resolveStatus = resolve;
+      }),
+    );
+
+    await openUsersTab();
+    await waitFor(() => expect(screen.getByText("alice@example.com")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "Désactiver" }));
+    const alertDialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(alertDialog).getByRole("button", { name: "Désactiver" }));
+    await waitFor(() => expect(mocks.setUserStatus).toHaveBeenCalledTimes(1));
+
+    // Paginate to offset 20 while the status update is still in flight -- the
+    // confirmation dialog is already gone by this point, so nothing here blocks
+    // this navigation.
+    const suivant = await screen.findByRole("button", { name: "Suivant" });
+    await waitFor(() => expect(suivant).toBeEnabled());
+    fireEvent.click(suivant);
+    await waitFor(() => expect(screen.getByText("page2@example.com")).toBeInTheDocument());
+
+    // Resolving the status update now must not refetch/display offset 0's stale
+    // page: the reload it triggers must target the *current* offset (20) -- the
+    // one the admin navigated to -- not the offset that was current when
+    // "Désactiver" was confirmed.
+    resolveStatus({ ...userA, is_active: false });
+    await waitFor(() =>
+      expect(mocks.getUsers).toHaveBeenLastCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ offset: 20 }),
+      ),
+    );
+    expect(screen.getByText("page2@example.com")).toBeInTheDocument();
+    expect(screen.queryByText("alice@example.com")).not.toBeInTheDocument();
+  });
+
   it("disables deleting, deactivating, or demoting your own account, matching the backend's own rejection rules", async () => {
     // The backend hard-rejects all three for your own account (auth.py: "Cannot
     // deactivate self"/"Cannot remove own admin role"/"Cannot delete self", each

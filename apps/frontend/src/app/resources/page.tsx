@@ -505,6 +505,20 @@ export default function ResourcesPage() {
   // this migration and there is no other consumer of this data to keep it in sync
   // with.
   const usersGenerationRef = useRef(0);
+  // Mirrors `usersOffset`/`usersSort`/`usersQuery` synchronously (updated at
+  // every write site below, not via a `useEffect`) so `reloadUsersPage` --
+  // called from `updateUserStatus`/`updateUserAdmin`/`addUser`/
+  // `deleteExistingUser` after an `await` -- reads the *live* pagination/sort/
+  // search state instead of the value closed over when the mutation started.
+  // Otherwise: an admin confirms a status/role/delete action (the confirmation
+  // dialog closes immediately, well before the mutation's own request
+  // resolves), pages/sorts/searches while it's still in flight, then the
+  // mutation resolves -- the reload it triggers would silently refetch and
+  // display stale data under the new controls' label. Same bug class and fix
+  // as `reloadRolesPage`/`reloadRoleCalendarsPage`/`reloadRolesPanelPage`.
+  const usersOffsetRef = useRef(usersOffset);
+  const usersSortRef = useRef(usersSort);
+  const usersQueryRef = useRef(usersQuery);
 
   useEffect(() => {
     const generation = ++usersGenerationRef.current;
@@ -560,9 +574,9 @@ export default function ResourcesPage() {
     try {
       const page = await getUsers(session, onSessionRefresh, {
         limit: usersLimit,
-        offset: usersOffset,
-        sort: usersSort,
-        q: usersQuery || undefined,
+        offset: usersOffsetRef.current,
+        sort: usersSortRef.current,
+        q: usersQueryRef.current || undefined,
       });
       if (usersGenerationRef.current === generation) setUsersPage(page);
     } catch (cause) {
@@ -1575,7 +1589,7 @@ export default function ResourcesPage() {
         </>
       ) : null}
 
-      {!busy && activeTab === "users" ? <UsersTab items={usersPage.items} currentUserId={currentUserId} pagination={{ total: usersPage.total, limit: usersLimit, offset: usersOffset }} onPaginationChange={(next) => setUsersOffset(next.offset)} sort={usersSort} onSortChange={setUsersSort} search={usersQuery} onSearchChange={(next) => { setUsersQuery(next); setUsersOffset(0); }} isLoading={usersLoading} isActionPending={pendingUserAction !== null} usersError={usersError} createUserMode={createUserMode} newEmail={newEmail} newPassword={newPassword} actionBusy={actionBusy} onCreateUser={addUser} onSetCreateUserMode={setCreateUserMode} onEmailChange={setNewEmail} onPasswordChange={setNewPassword} onToggleStatus={(user) => setPendingUserAction({ kind: "status", user })} onToggleAdmin={(user) => setPendingUserAction({ kind: "admin", user })} onRemove={(user) => setPendingUserAction({ kind: "delete", user })} /> : null}
+      {!busy && activeTab === "users" ? <UsersTab items={usersPage.items} currentUserId={currentUserId} pagination={{ total: usersPage.total, limit: usersLimit, offset: usersOffset }} onPaginationChange={(next) => { usersOffsetRef.current = next.offset; setUsersOffset(next.offset); }} sort={usersSort} onSortChange={(next) => { usersSortRef.current = next; setUsersSort(next); }} search={usersQuery} onSearchChange={(next) => { usersQueryRef.current = next; setUsersQuery(next); usersOffsetRef.current = 0; setUsersOffset(0); }} isLoading={usersLoading} isActionPending={pendingUserAction !== null} usersError={usersError} createUserMode={createUserMode} newEmail={newEmail} newPassword={newPassword} actionBusy={actionBusy} onCreateUser={addUser} onSetCreateUserMode={setCreateUserMode} onEmailChange={setNewEmail} onPasswordChange={setNewPassword} onToggleStatus={(user) => setPendingUserAction({ kind: "status", user })} onToggleAdmin={(user) => setPendingUserAction({ kind: "admin", user })} onRemove={(user) => setPendingUserAction({ kind: "delete", user })} /> : null}
 
       {pendingUserAction ? (() => {
         const copy = getPendingUserActionCopy(pendingUserAction);
