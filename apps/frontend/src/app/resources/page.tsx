@@ -114,7 +114,20 @@ export default function ResourcesPage() {
   const [costTypesLimit] = useState(20);
   const [costTypesSort, setCostTypesSort] = useState<string | null>(null);
   const [costTypesQuery, setCostTypesQuery] = useState("");
+  // `categories` (full, unfiltered) feeds other panels that need the complete list as
+  // reference data (RolesPanel, ValuationPanel, the categoryNameById lookup) -- same
+  // reasoning as `costTypes` above. CostCategoriesTable's own paginated view is a
+  // second, independent fetch (`categoriesPage` below).
   const [categories, setCategories] = useState<CostCategory[]>([]);
+  const [categoriesPage, setCategoriesPage] = useState<{ items: CostCategory[]; total: number }>({
+    items: [],
+    total: 0,
+  });
+  const [categoriesLoading, setCategoriesLoading] = useState(false);
+  const [categoriesOffset, setCategoriesOffset] = useState(0);
+  const [categoriesLimit] = useState(20);
+  const [categoriesSort, setCategoriesSort] = useState<string | null>(null);
+  const [categoriesQuery, setCategoriesQuery] = useState("");
   const [rates, setRates] = useState<CostRate[]>([]);
   // `roles` (full, unfiltered) feeds RolesPanel, RoleCalendarsTable, and the
   // capacity/calendar drafts keyed by role id -- per EPIC E7/E8, that "absent limit,
@@ -236,7 +249,7 @@ export default function ResourcesPage() {
           getResourceRoles(session, onSessionRefresh).then((page) => page.items),
           getCalendars(session, onSessionRefresh, true),
           getCostTypes(session, onSessionRefresh, true).then((page) => page.items),
-          getCostCategories(session, onSessionRefresh, true),
+          getCostCategories(session, onSessionRefresh, true).then((page) => page.items),
           getCostRates(session, onSessionRefresh),
           getInflationRates(session, onSessionRefresh),
           getRoleCapacities(session, onSessionRefresh),
@@ -467,6 +480,86 @@ export default function ResourcesPage() {
     }
   }
 
+  // The cost-categories table's own paginated view: same rationale as `costTypesPage`
+  // above -- independent of the full `categories` list, refetched on pagination/sort/
+  // search changes and again after any create/update/toggle mutation (see
+  // `reloadCategoriesPage` below).
+  const categoriesGenerationRef = useRef(0);
+
+  useEffect(() => {
+    const generation = ++categoriesGenerationRef.current;
+    const isCurrentGeneration = () => categoriesGenerationRef.current === generation;
+
+    async function load() {
+      if (!session) return;
+      setCategoriesLoading(true);
+      try {
+        const page = await getCostCategories(session, onSessionRefresh, true, {
+          limit: categoriesLimit,
+          offset: categoriesOffset,
+          sort: categoriesSort,
+          q: categoriesQuery || undefined,
+        });
+        if (!isCurrentGeneration()) return;
+        setCategoriesPage(page);
+      } catch (cause) {
+        if (!isCurrentGeneration()) return;
+        if (cause instanceof SessionExpiredError) {
+          clearSession();
+          router.push("/login");
+          return;
+        }
+        if (cause instanceof ApiError && cause.status === 401) {
+          clearSession();
+          router.push("/login");
+          return;
+        }
+        setNotice({
+          kind: "error",
+          message: cause instanceof ApiError ? cause.message : "Chargement des catégories de coût impossible",
+        });
+      } finally {
+        if (isCurrentGeneration()) setCategoriesLoading(false);
+      }
+    }
+
+    void load();
+  }, [session, onSessionRefresh, router, categoriesLimit, categoriesOffset, categoriesSort, categoriesQuery]);
+
+  // Deliberately swallows its own non-session errors rather than letting them
+  // propagate: this is called as the last step of `addCategory`/`saveCategory`/
+  // `toggleCategoryActive`, all wrapped in `submitAction`, which sets its own success
+  // notice right after `action()` returns -- see `reloadCostTypesPage` above for the
+  // full reasoning (a `setNotice` call here would just be overwritten, while throwing
+  // would make `submitAction` report the whole operation as failed even though the
+  // mutation itself succeeded). Session expiry is the one exception: it must still
+  // force a logout.
+  //
+  // Also sets `categoriesLoading` itself (guarded by the shared generation counter,
+  // like the effect above) so a mutation racing an in-flight pagination/sort/search
+  // fetch can't leave `categoriesLoading` stuck `true` forever.
+  async function reloadCategoriesPage() {
+    if (!session) return;
+    const generation = ++categoriesGenerationRef.current;
+    setCategoriesLoading(true);
+    try {
+      const page = await getCostCategories(session, onSessionRefresh, true, {
+        limit: categoriesLimit,
+        offset: categoriesOffset,
+        sort: categoriesSort,
+        q: categoriesQuery || undefined,
+      });
+      if (categoriesGenerationRef.current === generation) setCategoriesPage(page);
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
+        clearSession();
+        router.push("/login");
+      }
+    } finally {
+      if (categoriesGenerationRef.current === generation) setCategoriesLoading(false);
+    }
+  }
+
   async function submitAction(action: () => Promise<void>, success: string) {
     setActionBusy(true);
     setNotice(null);
@@ -545,6 +638,7 @@ export default function ResourcesPage() {
       setCategoryCode("");
       setCategoryName("");
       setAccountingCode("");
+      await reloadCategoriesPage();
     }, "Catégorie créée.");
   }
 
@@ -619,6 +713,7 @@ export default function ResourcesPage() {
       );
       setCategories((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
       setEditingCategoryId(null);
+      await reloadCategoriesPage();
     }, "Catégorie modifiée.");
   }
 
@@ -632,6 +727,7 @@ export default function ResourcesPage() {
         onSessionRefresh,
       );
       setCategories((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+      await reloadCategoriesPage();
     }, category.is_active ? "Catégorie désactivée." : "Catégorie réactivée.");
   }
 
@@ -1022,7 +1118,7 @@ export default function ResourcesPage() {
         <>
           <CostTypesTable items={costTypesPage.items} pagination={{ total: costTypesPage.total, limit: costTypesLimit, offset: costTypesOffset }} onPaginationChange={(next) => setCostTypesOffset(next.offset)} sort={costTypesSort} onSortChange={setCostTypesSort} search={costTypesQuery} onSearchChange={(next) => { setCostTypesQuery(next); setCostTypesOffset(0); }} isLoading={costTypesLoading} code={costTypeCode} name={costTypeName} kind={costTypeKind} draft={costTypeDraft} editingId={editingCostTypeId} busy={actionBusy} labels={costTypeKindLabels} onSubmit={addCostType} onCodeChange={setCostTypeCode} onNameChange={setCostTypeName} onKindChange={setCostTypeKind} onStartEdit={startEditCostType} onDraftChange={setCostTypeDraft} onSave={(item) => void saveCostType(item)} onCancel={() => setEditingCostTypeId(null)} onToggle={(item) => void toggleCostTypeActive(item)} />
 
-          <CostCategoriesTable items={categories} types={costTypes} typeId={categoryCostTypeId} accountingCode={categoryCode} categoryCode={accountingCode} name={categoryName} draft={categoryDraft} editingId={editingCategoryId} busy={actionBusy} onSubmit={addCategory} onTypeChange={setCategoryCostTypeId} onAccountingCodeChange={setCategoryCode} onCategoryCodeChange={setAccountingCode} onNameChange={setCategoryName} onStartEdit={startEditCategory} onDraftChange={(field, value) => setCategoryDraft((previous) => ({ ...previous, [field]: value }))} onSave={(item) => void saveCategory(item)} onCancel={() => setEditingCategoryId(null)} onToggle={(item) => void toggleCategoryActive(item)} />
+          <CostCategoriesTable items={categoriesPage.items} types={costTypes} pagination={{ total: categoriesPage.total, limit: categoriesLimit, offset: categoriesOffset }} onPaginationChange={(next) => setCategoriesOffset(next.offset)} sort={categoriesSort} onSortChange={setCategoriesSort} search={categoriesQuery} onSearchChange={(next) => { setCategoriesQuery(next); setCategoriesOffset(0); }} isLoading={categoriesLoading} typeId={categoryCostTypeId} accountingCode={categoryCode} categoryCode={accountingCode} name={categoryName} draft={categoryDraft} editingId={editingCategoryId} busy={actionBusy} onSubmit={addCategory} onTypeChange={setCategoryCostTypeId} onAccountingCodeChange={setCategoryCode} onCategoryCodeChange={setAccountingCode} onNameChange={setCategoryName} onStartEdit={startEditCategory} onDraftChange={(field, value) => setCategoryDraft((previous) => ({ ...previous, [field]: value }))} onSave={(item) => void saveCategory(item)} onCancel={() => setEditingCategoryId(null)} onToggle={(item) => void toggleCategoryActive(item)} />
 
           <ValuationPanel categories={categories} costTypes={costTypes} inflationYear={inflationYear} inflationValue={inflationValue} currency={displayCurrency} drafts={rateDrafts} busy={actionBusy} onCurrencyChange={setDisplayCurrency} onInflationChange={setInflationValue} onRateChange={(key, value) => setRateDrafts((previous) => ({ ...previous, [key]: value }))} onSave={() => void saveAllValuation()} />
         </>

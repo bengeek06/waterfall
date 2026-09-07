@@ -5,6 +5,7 @@ import {
   ApiError,
   SessionExpiredError,
   type Calendar,
+  type CostCategory,
   type CostType,
   type ResourceNode,
   type ResourceRole,
@@ -29,6 +30,7 @@ const mocks = vi.hoisted(() => ({
   createResourceRole: vi.fn(),
   createRoleCapacity: vi.fn(),
   updateRoleCapacity: vi.fn(),
+  createCostCategory: vi.fn(),
   router: { push: vi.fn() },
 }));
 
@@ -63,6 +65,7 @@ vi.mock("@/lib/backend", async () => {
     createResourceRole: mocks.createResourceRole,
     createRoleCapacity: mocks.createRoleCapacity,
     updateRoleCapacity: mocks.updateRoleCapacity,
+    createCostCategory: mocks.createCostCategory,
   };
 });
 
@@ -113,7 +116,7 @@ async function renderResourcesTab(calendars: Calendar[], roles: ResourceRole[] =
   mocks.getResourceRoles.mockResolvedValue({ items: roles, total: roles.length });
   mocks.getCalendars.mockResolvedValue(calendars);
   mocks.getCostTypes.mockResolvedValue({ items: [], total: 0 });
-  mocks.getCostCategories.mockResolvedValue([]);
+  mocks.getCostCategories.mockResolvedValue({ items: [], total: 0 });
   mocks.getCostRates.mockResolvedValue([]);
   mocks.getInflationRates.mockResolvedValue([]);
   mocks.getRoleCapacities.mockResolvedValue([]);
@@ -333,7 +336,7 @@ describe("ResourcesPage default calendar warning", () => {
     mocks.getResourceRoles.mockResolvedValue({ items: [], total: 0 });
     mocks.getCalendars.mockResolvedValue([activeCalendar]);
     mocks.getCostTypes.mockResolvedValue({ items: [], total: 0 });
-    mocks.getCostCategories.mockResolvedValue([]);
+    mocks.getCostCategories.mockResolvedValue({ items: [], total: 0 });
     mocks.getCostRates.mockResolvedValue([]);
     mocks.getInflationRates.mockResolvedValue([]);
     mocks.getRoleCapacities.mockResolvedValue([]);
@@ -365,7 +368,7 @@ describe("ResourcesPage default calendar warning", () => {
     mocks.getResourceRoles.mockResolvedValue({ items: [], total: 0 });
     mocks.getCalendars.mockResolvedValue([]);
     mocks.getCostTypes.mockResolvedValue({ items: [], total: 0 });
-    mocks.getCostCategories.mockResolvedValue([]);
+    mocks.getCostCategories.mockResolvedValue({ items: [], total: 0 });
     mocks.getCostRates.mockResolvedValue([]);
     mocks.getInflationRates.mockResolvedValue([]);
     mocks.getRoleCapacities.mockResolvedValue([]);
@@ -398,7 +401,7 @@ describe("ResourcesPage default calendar warning", () => {
     mocks.getResourceRoles.mockResolvedValue({ items: [], total: 0 });
     mocks.getCalendars.mockResolvedValue([activeCalendar]);
     mocks.getCostTypes.mockResolvedValue({ items: [], total: 0 });
-    mocks.getCostCategories.mockResolvedValue([]);
+    mocks.getCostCategories.mockResolvedValue({ items: [], total: 0 });
     mocks.getCostRates.mockResolvedValue([]);
     mocks.getInflationRates.mockResolvedValue([]);
     mocks.getRoleCapacities.mockResolvedValue([]);
@@ -461,7 +464,7 @@ describe("ResourcesPage reload race", () => {
 
     mocks.getCalendars.mockResolvedValue([]);
     mocks.getCostTypes.mockResolvedValue({ items: [], total: 0 });
-    mocks.getCostCategories.mockResolvedValue([]);
+    mocks.getCostCategories.mockResolvedValue({ items: [], total: 0 });
     mocks.getCostRates.mockResolvedValue([]);
     mocks.getInflationRates.mockResolvedValue([]);
     mocks.getRoleCapacities.mockResolvedValue([]);
@@ -505,7 +508,7 @@ describe("ResourcesPage cost types table (E8-02)", () => {
     mocks.getResourceNodes.mockResolvedValue([]);
     mocks.getResourceRoles.mockResolvedValue({ items: [], total: 0 });
     mocks.getCalendars.mockResolvedValue([]);
-    mocks.getCostCategories.mockResolvedValue([]);
+    mocks.getCostCategories.mockResolvedValue({ items: [], total: 0 });
     mocks.getCostRates.mockResolvedValue([]);
     mocks.getInflationRates.mockResolvedValue([]);
     mocks.getRoleCapacities.mockResolvedValue([]);
@@ -583,7 +586,10 @@ describe("ResourcesPage cost types table (E8-02)", () => {
 
     render(<ResourcesPage />);
     await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
-    const suivant = await screen.findByRole("button", { name: "Suivant" });
+    // Scoped to the cost-types table's own <form>: the cost-categories table below it
+    // (E8-03) renders an identically-labeled "Suivant" button of its own.
+    const costTypesTable = (await screen.findByLabelText("Rechercher un type de coût")).closest("form") as HTMLElement;
+    const suivant = within(costTypesTable).getByRole("button", { name: "Suivant" });
     await waitFor(() => expect(suivant).toBeEnabled());
 
     fireEvent.click(suivant);
@@ -809,7 +815,7 @@ describe("ResourcesPage capacity table (E8-05)", () => {
     mocks.getResourceNodes.mockResolvedValue([nodeFixture]);
     mocks.getCalendars.mockResolvedValue([]);
     mocks.getCostTypes.mockResolvedValue({ items: [], total: 0 });
-    mocks.getCostCategories.mockResolvedValue([]);
+    mocks.getCostCategories.mockResolvedValue({ items: [], total: 0 });
     mocks.getCostRates.mockResolvedValue([]);
     mocks.getInflationRates.mockResolvedValue([]);
     mocks.getRoleCapacities.mockResolvedValue([]);
@@ -970,7 +976,7 @@ describe("ResourcesPage capacity table (E8-05)", () => {
       is_active: true,
     } as never;
     mocks.getCostTypes.mockResolvedValue({ items: [laborCostType], total: 1 });
-    mocks.getCostCategories.mockResolvedValue([category]);
+    mocks.getCostCategories.mockResolvedValue({ items: [category], total: 1 });
     mocks.getResourceRoles.mockImplementation(
       (_tokens: unknown, _refresh: unknown, _nodeId: unknown, _includeDescendants: unknown, listParams: unknown) =>
         Promise.resolve(
@@ -1070,7 +1076,7 @@ describe("ResourcesPage capacity table (E8-05)", () => {
       is_active: true,
     } as never;
     mocks.getCostTypes.mockResolvedValue({ items: [laborCostType], total: 1 });
-    mocks.getCostCategories.mockResolvedValue([category]);
+    mocks.getCostCategories.mockResolvedValue({ items: [category], total: 1 });
     let paginatedCallCount = 0;
     mocks.getResourceRoles.mockImplementation(
       (_tokens: unknown, _refresh: unknown, _nodeId: unknown, _includeDescendants: unknown, listParams: unknown) => {
@@ -1122,7 +1128,7 @@ describe("ResourcesPage capacity table (E8-05)", () => {
       is_active: true,
     } as never;
     mocks.getCostTypes.mockResolvedValue({ items: [laborCostType], total: 1 });
-    mocks.getCostCategories.mockResolvedValue([category]);
+    mocks.getCostCategories.mockResolvedValue({ items: [category], total: 1 });
     let resolveStalePage!: (page: { items: ResourceRole[]; total: number }) => void;
     const stalePagePromise = new Promise<{ items: ResourceRole[]; total: number }>((resolve) => {
       resolveStalePage = resolve;
@@ -1191,7 +1197,7 @@ describe("ResourcesPage capacity table (E8-05)", () => {
       is_active: true,
     } as never;
     mocks.getCostTypes.mockResolvedValue({ items: [laborCostType], total: 1 });
-    mocks.getCostCategories.mockResolvedValue([category]);
+    mocks.getCostCategories.mockResolvedValue({ items: [category], total: 1 });
     const pageAtOffset0 = { items: [resourceRoleFixture({ id: 1, name: "Page 1 role" })], total: 25 };
     const pageAtOffset20 = { items: [resourceRoleFixture({ id: 2, name: "Page 2 role" })], total: 25 };
     mocks.getResourceRoles.mockImplementation(
@@ -1241,5 +1247,301 @@ describe("ResourcesPage capacity table (E8-05)", () => {
     );
     expect(within(capacityCard()).getByText("Page 2 role — IT (#2)")).toBeInTheDocument();
     expect(within(capacityCard()).queryByText("Page 1 role — IT (#1)")).not.toBeInTheDocument();
+  });
+});
+
+const categoryFixture = (overrides: Partial<CostCategory> = {}): CostCategory =>
+  ({
+    id: 1,
+    cost_type_id: 1,
+    accounting_code: "601",
+    category_code: "MAT",
+    name: "Matériel",
+    is_active: true,
+    created_at: "2026-08-01T00:00:00Z",
+    updated_at: "2026-08-01T00:00:00Z",
+    ...overrides,
+  }) as CostCategory;
+
+describe("ResourcesPage cost categories table (E8-03)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getResourceNodes.mockResolvedValue([]);
+    mocks.getResourceRoles.mockResolvedValue({ items: [], total: 0 });
+    mocks.getCalendars.mockResolvedValue([]);
+    // Deliberately "supply", not "labor": ValuationPanel (also mounted on the "costs"
+    // tab) filters the full `categories` reference list down to labor-linked
+    // categories only. Keeping the fixture cost type non-labor means the full-list
+    // fixtures below never leak into ValuationPanel's own rendering, which would
+    // otherwise collide with this describe block's own text/role assertions.
+    mocks.getCostTypes.mockResolvedValue({ items: [costTypeFixture({ kind: "supply" })], total: 1 });
+    mocks.getCostRates.mockResolvedValue([]);
+    mocks.getInflationRates.mockResolvedValue([]);
+    mocks.getRoleCapacities.mockResolvedValue([]);
+    mocks.getUsers.mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("requests the table's own paginated page independently from the unpaginated reference list other panels rely on, without either leaking into the other", async () => {
+    const fullList = [
+      categoryFixture({ id: 1, accounting_code: "601", name: "Matériel" }),
+      categoryFixture({ id: 2, accounting_code: "602", name: "Sous-traitance" }),
+    ];
+    const paginatedSlice = [categoryFixture({ id: 6, accounting_code: "PAGE1", name: "Page item" })];
+    mocks.getCostCategories.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, _includeInactive: unknown, listParams: unknown) =>
+        Promise.resolve(
+          listParams === undefined
+            ? { items: fullList, total: fullList.length }
+            : { items: paginatedSlice, total: 25 },
+        ),
+    );
+
+    render(<ResourcesPage />);
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    await waitFor(() => expect(mocks.getCostCategories).toHaveBeenCalledTimes(2));
+
+    const calls = mocks.getCostCategories.mock.calls as [unknown, unknown, unknown, unknown][];
+    // The full reference list (feeds RolesPanel/ValuationPanel/categoryNameById) is
+    // requested with no pagination params at all -- absence of `limit` must return
+    // everything, per EPIC E7/E8.
+    expect(calls.some(([, , , listParams]) => listParams === undefined)).toBe(true);
+    // The table's own view is requested separately, with an explicit page size.
+    expect(
+      calls.some(
+        ([, , , listParams]) =>
+          typeof listParams === "object" &&
+          listParams !== null &&
+          (listParams as { limit?: number }).limit === 20 &&
+          (listParams as { offset?: number }).offset === 0,
+      ),
+    ).toBe(true);
+
+    // The cost-categories table itself shows only its own paginated slice, not the full list.
+    expect(screen.getByText("PAGE1")).toBeInTheDocument();
+    expect(screen.queryByText("601")).not.toBeInTheDocument();
+  });
+
+  it("paginates: clicking Suivant refetches the table with the next offset, leaving the reference-list call untouched", async () => {
+    mocks.getCostCategories.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, _includeInactive: unknown, listParams: unknown) =>
+        Promise.resolve(
+          listParams === undefined
+            ? { items: [], total: 0 }
+            : { items: [categoryFixture({})], total: 25 },
+        ),
+    );
+
+    render(<ResourcesPage />);
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    // Scoped to the cost-categories table's own <form>: the cost-types table above it
+    // renders an identically-labeled "Suivant" button of its own.
+    const categoriesTable = (await screen.findByLabelText("Rechercher une catégorie de coût")).closest(
+      "form",
+    ) as HTMLElement;
+    const suivant = within(categoriesTable).getByRole("button", { name: "Suivant" });
+    await waitFor(() => expect(suivant).toBeEnabled());
+
+    fireEvent.click(suivant);
+
+    await waitFor(() =>
+      expect(mocks.getCostCategories).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        true,
+        expect.objectContaining({ limit: 20, offset: 20 }),
+      ),
+    );
+  });
+
+  it("searches: typing in the cost-categories search box debounces then refetches with q, resetting to offset 0", async () => {
+    mocks.getCostCategories.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, _includeInactive: unknown, listParams: unknown) =>
+        Promise.resolve(
+          listParams === undefined
+            ? { items: [], total: 0 }
+            : { items: [categoryFixture({})], total: 1 },
+        ),
+    );
+
+    render(<ResourcesPage />);
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    const searchInput = await screen.findByLabelText("Rechercher une catégorie de coût");
+
+    fireEvent.change(searchInput, { target: { value: "mat" } });
+
+    await waitFor(() =>
+      expect(mocks.getCostCategories).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        true,
+        expect.objectContaining({ q: "mat", offset: 0 }),
+      ),
+    );
+  });
+
+  it("sorts: clicking the Code comptable column header refetches with sort=accounting_code", async () => {
+    mocks.getCostCategories.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, _includeInactive: unknown, listParams: unknown) =>
+        Promise.resolve(
+          listParams === undefined
+            ? { items: [], total: 0 }
+            : { items: [categoryFixture({})], total: 1 },
+        ),
+    );
+
+    render(<ResourcesPage />);
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    // Only the cost-categories table's own "Code comptable" header renders as a
+    // sortable <Button>; ValuationPanel's own static "Code comptable" column header
+    // (also mounted on the "costs" tab) is a plain, non-interactive <TableHead>, so
+    // this stays unambiguous without needing to scope it further.
+    const sortButton = await screen.findByRole("button", { name: "Code comptable" });
+
+    fireEvent.click(sortButton);
+
+    await waitFor(() =>
+      expect(mocks.getCostCategories).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        true,
+        expect.objectContaining({ sort: "accounting_code" }),
+      ),
+    );
+  });
+
+  it("refetches the table's page after creating a category, on top of the existing local list update", async () => {
+    mocks.getCostCategories.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, _includeInactive: unknown, listParams: unknown) =>
+        Promise.resolve(
+          listParams === undefined ? { items: [], total: 0 } : { items: [], total: 0 },
+        ),
+    );
+    mocks.createCostCategory.mockResolvedValue(
+      categoryFixture({ id: 3, accounting_code: "NEW", name: "Nouveau" }),
+    );
+
+    render(<ResourcesPage />);
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    await waitFor(() => expect(mocks.getCostCategories).toHaveBeenCalledTimes(2));
+
+    const typeSelect = screen.getByLabelText("Type de la nouvelle catégorie");
+    fireEvent.change(typeSelect, { target: { value: "1" } });
+    const accountingCodeInput = screen.getByLabelText("Code comptable de la nouvelle catégorie");
+    fireEvent.change(accountingCodeInput, { target: { value: "NEW" } });
+    fireEvent.change(screen.getByLabelText("Nom de la nouvelle catégorie"), { target: { value: "Nouveau" } });
+    const addRow = accountingCodeInput.closest("tr");
+    if (!addRow) throw new Error("add row not found");
+    fireEvent.click(within(addRow).getByRole("button", { name: "Ajouter" }));
+
+    await waitFor(() => expect(mocks.createCostCategory).toHaveBeenCalledTimes(1));
+    // The initial load made 2 calls (reference list + table page); creating a category
+    // must trigger a 3rd, to refresh the table's own paginated view.
+    await waitFor(() => expect(mocks.getCostCategories).toHaveBeenCalledTimes(3));
+  });
+
+  it("redirects to login when the cost-categories table's own paginated fetch reports session expiry", async () => {
+    mocks.getCostCategories.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, _includeInactive: unknown, listParams: unknown) =>
+        listParams === undefined
+          ? Promise.resolve({ items: [], total: 0 })
+          : Promise.reject(new SessionExpiredError()),
+    );
+
+    render(<ResourcesPage />);
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+
+    await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith("/login"));
+  });
+
+  it("does not mask a successful mutation as failed when the follow-up table refresh fails", async () => {
+    let categoriesCallCount = 0;
+    mocks.getCostCategories.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, _includeInactive: unknown, listParams: unknown) => {
+        if (listParams === undefined) return Promise.resolve({ items: [], total: 0 });
+        categoriesCallCount += 1;
+        // First paginated call: the initial load, succeeds. Second paginated call:
+        // the reload triggered by the mutation below, fails transiently.
+        if (categoriesCallCount === 1) return Promise.resolve({ items: [], total: 0 });
+        return Promise.reject(new ApiError(500, "Actualisation impossible"));
+      },
+    );
+    mocks.createCostCategory.mockResolvedValue(
+      categoryFixture({ id: 3, accounting_code: "NEW", name: "Nouveau" }),
+    );
+
+    render(<ResourcesPage />);
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    await waitFor(() => expect(mocks.getCostCategories).toHaveBeenCalledTimes(2));
+
+    const typeSelect = screen.getByLabelText("Type de la nouvelle catégorie");
+    fireEvent.change(typeSelect, { target: { value: "1" } });
+    const accountingCodeInput = screen.getByLabelText("Code comptable de la nouvelle catégorie");
+    fireEvent.change(accountingCodeInput, { target: { value: "NEW" } });
+    fireEvent.change(screen.getByLabelText("Nom de la nouvelle catégorie"), { target: { value: "Nouveau" } });
+    const addRow = accountingCodeInput.closest("tr");
+    if (!addRow) throw new Error("add row not found");
+    fireEvent.click(within(addRow).getByRole("button", { name: "Ajouter" }));
+
+    await waitFor(() => expect(mocks.createCostCategory).toHaveBeenCalledTimes(1));
+    // The mutation itself succeeded and must be reported as such, even though the
+    // follow-up table-page refresh it triggers fails.
+    await waitFor(() => expect(screen.getByText("Catégorie créée.")).toBeInTheDocument());
+    expect(screen.queryByText("Actualisation impossible")).not.toBeInTheDocument();
+  });
+
+  it("does not leave the table's loading indicator stuck when a mutation's reload races an in-flight pagination fetch", async () => {
+    let resolveStalePage!: (page: { items: CostCategory[]; total: number }) => void;
+    const stalePagePromise = new Promise<{ items: CostCategory[]; total: number }>((resolve) => {
+      resolveStalePage = resolve;
+    });
+    let paginatedCallCount = 0;
+    mocks.getCostCategories.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, _includeInactive: unknown, listParams: unknown) => {
+        if (listParams === undefined) return Promise.resolve({ items: [], total: 0 });
+        paginatedCallCount += 1;
+        if (paginatedCallCount === 1) return stalePagePromise;
+        return Promise.resolve({
+          items: [categoryFixture({ id: 3, accounting_code: "NEW", name: "Nouveau" })],
+          total: 1,
+        });
+      },
+    );
+    mocks.createCostCategory.mockResolvedValue(
+      categoryFixture({ id: 3, accounting_code: "NEW", name: "Nouveau" }),
+    );
+
+    render(<ResourcesPage />);
+    // Signaled by call count rather than the generic `status` role: the
+    // cost-categories table's own loading skeleton is also a `role="status"`, and
+    // stays mounted throughout this test by design, so it can't be used as a
+    // page-ready signal.
+    await waitFor(() => expect(mocks.getCostCategories).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getAllByRole("status", { name: "Chargement des données" }).length).toBeGreaterThan(0));
+
+    const typeSelect = screen.getByLabelText("Type de la nouvelle catégorie");
+    fireEvent.change(typeSelect, { target: { value: "1" } });
+    const accountingCodeInput = screen.getByLabelText("Code comptable de la nouvelle catégorie");
+    fireEvent.change(accountingCodeInput, { target: { value: "NEW" } });
+    fireEvent.change(screen.getByLabelText("Nom de la nouvelle catégorie"), { target: { value: "Nouveau" } });
+    const addRow = accountingCodeInput.closest("tr");
+    if (!addRow) throw new Error("add row not found");
+    fireEvent.click(within(addRow).getByRole("button", { name: "Ajouter" }));
+
+    await waitFor(() => expect(mocks.createCostCategory).toHaveBeenCalledTimes(1));
+    // The mutation's own reload (2nd paginated call) resolves immediately and must
+    // clear the loading state on its own -- it must not wait for the stale 1st call.
+    await waitFor(() =>
+      expect(screen.queryByRole("status", { name: "Chargement des données" })).not.toBeInTheDocument(),
+    );
+
+    // Releasing the stale initial fetch afterwards must not resurrect the loading
+    // state or overwrite the fresher data already committed.
+    resolveStalePage({ items: [], total: 0 });
+    await waitFor(() => expect(screen.getByText("NEW")).toBeInTheDocument());
+    expect(screen.queryByRole("status", { name: "Chargement des données" })).not.toBeInTheDocument();
   });
 });
