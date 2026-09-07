@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type Ref } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -118,7 +118,11 @@ function ColumnResizeHandle({
 // hear. Only once the text is truncated does it become a focusable Tooltip trigger, which is the
 // only way to reach the full name without a mouse hover in that case.
 function TaskNameLabel({ name, width, isMilestone }: { name: string; width: number; isMilestone: boolean }) {
-  const textRef = useRef<HTMLSpanElement>(null);
+  // Typed as the common base rather than HTMLSpanElement | HTMLButtonElement because the same ref
+  // is attached to either a plain <span> (untruncated case) or the Tooltip's <button> trigger
+  // (truncated case, see below) -- only scrollWidth/clientWidth are read from it, both of which
+  // are HTMLElement members, so this stays a pure typing fix with no runtime effect.
+  const textRef = useRef<HTMLElement>(null);
   const [isTruncated, setIsTruncated] = useState(false);
 
   // Re-checked whenever the name text or the Name column's own width changes -- either can flip
@@ -144,7 +148,7 @@ function TaskNameLabel({ name, width, isMilestone }: { name: string; width: numb
 
   if (!isTruncated) {
     return (
-      <span ref={textRef} className="min-w-0 truncate text-left">
+      <span ref={textRef as Ref<HTMLSpanElement>} className="min-w-0 truncate text-left">
         {label}
       </span>
     );
@@ -153,7 +157,7 @@ function TaskNameLabel({ name, width, isMilestone }: { name: string; width: numb
   return (
     <Tooltip>
       <TooltipTrigger
-        ref={textRef}
+        ref={textRef as Ref<HTMLButtonElement>}
         type="button"
         className="min-w-0 truncate text-left"
         onClick={(event: MouseEvent<HTMLButtonElement>) => event.stopPropagation()}
