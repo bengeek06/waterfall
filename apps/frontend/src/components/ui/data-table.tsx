@@ -221,6 +221,12 @@ function noop() {
   // hook can still be called unconditionally on every render.
 }
 
+// Complexity exception (E4-17, #157): grown across the EPIC E8 migrations (manual
+// pagination/sorting/filtering, debounced search, pinned row, isEditing/editingReason
+// freeze, empty/no-results/loading states, sortable headers, onRowClick) into the
+// single component every table in this app now renders through. Decomposition tracked
+// in #204 (E4-18) rather than bundled into #157's gate-activation scope.
+// eslint-disable-next-line complexity
 export function DataTable<TData>({
   columns,
   data,

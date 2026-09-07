@@ -70,6 +70,11 @@ export function usePlanningDetailEffect({
   useEffect(() => {
     let cancelled = false;
 
+    // Complexity exception (E4-17, #157): generation-guarded load + revision-conflict
+    // detection + structure-draft derivation + session-expiry handling in one function.
+    // Decomposition tracked in #206 (E4-20) rather than bundled into #157's gate-activation
+    // scope.
+    // eslint-disable-next-line complexity
     async function loadPlanningDetail() {
       const loadGeneration = ++planningLoadGenerationRef.current;
       if (!session || selectedPlanningId === null) {

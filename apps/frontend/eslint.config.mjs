@@ -13,6 +13,16 @@ const eslintConfig = defineConfig([
     "build/**",
     "next-env.d.ts",
   ]),
+  // E4-17 (#157): same McCabe cyclomatic-complexity metric and threshold (15) as
+  // the backend's Ruff C90 gate (#58), the sole complexity metric normative for
+  // this frontend. Any `// eslint-disable-next-line complexity` beyond the ones
+  // already documented in this codebase must carry a comment linking to the
+  // tracking issue for its decomposition -- see README.md's "Complexité" section.
+  {
+    rules: {
+      complexity: ["error", 15],
+    },
+  },
 ]);
 
 export default eslintConfig;

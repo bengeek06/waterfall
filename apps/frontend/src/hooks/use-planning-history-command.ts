@@ -69,6 +69,11 @@ export function usePlanningHistoryCommand({
   setHistoryByPlanningId,
   setRetryableError,
 }: UsePlanningHistoryCommandParams) {
+  // Complexity exception (E4-17, #157): multi-condition guard + conditional display
+  // update + three-branch error handling (session expiry, revision conflict, generic
+  // retryable error) in one function. Decomposition tracked in #207 (E4-21) rather
+  // than bundled into #157's gate-activation scope.
+  // eslint-disable-next-line complexity
   async function applyPlanningHistoryCommand(direction: "undo" | "redo") {
     if (
       !session ||
