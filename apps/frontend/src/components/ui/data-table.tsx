@@ -21,6 +21,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { cn } from "@/lib/utils";
 
 // Marks a column as server-sortable and gives the exact column name the backend's
 // `sort` query parameter expects. TanStack's own `accessorKey`/`id` may not always
@@ -83,6 +84,24 @@ export type DataTableProps<TData> = {
   // for a caller to affect row-level styling without DataTable hard-coding a
   // specific business meaning (like "is_active") into a shared component.
   getRowClassName?: (row: TData) => string | undefined;
+
+  // Whole-row navigation (e.g. `projects-table.tsx`'s click-anywhere-on-the-row to
+  // open a project), applied only to data rows, never `pinnedRow` (a pinned
+  // create-row has its own inputs/submit button, not a "thing to navigate to").
+  // Adds a `cursor-pointer` affordance automatically so the click target is
+  // visually obvious without every caller re-deriving that class itself. A cell
+  // that renders its own interactive control inside a clickable row (a checkbox, a
+  // `next/link`) must call `event.stopPropagation()` in its own handler, or the
+  // click bubbles up and fires both actions -- see `projects-table.tsx`'s
+  // selection checkbox and "Nom" link for the pattern.
+  //
+  // The `<TableRow>` itself gets no `tabIndex`/`role`/`onKeyDown` -- there is no
+  // native keyboard equivalent for "click this row" here. A caller that sets
+  // `onRowClick` must therefore make sure at least one genuinely focusable
+  // element inside the row (typically a `next/link`, as in `projects-table.tsx`'s
+  // "Nom" column) leads to the exact same destination, so the row's action stays
+  // reachable via Tab + Enter even without the whole-row click.
+  onRowClick?: (row: TData) => void;
 
   isEditing?: boolean;
   editingReason?: string;
@@ -213,6 +232,7 @@ export function DataTable<TData>({
   search,
   pinnedRow,
   getRowClassName,
+  onRowClick,
   isEditing = false,
   editingReason,
   isLoading = false,
@@ -349,7 +369,11 @@ export function DataTable<TData>({
             </TableRow>
           ) : (
             rows.map((row) => (
-              <TableRow key={row.id} className={getRowClassName?.(row.original)}>
+              <TableRow
+                key={row.id}
+                className={cn(getRowClassName?.(row.original), onRowClick ? "cursor-pointer" : undefined)}
+                onClick={onRowClick ? () => onRowClick(row.original) : undefined}
+              >
                 {row.getVisibleCells().map((cell) => {
                   const sticky = cell.column.columnDef.meta?.sticky;
                   return (
