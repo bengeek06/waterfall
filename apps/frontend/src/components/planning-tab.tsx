@@ -14,6 +14,7 @@ import type {
   Project,
   TaskLinkWrite,
 } from "@/lib/backend";
+import { DEFAULT_PROJECT_CALENDAR, type ProjectCalendar } from "@/lib/planning-calendar";
 import type { PlanningStructureDraftRow } from "@/lib/planning-structure";
 import type { PlanningMoveCommand } from "@/lib/planning-tree";
 import type { ChangeEvent } from "react";
@@ -27,6 +28,7 @@ export type PlanningTabProps = {
   importFile: File | null;
   importBusy: boolean;
   onFileChange: (event: ChangeEvent<HTMLInputElement>) => void;
+  onFilesDrop: (files: FileList) => void;
   onPreviewImport: () => void;
   planningExportBusy: boolean;
   onExportXml: () => void;
@@ -109,6 +111,21 @@ function canReopenPlanningStructure(project: Project | null, isReadOnlyProject: 
   return !isReadOnlyProject && project?.status !== "cree";
 }
 
+// Falls back to DEFAULT_PROJECT_CALENDAR while the project hasn't loaded yet (e.g. first render):
+// PlanningTreePanel/PlanningTreeTable/predecessorsLabel all require a concrete calendar to format
+// durations/lags, and there is no meaningful project-specific value to derive one from before
+// `project` itself is available.
+function projectCalendar(project: Project | null): ProjectCalendar {
+  if (!project) {
+    return DEFAULT_PROJECT_CALENDAR;
+  }
+  return {
+    minutes_per_day: project.minutes_per_day,
+    minutes_per_week: project.minutes_per_week,
+    days_per_month: project.days_per_month,
+  };
+}
+
 // Extracted from ProjectDetailsPage (E4-11 / #151): composes the whole "Planning" tab (import,
 // structure editor, version controls, conflict banner, tree panel). Gates its own visibility via
 // the `active` prop instead of a ternary at the call site, so page.tsx's own JSX stays a flat,
@@ -120,6 +137,7 @@ export function PlanningTab({
   importFile,
   importBusy,
   onFileChange,
+  onFilesDrop,
   onPreviewImport,
   planningExportBusy,
   onExportXml,
@@ -176,6 +194,7 @@ export function PlanningTab({
         importFile={importFile}
         importBusy={importBusy}
         onFileChange={onFileChange}
+        onFilesDrop={onFilesDrop}
         onPreview={onPreviewImport}
         planningExportBusy={planningExportBusy}
         onExportXml={onExportXml}
@@ -247,6 +266,7 @@ export function PlanningTab({
             isReadOnlyProject={isReadOnlyProject}
             selectedPlanningHasConflict={selectedPlanningHasConflict}
             planningMutationBusy={planningMutationBusy}
+            calendar={projectCalendar(project)}
             onMove={onMove}
             onScheduleUpdate={onScheduleUpdate}
             onEditLinks={onEditLinks}
