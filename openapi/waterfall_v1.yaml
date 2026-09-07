@@ -3056,6 +3056,9 @@ components:
         - source_version
         - save_version_out
         - schedule_from_start
+        - minutes_per_day
+        - minutes_per_week
+        - days_per_month
       properties:
         id:
           type: integer
@@ -3104,6 +3107,12 @@ components:
             - string
             - 'null'
           format: date-time
+        minutes_per_day:
+          type: integer
+        minutes_per_week:
+          type: integer
+        days_per_month:
+          type: integer
         currency_code:
           type:
             - string

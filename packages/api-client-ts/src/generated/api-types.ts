@@ -1407,6 +1407,9 @@ export interface components {
             start_date?: string | null;
             /** Format: date-time */
             finish_date?: string | null;
+            minutes_per_day: number;
+            minutes_per_week: number;
+            days_per_month: number;
             currency_code?: string | null;
             planning_reference_id?: number | null;
             displayed_planning_id?: number | null;
