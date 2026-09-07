@@ -3,6 +3,7 @@
 import { PlanningTreeTable } from "@/components/planning-tree-table";
 import { ReadOnlyGantt } from "@/components/read-only-gantt";
 import type { Planning, PlanningDetail, PlanningTaskScheduleUpdate, TaskLinkWrite } from "@/lib/backend";
+import type { ProjectCalendar } from "@/lib/planning-calendar";
 import type { PlanningMoveCommand } from "@/lib/planning-tree";
 
 export type PlanningTreePanelProps = {
@@ -12,6 +13,8 @@ export type PlanningTreePanelProps = {
   isReadOnlyProject: boolean;
   selectedPlanningHasConflict: boolean;
   planningMutationBusy: boolean;
+  /** The owning project's working calendar -- see PlanningTreeTableProps.calendar. */
+  calendar: ProjectCalendar;
   onMove: (command: PlanningMoveCommand) => void;
   onScheduleUpdate: (
     taskUid: number,
@@ -52,6 +55,7 @@ export function PlanningTreePanel({
   isReadOnlyProject,
   selectedPlanningHasConflict,
   planningMutationBusy,
+  calendar,
   onMove,
   onScheduleUpdate,
   onEditLinks,
@@ -67,6 +71,7 @@ export function PlanningTreePanel({
         <PlanningTreeTable
           tasks={planningDetail.tasks}
           versionKey={selectedPlanning?.id ?? null}
+          calendar={calendar}
           readOnly={isPlanningTreeReadOnly(isReadOnlyProject, selectedPlanningHasConflict, selectedPlanning)}
           onMove={onMove}
           onScheduleUpdate={onScheduleUpdate}

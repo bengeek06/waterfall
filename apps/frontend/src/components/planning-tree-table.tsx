@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type Ref } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -11,12 +11,21 @@ import { PlanningCreateTaskDialog } from "@/components/planning-create-task-dial
 import { PlanningScheduleCells } from "@/components/planning-schedule-cells";
 import { PlanningTaskLinksDialog } from "@/components/planning-task-links-dialog";
 import { PlanningTreeToolbar } from "@/components/planning-tree-toolbar";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  PLANNING_COLUMN_ORDER,
+  PLANNING_MAX_COLUMN_WIDTH,
+  PLANNING_MIN_COLUMN_WIDTHS,
+  usePlanningColumnWidths,
+  type PlanningColumnKey,
+} from "@/hooks/use-planning-column-widths";
 import { usePlanningCreateTaskDialog } from "@/hooks/use-planning-create-task-dialog";
 import { usePlanningDeleteSelection } from "@/hooks/use-planning-delete-selection";
 import { usePlanningScheduleDrafts } from "@/hooks/use-planning-schedule-drafts";
 import { usePlanningTaskLinks } from "@/hooks/use-planning-task-links";
 import { usePlanningTreeSelection } from "@/hooks/use-planning-tree-selection";
 import type { PlanningTaskScheduleUpdate, Task, TaskLinkWrite } from "@/lib/backend";
+import { DEFAULT_PROJECT_CALENDAR, type ProjectCalendar } from "@/lib/planning-calendar";
 import { predecessorsLabel } from "@/lib/planning-links";
 import {
   computeIndentCommand,
@@ -24,6 +33,142 @@ import {
   computeReorderCommand,
   type PlanningMoveCommand,
 } from "@/lib/planning-tree";
+import { cn } from "@/lib/utils";
+
+const COLUMN_HEADERS: ReadonlyArray<{ key: PlanningColumnKey; label: string }> = [
+  { key: "uid", label: "UID" },
+  { key: "name", label: "Nom" },
+  { key: "type", label: "Type" },
+  { key: "start", label: "Début" },
+  { key: "end", label: "Fin" },
+  { key: "duration", label: "Durée" },
+  { key: "mode", label: "Mode" },
+  { key: "predecessors", label: "Prédécesseurs" },
+];
+
+// Fixed step for keyboard-driven resizing (ArrowLeft/ArrowRight), mirroring the granularity of a
+// small mouse drag.
+const COLUMN_RESIZE_KEYBOARD_STEP = 10;
+
+function ColumnResizeHandle({
+  column,
+  label,
+  width,
+  min,
+  onResizeStart,
+  onResizeBy,
+}: {
+  column: PlanningColumnKey;
+  label: string;
+  width: number;
+  min: number;
+  onResizeStart: (column: PlanningColumnKey, event: MouseEvent<HTMLSpanElement>) => void;
+  onResizeBy: (column: PlanningColumnKey, delta: number) => void;
+}) {
+  return (
+    <span
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={`Redimensionner la colonne ${label}`}
+      aria-valuenow={width}
+      aria-valuemin={min}
+      aria-valuemax={PLANNING_MAX_COLUMN_WIDTH}
+      tabIndex={0}
+      data-testid={`resize-handle-${column}`}
+      // `group` + a wider (w-3 = 12px) hit area than what's visually painted (the inner bar below
+      // stays w-1 = 4px, flush against the column boundary via justify-end): a plain 4px strip is
+      // only discoverable by accidentally hovering exactly on the column boundary, and is a fiddly
+      // mouse/touch target. The outer box stays entirely inside the TableHead's own bounds (right-0,
+      // extending leftward into the current column, never past its right edge), so none of it is
+      // clipped by the parent's `overflow-hidden` (needed so the handle never visually spills into
+      // the next header).
+      className="group absolute right-0 top-0 z-10 flex h-full w-3 cursor-col-resize items-center justify-end select-none outline-none"
+      onMouseDown={(event) => onResizeStart(column, event)}
+      onKeyDown={(event) => {
+        if (event.key === "ArrowLeft") {
+          event.preventDefault();
+          onResizeBy(column, -COLUMN_RESIZE_KEYBOARD_STEP);
+        } else if (event.key === "ArrowRight") {
+          event.preventDefault();
+          onResizeBy(column, COLUMN_RESIZE_KEYBOARD_STEP);
+        }
+      }}
+    >
+      {/*
+        Visible handle bar, separate from the interactive span above: `hover:bg-border` gives
+        sighted mouse users a discoverable affordance instead of an invisible strip.
+        `group-focus-visible:bg-primary` is a background-color change rather than an
+        `outline`/`ring` utility on the handle itself, because that would be clipped by the parent
+        TableHead's `overflow-hidden` if it extended outside the handle's own box -- a background
+        change painted inside the bar's own bounds stays visible under that clipping, so keyboard
+        focus is never silently invisible.
+      */}
+      <span
+        aria-hidden="true"
+        className="h-full w-1 rounded-full bg-transparent transition-colors group-hover:bg-border group-focus-visible:bg-primary"
+      />
+    </span>
+  );
+}
+
+// Renders a task's name, interactive only when it is actually visually truncated: an ordinary,
+// non-truncated name stays a plain <span>, with no tab stop or button semantics, so keyboard/
+// screen-reader users navigating a large planning (including the supported 1000-row case) never
+// have to traverse a per-row control that does nothing beyond announcing the name they'd already
+// hear. Only once the text is truncated does it become a focusable Tooltip trigger, which is the
+// only way to reach the full name without a mouse hover in that case.
+function TaskNameLabel({ name, width, isMilestone }: { name: string; width: number; isMilestone: boolean }) {
+  // Typed as the common base rather than HTMLSpanElement | HTMLButtonElement because the same ref
+  // is attached to either a plain <span> (untruncated case) or the Tooltip's <button> trigger
+  // (truncated case, see below) -- only scrollWidth/clientWidth are read from it, both of which
+  // are HTMLElement members, so this stays a pure typing fix with no runtime effect.
+  const textRef = useRef<HTMLElement>(null);
+  const [isTruncated, setIsTruncated] = useState(false);
+
+  // Re-checked whenever the name text or the Name column's own width changes -- either can flip
+  // whether the text actually overflows its box. `width` (usePlanningColumnWidths' committed value
+  // for the "name" column) also updates while a resize drag is in progress, not just once it ends:
+  // the hook commits at most one width per animation frame during a drag (see its own rAF-
+  // coalescing comment), so this re-measures at that same, already-throttled cadence rather than on
+  // every raw mousemove.
+  useEffect(() => {
+    const element = textRef.current;
+    if (!element) {
+      return;
+    }
+    setIsTruncated(element.scrollWidth > element.clientWidth);
+  }, [name, width]);
+
+  const label = (
+    <>
+      {isMilestone ? "◆ " : ""}
+      {name}
+    </>
+  );
+
+  if (!isTruncated) {
+    return (
+      <span ref={textRef as Ref<HTMLSpanElement>} className="min-w-0 truncate text-left">
+        {label}
+      </span>
+    );
+  }
+
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        ref={textRef as Ref<HTMLButtonElement>}
+        type="button"
+        className="min-w-0 truncate text-left"
+        onClick={(event: MouseEvent<HTMLButtonElement>) => event.stopPropagation()}
+        onKeyDown={(event: KeyboardEvent<HTMLButtonElement>) => event.stopPropagation()}
+      >
+        {label}
+      </TooltipTrigger>
+      <TooltipContent>{name}</TooltipContent>
+    </Tooltip>
+  );
+}
 
 function taskTypeLabel(task: Task): string {
   if (task.is_milestone) {
@@ -46,6 +191,14 @@ type PlanningTreeTableProps = Readonly<{
   tasks: Task[];
   /** Any value identifying the loaded planning version; changing it resets local expand/selection state. */
   versionKey: number | string | null;
+  /**
+   * The owning project's working calendar, used to format/parse the Duration cell and the
+   * Prédécesseurs column's lag in MS-Project-like units (day/week/month) instead of raw minutes.
+   * Optional (defaulting to DEFAULT_PROJECT_CALENDAR) so call sites that don't care about this
+   * formatting -- most of this component's own tests -- don't need to thread it through, mirroring
+   * readOnly/mutationBusy's own optional-with-default pattern below.
+   */
+  calendar?: ProjectCalendar;
   readOnly?: boolean;
   onMove?: (command: PlanningMoveCommand) => void;
   onScheduleUpdate?: (
@@ -86,6 +239,7 @@ type PlanningTreeTableProps = Readonly<{
 export function PlanningTreeTable({
   tasks,
   versionKey,
+  calendar = DEFAULT_PROJECT_CALENDAR,
   readOnly = false,
   onMove,
   onScheduleUpdate,
@@ -100,8 +254,19 @@ export function PlanningTreeTable({
   // predecessor referenced by a collapsed/off-screen task must still resolve correctly.
   const tasksByUid = useMemo(() => new Map(tasks.map((task) => [task.uid, task])), [tasks]);
 
+  const columnWidths = usePlanningColumnWidths();
+  // Table renders `w-full`, which under table-fixed layout redistributes any surplus between the
+  // container and this sum across the columns -- making rendered widths drift from the persisted
+  // ones and coupling a resize on one column to its neighbors. Pinning the table's own width to
+  // exactly this sum (see the inline style below) keeps each handle in sole control of its column;
+  // the existing overflow-x-auto wrapper still takes over and scrolls once this exceeds the
+  // viewport.
+  const totalColumnWidth = useMemo(
+    () => PLANNING_COLUMN_ORDER.reduce((total, key) => total + columnWidths.widths[key], 0),
+    [columnWidths.widths],
+  );
   const selection = usePlanningTreeSelection(tasks);
-  const scheduleDrafts = usePlanningScheduleDrafts({ onScheduleUpdate, mutationBusy });
+  const scheduleDrafts = usePlanningScheduleDrafts({ onScheduleUpdate, mutationBusy, calendar });
   const taskLinks = usePlanningTaskLinks({ tasks, onEditLinks });
   const singleSelectedTask = getSingleSelectedTask(selection.selectedUids, tasksByUid);
   const createTaskDialog = usePlanningCreateTaskDialog({ onCreateTask, singleSelectedTask });
@@ -169,17 +334,33 @@ export function PlanningTreeTable({
         {selection.rows.length === 0 ? (
           <p className="py-6 text-sm text-muted-foreground">Le planning ne contient aucune tâche.</p>
         ) : (
-          <Table>
+          <Table className="table-fixed w-auto" style={{ width: totalColumnWidth }}>
+            <colgroup>
+              {COLUMN_HEADERS.map(({ key }) => (
+                <col key={key} style={{ width: `${columnWidths.widths[key]}px` }} />
+              ))}
+            </colgroup>
             <TableHeader>
               <TableRow>
-                <TableHead>UID</TableHead>
-                <TableHead>Nom</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Début</TableHead>
-                <TableHead>Fin</TableHead>
-                <TableHead>Durée</TableHead>
-                <TableHead>Mode</TableHead>
-                <TableHead>Prédécesseurs</TableHead>
+                {COLUMN_HEADERS.map(({ key, label }) => (
+                  <TableHead
+                    key={key}
+                    className={cn(
+                      "relative overflow-hidden",
+                      key === "predecessors" && "whitespace-normal break-words align-top",
+                    )}
+                  >
+                    {label}
+                    <ColumnResizeHandle
+                      column={key}
+                      label={label}
+                      width={columnWidths.widths[key]}
+                      min={PLANNING_MIN_COLUMN_WIDTHS[key]}
+                      onResizeStart={columnWidths.startResize}
+                      onResizeBy={columnWidths.resizeBy}
+                    />
+                  </TableHead>
+                ))}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -208,13 +389,24 @@ export function PlanningTreeTable({
                     onKeyDown={(event) => selection.onRowKeyDown(event, row)}
                   >
                     <TableCell>{row.id_display ?? row.uid}</TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-1" style={{ paddingLeft: `${row.depth * 1.25}rem` }}>
+                    <TableCell className="overflow-hidden">
+                      <div
+                        className="flex min-w-0 items-center gap-1"
+                        // Deliberately uncapped: the tree builder allows arbitrary nesting depth (a
+                        // real MS Project import can exceed a handful of levels), and the visual
+                        // indentation must keep reflecting the actual hierarchy rather than flattening
+                        // past some arbitrary depth. PLANNING_MIN_COLUMN_WIDTHS.name (in
+                        // use-planning-column-widths.ts) only comfortably budgets indentation headroom
+                        // up to a typical depth of 4 -- a tree nested deeper than that may need the
+                        // Name column widened via its resize handle to keep the chevron/text fully
+                        // visible, which is expected, not a bug.
+                        style={{ paddingLeft: `${row.depth * 1.25}rem` }}
+                      >
                         {row.hasChildren ? (
                           <button
                             type="button"
                             aria-label={collapsed ? `Déplier ${row.name}` : `Replier ${row.name}`}
-                            className="flex size-6 items-center justify-center"
+                            className="flex size-6 shrink-0 items-center justify-center"
                             onClick={(event) => {
                               event.stopPropagation();
                               selection.toggleCollapsed(row.uid);
@@ -223,10 +415,13 @@ export function PlanningTreeTable({
                             {collapsed ? <ChevronRight aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}
                           </button>
                         ) : (
-                          <span className="size-6" />
+                          <span className="size-6 shrink-0" />
                         )}
-                        {row.is_milestone ? "◆ " : ""}
-                        {row.name}
+                        <TaskNameLabel
+                          name={row.name}
+                          width={columnWidths.widths.name}
+                          isMilestone={row.is_milestone}
+                        />
                       </div>
                     </TableCell>
                     <TableCell>{taskTypeLabel(row)}</TableCell>
@@ -236,20 +431,23 @@ export function PlanningTreeTable({
                       readOnly={readOnly}
                       hasScheduleUpdate={Boolean(onScheduleUpdate)}
                       mutationBusy={mutationBusy}
+                      calendar={calendar}
+                      durationError={scheduleDrafts.durationErrorFor(row)}
                       tasksByUid={tasksByUid}
                       onUpdateDraft={(field, value) => scheduleDrafts.updateScheduleDraft(row, field, value)}
                       onCommit={() => void scheduleDrafts.commitScheduleEdit(row)}
                       onCommitModeChange={(isManual) => void scheduleDrafts.commitModeChange(row, isManual)}
                       onFieldKeyDown={scheduleDrafts.onScheduleFieldKeyDown}
                     />
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        <span>{predecessorsLabel(row)}</span>
+                    <TableCell className="whitespace-normal break-words align-top">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="min-w-0">{predecessorsLabel(row, calendar)}</span>
                         {!readOnly && onEditLinks ? (
                           <Button
                             type="button"
                             variant="outline"
                             size="sm"
+                            className="shrink-0"
                             disabled={mutationBusy}
                             aria-label={`Éditer les prédécesseurs de ${row.name}`}
                             onClick={(event: MouseEvent<HTMLButtonElement>) => {
