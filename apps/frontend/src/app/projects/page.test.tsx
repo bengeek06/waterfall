@@ -100,7 +100,7 @@ describe("ProjectsPage", () => {
     await waitFor(() => expect(screen.getByText("Lecture seule")).toBeInTheDocument());
     expect(screen.getByText("En cours")).toBeInTheDocument();
     expect(screen.getByText("Perdu")).toBeInTheDocument();
-    expect(screen.getByLabelText("Statut : Perdu")).toHaveAttribute("title", "Perdu");
+    expect(screen.getByText("Perdu").querySelector("svg")).toHaveAttribute("aria-hidden", "true");
     expect(screen.getByRole("checkbox", { name: "Sélectionner Projet perdu" })).toHaveAttribute("aria-disabled", "true");
     expect(screen.getByRole("button", { name: "Supprimer la sélection" })).toBeDisabled();
   });

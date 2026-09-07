@@ -121,7 +121,7 @@ export function ProjectsTable({
           return (
             <div className="flex items-center gap-2">
               <Badge variant={status.variant} className="gap-1.5">
-                <status.Icon aria-label={`Statut : ${status.label}`} title={status.label} />
+                <status.Icon aria-hidden="true" />
                 {status.label}
               </Badge>
               {isReadOnly ? <span className="text-xs text-muted-foreground">Lecture seule</span> : null}

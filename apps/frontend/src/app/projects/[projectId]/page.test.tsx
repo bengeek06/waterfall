@@ -66,7 +66,7 @@ vi.mock("@/lib/backend", async () => {
     createPlanningStructure: mocks.createPlanningStructure,
     reopenPlanningStructure: mocks.reopenPlanningStructure,
     skipPlanningStructure: mocks.skipPlanningStructure,
-    getCostCategories: vi.fn().mockResolvedValue([]),
+    getCostCategories: vi.fn().mockResolvedValue({ items: [], total: 0 }),
     getCostTypes: vi.fn().mockResolvedValue({ items: [], total: 0 }),
   };
 });
