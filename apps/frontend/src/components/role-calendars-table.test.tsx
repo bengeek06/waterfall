@@ -309,4 +309,50 @@ describe("RoleCalendarsTable", () => {
     fireEvent.click(screen.getByRole("button", { name: "Toggle page" }));
     expect(screen.getByLabelText(selectLabel)).toHaveValue("3");
   });
+
+  it("reflects a renamed node's code in the role label without any calendar-related change", () => {
+    // Regression test for a real bug: `labelFor` is only captured into the
+    // memoized `columns` cell closures when `columns` is rebuilt, which only
+    // happens when `[activeCalendars, defaultOptionLabel]` (i.e. `calendars`)
+    // change -- never on a `nodeCodeById`-only change. Renaming a node's code on
+    // the "Nœud" tab, with no calendar CRUD happening in between, would
+    // otherwise leave this table showing the role's *old* node code
+    // indefinitely.
+    const roles = [{ id: 1, name: "Développeur", node_id: 1, calendar_id: null } as never];
+    const calendars = [{ id: 2, code: "PARTTIME", name: "Temps partiel", is_active: true } as never];
+    function Wrapper() {
+      const [codeById, setCodeById] = useState(new Map([[1, "IT"]]));
+      return (
+        <>
+          <button type="button" onClick={() => setCodeById(new Map([[1, "ITSM"]]))}>
+            Rename node
+          </button>
+          <RoleCalendarsTable
+            roles={roles}
+            calendars={calendars}
+            pagination={{ total: 1, limit: 20, offset: 0 }}
+            onPaginationChange={vi.fn()}
+            sort={null}
+            onSortChange={vi.fn()}
+            search=""
+            onSearchChange={vi.fn()}
+            isLoading={false}
+            drafts={{}}
+            actionBusy={false}
+            nodeCodeById={codeById}
+            onDraftChange={vi.fn()}
+            onSave={vi.fn()}
+          />
+        </>
+      );
+    }
+
+    render(<Wrapper />);
+    expect(screen.getByText("Développeur — IT (#1)")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Rename node" }));
+
+    expect(screen.getByText("Développeur — ITSM (#1)")).toBeInTheDocument();
+    expect(screen.queryByText("Développeur — IT (#1)")).not.toBeInTheDocument();
+  });
 });

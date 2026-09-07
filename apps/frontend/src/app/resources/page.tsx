@@ -1250,7 +1250,13 @@ export default function ResourcesPage() {
   }
 
   const categoryNameById = new Map(categories.map((category) => [category.id, category.name]));
-  const nodeCodeById = new Map(nodes.map((node) => [node.id, node.code]));
+  // Memoized (not a plain `new Map()` on every render): `RoleCalendarsTable`
+  // depends on it in its own memoized `columns` (to keep its role labels correct
+  // after a node rename without rebuilding `columns` on every unrelated render),
+  // and a fresh Map identity every render -- even with the same *contents* --
+  // would defeat that memoization just as surely as depending on a per-keystroke
+  // prop directly.
+  const nodeCodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node.code])), [nodes]);
   const calendarIdsInUseByActiveRoles = new Set(
     roles.filter((role) => role.is_active && role.calendar_id != null).map((role) => role.calendar_id as number),
   );

@@ -192,14 +192,21 @@ export function RoleCalendarsTable(props: RoleCalendarsTableProps) {
         ),
       },
     ],
-    // Intentionally depends only on the calendar reference list (see the
-    // comment above `columns`); `labelFor`/`assignedInactiveCalendarFor` are
-    // recreated every render but are only used inside the memoized cell
-    // closures for display text/lookups that don't need to be render-fresh.
-    // The calendar select's initial value is read from `propsRef.current.drafts`
-    // directly (see that cell's own comment), not from a closed-over helper.
+    // Depends on `props.nodeCodeById` too (not just the calendar reference
+    // list): unlike `props.drafts`, it changes only when the organization
+    // tree's nodes change (e.g. a node rename on the "Nœud" tab) -- a rare
+    // event, not a per-keystroke one -- so including it here doesn't reproduce
+    // the focus-loss bug `columns`'s memoization exists to prevent, and it must
+    // be included: `labelFor`'s displayed node code would otherwise go stale
+    // after a rename, since nothing else in this array would change to force
+    // `columns` (and the `labelFor` closure it captured) to rebuild.
+    // `assignedInactiveCalendarFor` is recreated every render but only used
+    // inside the memoized cell closures for a lookup that doesn't need to be
+    // render-fresh. The calendar select's initial value is read from
+    // `propsRef.current.drafts` directly (see that cell's own comment), not
+    // from a closed-over helper.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activeCalendars, defaultOptionLabel],
+    [activeCalendars, defaultOptionLabel, props.nodeCodeById],
   );
 
   return (
