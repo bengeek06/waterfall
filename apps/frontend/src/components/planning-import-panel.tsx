@@ -1,6 +1,6 @@
 "use client";
 
-import type { ChangeEvent } from "react";
+import { useState, type ChangeEvent, type DragEvent } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -8,12 +8,14 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { ImportDiff } from "@/lib/backend";
+import { cn } from "@/lib/utils";
 
 export type PlanningImportPanelProps = {
   projectStatusInitialise: boolean;
   importFile: File | null;
   importBusy: boolean;
   onFileChange: (event: ChangeEvent<HTMLInputElement>) => void;
+  onFilesDrop: (files: FileList) => void;
   onPreview: () => void;
   planningExportBusy: boolean;
   onExportXml: () => void;
@@ -30,20 +32,64 @@ export function PlanningImportPanel({
   importFile,
   importBusy,
   onFileChange,
+  onFilesDrop,
   onPreview,
   planningExportBusy,
   onExportXml,
   importReview,
   onConfirmImport,
 }: PlanningImportPanelProps) {
+  // dragenter/dragleave bubble up from the label/input/button children of the drop zone, so a
+  // naive boolean toggled directly by those events would flicker off every time the pointer
+  // crosses a child element. A depth counter absorbs that bubbling: it only reaches zero once the
+  // pointer has actually left every nested element, at which point the visual affordance clears.
+  const [dragDepth, setDragDepth] = useState(0);
+  const isDraggingOver = dragDepth > 0;
+
+  function onDropZoneDragEnter(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setDragDepth((depth) => depth + 1);
+  }
+
+  function onDropZoneDragOver(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+  }
+
+  function onDropZoneDragLeave(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setDragDepth((depth) => Math.max(0, depth - 1));
+  }
+
+  function onDropZoneDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setDragDepth(0);
+    if (event.dataTransfer.files.length > 0) {
+      onFilesDrop(event.dataTransfer.files);
+    }
+  }
+
   return (
     <>
       {projectStatusInitialise ? (
         <Card className="mb-4">
           <CardContent className="flex flex-wrap items-end justify-between gap-4 pt-6">
-            <div className="flex flex-wrap items-end gap-3">
+            <div
+              role="group"
+              aria-label="Zone de dépôt du fichier de planning à importer"
+              onDragEnter={onDropZoneDragEnter}
+              onDragOver={onDropZoneDragOver}
+              onDragLeave={onDropZoneDragLeave}
+              onDrop={onDropZoneDrop}
+              className={cn(
+                "flex flex-wrap items-end gap-3 rounded-lg border-2 border-dashed border-transparent p-2 transition-colors",
+                isDraggingOver && "border-primary bg-muted/50",
+              )}
+            >
               <div className="grid gap-2">
                 <Label htmlFor="planning-import-file">Importer un planning MS Project (.xml)</Label>
+                <p className="text-sm text-muted-foreground">
+                  Glissez-déposez un fichier XML ici, ou choisissez-le ci-dessous.
+                </p>
                 <Input
                   id="planning-import-file"
                   type="file"

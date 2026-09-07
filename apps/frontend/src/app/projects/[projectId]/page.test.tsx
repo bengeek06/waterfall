@@ -738,6 +738,93 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     expect(screen.queryByRole("heading", { name: "Remplacement à confirmer" })).not.toBeInTheDocument();
   });
 
+  it("imports a dropped file the same way as a manually selected file", async () => {
+    const current = planning({ id: 2, version_number: 2, status: "validated" });
+    mocks.getProject
+      .mockResolvedValueOnce(project({ status: "initialise", displayed_planning_id: current.id }))
+      .mockResolvedValueOnce(project({ status: "initialise", displayed_planning_id: current.id }));
+    mocks.listPlannings
+      .mockResolvedValueOnce([current])
+      .mockResolvedValueOnce([current]);
+    mocks.getPlanning.mockResolvedValue(detail(current));
+
+    render(<ProjectDetailsPage />);
+    const file = new File(["<Project />"], "planning.xml", { type: "application/xml" });
+    const dropZone = await screen.findByRole("group", {
+      name: "Zone de dépôt du fichier de planning à importer",
+    });
+    fireEvent.drop(dropZone, { dataTransfer: { files: [file] } });
+
+    const previewButton = screen.getByRole("button", { name: "Prévisualiser l'import" });
+    expect(previewButton).not.toBeDisabled();
+    fireEvent.click(previewButton);
+
+    await waitFor(() => expect(mocks.getImportBatchDiff).toHaveBeenCalledWith(
+      42,
+      expect.anything(),
+      expect.anything(),
+    ));
+    expect(screen.getByRole("heading", { name: "Remplacement à confirmer" })).toBeInTheDocument();
+  });
+
+  it("refuses a dropped file larger than 25 MiB with the same message as the manual picker", async () => {
+    const current = planning({ id: 2, version_number: 2, status: "validated" });
+    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: current.id }));
+    mocks.listPlannings.mockResolvedValue([current]);
+    mocks.getPlanning.mockResolvedValue(detail(current));
+
+    render(<ProjectDetailsPage />);
+    const oversizedFile = new File(["<Project />"], "planning.xml", { type: "application/xml" });
+    Object.defineProperty(oversizedFile, "size", { value: 25 * 1024 * 1024 + 1 });
+    const dropZone = await screen.findByRole("group", {
+      name: "Zone de dépôt du fichier de planning à importer",
+    });
+    fireEvent.drop(dropZone, { dataTransfer: { files: [oversizedFile] } });
+
+    expect(await screen.findByText("Le fichier XML ne doit pas dépasser 25 MiB.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Prévisualiser l'import" })).toBeDisabled();
+    expect(mocks.createImportBatch).not.toHaveBeenCalled();
+  });
+
+  it("refuses a dropped file of a different type with an explicit message", async () => {
+    const current = planning({ id: 2, version_number: 2, status: "validated" });
+    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: current.id }));
+    mocks.listPlannings.mockResolvedValue([current]);
+    mocks.getPlanning.mockResolvedValue(detail(current));
+
+    render(<ProjectDetailsPage />);
+    const wrongTypeFile = new File(["not xml"], "planning.docx", {
+      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    });
+    const dropZone = await screen.findByRole("group", {
+      name: "Zone de dépôt du fichier de planning à importer",
+    });
+    fireEvent.drop(dropZone, { dataTransfer: { files: [wrongTypeFile] } });
+
+    expect(await screen.findByText("Seuls les fichiers .xml sont acceptés.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Prévisualiser l'import" })).toBeDisabled();
+    expect(mocks.createImportBatch).not.toHaveBeenCalled();
+  });
+
+  it("refuses dropping multiple files without a silent failure", async () => {
+    const current = planning({ id: 2, version_number: 2, status: "validated" });
+    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: current.id }));
+    mocks.listPlannings.mockResolvedValue([current]);
+    mocks.getPlanning.mockResolvedValue(detail(current));
+
+    render(<ProjectDetailsPage />);
+    const fileOne = new File(["<Project />"], "planning-1.xml", { type: "application/xml" });
+    const fileTwo = new File(["<Project />"], "planning-2.xml", { type: "application/xml" });
+    const dropZone = await screen.findByRole("group", {
+      name: "Zone de dépôt du fichier de planning à importer",
+    });
+    fireEvent.drop(dropZone, { dataTransfer: { files: [fileOne, fileTwo] } });
+
+    expect(await screen.findByText("Dépose un seul fichier à la fois.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Prévisualiser l'import" })).toBeDisabled();
+    expect(mocks.createImportBatch).not.toHaveBeenCalled();
+  });
+
   it("keeps the import success visible when a post-import refresh fails", async () => {
     const current = planning({ id: 2, version_number: 2, status: "validated" });
     mocks.getProject

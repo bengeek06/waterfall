@@ -42,6 +42,7 @@ import {
 } from "@/lib/backend";
 import { clearSession, getSession, setSession, type SessionTokens } from "@/lib/session";
 import { canRedo, canUndo, getPlanningHistory, type PlanningHistoryByPlanningId } from "@/lib/planning-history";
+import { validateImportFile } from "@/lib/planning-import-validation";
 import { usePlanningDetailEffect, type PlanningRevisionConflict } from "@/hooks/use-planning-detail";
 import { usePlanningHistoryCommand } from "@/hooks/use-planning-history-command";
 import { usePlanningImport } from "@/hooks/use-planning-import";
@@ -49,8 +50,6 @@ import { usePlanningStructureEditor } from "@/hooks/use-planning-structure-edito
 import { usePlanningTreeMutations } from "@/hooks/use-planning-tree-mutations";
 import { useEstimateCostLines } from "@/hooks/use-estimate-cost-lines";
 import { useProjectInfoEditor } from "@/hooks/use-project-info-editor";
-
-const MAX_IMPORT_FILE_SIZE = 25 * 1024 * 1024;
 
 function describeInitialProjectLoadError(cause: unknown): string {
   if (cause instanceof ApiError) {
@@ -496,10 +495,33 @@ export default function ProjectDetailsPage() {
 
   function onImportFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0] ?? null;
-    if (file && file.size > MAX_IMPORT_FILE_SIZE) {
+    if (file) {
+      const validationError = validateImportFile(file);
+      if (validationError) {
+        setImportFile(null);
+        setError(validationError);
+        event.target.value = "";
+        return;
+      }
+    }
+    setError(null);
+    setImportFile(file);
+  }
+
+  function onImportFilesDrop(files: FileList) {
+    if (files.length === 0) {
+      return;
+    }
+    if (files.length > 1) {
       setImportFile(null);
-      setError("Le fichier XML ne doit pas dépasser 25 MiB.");
-      event.target.value = "";
+      setError("Dépose un seul fichier à la fois.");
+      return;
+    }
+    const file = files[0];
+    const validationError = validateImportFile(file);
+    if (validationError) {
+      setImportFile(null);
+      setError(validationError);
       return;
     }
     setError(null);
@@ -565,6 +587,7 @@ export default function ProjectDetailsPage() {
           importFile={importFile}
           importBusy={importBusy}
           onFileChange={onImportFileChange}
+          onFilesDrop={onImportFilesDrop}
           onPreviewImport={() => void preparePlanningImport()}
           planningExportBusy={planningExportBusy}
           onExportXml={() => void exportPlanningXml()}
