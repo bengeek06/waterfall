@@ -57,7 +57,9 @@ export function RolesPanel(props: RolesPanelProps) {
     },
     {
       id: "category",
-      header: "Code comptable",
+      // `categoryNames` (page.tsx) maps a category id to its *name*, not its
+      // accounting code -- this header must match what's actually displayed.
+      header: "Catégorie",
       cell: ({ row }) => <Badge variant="outline">{props.categoryNames.get(row.original.cost_category_id) ?? "?"}</Badge>,
     },
   ];

@@ -1188,6 +1188,91 @@ describe("ResourcesPage roles panel (E8-08)", () => {
     expect(screen.getByText("RôleB (#20)")).toBeInTheDocument();
     expect(screen.queryByText("RôleA (#10)")).not.toBeInTheDocument();
   });
+
+  it("does not apply a stale offset to the reload triggered by creating a role, if the user paginated away while the creation was in flight", async () => {
+    const pageAtOffset0 = { items: [roleFixture2({ id: 1, name: "Page 1 role", node_id: nodeA.id })], total: 25 };
+    const pageAtOffset20 = { items: [roleFixture2({ id: 2, name: "Page 2 role", node_id: nodeA.id })], total: 25 };
+    mocks.getResourceRoles.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, nodeId: unknown, _includeDescendants: unknown, listParams: unknown) => {
+        if (listParams === undefined) return Promise.resolve({ items: [], total: 0 });
+        if (nodeId === undefined) return Promise.resolve({ items: [], total: 0 });
+        const offset = (listParams as { offset?: number }).offset ?? 0;
+        return Promise.resolve(offset === 0 ? pageAtOffset0 : pageAtOffset20);
+      },
+    );
+    let resolveCreate!: (role: ResourceRole) => void;
+    mocks.createResourceRole.mockReturnValue(
+      new Promise<ResourceRole>((resolve) => {
+        resolveCreate = resolve;
+      }),
+    );
+
+    await openRessourcesTab();
+    await waitFor(() => expect(screen.getByText("Page 1 role (#1)")).toBeInTheDocument());
+
+    const nameInput = screen.getByLabelText("Nom");
+    fireEvent.change(nameInput, { target: { value: "Nouveau rôle" } });
+    fireEvent.change(screen.getByLabelText("Nœud"), { target: { value: String(nodeA.id) } });
+    fireEvent.change(screen.getByLabelText("Code comptable"), { target: { value: "200" } });
+    const roleForm = nameInput.closest("form");
+    if (!roleForm) throw new Error("role create form not found");
+    fireEvent.click(within(roleForm).getByRole("button", { name: "Ajouter" }));
+    await waitFor(() => expect(mocks.createResourceRole).toHaveBeenCalledTimes(1));
+
+    // Paginate to offset 20 while the role creation is still in flight.
+    const suivant = await within(rolesPanelCard()).findByRole("button", { name: "Suivant" });
+    fireEvent.click(suivant);
+    await waitFor(() => expect(screen.getByText("Page 2 role (#2)")).toBeInTheDocument());
+
+    // Resolving the creation now must not refetch/display offset 0's stale page:
+    // the reload it triggers must target the *current* offset (20), not the
+    // offset that was current when "Ajouter" was clicked.
+    resolveCreate(roleFixture2({ id: 9, name: "Nouveau rôle", node_id: nodeA.id }));
+    await waitFor(() =>
+      expect(mocks.getResourceRoles).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        nodeA.id,
+        false,
+        expect.objectContaining({ offset: 20 }),
+      ),
+    );
+    expect(screen.getByText("Page 2 role (#2)")).toBeInTheDocument();
+    expect(screen.queryByText("Page 1 role (#1)")).not.toBeInTheDocument();
+  });
+
+  it("treats selecting the placeholder option in the create form's node dropdown as no selection, not as node id 0 (which would fetch every node's roles unscoped)", async () => {
+    mocks.getResourceRoles.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, nodeId: unknown, _includeDescendants: unknown, listParams: unknown) => {
+        if (listParams === undefined) return Promise.resolve({ items: [], total: 0 });
+        return Promise.resolve({ items: [roleFixture2({ node_id: nodeId as number })], total: 1 });
+      },
+    );
+
+    await openRessourcesTab();
+    await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      nodeA.id,
+      false,
+      expect.anything(),
+    ));
+
+    fireEvent.change(screen.getByLabelText("Nœud"), { target: { value: "" } });
+
+    // Must take the "no selection" branch (no paginated fetch at all for the
+    // placeholder), never a call with `nodeId` coerced to `0` -- `Number("")`
+    // is `0`, and `getResourceRoles` only adds a `node_id` filter for truthy
+    // values, so a literal `0` would silently fetch every node's roles unscoped.
+    await waitFor(() => expect(screen.getByText("Sélectionnez un nœud pour voir ses rôles.")).toBeInTheDocument());
+    expect(mocks.getResourceRoles).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      0,
+      expect.anything(),
+      expect.anything(),
+    );
+  });
 });
 
 const resourceRoleFixture = (overrides: Partial<ResourceRole> = {}): ResourceRole =>

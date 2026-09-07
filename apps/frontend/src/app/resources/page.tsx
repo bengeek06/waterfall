@@ -436,6 +436,18 @@ export default function ResourcesPage() {
   // mirrors the previous client-side-filtered behavior, where the list was simply
   // empty until a node was picked.
   const rolesPanelGenerationRef = useRef(0);
+  // Mirrors `rolesPanelOffset`/`rolesPanelSort`/`rolesPanelQuery` synchronously
+  // (updated at every write site below, not via a `useEffect`) so
+  // `reloadRolesPanelPage` -- called from `addRole` after an `await` -- reads
+  // the *live* pagination/sort/search state instead of the value closed over
+  // when `addRole` started. Otherwise: the table remains interactive while
+  // `createResourceRole` is pending, so a user can page/sort/search before it
+  // resolves -- the reload it triggers would then silently commit rows fetched
+  // with the stale parameters under the new controls. Same bug class and fix
+  // as `reloadRolesPage`/`reloadRoleCalendarsPage`.
+  const rolesPanelOffsetRef = useRef(rolesPanelOffset);
+  const rolesPanelSortRef = useRef(rolesPanelSort);
+  const rolesPanelQueryRef = useRef(rolesPanelQuery);
 
   useEffect(() => {
     const generation = ++rolesPanelGenerationRef.current;
@@ -504,9 +516,9 @@ export default function ResourcesPage() {
     try {
       const page = await getResourceRoles(session, onSessionRefresh, nodeId, false, {
         limit: rolesPanelLimit,
-        offset: rolesPanelOffset,
-        sort: rolesPanelSort,
-        q: rolesPanelQuery || undefined,
+        offset: rolesPanelOffsetRef.current,
+        sort: rolesPanelSortRef.current,
+        q: rolesPanelQueryRef.current || undefined,
       });
       if (rolesPanelGenerationRef.current === generation && selectedNodeIdRef.current === nodeId) {
         setRolesPanelPage(page);
@@ -756,6 +768,7 @@ export default function ResourcesPage() {
       if (selectedNodeIdRef.current === node.id) {
         selectedNodeIdRef.current = null;
         setSelectedNodeId(null);
+        rolesPanelOffsetRef.current = 0;
         setRolesPanelOffset(0);
       }
     }, "Nœud supprimé.");
@@ -1119,6 +1132,7 @@ export default function ResourcesPage() {
     selectedNodeIdRef.current = nodeId;
     setSelectedNodeId(nodeId);
     setRoleNodeId(String(nodeId));
+    rolesPanelOffsetRef.current = 0;
     setRolesPanelOffset(0);
   }
 
@@ -1226,7 +1240,7 @@ export default function ResourcesPage() {
             onNodeChange={(field, value) => { if (field === "code") setNodeCode(value); if (field === "name") setNodeName(value); if (field === "parent") setNodeParentId(value); }}
           />
 
-          <RolesPanel selectedNode={selectedNode} items={rolesPanelPage.items} pagination={{ total: rolesPanelPage.total, limit: rolesPanelLimit, offset: rolesPanelOffset }} onPaginationChange={(next) => setRolesPanelOffset(next.offset)} sort={rolesPanelSort} onSortChange={setRolesPanelSort} search={rolesPanelQuery} onSearchChange={(next) => { setRolesPanelQuery(next); setRolesPanelOffset(0); }} isLoading={rolesPanelLoading} nodes={nodes} categories={categories} costTypes={costTypes} roleName={roleName} roleNodeId={roleNodeId} roleCategoryId={roleCategoryId} actionBusy={actionBusy} categoryNames={categoryNameById} onSubmit={addRole} onNameChange={setRoleName} onNodeChange={(value) => { setRoleNodeId(value); selectedNodeIdRef.current = Number(value); setSelectedNodeId(Number(value)); setRolesPanelOffset(0); }} onCategoryChange={setRoleCategoryId} />
+          <RolesPanel selectedNode={selectedNode} items={rolesPanelPage.items} pagination={{ total: rolesPanelPage.total, limit: rolesPanelLimit, offset: rolesPanelOffset }} onPaginationChange={(next) => { rolesPanelOffsetRef.current = next.offset; setRolesPanelOffset(next.offset); }} sort={rolesPanelSort} onSortChange={(next) => { rolesPanelSortRef.current = next; setRolesPanelSort(next); }} search={rolesPanelQuery} onSearchChange={(next) => { rolesPanelQueryRef.current = next; setRolesPanelQuery(next); rolesPanelOffsetRef.current = 0; setRolesPanelOffset(0); }} isLoading={rolesPanelLoading} nodes={nodes} categories={categories} costTypes={costTypes} roleName={roleName} roleNodeId={roleNodeId} roleCategoryId={roleCategoryId} actionBusy={actionBusy} categoryNames={categoryNameById} onSubmit={addRole} onNameChange={setRoleName} onNodeChange={(value) => { setRoleNodeId(value); const nextNodeId = value === "" ? null : Number(value); selectedNodeIdRef.current = nextNodeId; setSelectedNodeId(nextNodeId); rolesPanelOffsetRef.current = 0; setRolesPanelOffset(0); }} onCategoryChange={setRoleCategoryId} />
 
           </div>
           <CapacityTable items={rolesPage.items} pagination={{ total: rolesPage.total, limit: rolesLimit, offset: rolesOffset }} onPaginationChange={(next) => { rolesOffsetRef.current = next.offset; setRolesOffset(next.offset); }} sort={rolesSort} onSortChange={(next) => { rolesSortRef.current = next; setRolesSort(next); }} search={rolesQuery} onSearchChange={(next) => { rolesQueryRef.current = next; setRolesQuery(next); rolesOffsetRef.current = 0; setRolesOffset(0); }} isLoading={rolesPageLoading} drafts={capacityDrafts} actionBusy={actionBusy} nodeCodeById={nodeCodeById} onDraftChange={(roleId, draft) => setCapacityDrafts((previous) => ({ ...previous, [roleId]: draft }))} onSave={(roleId) => void saveRoleCapacity(roleId)} />
