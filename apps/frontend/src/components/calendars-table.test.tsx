@@ -81,6 +81,75 @@ describe("CalendarsTable", () => {
     expect(onSave).toHaveBeenCalledWith(item);
   });
 
+  it("blocks Enregistrer and does not call onSave when an edited hours-per-day field is out of the native HTML5 bounds", () => {
+    // Regression test for #194: before the fix, "Enregistrer" was a raw
+    // `type="button"` that called `onSave` directly, bypassing the native
+    // `min`/`max` constraints declared on this same field.
+    const onSave = vi.fn();
+    renderTable({
+      items: [calendar({})],
+      draft: { code: "STANDARD", name: "Calendrier standard", weeksPerYear: "47", weekdays: defaultWeekdays() },
+      editingId: 1,
+      onSave,
+    });
+
+    fireEvent.change(screen.getByLabelText("Heures du Lun de STANDARD"), { target: { value: "30" } });
+    fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("blocks Enregistrer and does not call onSave when the weeks-per-year field is cleared", () => {
+    // Regression test for a review finding on #194: `min`/`max` alone don't
+    // reject an empty numeric input -- HTML5 only rejects blank via
+    // `required`. Without `required` on this field, clearing it and clicking
+    // "Enregistrer" would still call `onSave`, sending `Number("") === 0` to
+    // the backend.
+    const onSave = vi.fn();
+    renderTable({
+      items: [calendar({})],
+      draft: { code: "STANDARD", name: "Calendrier standard", weeksPerYear: "47", weekdays: defaultWeekdays() },
+      editingId: 1,
+      onSave,
+    });
+
+    fireEvent.change(screen.getByLabelText("Semaines par an de STANDARD"), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("blocks Enregistrer and does not call onSave when an hours-per-day field is cleared", () => {
+    const onSave = vi.fn();
+    renderTable({
+      items: [calendar({})],
+      draft: { code: "STANDARD", name: "Calendrier standard", weeksPerYear: "47", weekdays: defaultWeekdays() },
+      editingId: 1,
+      onSave,
+    });
+
+    fireEvent.change(screen.getByLabelText("Heures du Lun de STANDARD"), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("still calls onSave when an edited hours-per-day field is changed to a value within bounds", () => {
+    const onSave = vi.fn();
+    const item = calendar({});
+    renderTable({
+      items: [item],
+      draft: { code: "STANDARD", name: "Calendrier standard", weeksPerYear: "47", weekdays: defaultWeekdays() },
+      editingId: 1,
+      onSave,
+    });
+
+    fireEvent.change(screen.getByLabelText("Heures du Lun de STANDARD"), { target: { value: "8" } });
+    fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+
+    expect(onSave).toHaveBeenCalledWith(item);
+  });
+
   it("shows an input in place of the weekday cell while that row is being edited", () => {
     const onDraftWeekdayChange = vi.fn();
     renderTable({
