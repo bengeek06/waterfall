@@ -27,6 +27,8 @@ const mocks = vi.hoisted(() => ({
   deleteCalendar: vi.fn(),
   updateResourceRole: vi.fn(),
   createCostType: vi.fn(),
+  createCostRate: vi.fn(),
+  updateCostRate: vi.fn(),
   createResourceRole: vi.fn(),
   deleteResourceNode: vi.fn(),
   createRoleCapacity: vi.fn(),
@@ -63,6 +65,8 @@ vi.mock("@/lib/backend", async () => {
     deleteCalendar: mocks.deleteCalendar,
     updateResourceRole: mocks.updateResourceRole,
     createCostType: mocks.createCostType,
+    createCostRate: mocks.createCostRate,
+    updateCostRate: mocks.updateCostRate,
     createResourceRole: mocks.createResourceRole,
     deleteResourceNode: mocks.deleteResourceNode,
     createRoleCapacity: mocks.createRoleCapacity,
@@ -524,6 +528,149 @@ const costTypeFixture = (overrides: Partial<CostType> = {}): CostType =>
     ...overrides,
   }) as CostType;
 
+describe("ResourcesPage valuation panel (E8-04)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getResourceNodes.mockResolvedValue([]);
+    mocks.getResourceRoles.mockResolvedValue({ items: [], total: 0 });
+    mocks.getCalendars.mockResolvedValue([]);
+    mocks.getCostTypes.mockResolvedValue({ items: [costTypeFixture({})], total: 1 });
+    mocks.getCostRates.mockResolvedValue([]);
+    mocks.getInflationRates.mockResolvedValue([]);
+    mocks.getRoleCapacities.mockResolvedValue([]);
+    mocks.getUsers.mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  function valuationCard() {
+    return screen.getByRole("heading", { name: "Valorisation" }).closest("[data-slot='card']") as HTMLElement;
+  }
+
+  it("bulk-saves a rate entered on a page other than the one visible when Enregistrer is clicked, exercising the full labor-category set rather than just the visible page", async () => {
+    // 21 labor categories: 20 fit on the ValuationPanel's first page (limit 20),
+    // leaving exactly one -- "A21" -- on page 2. This is the concrete gap named by
+    // the local review: `getLaborCategories`/`getValuationCategoryPage` and the
+    // page-level bulk-save wiring were previously exercised only by
+    // `valuation-panel.test.tsx`'s hand-constructed props, never by a real
+    // multi-page scenario driven through `ResourcesPage` itself.
+    const categories = Array.from({ length: 21 }, (_, index) => ({
+      id: index + 1,
+      accounting_code: `A${String(index + 1).padStart(2, "0")}`,
+      category_code: null,
+      name: `Catégorie ${index + 1}`,
+      cost_type_id: 1,
+      is_active: true,
+    })) as never[];
+    mocks.getCostCategories.mockResolvedValue({ items: categories, total: categories.length });
+    mocks.createCostRate.mockResolvedValue({
+      id: 100,
+      cost_category_id: 21,
+      year: new Date().getFullYear(),
+      hourly_rate: "42.00",
+      currency_code: "EUR",
+    });
+
+    render(<ResourcesPage />);
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+
+    const card = valuationCard();
+    expect(within(card).getByText("A01")).toBeInTheDocument();
+    expect(within(card).queryByText("A21")).not.toBeInTheDocument();
+
+    // Navigate to page 2, where category A21 lives, and enter a rate for it.
+    fireEvent.click(within(card).getByRole("button", { name: "Suivant" }));
+    await waitFor(() => expect(within(card).getByText("A21")).toBeInTheDocument());
+    const year = new Date().getFullYear();
+    fireEvent.change(within(card).getByLabelText(`A21 ${year}`), { target: { value: "42.00" } });
+
+    // Navigate back to page 1 -- A21's row (and its draft) is no longer rendered --
+    // then save from there.
+    fireEvent.click(within(card).getByRole("button", { name: "Précédent" }));
+    await waitFor(() => expect(within(card).getByText("A01")).toBeInTheDocument());
+    expect(within(card).queryByText("A21")).not.toBeInTheDocument();
+
+    fireEvent.click(within(card).getByRole("button", { name: "Enregistrer" }));
+
+    await waitFor(() =>
+      expect(mocks.createCostRate).toHaveBeenCalledWith(
+        { cost_category_id: 21, year, hourly_rate: "42.00", currency_code: "EUR" },
+        expect.anything(),
+        expect.anything(),
+      ),
+    );
+    // Only the one category with an actual draft value should have triggered a
+    // save -- the other 20 labor categories were left blank.
+    expect(mocks.createCostRate).toHaveBeenCalledTimes(1);
+    expect(mocks.updateCostRate).not.toHaveBeenCalled();
+  });
+
+  it("only shows labor categories in the grid and filters them by accounting code/category code/name when searching", async () => {
+    // A deliberate mix of labor ("MO") and non-labor ("FN") cost types/categories:
+    // `getValuationCategoryPage`'s labor filter (`getLaborCategories`) must exclude
+    // "A01-FN" from the grid entirely, in every render and every search result --
+    // not merely absent from the *default*, unfiltered view.
+    mocks.getCostTypes.mockResolvedValue({
+      items: [costTypeFixture({ id: 1, code: "MO", kind: "labor" }), costTypeFixture({ id: 2, code: "FN", name: "Fourniture", kind: "supply" })],
+      total: 2,
+    });
+    mocks.getCostCategories.mockResolvedValue({
+      items: [
+        { id: 1, accounting_code: "B02-MO", category_code: null, name: "Beta", cost_type_id: 1, is_active: true },
+        { id: 2, accounting_code: "A01-FN", category_code: null, name: "Alpha", cost_type_id: 2, is_active: true },
+        { id: 3, accounting_code: "C03-MO", category_code: null, name: "Charlie", cost_type_id: 1, is_active: true },
+      ] as never[],
+      total: 3,
+    });
+
+    render(<ResourcesPage />);
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+
+    const card = valuationCard();
+    expect(within(card).getByText("B02-MO")).toBeInTheDocument();
+    expect(within(card).getByText("C03-MO")).toBeInTheDocument();
+    expect(within(card).queryByText("A01-FN")).not.toBeInTheDocument();
+
+    fireEvent.change(within(card).getByLabelText("Rechercher une catégorie"), { target: { value: "C03" } });
+
+    await waitFor(() => expect(within(card).queryByText("B02-MO")).not.toBeInTheDocument());
+    expect(within(card).getByText("C03-MO")).toBeInTheDocument();
+    expect(within(card).queryByText("A01-FN")).not.toBeInTheDocument();
+  });
+
+  it("sorts the grid ascending then descending by accounting code when the Code comptable header is clicked", async () => {
+    mocks.getCostCategories.mockResolvedValue({
+      items: [
+        { id: 1, accounting_code: "C-003", category_code: null, name: "Charlie", cost_type_id: 1, is_active: true },
+        { id: 2, accounting_code: "A-001", category_code: null, name: "Alpha", cost_type_id: 1, is_active: true },
+        { id: 3, accounting_code: "B-002", category_code: null, name: "Bravo", cost_type_id: 1, is_active: true },
+      ] as never[],
+      total: 3,
+    });
+
+    render(<ResourcesPage />);
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+
+    const card = valuationCard();
+    await waitFor(() => expect(within(card).getByText("A-001")).toBeInTheDocument());
+
+    function accountingCodeOrder() {
+      return within(card)
+        .getAllByRole("row")
+        .slice(1)
+        .map((row) => within(row).getAllByRole("cell")[0].textContent);
+    }
+
+    fireEvent.click(within(card).getByRole("button", { name: "Code comptable" }));
+    await waitFor(() => expect(accountingCodeOrder()).toEqual(["A-001", "B-002", "C-003"]));
+
+    fireEvent.click(within(card).getByRole("button", { name: "Code comptable" }));
+    await waitFor(() => expect(accountingCodeOrder()).toEqual(["C-003", "B-002", "A-001"]));
+  });
+});
+
 describe("ResourcesPage cost types table (E8-02)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -608,10 +755,13 @@ describe("ResourcesPage cost types table (E8-02)", () => {
 
     render(<ResourcesPage />);
     await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
-    // Scoped to the cost-types table's own <form>: the cost-categories table below it
-    // (E8-03) renders an identically-labeled "Suivant" button of its own.
-    const costTypesTable = (await screen.findByLabelText("Rechercher un type de coût")).closest("form") as HTMLElement;
-    const suivant = within(costTypesTable).getByRole("button", { name: "Suivant" });
+    // Scoped to the cost-types table's own card: the cost-categories table (E8-03)
+    // and the ValuationPanel grid (E8-04) each render their own, independently
+    // labeled "Suivant" button on the same tab.
+    const costTypesCard = (await screen.findByRole("heading", { name: "Types de coût" })).closest(
+      "[data-slot='card']",
+    ) as HTMLElement;
+    const suivant = within(costTypesCard).getByRole("button", { name: "Suivant" });
     await waitFor(() => expect(suivant).toBeEnabled());
 
     fireEvent.click(suivant);
@@ -2426,11 +2576,15 @@ describe("ResourcesPage cost categories table (E8-03)", () => {
 
     render(<ResourcesPage />);
     await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
-    // Only the cost-categories table's own "Code comptable" header renders as a
-    // sortable <Button>; ValuationPanel's own static "Code comptable" column header
-    // (also mounted on the "costs" tab) is a plain, non-interactive <TableHead>, so
-    // this stays unambiguous without needing to scope it further.
-    const sortButton = await screen.findByRole("button", { name: "Code comptable" });
+    // Both the cost-categories table's own "Code comptable" header and
+    // ValuationPanel's (also mounted on the "costs" tab, both now DataTable-backed
+    // sortable columns as of E8-04) render a <Button> with this name, so this must
+    // be scoped to the cost-categories table's own <form> -- same scoping used by
+    // the "paginates" test above for its "Suivant" button.
+    const categoriesTable = (await screen.findByLabelText("Rechercher une catégorie de coût")).closest(
+      "form",
+    ) as HTMLElement;
+    const sortButton = within(categoriesTable).getByRole("button", { name: "Code comptable" });
 
     fireEvent.click(sortButton);
 
