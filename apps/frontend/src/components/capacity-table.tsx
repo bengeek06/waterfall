@@ -185,9 +185,10 @@ export function CapacityTable(props: CapacityTableProps) {
           onPaginationChange={props.onPaginationChange}
           sort={props.sort}
           onSortChange={props.onSortChange}
-          // Server-side, this only matches ResourceRole.name -- searching by the node
-          // code or id also shown in the label below (e.g. "IT" or "#42") returns
-          // nothing. Matching those too would need a backend join, out of scope here.
+          // Server-side, this matches ResourceRole.name as well as the node code and
+          // id also shown in the label below (e.g. "IT" or "#42") -- see `list_roles`
+          // in resources.py. A leading "#" in the id part is stripped there, so
+          // typing either "42" or "#42" finds the role.
           search={{ value: props.search, onChange: props.onSearchChange, placeholder: "Rechercher un rôle" }}
           isLoading={props.isLoading}
         />

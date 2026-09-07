@@ -47,7 +47,7 @@ def apply_pagination(
     sortable: Mapping[str, SortableColumn],
     tiebreaker: SortableColumn,
     default_sort: SortableColumn | None = None,
-    searchable: Sequence[SortableColumn] = (),
+    searchable: Sequence[SortableColumn | ColumnElement[Any]] = (),
 ) -> PaginationResult[RowT]:
     """Apply search, sort and pagination to `query` (EPIC E7 backend foundation).
 
@@ -76,6 +76,11 @@ def apply_pagination(
     look identical to one that filtered everything out, with no error to
     tell the two apart. So `q` on a resource with no `searchable` columns
     is rejected the same way an unknown `sort` column is.
+
+    `searchable` accepts plain ORM columns as well as arbitrary column
+    expressions (e.g. `sqlalchemy.cast(Model.id, String)` to let an id match
+    a partial, ilike-style search the way a displayed "#42" label would) --
+    both expose the `.ilike()` this function calls, which is all it needs.
     """
     # Drop any ordering already present on `query` up front: apply_pagination owns
     # ordering entirely, and Query.order_by() *appends* rather than replaces on each

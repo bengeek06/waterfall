@@ -1326,6 +1326,33 @@ def test_roles_pagination_sort_search_and_node_filter() -> None:
         )
         assert [role["name"] for role in searched["items"]] == ["Alice"]
 
+        # `q` also matches the node's code, not just the role's own name -- this
+        # is the text shown as "name -- code (#id)" in the frontend, so search
+        # must cover all three parts. "IT-PAGROLE2" is unique to other_context's
+        # node (it would also substring-match "IT-PAGROLE" the other way around,
+        # which is why the assertion below only relies on this specific code
+        # matching its own, more specific node).
+        searched_by_node_code = cast(
+            dict[str, Any],
+            client.get("/resources/roles?q=IT-PAGROLE2", headers=headers).json(),
+        )
+        assert [role["name"] for role in searched_by_node_code["items"]] == ["Dana"]
+
+        # `q` also matches the role's id, with or without the leading "#" the
+        # frontend label displays it with.
+        other_role_id = cast(dict[str, Any], other_role.json())["id"]
+        searched_by_id = cast(
+            dict[str, Any],
+            client.get(f"/resources/roles?q={other_role_id}", headers=headers).json(),
+        )
+        assert [role["name"] for role in searched_by_id["items"]] == ["Dana"]
+
+        searched_by_hash_id = cast(
+            dict[str, Any],
+            client.get(f"/resources/roles?q=%23{other_role_id}", headers=headers).json(),
+        )
+        assert [role["name"] for role in searched_by_hash_id["items"]] == ["Dana"]
+
         invalid_sort = client.get("/resources/roles?sort=node_id", headers=headers)
         assert invalid_sort.status_code == 400
 
