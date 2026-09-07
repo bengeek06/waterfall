@@ -148,6 +148,12 @@ export function usePlanningScheduleDrafts({ onScheduleUpdate, mutationBusy, cale
       delete next[uid];
       return next;
     });
+    // A stale format-parsing error from a previous failed attempt on this row must not survive
+    // once the draft itself is discarded (e.g. after a successful commitModeChange): otherwise the
+    // now-reset, valid field would still display the old error message next to it. Redundant with
+    // the clearDurationError already called separately by commitScheduleEdit's success path, but
+    // harmless there (see clearDurationError's own no-op guard when the uid isn't present).
+    clearDurationError(uid);
   }
 
   async function commitScheduleEdit(row: PlanningTreeRow) {

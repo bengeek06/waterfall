@@ -667,6 +667,43 @@ describe("PlanningTreeTable", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
+  it("clears a stale duration format error once a mode change on the same row succeeds (Copilot review round 2, #142/PR #189)", async () => {
+    // Reproduces the scenario the round-2 review flagged: an invalid duration format is committed
+    // and deliberately left in place with its error message (see the previous test); the user then
+    // switches the row's mode instead of fixing it, and that mode change succeeds. clearScheduleDraft
+    // must also clear durationErrors so the field -- now showing the reset, valid default value --
+    // doesn't keep displaying a stale format error next to it.
+    const onScheduleUpdate = vi.fn().mockResolvedValue(true);
+    const tasks: Task[] = [
+      task({
+        uid: 1,
+        name: "Tâche manuelle",
+        parent_uid: null,
+        position: 1,
+        is_manual: true,
+        start_at: "2026-01-05T09:00:00Z",
+        finish_at: "2026-01-06T17:00:00Z",
+        duration_minutes: 480,
+      }),
+    ];
+    render(<PlanningTreeTable tasks={tasks} versionKey={1} onScheduleUpdate={onScheduleUpdate} />);
+
+    const durationInput = screen.getByLabelText<HTMLInputElement>("Durée de Tâche manuelle");
+    fireEvent.change(durationInput, { target: { value: "3xyz" } });
+    fireEvent.blur(durationInput);
+
+    expect(onScheduleUpdate).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert")).toHaveTextContent("Format de durée non reconnu");
+
+    fireEvent.click(screen.getByLabelText("Mode de Tâche manuelle"));
+    const automaticOption = await screen.findByRole("option", { name: "Automatique" });
+    fireEvent.pointerDown(automaticOption);
+    fireEvent.click(automaticOption);
+
+    await waitFor(() => expect(onScheduleUpdate).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("formats a predecessor's lag using the project's own calendar instead of raw minutes", () => {
     const tasks: Task[] = [
       task({ uid: 1, name: "Prédécesseur", parent_uid: null, position: 1, predecessor_links: [] }),

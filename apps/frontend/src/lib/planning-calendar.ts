@@ -89,11 +89,13 @@ export function formatCalendarDuration(minutes: number | null | undefined, calen
   const primary = sizes[primaryIndex];
   const primaryRawCount = minutes / primary.size;
   // Guard against a misconfigured calendar (e.g. minutes_per_day/minutes_per_week/days_per_month
-  // stored as 0 -- nothing in the backend model/schema currently forbids it, see planning-calendar
-  // review notes) making `primary.size` 0 and turning the division above into Infinity/NaN: fall
-  // back to the raw minute count, the same safety net formatCalendarDurationForEditing already has
-  // for its own fallback case, rather than surfacing a corrupted string like "InfinitymNaNsm".
-  if (!Number.isFinite(primaryRawCount)) {
+  // stored as 0, or even negative -- nothing in the backend model/schema currently forbids either,
+  // see planning-calendar review notes) making `primary.size` 0 (division -> Infinity/NaN, caught
+  // by the Number.isFinite check) or negative (division stays finite but produces a nonsensical
+  // count): fall back to the raw minute count, the same safety net
+  // formatCalendarDurationForEditing already has for its own fallback case, rather than surfacing
+  // a corrupted string like "InfinitymNaNsm" or a meaningless negative/inverted count.
+  if (!Number.isFinite(primaryRawCount) || primary.size <= 0) {
     return String(minutes);
   }
   const primaryCount = roundedUnitCount(primaryRawCount, primary.abbrev);
@@ -104,7 +106,10 @@ export function formatCalendarDuration(minutes: number | null | undefined, calen
   }
   const secondary = sizes[primaryIndex + 1];
   const secondaryRawCount = remainder / secondary.size;
-  if (!Number.isFinite(secondaryRawCount)) {
+  // Same guard as the primary component above: a secondary unit whose calendar-derived size is
+  // <= 0 must not be allowed to contribute a nonsensical count -- fall back to the primary
+  // component alone, exactly like the !Number.isFinite (division-by-zero) case just below.
+  if (!Number.isFinite(secondaryRawCount) || secondary.size <= 0) {
     return `${formatUnitCount(primaryCount)}${primary.abbrev}`;
   }
   const secondaryCount = roundedUnitCount(secondaryRawCount, secondary.abbrev);

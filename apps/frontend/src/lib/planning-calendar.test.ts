@@ -82,6 +82,22 @@ describe("formatCalendarDuration", () => {
     // primary "h" component stays a whole count.
     expect(formatCalendarDuration(90.5, DEFAULT_PROJECT_CALENDAR)).toBe("1h30.5min");
   });
+
+  it("falls back to the primary component alone when the secondary unit's size is invalid (Copilot review round 2, #142/PR #189)", () => {
+    // Nothing forbids a negative calendar field either (e.g. minutes_per_week stored as -100):
+    // the primary "m" component (10000 min/month) is still valid and lands cleanly, but the
+    // secondary "sm" component would divide by a negative size and produce a nonsensical count
+    // (e.g. "-0.5sm") if not guarded the same way as the division-by-zero case above.
+    const negativeWeekCalendar: ProjectCalendar = { minutes_per_day: 500, minutes_per_week: -100, days_per_month: 20 };
+    expect(formatCalendarDuration(10050, negativeWeekCalendar)).toBe("1m");
+  });
+
+  it("falls back to the raw minute count when the primary unit's size is negative", () => {
+    // Same reasoning applied to the primary component for consistency: a negative
+    // minutes_per_day/days_per_month must not produce a nonsensical primary count either.
+    const negativeCalendar: ProjectCalendar = { minutes_per_day: -480, minutes_per_week: -2400, days_per_month: 20 };
+    expect(formatCalendarDuration(10, negativeCalendar)).toBe("10");
+  });
 });
 
 describe("formatCalendarDurationForEditing", () => {
