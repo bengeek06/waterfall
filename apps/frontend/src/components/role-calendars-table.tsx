@@ -122,10 +122,6 @@ export function RoleCalendarsTable(props: RoleCalendarsTableProps) {
     return `${role.name} — ${nodeCode} (#${role.id})`;
   }
 
-  function draftFor(role: ResourceRole): string {
-    return props.drafts[role.id] ?? (role.calendar_id ? String(role.calendar_id) : "");
-  }
-
   function assignedInactiveCalendarFor(role: ResourceRole): Calendar | undefined {
     if (role.calendar_id == null || activeCalendars.some((calendar) => calendar.id === role.calendar_id)) return undefined;
     return props.calendars.find((calendar) => calendar.id === role.calendar_id);
@@ -157,10 +153,20 @@ export function RoleCalendarsTable(props: RoleCalendarsTableProps) {
         header: "Calendrier",
         cell: ({ row }) => {
           const role = row.original;
+          // Reads the *live* drafts via `propsRef`, not the `draftFor` closed over
+          // when this memoized cell function was created: `initialValue` only
+          // seeds `RoleCalendarSelect`'s local state once, at mount, but a row
+          // remounts whenever its role leaves and re-enters the current page
+          // (pagination/sort/search) -- reading the stale snapshot from
+          // `columns`'s own creation-time render would revert an unsaved draft
+          // made in the meantime back to whatever it was when `columns` was last
+          // rebuilt.
+          const liveDrafts = propsRef.current.drafts;
+          const initialValue = liveDrafts[role.id] ?? (role.calendar_id ? String(role.calendar_id) : "");
           return (
             <RoleCalendarSelect
               role={role}
-              initialValue={draftFor(role)}
+              initialValue={initialValue}
               ariaLabel={`Calendrier de ${labelFor(role)}`}
               disabled={propsRef.current.actionBusy}
               defaultOptionLabel={defaultOptionLabel}
@@ -187,11 +193,11 @@ export function RoleCalendarsTable(props: RoleCalendarsTableProps) {
       },
     ],
     // Intentionally depends only on the calendar reference list (see the
-    // comment above `columns`); `labelFor`/`draftFor`/`assignedInactiveCalendarFor`
-    // are recreated every render but are only used inside the memoized cell
-    // closures as the *initial* seed for `RoleCalendarSelect` (read once, at
-    // mount, per role) or for display text that doesn't need to be
-    // render-fresh.
+    // comment above `columns`); `labelFor`/`assignedInactiveCalendarFor` are
+    // recreated every render but are only used inside the memoized cell
+    // closures for display text/lookups that don't need to be render-fresh.
+    // The calendar select's initial value is read from `propsRef.current.drafts`
+    // directly (see that cell's own comment), not from a closed-over helper.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [activeCalendars, defaultOptionLabel],
   );

@@ -281,15 +281,13 @@ describe("ResourcesPage calendar mutations", () => {
     const select = await screen.findByLabelText(roleCalendarSelectLabel);
     fireEvent.change(select, { target: { value: String(otherCalendar.id) } });
 
-    // Re-queries the select rather than reusing the pre-change DOM reference: the
-    // DataTable columns array is recreated on every render, and TanStack's
-    // `flexRender` treats each cell's function identity as its own component type,
-    // so this draft-change re-render remounts the cell's DOM node instead of
-    // updating it in place. CapacityTable renders an "Enregistrer" button per role
-    // too, so the button lookup must stay scoped to this row.
-    await waitFor(() => expect(screen.getByLabelText(roleCalendarSelectLabel)).toHaveValue(String(otherCalendar.id)));
-    const refreshedSelect = screen.getByLabelText(roleCalendarSelectLabel);
-    const roleRow = refreshedSelect.closest("tr");
+    // The select keeps the same DOM identity across the draft-change re-render
+    // (`columns` is memoized -- see `role-calendars-table.tsx`'s `RoleCalendarSelect`/
+    // `columns` comments), so the original reference stays valid -- no need to
+    // re-query it. CapacityTable renders an "Enregistrer" button per role too, so the
+    // button lookup must stay scoped to this row.
+    await waitFor(() => expect(select).toHaveValue(String(otherCalendar.id)));
+    const roleRow = select.closest("tr");
     if (!roleRow) throw new Error("role row not found");
     fireEvent.click(within(roleRow).getByRole("button", { name: "Enregistrer" }));
 
@@ -1172,6 +1170,70 @@ describe("ResourcesPage role calendars table (E8-06)", () => {
     ).toBeInTheDocument();
     expect(screen.queryByLabelText(roleCalendarSelectLabel)).not.toBeInTheDocument();
   });
+
+  it("refetches the role-calendars page after creating a role via the roles panel, on top of the existing local roles update", async () => {
+    const laborCostType = {
+      id: 1,
+      code: "MO",
+      name: "Main d'œuvre",
+      kind: "labor",
+      is_active: true,
+      created_at: "2026-08-01T00:00:00Z",
+      updated_at: "2026-08-01T00:00:00Z",
+    } as CostType;
+    const category = {
+      id: 5,
+      accounting_code: "C1",
+      category_code: null,
+      name: "Catégorie 1",
+      cost_type_id: 1,
+      is_active: true,
+    } as never;
+    const newRole: ResourceRole = { ...roleFixture, id: 55, name: "Nouveau rôle" } as never;
+    mocks.getResourceNodes.mockResolvedValue([nodeFixture]);
+    mocks.getCalendars.mockResolvedValue([activeCalendar]);
+    mocks.getCostTypes.mockResolvedValue({ items: [laborCostType], total: 1 });
+    mocks.getCostCategories.mockResolvedValue({ items: [category], total: 1 });
+    mocks.getCostRates.mockResolvedValue([]);
+    mocks.getInflationRates.mockResolvedValue([]);
+    mocks.getRoleCapacities.mockResolvedValue([]);
+    mocks.getUsers.mockResolvedValue([]);
+    let roleCalendarsCallCount = 0;
+    mocks.getResourceRoles.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, nodeId: unknown, includeDescendants: unknown, listParams: unknown) => {
+        if (listParams === undefined) return Promise.resolve({ items: [], total: 0 });
+        if (nodeId !== undefined || includeDescendants === false) return Promise.resolve({ items: [], total: 0 });
+        roleCalendarsCallCount += 1;
+        // First (initial-mount) call: empty. Second (post-creation reload) call:
+        // the newly created role now shows up.
+        return Promise.resolve(roleCalendarsCallCount === 1 ? { items: [], total: 0 } : { items: [newRole], total: 1 });
+      },
+    );
+    mocks.createResourceRole.mockResolvedValue(newRole);
+
+    render(<ResourcesPage />);
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("tab", { name: "Ressources" }));
+    await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalledTimes(4));
+
+    const nameInput = screen.getByLabelText("Nom");
+    fireEvent.change(nameInput, { target: { value: newRole.name } });
+    fireEvent.change(screen.getByLabelText("Nœud"), { target: { value: String(nodeFixture.id) } });
+    fireEvent.change(screen.getByLabelText("Code comptable"), { target: { value: "5" } });
+    const rolesForm = nameInput.closest("form");
+    if (!rolesForm) throw new Error("roles form not found");
+    fireEvent.click(within(rolesForm).getByRole("button", { name: "Ajouter" }));
+
+    await waitFor(() => expect(mocks.createResourceRole).toHaveBeenCalledTimes(1));
+    // Without `addRole` also calling `reloadRoleCalendarsPage`, this table would
+    // keep showing its stale (empty) page indefinitely, even though the role was
+    // successfully created.
+    await waitFor(() =>
+      expect(
+        within(roleCalendarsCard()).getByLabelText(`Calendrier de ${newRole.name} — ${nodeFixture.code} (#${newRole.id})`),
+      ).toBeInTheDocument(),
+    );
+  });
 });
 const nodeA: ResourceNode = { id: 1, code: "NODEA", name: "Nœud A", parent_id: null } as never;
 const nodeB: ResourceNode = { id: 2, code: "NODEB", name: "Nœud B", parent_id: null } as never;
@@ -1400,9 +1462,10 @@ describe("ResourcesPage roles panel (E8-08)", () => {
     fireEvent.click(within(roleForm).getByRole("button", { name: "Ajouter" }));
 
     await waitFor(() => expect(mocks.createResourceRole).toHaveBeenCalledTimes(1));
-    // The initial load made 4 calls; creating a role triggers both its own
-    // panel reload and CapacityTable's reload (addRole calls both), for 6 total.
-    await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalledTimes(6));
+    // The initial load made 4 calls; creating a role triggers its own panel
+    // reload plus CapacityTable's and RoleCalendarsTable's reloads (addRole
+    // calls all three), for 7 total.
+    await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalledTimes(7));
   });
 
   it("redirects to login when the roles panel's own paginated fetch reports session expiry", async () => {
@@ -1953,9 +2016,10 @@ describe("ResourcesPage capacity table (E8-05)", () => {
     fireEvent.click(within(rolesForm).getByRole("button", { name: "Ajouter" }));
 
     await waitFor(() => expect(mocks.createResourceRole).toHaveBeenCalledTimes(1));
-    // The initial load made 4 calls; creating a role triggers both RolesPanel's
-    // own reload and the capacity table's reload (addRole calls both), for 6 total.
-    await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalledTimes(6));
+    // The initial load made 4 calls; creating a role triggers RolesPanel's own
+    // reload plus the capacity table's and RoleCalendarsTable's reloads (addRole
+    // calls all three), for 7 total.
+    await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalledTimes(7));
   });
 
   it("redirects to login when the capacity table's own paginated fetch reports session expiry", async () => {

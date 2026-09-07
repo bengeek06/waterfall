@@ -1029,6 +1029,7 @@ export default function ResourcesPage() {
       setRoleName("");
       await reloadRolesPanelPage();
       await reloadRolesPage();
+      await reloadRoleCalendarsPage();
     }, "Rôle créé.");
   }
 

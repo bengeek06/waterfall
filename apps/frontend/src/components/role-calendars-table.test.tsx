@@ -250,4 +250,63 @@ describe("RoleCalendarsTable", () => {
     expect(document.activeElement).toBe(select);
     expect(select.value).toBe("3");
   });
+
+  it("seeds a remounted role's select from the latest unsaved draft, not the draft captured when columns were built", () => {
+    // Regression test for a real bug: `columns` is memoized (deliberately not
+    // depending on `drafts` -- see the comment above it), so a `cell` closure
+    // built from an early render keeps referring to whatever helper function
+    // existed at that time. Seeding `initialValue` from such a closed-over
+    // helper (rather than the live `propsRef.current.drafts`) means a role that
+    // leaves the current page (e.g. the user paginates away) and later
+    // re-enters it remounts its `<select>` seeded from a *stale* drafts
+    // snapshot, silently reverting an unsaved edit made in between.
+    const roles = [{ id: 1, name: "Développeur", node_id: 1, calendar_id: null } as never];
+    const calendars = [
+      { id: 2, code: "PARTTIME", name: "Temps partiel", is_active: true } as never,
+      { id: 3, code: "FULLTIME", name: "Temps plein", is_active: true } as never,
+    ];
+    function Wrapper() {
+      const [drafts, setDrafts] = useState<RoleCalendarsTableProps["drafts"]>({});
+      const [roleOnPage, setRoleOnPage] = useState(true);
+      return (
+        <>
+          <button type="button" onClick={() => setRoleOnPage((previous) => !previous)}>
+            Toggle page
+          </button>
+          <RoleCalendarsTable
+            roles={roleOnPage ? roles : []}
+            calendars={calendars}
+            pagination={{ total: 1, limit: 20, offset: 0 }}
+            onPaginationChange={vi.fn()}
+            sort={null}
+            onSortChange={vi.fn()}
+            search=""
+            onSearchChange={vi.fn()}
+            isLoading={false}
+            drafts={drafts}
+            actionBusy={false}
+            nodeCodeById={nodeCodeById}
+            onDraftChange={(roleId, value) => setDrafts((previous) => ({ ...previous, [roleId]: value }))}
+            onSave={vi.fn()}
+          />
+        </>
+      );
+    }
+
+    render(<Wrapper />);
+    const selectLabel = "Calendrier de Développeur — IT (#1)";
+    const select = screen.getByLabelText(selectLabel) as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "3" } });
+    expect(select.value).toBe("3");
+
+    // Paginate away: the role (and its select) unmounts.
+    fireEvent.click(screen.getByRole("button", { name: "Toggle page" }));
+    expect(screen.queryByLabelText(selectLabel)).not.toBeInTheDocument();
+
+    // Paginate back: the role's select remounts and must be seeded from the
+    // draft as it stands now (still "3", never saved), not reverted to the
+    // role's actual `calendar_id` (`null`, i.e. the empty option).
+    fireEvent.click(screen.getByRole("button", { name: "Toggle page" }));
+    expect(screen.getByLabelText(selectLabel)).toHaveValue("3");
+  });
 });
