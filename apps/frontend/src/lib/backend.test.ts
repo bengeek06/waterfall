@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
   deletePlanningTasks,
+  getCalendars,
   getCostTypes,
   getPlanning,
   getPlanningTaskDeleteConflict,
@@ -70,6 +71,50 @@ describe("getCostTypes query building", () => {
     const page = await getCostTypes({ accessToken: "token" }, vi.fn(), true, { limit: 1, offset: 0 });
 
     expect(page).toEqual({ items, total: 12 });
+  });
+});
+
+describe("getCalendars query building", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("sends no query string at all when called with no listParams, for the unpaginated reference-list case", async () => {
+    const fetchMock = vi.fn<(input: RequestInfo | URL) => Promise<Response>>(async () => jsonResponse({ items: [], total: 0 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getCalendars({ accessToken: "token" }, vi.fn());
+
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain("?");
+  });
+
+  it("sends limit, offset, sort, and q together, plus include_inactive as its own flag", async () => {
+    const fetchMock = vi.fn<(input: RequestInfo | URL) => Promise<Response>>(async () => jsonResponse({ items: [], total: 0 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getCalendars({ accessToken: "token" }, vi.fn(), true, {
+      limit: 20,
+      offset: 40,
+      sort: "-name",
+      q: "abc",
+    });
+
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain("include_inactive=true");
+    expect(url).toContain("limit=20");
+    expect(url).toContain("offset=40");
+    expect(url).toContain("sort=-name");
+    expect(url).toContain("q=abc");
+  });
+
+  it("returns items and total from the response envelope", async () => {
+    const items = [{ id: 1, code: "STANDARD", name: "Calendrier standard", weeks_per_year: 47, is_active: true, weekdays: [] }];
+    const fetchMock = vi.fn(async () => jsonResponse({ items, total: 3 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const page = await getCalendars({ accessToken: "token" }, vi.fn(), true, { limit: 1, offset: 0 });
+
+    expect(page).toEqual({ items, total: 3 });
   });
 });
 

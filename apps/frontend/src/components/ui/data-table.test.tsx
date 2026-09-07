@@ -86,6 +86,22 @@ describe("DataTable", () => {
     expect(screen.getByRole("columnheader", { name: "ID" })).toHaveAttribute("aria-sort", "none");
   });
 
+  it("pins a column marked meta.sticky: \"right\" to the right edge of the horizontally scrollable table", () => {
+    const columnsWithSticky: ColumnDef<Item>[] = [
+      ...columns,
+      { id: "actions", header: "Actions", meta: { sticky: "right" }, cell: () => "Modifier" },
+    ];
+    renderTable({
+      columns: columnsWithSticky,
+      data: [{ id: 1, name: "Alpha" }],
+      pagination: { total: 1, limit: 10, offset: 0 },
+    });
+
+    expect(screen.getByRole("columnheader", { name: "Actions" })).toHaveClass("sticky", "right-0");
+    const actionsCell = screen.getByText("Modifier").closest("td");
+    expect(actionsCell).toHaveClass("sticky", "right-0");
+  });
+
   it("omits aria-sort entirely on a column with no meta.sortColumn, rather than setting it to none", () => {
     const columnsWithOneUnsortable: ColumnDef<Item>[] = [
       ...columns,
@@ -140,6 +156,39 @@ describe("DataTable", () => {
       }
 
       expect(calls).toEqual(["a"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("suspends a pending debounced search once isEditing becomes true, and does not replay it once editing ends", () => {
+    // Regression test: an in-flight debounce timer used to keep running even after
+    // isEditing flipped to true (e.g. the user clicked "Modifier" on a row right
+    // after typing a search), silently loading a new filtered page underneath an
+    // edit in progress and potentially dropping the edited row off the page with no
+    // way back to it (pagination/sort are frozen by isEditing, but the page content
+    // itself wasn't). Silent abandonment on resume is a deliberate, documented
+    // choice (see `useDebouncedSearchValue`'s comment) -- the pending search must
+    // not fire late either, once editing ends.
+    vi.useFakeTimers();
+    try {
+      const onChange = vi.fn();
+      const { rerender, props } = renderTable({ search: { value: "", onChange } });
+
+      fireEvent.change(screen.getByLabelText("Rechercher"), { target: { value: "abc" } });
+      vi.advanceTimersByTime(100);
+
+      rerender(<DataTable {...props} search={{ value: "", onChange }} isEditing />);
+      vi.advanceTimersByTime(300);
+      expect(onChange).not.toHaveBeenCalled();
+      expect(screen.getByLabelText("Rechercher")).toHaveValue("abc");
+
+      rerender(<DataTable {...props} search={{ value: "", onChange }} isEditing={false} />);
+      vi.advanceTimersByTime(300);
+      expect(onChange).not.toHaveBeenCalled();
+      // The abandoned "abc" must not linger in the input forever once editing ends --
+      // it was never applied, so the field must resync onto the external value.
+      expect(screen.getByLabelText("Rechercher")).toHaveValue("");
     } finally {
       vi.useRealTimers();
     }

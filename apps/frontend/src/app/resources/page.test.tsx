@@ -129,7 +129,7 @@ function mockGetResourceRoles(roles: ResourceRole[]) {
 async function renderResourcesTab(calendars: Calendar[], roles: ResourceRole[] = [], nodes: ResourceNode[] = []) {
   mocks.getResourceNodes.mockResolvedValue(nodes);
   mockGetResourceRoles(roles);
-  mocks.getCalendars.mockResolvedValue(calendars);
+  mocks.getCalendars.mockResolvedValue({ items: calendars, total: calendars.length });
   mocks.getCostTypes.mockResolvedValue({ items: [], total: 0 });
   mocks.getCostCategories.mockResolvedValue({ items: [], total: 0 });
   mocks.getCostRates.mockResolvedValue([]);
@@ -156,6 +156,11 @@ describe("ResourcesPage calendar toggle", () => {
   it("deletes an active calendar via the guarded DELETE endpoint instead of PATCH", async () => {
     mocks.deleteCalendar.mockResolvedValue(undefined);
     await renderResourcesTab([activeCalendar]);
+    // The toggle handler mutates `calendars` (the full reference list) optimistically,
+    // then reloads the table's own paginated view (`reloadCalendarsPage`) -- which, in
+    // production, would reflect the just-applied deactivation. Simulated here by
+    // updating what the next `getCalendars` call resolves to.
+    mocks.getCalendars.mockResolvedValue({ items: [{ ...activeCalendar, is_active: false }], total: 1 });
 
     fireEvent.click(screen.getByRole("button", { name: "Désactiver" }));
 
@@ -167,6 +172,10 @@ describe("ResourcesPage calendar toggle", () => {
   it("reactivates an inactive calendar via PATCH is_active:true instead of DELETE", async () => {
     mocks.updateCalendar.mockResolvedValue({ ...inactiveCalendar, is_active: true });
     await renderResourcesTab([inactiveCalendar]);
+    // See the comment in the deactivate test above: the table's own paginated view is
+    // only refreshed by the reload the toggle handler triggers, not by the optimistic
+    // update to the full reference list.
+    mocks.getCalendars.mockResolvedValue({ items: [{ ...inactiveCalendar, is_active: true }], total: 1 });
 
     fireEvent.click(screen.getByRole("button", { name: "Réactiver" }));
 
@@ -175,6 +184,31 @@ describe("ResourcesPage calendar toggle", () => {
     );
     expect(mocks.deleteCalendar).not.toHaveBeenCalled();
     await waitFor(() => expect(screen.getByRole("button", { name: "Désactiver" })).toBeInTheDocument());
+  });
+
+  it("keeps the row's displayed state on the just-applied toggle when the post-toggle reload silently fails", async () => {
+    // Regression test for the optimistic patch to `calendarsPage.items` in
+    // `toggleCalendarActive`: the mutation itself (`deleteCalendar`) succeeds, but the
+    // `reloadCalendarsPage()` call that follows fails with a non-auth error, which
+    // `reloadCalendarsPage` swallows silently (see its own comment in page.tsx) rather
+    // than surfacing it. Without the optimistic patch, the table's displayed row would
+    // be stuck showing the pre-toggle state forever, with no error to explain why.
+    mocks.deleteCalendar.mockResolvedValue(undefined);
+    await renderResourcesTab([activeCalendar]);
+    // Only the reload triggered by the toggle (the next call) must fail -- the initial
+    // page load above already resolved successfully via `renderResourcesTab`.
+    mocks.getCalendars.mockRejectedValueOnce(new ApiError(500, "Erreur serveur interne."));
+
+    fireEvent.click(screen.getByRole("button", { name: "Désactiver" }));
+
+    await waitFor(() => expect(mocks.deleteCalendar).toHaveBeenCalledWith(1, expect.anything(), expect.anything()));
+    // The row must flip to "Réactiver" from the optimistic patch alone, since the
+    // failed reload could not have supplied this value.
+    await waitFor(() => expect(screen.getByRole("button", { name: "Réactiver" })).toBeInTheDocument());
+    // The action is still reported as successful to the user -- the reload failure is
+    // deliberately silent -- and no error notice is shown.
+    expect(await screen.findByText("Calendrier désactivé.")).toBeInTheDocument();
+    expect(screen.queryByText("Erreur serveur interne.")).not.toBeInTheDocument();
   });
 
   it("surfaces the 409 guard error and leaves the calendar active when deletion is blocked", async () => {
@@ -212,6 +246,10 @@ describe("ResourcesPage calendar mutations", () => {
     };
     mocks.createCalendar.mockResolvedValue(createdCalendar);
     await renderResourcesTab([activeCalendar]);
+    // The create handler appends the new calendar to `calendars` (the full reference
+    // list) optimistically, then reloads the table's own paginated view: simulated
+    // here by updating what the next `getCalendars` call resolves to.
+    mocks.getCalendars.mockResolvedValue({ items: [activeCalendar, createdCalendar], total: 2 });
 
     const codeInput = screen.getByLabelText("Code du nouveau calendrier");
     fireEvent.change(codeInput, { target: { value: "NEW" } });
@@ -240,6 +278,10 @@ describe("ResourcesPage calendar mutations", () => {
     const updatedCalendar: Calendar = { ...activeCalendar, code: "STD2", name: "Calendrier standard v2" };
     mocks.updateCalendar.mockResolvedValue(updatedCalendar);
     await renderResourcesTab([activeCalendar]);
+    // The save handler replaces the calendar in `calendars` (the full reference list)
+    // optimistically, then reloads the table's own paginated view: simulated here by
+    // updating what the next `getCalendars` call resolves to.
+    mocks.getCalendars.mockResolvedValue({ items: [updatedCalendar], total: 1 });
 
     fireEvent.click(screen.getByRole("button", { name: "Modifier" }));
     fireEvent.change(screen.getByLabelText("Code de STANDARD"), { target: { value: "STD2" } });
@@ -307,7 +349,7 @@ describe("ResourcesPage calendar mutations", () => {
     await waitFor(() => expect(screen.getByLabelText(roleCalendarSelectLabel)).toHaveValue(String(otherCalendar.id)));
   });
 
-  it("promotes a calendar as default and locally demotes the previous default without a reload", async () => {
+  it("promotes a calendar as default and reflects the previous default's demotion once the table's page reloads", async () => {
     const previousDefault: Calendar = { ...activeCalendar, id: 1, code: "STANDARD", is_default: true };
     const candidate: Calendar = {
       id: 3,
@@ -323,6 +365,10 @@ describe("ResourcesPage calendar mutations", () => {
     const promoted: Calendar = { ...candidate, is_default: true };
     mocks.updateCalendar.mockResolvedValue(promoted);
     await renderResourcesTab([previousDefault, candidate]);
+    // The set-default handler demotes the previous default in `calendars` (the full
+    // reference list) optimistically, then reloads the table's own paginated view:
+    // simulated here by updating what the next `getCalendars` call resolves to.
+    mocks.getCalendars.mockResolvedValue({ items: [{ ...previousDefault, is_default: false }, promoted], total: 2 });
 
     const otherRow = screen.getByText("OTHER").closest("tr");
     if (!otherRow) throw new Error("row not found");
@@ -360,7 +406,7 @@ describe("ResourcesPage default calendar warning", () => {
   it("shows the warning on initial render, before switching to the Ressources tab", async () => {
     mocks.getResourceNodes.mockResolvedValue([]);
     mocks.getResourceRoles.mockResolvedValue({ items: [], total: 0 });
-    mocks.getCalendars.mockResolvedValue([activeCalendar]);
+    mocks.getCalendars.mockResolvedValue({ items: [activeCalendar], total: 1 });
     mocks.getCostTypes.mockResolvedValue({ items: [], total: 0 });
     mocks.getCostCategories.mockResolvedValue({ items: [], total: 0 });
     mocks.getCostRates.mockResolvedValue([]);
@@ -392,7 +438,7 @@ describe("ResourcesPage default calendar warning", () => {
   it("does not show the warning when the initial load fails, and surfaces the load error instead", async () => {
     mocks.getResourceNodes.mockRejectedValue(new ApiError(500, "Chargement impossible"));
     mocks.getResourceRoles.mockResolvedValue({ items: [], total: 0 });
-    mocks.getCalendars.mockResolvedValue([]);
+    mocks.getCalendars.mockResolvedValue({ items: [], total: 0 });
     mocks.getCostTypes.mockResolvedValue({ items: [], total: 0 });
     mocks.getCostCategories.mockResolvedValue({ items: [], total: 0 });
     mocks.getCostRates.mockResolvedValue([]);
@@ -425,7 +471,7 @@ describe("ResourcesPage default calendar warning", () => {
       return Promise.reject(new ApiError(500, "Rechargement impossible"));
     });
     mocks.getResourceRoles.mockResolvedValue({ items: [], total: 0 });
-    mocks.getCalendars.mockResolvedValue([activeCalendar]);
+    mocks.getCalendars.mockResolvedValue({ items: [activeCalendar], total: 1 });
     mocks.getCostTypes.mockResolvedValue({ items: [], total: 0 });
     mocks.getCostCategories.mockResolvedValue({ items: [], total: 0 });
     mocks.getCostRates.mockResolvedValue([]);
@@ -488,7 +534,7 @@ describe("ResourcesPage reload race", () => {
       },
     );
 
-    mocks.getCalendars.mockResolvedValue([]);
+    mocks.getCalendars.mockResolvedValue({ items: [], total: 0 });
     mocks.getCostTypes.mockResolvedValue({ items: [], total: 0 });
     mocks.getCostCategories.mockResolvedValue({ items: [], total: 0 });
     mocks.getCostRates.mockResolvedValue([]);
@@ -516,6 +562,317 @@ describe("ResourcesPage reload race", () => {
   });
 });
 
+const calendarFixture = (overrides: Partial<Calendar> = {}): Calendar =>
+  ({
+    id: 1,
+    code: "STANDARD",
+    name: "Calendrier standard",
+    weeks_per_year: 47,
+    is_active: true,
+    is_default: false,
+    created_at: "2026-08-01T00:00:00Z",
+    updated_at: "2026-08-01T00:00:00Z",
+    weekdays: [],
+    ...overrides,
+  }) as Calendar;
+
+describe("ResourcesPage calendars table (E8-07)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getResourceNodes.mockResolvedValue([nodeFixture]);
+    mocks.getResourceRoles.mockResolvedValue({ items: [roleFixture], total: 1 });
+    mocks.getCostTypes.mockResolvedValue({ items: [], total: 0 });
+    mocks.getCostCategories.mockResolvedValue({ items: [], total: 0 });
+    mocks.getCostRates.mockResolvedValue([]);
+    mocks.getInflationRates.mockResolvedValue([]);
+    mocks.getRoleCapacities.mockResolvedValue([]);
+    mocks.getUsers.mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("requests the table's own paginated page independently from the unpaginated reference list other panels rely on, without either leaking into the other", async () => {
+    // Genuinely different item sets for the two call shapes -- if the paginated
+    // slice ever got wired into the reference-data consumers (or vice versa), this
+    // test would catch it by which codes show up where, not just by which params
+    // getCalendars was called with.
+    const fullList = [
+      calendarFixture({ id: 1, code: "STANDARD", name: "Calendrier standard" }),
+      calendarFixture({ id: 2, code: "REDUIT", name: "Calendrier réduit" }),
+    ];
+    const paginatedSlice = [calendarFixture({ id: 6, code: "PAGE1", name: "Page item" })];
+    mocks.getCalendars.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, _includeInactive: unknown, listParams: unknown) =>
+        Promise.resolve(
+          listParams === undefined
+            ? { items: fullList, total: fullList.length }
+            : { items: paginatedSlice, total: 25 },
+        ),
+    );
+
+    render(<ResourcesPage />);
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("tab", { name: "Ressources" }));
+    await waitFor(() => expect(mocks.getCalendars).toHaveBeenCalledTimes(2));
+
+    const calls = mocks.getCalendars.mock.calls as [unknown, unknown, unknown, unknown][];
+    // The full reference list (feeds RoleCalendarsTable's assignment dropdown and the
+    // missing-default-calendar banner) is requested with no pagination params at all
+    // -- absence of `limit` must return everything, per EPIC E7/E8.
+    expect(calls.some(([, , , listParams]) => listParams === undefined)).toBe(true);
+    // The table's own view is requested separately, with an explicit page size.
+    expect(
+      calls.some(
+        ([, , , listParams]) =>
+          typeof listParams === "object" &&
+          listParams !== null &&
+          (listParams as { limit?: number }).limit === 20 &&
+          (listParams as { offset?: number }).offset === 0,
+      ),
+    ).toBe(true);
+
+    // The role-calendar assignment dropdown (fed by the full, unpaginated list) must
+    // offer every reference calendar, not just the calendars table's page.
+    const calendarSelect = screen.getByLabelText(
+      `Calendrier de ${roleFixture.name} — ${nodeFixture.code} (#${roleFixture.id})`,
+    );
+    for (const calendar of fullList) {
+      expect(within(calendarSelect).getByRole("option", { name: `${calendar.code} - ${calendar.name}` })).toBeInTheDocument();
+    }
+    expect(within(calendarSelect).queryByRole("option", { name: /PAGE1/ })).not.toBeInTheDocument();
+
+    // The calendars table itself shows only its own paginated slice, not the full list.
+    expect(screen.getByText("PAGE1")).toBeInTheDocument();
+    expect(screen.queryByText("STANDARD")).not.toBeInTheDocument();
+  });
+
+  it("paginates: clicking Suivant refetches the table with the next offset, leaving the reference-list call untouched", async () => {
+    mocks.getCalendars.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, _includeInactive: unknown, listParams: unknown) =>
+        Promise.resolve(
+          listParams === undefined
+            ? { items: [], total: 0 }
+            : { items: [calendarFixture({})], total: 25 },
+        ),
+    );
+
+    render(<ResourcesPage />);
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("tab", { name: "Ressources" }));
+    // Scoped to the calendars card (not a bare role/name query): every other
+    // paginated table on this same tab (roles, capacities, cost categories) has its
+    // own "Suivant" button too.
+    const card = (await screen.findByRole("heading", { name: "Calendriers de travail" })).closest(
+      "[data-slot='card']",
+    ) as HTMLElement;
+    const suivant = within(card).getByRole("button", { name: "Suivant" });
+    await waitFor(() => expect(suivant).toBeEnabled());
+
+    fireEvent.click(suivant);
+
+    await waitFor(() =>
+      expect(mocks.getCalendars).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        true,
+        expect.objectContaining({ limit: 20, offset: 20 }),
+      ),
+    );
+  });
+
+  it("searches: typing in the calendars search box debounces then refetches with q, resetting to offset 0", async () => {
+    mocks.getCalendars.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, _includeInactive: unknown, listParams: unknown) =>
+        Promise.resolve(
+          listParams === undefined
+            ? { items: [], total: 0 }
+            : { items: [calendarFixture({})], total: 1 },
+        ),
+    );
+
+    render(<ResourcesPage />);
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("tab", { name: "Ressources" }));
+    const searchInput = await screen.findByLabelText("Rechercher un calendrier");
+
+    fireEvent.change(searchInput, { target: { value: "standard" } });
+
+    await waitFor(() =>
+      expect(mocks.getCalendars).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        true,
+        expect.objectContaining({ q: "standard", offset: 0 }),
+      ),
+    );
+  });
+
+  it("sorts: clicking the Code column header refetches with sort=code", async () => {
+    mocks.getCalendars.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, _includeInactive: unknown, listParams: unknown) =>
+        Promise.resolve(
+          listParams === undefined
+            ? { items: [], total: 0 }
+            : { items: [calendarFixture({})], total: 1 },
+        ),
+    );
+
+    render(<ResourcesPage />);
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("tab", { name: "Ressources" }));
+    // Scoped to a button (not a bare columnheader): the "Organisation" table on this
+    // same tab has its own, non-sortable "Code" column header, which would otherwise
+    // match too.
+    const sortButton = await screen.findByRole("button", { name: "Code" });
+
+    fireEvent.click(sortButton);
+
+    await waitFor(() =>
+      expect(mocks.getCalendars).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        true,
+        expect.objectContaining({ sort: "code" }),
+      ),
+    );
+  });
+
+  it("refetches the table's page after creating a calendar, on top of the existing local list update", async () => {
+    mocks.getCalendars.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, _includeInactive: unknown, listParams: unknown) =>
+        Promise.resolve(
+          listParams === undefined
+            ? { items: [], total: 0 }
+            : { items: [], total: 0 },
+        ),
+    );
+    mocks.createCalendar.mockResolvedValue(calendarFixture({ id: 3, code: "NEW", name: "Nouveau" }));
+
+    render(<ResourcesPage />);
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("tab", { name: "Ressources" }));
+    await waitFor(() => expect(mocks.getCalendars).toHaveBeenCalledTimes(2));
+
+    const codeInput = screen.getByLabelText("Code du nouveau calendrier");
+    fireEvent.change(codeInput, { target: { value: "NEW" } });
+    fireEvent.change(screen.getByLabelText("Nom du nouveau calendrier"), { target: { value: "Nouveau" } });
+    const addRow = codeInput.closest("tr");
+    if (!addRow) throw new Error("add row not found");
+    fireEvent.click(within(addRow).getByRole("button", { name: "Ajouter" }));
+
+    await waitFor(() => expect(mocks.createCalendar).toHaveBeenCalledTimes(1));
+    // The initial load made 2 calls (reference list + table page); creating a
+    // calendar must trigger a 3rd, to refresh the table's own paginated view.
+    await waitFor(() => expect(mocks.getCalendars).toHaveBeenCalledTimes(3));
+  });
+
+  it("redirects to login when the calendars table's own paginated fetch reports session expiry", async () => {
+    mocks.getCalendars.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, _includeInactive: unknown, listParams: unknown) =>
+        listParams === undefined
+          ? Promise.resolve({ items: [], total: 0 })
+          : Promise.reject(new SessionExpiredError()),
+    );
+
+    render(<ResourcesPage />);
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("tab", { name: "Ressources" }));
+
+    await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith("/login"));
+  });
+
+  it("does not mask a successful mutation as failed when the follow-up table refresh fails", async () => {
+    let calendarsCallCount = 0;
+    mocks.getCalendars.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, _includeInactive: unknown, listParams: unknown) => {
+        if (listParams === undefined) return Promise.resolve({ items: [], total: 0 });
+        calendarsCallCount += 1;
+        // First paginated call: the initial load, succeeds. Second paginated call:
+        // the reload triggered by the mutation below, fails transiently.
+        if (calendarsCallCount === 1) return Promise.resolve({ items: [], total: 0 });
+        return Promise.reject(new ApiError(500, "Actualisation impossible"));
+      },
+    );
+    mocks.createCalendar.mockResolvedValue(calendarFixture({ id: 3, code: "NEW", name: "Nouveau" }));
+
+    render(<ResourcesPage />);
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("tab", { name: "Ressources" }));
+    await waitFor(() => expect(mocks.getCalendars).toHaveBeenCalledTimes(2));
+
+    const codeInput = screen.getByLabelText("Code du nouveau calendrier");
+    fireEvent.change(codeInput, { target: { value: "NEW" } });
+    fireEvent.change(screen.getByLabelText("Nom du nouveau calendrier"), { target: { value: "Nouveau" } });
+    const addRow = codeInput.closest("tr");
+    if (!addRow) throw new Error("add row not found");
+    fireEvent.click(within(addRow).getByRole("button", { name: "Ajouter" }));
+
+    await waitFor(() => expect(mocks.createCalendar).toHaveBeenCalledTimes(1));
+    // The mutation itself succeeded and must be reported as such, even though the
+    // follow-up table-page refresh it triggers fails.
+    await waitFor(() => expect(screen.getByText("Calendrier créé.")).toBeInTheDocument());
+    expect(screen.queryByText("Actualisation impossible")).not.toBeInTheDocument();
+  });
+
+  it("does not leave the table's loading indicator stuck when a mutation's reload races an in-flight pagination fetch", async () => {
+    // The initial paginated fetch is left pending on purpose (released at the end of
+    // the test), simulating a mutation firing while a pagination/sort/search fetch is
+    // still in flight. The mutation's own reload uses a fresh generation number and
+    // resolves immediately; without its own loading-state handling, the stale fetch's
+    // eventual resolution would be the only thing ever touching `calendarsLoading`,
+    // and it's guarded out by the generation check -- leaving the loading indicator
+    // stuck forever.
+    let resolveStalePage!: (page: { items: Calendar[]; total: number }) => void;
+    const stalePagePromise = new Promise<{ items: Calendar[]; total: number }>((resolve) => {
+      resolveStalePage = resolve;
+    });
+    let paginatedCallCount = 0;
+    mocks.getCalendars.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, _includeInactive: unknown, listParams: unknown) => {
+        if (listParams === undefined) return Promise.resolve({ items: [], total: 0 });
+        paginatedCallCount += 1;
+        if (paginatedCallCount === 1) return stalePagePromise;
+        return Promise.resolve({
+          items: [calendarFixture({ id: 3, code: "NEW", name: "Nouveau" })],
+          total: 1,
+        });
+      },
+    );
+    mocks.createCalendar.mockResolvedValue(calendarFixture({ id: 3, code: "NEW", name: "Nouveau" }));
+
+    render(<ResourcesPage />);
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("tab", { name: "Ressources" }));
+    // Signaled by call count rather than the generic `status` role: the calendars
+    // table's own loading skeleton is also a `role="status"`, and stays mounted
+    // throughout this test by design, so it can't be used as a page-ready signal.
+    await waitFor(() => expect(mocks.getCalendars).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByRole("status", { name: "Chargement des données" })).toBeInTheDocument());
+
+    const codeInput = screen.getByLabelText("Code du nouveau calendrier");
+    fireEvent.change(codeInput, { target: { value: "NEW" } });
+    fireEvent.change(screen.getByLabelText("Nom du nouveau calendrier"), { target: { value: "Nouveau" } });
+    const addRow = codeInput.closest("tr");
+    if (!addRow) throw new Error("add row not found");
+    fireEvent.click(within(addRow).getByRole("button", { name: "Ajouter" }));
+
+    await waitFor(() => expect(mocks.createCalendar).toHaveBeenCalledTimes(1));
+    // The mutation's own reload (2nd paginated call) resolves immediately and must
+    // clear the loading state on its own -- it must not wait for the stale 1st call.
+    await waitFor(() =>
+      expect(screen.queryByRole("status", { name: "Chargement des données" })).not.toBeInTheDocument(),
+    );
+
+    // Releasing the stale initial fetch afterwards must not resurrect the loading
+    // state or overwrite the fresher data already committed.
+    resolveStalePage({ items: [], total: 0 });
+    await waitFor(() => expect(screen.getByText("NEW")).toBeInTheDocument());
+    expect(screen.queryByRole("status", { name: "Chargement des données" })).not.toBeInTheDocument();
+  });
+});
+
 const costTypeFixture = (overrides: Partial<CostType> = {}): CostType =>
   ({
     id: 1,
@@ -533,7 +890,7 @@ describe("ResourcesPage valuation panel (E8-04)", () => {
     vi.clearAllMocks();
     mocks.getResourceNodes.mockResolvedValue([]);
     mocks.getResourceRoles.mockResolvedValue({ items: [], total: 0 });
-    mocks.getCalendars.mockResolvedValue([]);
+    mocks.getCalendars.mockResolvedValue({ items: [], total: 0 });
     mocks.getCostTypes.mockResolvedValue({ items: [costTypeFixture({})], total: 1 });
     mocks.getCostRates.mockResolvedValue([]);
     mocks.getInflationRates.mockResolvedValue([]);
@@ -676,7 +1033,7 @@ describe("ResourcesPage cost types table (E8-02)", () => {
     vi.clearAllMocks();
     mocks.getResourceNodes.mockResolvedValue([]);
     mocks.getResourceRoles.mockResolvedValue({ items: [], total: 0 });
-    mocks.getCalendars.mockResolvedValue([]);
+    mocks.getCalendars.mockResolvedValue({ items: [], total: 0 });
     mocks.getCostCategories.mockResolvedValue({ items: [], total: 0 });
     mocks.getCostRates.mockResolvedValue([]);
     mocks.getInflationRates.mockResolvedValue([]);
@@ -959,7 +1316,7 @@ describe("ResourcesPage cost types table (E8-02)", () => {
 
 async function renderRoleCalendarsTab() {
   mocks.getResourceNodes.mockResolvedValue([nodeFixture]);
-  mocks.getCalendars.mockResolvedValue([activeCalendar]);
+  mocks.getCalendars.mockResolvedValue({ items: [activeCalendar], total: 1 });
   mocks.getCostTypes.mockResolvedValue({ items: [], total: 0 });
   mocks.getCostCategories.mockResolvedValue({ items: [], total: 0 });
   mocks.getCostRates.mockResolvedValue([]);
@@ -1341,7 +1698,7 @@ describe("ResourcesPage role calendars table (E8-06)", () => {
     } as never;
     const newRole: ResourceRole = { ...roleFixture, id: 55, name: "Nouveau rôle" } as never;
     mocks.getResourceNodes.mockResolvedValue([nodeFixture]);
-    mocks.getCalendars.mockResolvedValue([activeCalendar]);
+    mocks.getCalendars.mockResolvedValue({ items: [activeCalendar], total: 1 });
     mocks.getCostTypes.mockResolvedValue({ items: [laborCostType], total: 1 });
     mocks.getCostCategories.mockResolvedValue({ items: [category], total: 1 });
     mocks.getCostRates.mockResolvedValue([]);
@@ -1421,7 +1778,7 @@ describe("ResourcesPage roles panel (E8-08)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getResourceNodes.mockResolvedValue([nodeA, nodeB]);
-    mocks.getCalendars.mockResolvedValue([]);
+    mocks.getCalendars.mockResolvedValue({ items: [], total: 0 });
     mocks.getCostTypes.mockResolvedValue({
       items: [{ id: 100, code: "MO", name: "Main d'œuvre", kind: "labor", is_active: true } as CostType],
       total: 1,
@@ -1574,11 +1931,10 @@ describe("ResourcesPage roles panel (E8-08)", () => {
     );
 
     await openRessourcesTab();
-    // Only RolesPanel's "Nom" column is sortable (rendered as a button inside the
-    // header); OrganizationTree's and CalendarsTable's own "Nom" columns are plain
-    // text, so this is unambiguous even though several "Nom" column headers exist
-    // on the page at once.
-    const sortButton = await screen.findByRole("button", { name: "Nom" });
+    // Scoped to RolesPanel's own card: CalendarsTable, on the same tab, also has its
+    // own sortable "Nom" column (rendered as a button too), so an unscoped query
+    // would be ambiguous.
+    const sortButton = await within(rolesPanelCard()).findByRole("button", { name: "Nom" });
 
     fireEvent.click(sortButton);
 
@@ -1978,7 +2334,7 @@ describe("ResourcesPage capacity table (E8-05)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getResourceNodes.mockResolvedValue([nodeFixture]);
-    mocks.getCalendars.mockResolvedValue([]);
+    mocks.getCalendars.mockResolvedValue({ items: [], total: 0 });
     mocks.getCostTypes.mockResolvedValue({ items: [], total: 0 });
     mocks.getCostCategories.mockResolvedValue({ items: [], total: 0 });
     mocks.getCostRates.mockResolvedValue([]);
@@ -2449,7 +2805,7 @@ describe("ResourcesPage cost categories table (E8-03)", () => {
     vi.clearAllMocks();
     mocks.getResourceNodes.mockResolvedValue([]);
     mocks.getResourceRoles.mockResolvedValue({ items: [], total: 0 });
-    mocks.getCalendars.mockResolvedValue([]);
+    mocks.getCalendars.mockResolvedValue({ items: [], total: 0 });
     // Deliberately "supply", not "labor": ValuationPanel (also mounted on the "costs"
     // tab) filters the full `categories` reference list down to labor-linked
     // categories only. Keeping the fixture cost type non-labor means the full-list
