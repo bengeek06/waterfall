@@ -70,6 +70,18 @@ describe("formatCalendarDuration", () => {
     const zeroCalendar: ProjectCalendar = { minutes_per_day: 0, minutes_per_week: 0, days_per_month: 0 };
     expect(formatCalendarDuration(10, zeroCalendar)).toBe("10");
   });
+
+  it("preserves a fractional minute instead of flooring it away (Copilot review, #142/PR #189)", () => {
+    // predecessorsLabel (planning-links.ts) calls this with link.lag_tenth_minute / 10, which can
+    // legitimately be e.g. 0.5 -- Math.floor would silently turn that into "0min", losing a real lag.
+    expect(formatCalendarDuration(0.5, DEFAULT_PROJECT_CALENDAR)).toBe("0.5min");
+  });
+
+  it("preserves a fractional minute in the secondary component alongside a non-zero primary component", () => {
+    // 90.5 minutes = 1h + 30.5min: only the finest ("min") component may carry a decimal, the
+    // primary "h" component stays a whole count.
+    expect(formatCalendarDuration(90.5, DEFAULT_PROJECT_CALENDAR)).toBe("1h30.5min");
+  });
 });
 
 describe("formatCalendarDurationForEditing", () => {
@@ -138,5 +150,16 @@ describe("parseCalendarDuration", () => {
     const parsed = parseCalendarDuration(formatted, DEFAULT_PROJECT_CALENDAR);
     expect(parsed).toEqual({ minutes });
     expect(formatCalendarDuration((parsed as { minutes: number }).minutes, DEFAULT_PROJECT_CALENDAR)).toBe(formatted);
+  });
+
+  it("rejects a token whose unit is worthless under a misconfigured calendar instead of silently returning 0 (Copilot review, #142/PR #189)", () => {
+    const zeroDayCalendar: ProjectCalendar = { ...DEFAULT_PROJECT_CALENDAR, minutes_per_day: 0 };
+    expect(parseCalendarDuration("2j", zeroDayCalendar)).toEqual({ error: DURATION_PARSE_ERROR_MESSAGE });
+
+    const zeroWeekCalendar: ProjectCalendar = { ...DEFAULT_PROJECT_CALENDAR, minutes_per_week: 0 };
+    expect(parseCalendarDuration("1sm", zeroWeekCalendar)).toEqual({ error: DURATION_PARSE_ERROR_MESSAGE });
+
+    const zeroMonthCalendar: ProjectCalendar = { ...DEFAULT_PROJECT_CALENDAR, days_per_month: 0 };
+    expect(parseCalendarDuration("1m", zeroMonthCalendar)).toEqual({ error: DURATION_PARSE_ERROR_MESSAGE });
   });
 });

@@ -51,6 +51,27 @@ const UNITS: UnitDefinition[] = [
 // "XhYmin", never cascading into e.g. days). Prefer this over a full cascade: it stays visually
 // compact and consistent with the existing convention, at the cost of being a lossy *display*
 // only (the underlying stored duration_minutes is never touched by this rounding).
+// Rounds a unit's raw (undivided) count the way that unit is meant to be displayed: minutes are
+// the only unit whose backend-side source of truth (PredecessorLink.lag_tenth_minute / 10, see
+// planning-links.ts) can legitimately be a non-integer -- e.g. a 5 lag_tenth_minute becomes a
+// genuine 0.5-minute lag -- so a "min" count is rounded to the nearest tenth of a minute (the same
+// resolution as lag_tenth_minute) instead of being floored away. Every larger unit (h/j/sm/m) has
+// no such fractional source and stays a whole count, matching MS Project's own convention and the
+// pre-existing two-adjacent-units design above.
+function roundedUnitCount(rawCount: number, abbrev: UnitDefinition["abbrev"]): number {
+  if (abbrev === "min") {
+    return Math.round(rawCount * 10) / 10;
+  }
+  return Math.floor(rawCount);
+}
+
+// Renders a unit count produced by roundedUnitCount: a whole number never carries a trailing
+// ".0" (e.g. "3min", not "3.0min"), while a genuine tenth-of-a-minute value keeps its one decimal
+// (e.g. "0.5min").
+function formatUnitCount(count: number): string {
+  return Number.isInteger(count) ? String(count) : count.toFixed(1);
+}
+
 export function formatCalendarDuration(minutes: number | null | undefined, calendar: ProjectCalendar): string {
   if (minutes === null || minutes === undefined) {
     return "-";
@@ -66,29 +87,31 @@ export function formatCalendarDuration(minutes: number | null | undefined, calen
     primaryIndex = sizes.length - 1;
   }
   const primary = sizes[primaryIndex];
-  const primaryCount = Math.floor(minutes / primary.size);
+  const primaryRawCount = minutes / primary.size;
   // Guard against a misconfigured calendar (e.g. minutes_per_day/minutes_per_week/days_per_month
   // stored as 0 -- nothing in the backend model/schema currently forbids it, see planning-calendar
   // review notes) making `primary.size` 0 and turning the division above into Infinity/NaN: fall
   // back to the raw minute count, the same safety net formatCalendarDurationForEditing already has
   // for its own fallback case, rather than surfacing a corrupted string like "InfinitymNaNsm".
-  if (!Number.isFinite(primaryCount)) {
+  if (!Number.isFinite(primaryRawCount)) {
     return String(minutes);
   }
+  const primaryCount = roundedUnitCount(primaryRawCount, primary.abbrev);
   const remainder = minutes - primaryCount * primary.size;
   const isFinestUnit = primaryIndex === sizes.length - 1;
   if (remainder === 0 || isFinestUnit) {
-    return `${primaryCount}${primary.abbrev}`;
+    return `${formatUnitCount(primaryCount)}${primary.abbrev}`;
   }
   const secondary = sizes[primaryIndex + 1];
-  const secondaryCount = Math.floor(remainder / secondary.size);
-  if (!Number.isFinite(secondaryCount)) {
-    return `${primaryCount}${primary.abbrev}`;
+  const secondaryRawCount = remainder / secondary.size;
+  if (!Number.isFinite(secondaryRawCount)) {
+    return `${formatUnitCount(primaryCount)}${primary.abbrev}`;
   }
+  const secondaryCount = roundedUnitCount(secondaryRawCount, secondary.abbrev);
   if (secondaryCount === 0) {
-    return `${primaryCount}${primary.abbrev}`;
+    return `${formatUnitCount(primaryCount)}${primary.abbrev}`;
   }
-  return `${primaryCount}${primary.abbrev}${secondaryCount}${secondary.abbrev}`;
+  return `${formatUnitCount(primaryCount)}${primary.abbrev}${formatUnitCount(secondaryCount)}${secondary.abbrev}`;
 }
 
 // formatCalendarDuration is lossy by design (see above) once a value needs more than two adjacent
@@ -99,6 +122,16 @@ export function formatCalendarDuration(minutes: number | null | undefined, calen
 // this variant only returns the calendar-formatted string when it round-trips losslessly back
 // through parseCalendarDuration; otherwise it falls back to the plain minute count, which is
 // always exact. Symmetric use: parseCalendarDuration must accept whatever this returns.
+//
+// This function is only ever called with a task's PlanningTaskRead.duration_minutes (see
+// use-planning-schedule-drafts.ts), an always-integer field per the backend schema -- unlike
+// formatCalendarDuration's other caller (predecessorsLabel in planning-links.ts, which divides
+// lag_tenth_minute by 10 and can legitimately produce e.g. 0.5), so the round-trip check above
+// never actually has to reconcile a fractional "min" component here. If that ever changes, note
+// that the round-trip is *not* guaranteed for a fractional minutes remainder: parseCalendarDuration
+// only accepts an integer amount before a unit suffix (its token regex is `\d+`), so a formatted
+// string like "0.5min" or "1h30.5min" fails to parse and this function would (correctly, if
+// conservatively) fall back to the plain `String(minutes)` instead of silently misparsing it.
 export function formatCalendarDurationForEditing(minutes: number, calendar: ProjectCalendar): string {
   const formatted = formatCalendarDuration(minutes, calendar);
   const parsed = parseCalendarDuration(formatted, calendar);
@@ -159,7 +192,17 @@ export function parseCalendarDuration(text: string, calendar: ProjectCalendar): 
     if (!unitDefinition) {
       return { error: DURATION_PARSE_ERROR_MESSAGE };
     }
-    totalMinutes += Number(amountText) * unitDefinition.minutesPerUnit(calendar);
+    const unitMinutes = unitDefinition.minutesPerUnit(calendar);
+    // A misconfigured project calendar (minutes_per_day/minutes_per_week/days_per_month stored as
+    // 0, or some other non-finite value -- nothing in the backend model/schema currently forbids
+    // it) must not be allowed to silently turn e.g. "2j" into 0 minutes: formatCalendarDuration
+    // already has an explicit fallback for this same misconfiguration, so parsing should surface
+    // an error too rather than accepting a token whose unit is worth nothing/undefined here. The
+    // bare-minutes branch above is unaffected: it never depends on the calendar.
+    if (!Number.isFinite(unitMinutes) || unitMinutes <= 0) {
+      return { error: DURATION_PARSE_ERROR_MESSAGE };
+    }
+    totalMinutes += Number(amountText) * unitMinutes;
     consumedLength = match.index + fullMatch.length;
   }
   if (consumedLength === 0 || consumedLength !== trimmed.length) {
