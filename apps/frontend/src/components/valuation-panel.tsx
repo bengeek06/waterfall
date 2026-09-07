@@ -14,6 +14,11 @@ export type ValuationPanelProps = {
   // Already restricted to "labor"-kind categories and sliced to the current page --
   // see `getValuationCategoryPage` in `resources/page.tsx`.
   items: CostCategory[];
+  // Computed once in the parent page (not recomputed here) and shared with
+  // `saveAllValuation`'s save loop, so the displayed year columns and the years
+  // actually persisted on "Enregistrer" can never drift apart -- see the comment
+  // on `valuationYears` in `resources/page.tsx`.
+  years: number[];
   pagination: DataTablePaginationState;
   onPaginationChange: (next: { offset: number; limit: number }) => void;
   sort: string | null;
@@ -90,7 +95,7 @@ function ValuationRateInput(props: { ariaLabel: string; initialValue: string; on
 // `resources/page.tsx`), donc appliquer recherche/tri/pagination en mémoire sur
 // cette liste ne coûte aucun aller-retour réseau supplémentaire.
 export function ValuationPanel(props: ValuationPanelProps) {
-  const years = [-4, -3, -2, -1, 0].map((offset) => new Date().getFullYear() + offset);
+  const years = props.years;
   const lastYear = years.at(-1);
 
   // Callbacks are forwarded through this ref (safe -- only invoked from event
@@ -103,10 +108,11 @@ export function ValuationPanel(props: ValuationPanelProps) {
   });
 
   // Memoized (empty deps) so cell renderers keep a stable identity across
-  // renders -- see `ValuationRateInput`'s comment for why. `years`/`lastYear`
-  // are derived from the current date and, in practice, don't change during
-  // the component's lifetime, so capturing them once at mount is equivalent to
-  // recomputing them every render.
+  // renders -- see `ValuationRateInput`'s comment for why. `years` is now a
+  // stable-identity array computed once by the parent page (`valuationYears`
+  // in `resources/page.tsx`, itself in a mount-only `useState` initializer),
+  // so capturing it here at mount is equivalent to reading it fresh on every
+  // render -- it never changes for the component's lifetime.
   const columns = useMemo<ColumnDef<CostCategory>[]>(
     () => [
       {

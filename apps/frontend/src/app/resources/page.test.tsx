@@ -606,6 +606,69 @@ describe("ResourcesPage valuation panel (E8-04)", () => {
     expect(mocks.createCostRate).toHaveBeenCalledTimes(1);
     expect(mocks.updateCostRate).not.toHaveBeenCalled();
   });
+
+  it("only shows labor categories in the grid and filters them by accounting code/category code/name when searching", async () => {
+    // A deliberate mix of labor ("MO") and non-labor ("FN") cost types/categories:
+    // `getValuationCategoryPage`'s labor filter (`getLaborCategories`) must exclude
+    // "A01-FN" from the grid entirely, in every render and every search result --
+    // not merely absent from the *default*, unfiltered view.
+    mocks.getCostTypes.mockResolvedValue({
+      items: [costTypeFixture({ id: 1, code: "MO", kind: "labor" }), costTypeFixture({ id: 2, code: "FN", name: "Fourniture", kind: "supply" })],
+      total: 2,
+    });
+    mocks.getCostCategories.mockResolvedValue({
+      items: [
+        { id: 1, accounting_code: "B02-MO", category_code: null, name: "Beta", cost_type_id: 1, is_active: true },
+        { id: 2, accounting_code: "A01-FN", category_code: null, name: "Alpha", cost_type_id: 2, is_active: true },
+        { id: 3, accounting_code: "C03-MO", category_code: null, name: "Charlie", cost_type_id: 1, is_active: true },
+      ] as never[],
+      total: 3,
+    });
+
+    render(<ResourcesPage />);
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+
+    const card = valuationCard();
+    expect(within(card).getByText("B02-MO")).toBeInTheDocument();
+    expect(within(card).getByText("C03-MO")).toBeInTheDocument();
+    expect(within(card).queryByText("A01-FN")).not.toBeInTheDocument();
+
+    fireEvent.change(within(card).getByLabelText("Rechercher une catégorie"), { target: { value: "C03" } });
+
+    await waitFor(() => expect(within(card).queryByText("B02-MO")).not.toBeInTheDocument());
+    expect(within(card).getByText("C03-MO")).toBeInTheDocument();
+    expect(within(card).queryByText("A01-FN")).not.toBeInTheDocument();
+  });
+
+  it("sorts the grid ascending then descending by accounting code when the Code comptable header is clicked", async () => {
+    mocks.getCostCategories.mockResolvedValue({
+      items: [
+        { id: 1, accounting_code: "C-003", category_code: null, name: "Charlie", cost_type_id: 1, is_active: true },
+        { id: 2, accounting_code: "A-001", category_code: null, name: "Alpha", cost_type_id: 1, is_active: true },
+        { id: 3, accounting_code: "B-002", category_code: null, name: "Bravo", cost_type_id: 1, is_active: true },
+      ] as never[],
+      total: 3,
+    });
+
+    render(<ResourcesPage />);
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+
+    const card = valuationCard();
+    await waitFor(() => expect(within(card).getByText("A-001")).toBeInTheDocument());
+
+    function accountingCodeOrder() {
+      return within(card)
+        .getAllByRole("row")
+        .slice(1)
+        .map((row) => within(row).getAllByRole("cell")[0].textContent);
+    }
+
+    fireEvent.click(within(card).getByRole("button", { name: "Code comptable" }));
+    await waitFor(() => expect(accountingCodeOrder()).toEqual(["A-001", "B-002", "C-003"]));
+
+    fireEvent.click(within(card).getByRole("button", { name: "Code comptable" }));
+    await waitFor(() => expect(accountingCodeOrder()).toEqual(["C-003", "B-002", "A-001"]));
+  });
 });
 
 describe("ResourcesPage cost types table (E8-02)", () => {

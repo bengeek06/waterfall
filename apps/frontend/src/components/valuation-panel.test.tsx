@@ -7,6 +7,7 @@ import type { CostCategory } from "@/lib/backend";
 afterEach(() => cleanup());
 
 const currentYear = new Date().getFullYear();
+const years = [-4, -3, -2, -1, 0].map((offset) => currentYear + offset);
 
 const category = (overrides: Partial<CostCategory>): CostCategory =>
   ({
@@ -22,6 +23,7 @@ const category = (overrides: Partial<CostCategory>): CostCategory =>
 function panelProps(overrides: Partial<ValuationPanelProps> = {}): ValuationPanelProps {
   return {
     items: [category({})],
+    years,
     pagination: { total: 1, limit: 20, offset: 0 },
     onPaginationChange: vi.fn(),
     sort: null,
@@ -94,13 +96,14 @@ describe("ValuationPanel", () => {
     expect(onPaginationChange).toHaveBeenCalledExactlyOnceWith({ offset: 20, limit: 20 });
   });
 
-  // Issue #122 (E8-04): the ValuationPanel grid is server-driven for search/sort but
-  // its pagination is entirely presentational -- see the long comment atop
-  // valuation-panel.tsx for why drafts are conserved across pages (they live in the
-  // parent page's `rateDrafts` state, never reset by pagination/search/sort). This
-  // test proves the conservation from ValuationPanel's own point of view: swapping
-  // `items` (simulating a page change) never drops a draft already present in
-  // `drafts`, and navigating back to the original page still shows it.
+  // Issue #122 (E8-04): the ValuationPanel grid's search/sort/pagination are all
+  // computed client-side by the parent page (`getValuationCategoryPage` in
+  // resources/page.tsx) -- see the long comment atop valuation-panel.tsx for why
+  // drafts are conserved across pages (they live in the parent page's
+  // `rateDrafts` state, never reset by pagination/search/sort). This test proves
+  // the conservation from ValuationPanel's own point of view: swapping `items`
+  // (simulating a page change) never drops a draft already present in `drafts`,
+  // and navigating back to the original page still shows it.
   it("preserves a draft entered on one page when the visible page changes", () => {
     const pageOneCategory = category({ id: 1, accounting_code: "MO-DEV" });
     const pageTwoCategory = category({ id: 2, accounting_code: "MO-INT", cost_type_id: 1 });

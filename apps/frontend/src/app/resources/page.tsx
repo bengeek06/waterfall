@@ -261,6 +261,12 @@ export default function ResourcesPage() {
   const [inflationValue, setInflationValue] = useState("");
   const [displayCurrency, setDisplayCurrency] = useState("EUR");
   const [rateDrafts, setRateDrafts] = useState<Record<string, string>>({});
+  // Computed once (mount) and shared between the ValuationPanel grid's displayed
+  // year columns and `saveAllValuation`'s save loop below -- if each recomputed
+  // its own `years` from `new Date()` independently, a page left open across a
+  // New Year's boundary would silently drop the oldest displayed column's drafts
+  // on save (see issue #122/E8-04 PR review).
+  const [valuationYears] = useState(() => [-4, -3, -2, -1, 0].map((offset) => new Date().getFullYear() + offset));
   // The ValuationPanel grid's own search/sort/pagination controls (E8-04): see
   // `getValuationCategoryPage` above for why these drive an in-memory computation
   // rather than a second fetch, unlike `costTypesOffset`/`costTypesSort`/etc. below.
@@ -1174,15 +1180,16 @@ export default function ResourcesPage() {
         const percentage = Number(inflationValue);
         await setInflationRate(Number(inflationYear), String(1 + percentage / 100), session, onSessionRefresh);
       }
-      const years = [-4, -3, -2, -1, 0].map((offset) => new Date().getFullYear() + offset);
       // Deliberately the *full* labor-category set, not the ValuationPanel grid's
       // currently visible page: see the draft-preservation comment in
       // valuation-panel.tsx -- bulk save must act on every draft with a value,
       // regardless of which page/search/sort was active when "Enregistrer" was
-      // clicked.
+      // clicked. `valuationYears` (not a fresh computation here) keeps this loop
+      // in sync with the grid's displayed columns -- see the comment on that
+      // state above.
       const laborCategories = getLaborCategories(categories, costTypes);
       for (const category of laborCategories) {
-        for (const year of years) {
+        for (const year of valuationYears) {
           const value = rateDrafts[`${category.id}:${year}`]?.trim() ?? "";
           if (!value) continue;
           const existing = rates.find((rate) => rate.cost_category_id === category.id && rate.year === year);
@@ -1467,7 +1474,7 @@ export default function ResourcesPage() {
 
           <CostCategoriesTable items={categoriesPage.items} types={costTypes} pagination={{ total: categoriesPage.total, limit: categoriesLimit, offset: categoriesOffset }} onPaginationChange={(next) => setCategoriesOffset(next.offset)} sort={categoriesSort} onSortChange={setCategoriesSort} search={categoriesQuery} onSearchChange={(next) => { setCategoriesQuery(next); setCategoriesOffset(0); }} isLoading={categoriesLoading} typeId={categoryCostTypeId} accountingCode={categoryCode} categoryCode={accountingCode} name={categoryName} draft={categoryDraft} editingId={editingCategoryId} busy={actionBusy} onSubmit={addCategory} onTypeChange={setCategoryCostTypeId} onAccountingCodeChange={setCategoryCode} onCategoryCodeChange={setAccountingCode} onNameChange={setCategoryName} onStartEdit={startEditCategory} onDraftChange={(field, value) => setCategoryDraft((previous) => ({ ...previous, [field]: value }))} onSave={(item) => void saveCategory(item)} onCancel={() => setEditingCategoryId(null)} onToggle={(item) => void toggleCategoryActive(item)} />
 
-          <ValuationPanel items={valuationPage.items} pagination={{ total: valuationPage.total, limit: valuationLimit, offset: valuationOffset }} onPaginationChange={(next) => setValuationOffset(next.offset)} sort={valuationSort} onSortChange={setValuationSort} search={valuationQuery} onSearchChange={(next) => { setValuationQuery(next); setValuationOffset(0); }} inflationYear={inflationYear} inflationValue={inflationValue} currency={displayCurrency} drafts={rateDrafts} busy={actionBusy} onCurrencyChange={setDisplayCurrency} onInflationChange={setInflationValue} onRateChange={(key, value) => setRateDrafts((previous) => ({ ...previous, [key]: value }))} onSave={() => void saveAllValuation()} />
+          <ValuationPanel items={valuationPage.items} years={valuationYears} pagination={{ total: valuationPage.total, limit: valuationLimit, offset: valuationOffset }} onPaginationChange={(next) => setValuationOffset(next.offset)} sort={valuationSort} onSortChange={setValuationSort} search={valuationQuery} onSearchChange={(next) => { setValuationQuery(next); setValuationOffset(0); }} inflationYear={inflationYear} inflationValue={inflationValue} currency={displayCurrency} drafts={rateDrafts} busy={actionBusy} onCurrencyChange={setDisplayCurrency} onInflationChange={setInflationValue} onRateChange={(key, value) => setRateDrafts((previous) => ({ ...previous, [key]: value }))} onSave={() => void saveAllValuation()} />
         </>
       ) : null}
 
