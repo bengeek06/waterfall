@@ -532,7 +532,7 @@ describe("ResourcesPage valuation panel (E8-04)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getResourceNodes.mockResolvedValue([]);
-    mocks.getResourceRoles.mockResolvedValue([]);
+    mocks.getResourceRoles.mockResolvedValue({ items: [], total: 0 });
     mocks.getCalendars.mockResolvedValue([]);
     mocks.getCostTypes.mockResolvedValue({ items: [costTypeFixture({})], total: 1 });
     mocks.getCostRates.mockResolvedValue([]);
@@ -564,7 +564,7 @@ describe("ResourcesPage valuation panel (E8-04)", () => {
       cost_type_id: 1,
       is_active: true,
     })) as never[];
-    mocks.getCostCategories.mockResolvedValue(categories);
+    mocks.getCostCategories.mockResolvedValue({ items: categories, total: categories.length });
     mocks.createCostRate.mockResolvedValue({
       id: 100,
       cost_category_id: 21,
@@ -2513,11 +2513,15 @@ describe("ResourcesPage cost categories table (E8-03)", () => {
 
     render(<ResourcesPage />);
     await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
-    // Only the cost-categories table's own "Code comptable" header renders as a
-    // sortable <Button>; ValuationPanel's own static "Code comptable" column header
-    // (also mounted on the "costs" tab) is a plain, non-interactive <TableHead>, so
-    // this stays unambiguous without needing to scope it further.
-    const sortButton = await screen.findByRole("button", { name: "Code comptable" });
+    // Both the cost-categories table's own "Code comptable" header and
+    // ValuationPanel's (also mounted on the "costs" tab, both now DataTable-backed
+    // sortable columns as of E8-04) render a <Button> with this name, so this must
+    // be scoped to the cost-categories table's own <form> -- same scoping used by
+    // the "paginates" test above for its "Suivant" button.
+    const categoriesTable = (await screen.findByLabelText("Rechercher une catégorie de coût")).closest(
+      "form",
+    ) as HTMLElement;
+    const sortButton = within(categoriesTable).getByRole("button", { name: "Code comptable" });
 
     fireEvent.click(sortButton);
 
