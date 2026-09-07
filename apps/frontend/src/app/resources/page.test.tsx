@@ -3119,7 +3119,7 @@ describe("ResourcesPage users table (E8-09)", () => {
     vi.clearAllMocks();
     mocks.getResourceNodes.mockResolvedValue([]);
     mocks.getResourceRoles.mockResolvedValue({ items: [], total: 0 });
-    mocks.getCalendars.mockResolvedValue([]);
+    mocks.getCalendars.mockResolvedValue({ items: [], total: 0 });
     mocks.getCostTypes.mockResolvedValue({ items: [], total: 0 });
     mocks.getCostCategories.mockResolvedValue({ items: [], total: 0 });
     mocks.getCostRates.mockResolvedValue([]);
