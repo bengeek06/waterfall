@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   updateResourceRole: vi.fn(),
   createCostType: vi.fn(),
   createResourceRole: vi.fn(),
+  deleteResourceNode: vi.fn(),
   createRoleCapacity: vi.fn(),
   updateRoleCapacity: vi.fn(),
   createCostCategory: vi.fn(),
@@ -63,6 +64,7 @@ vi.mock("@/lib/backend", async () => {
     updateResourceRole: mocks.updateResourceRole,
     createCostType: mocks.createCostType,
     createResourceRole: mocks.createResourceRole,
+    deleteResourceNode: mocks.deleteResourceNode,
     createRoleCapacity: mocks.createRoleCapacity,
     updateRoleCapacity: mocks.updateRoleCapacity,
     createCostCategory: mocks.createCostCategory,
@@ -785,6 +787,566 @@ describe("ResourcesPage cost types table (E8-02)", () => {
   });
 });
 
+const nodeA: ResourceNode = { id: 1, code: "NODEA", name: "Nœud A", parent_id: null } as never;
+const nodeB: ResourceNode = { id: 2, code: "NODEB", name: "Nœud B", parent_id: null } as never;
+
+const roleFixture2 = (overrides: Partial<ResourceRole> = {}): ResourceRole =>
+  ({
+    id: 10,
+    name: "Développeur",
+    node_id: nodeA.id,
+    cost_category_id: 1,
+    calendar_id: null,
+    is_active: true,
+    ...overrides,
+  }) as ResourceRole;
+
+async function openRessourcesTab() {
+  render(<ResourcesPage />);
+  await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+  fireEvent.click(screen.getByRole("tab", { name: "Ressources" }));
+}
+
+// RolesPanel shares its search placeholder ("Rechercher un rôle") with
+// CapacityTable, both mounted on the same "Ressources" tab -- every query in
+// this describe block that could otherwise match either table is scoped to
+// RolesPanel's own <Card>. Its heading is dynamic ("Rôles" or "Rôles de
+// <node name>" once a node is selected), hence the prefix match.
+function rolesPanelCard(): HTMLElement {
+  const heading = screen.getByRole("heading", { name: /^Rôles/ });
+  const card = heading.closest('[data-slot="card"]');
+  if (!card) throw new Error("roles panel card not found");
+  return card as HTMLElement;
+}
+
+describe("ResourcesPage roles panel (E8-08)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getResourceNodes.mockResolvedValue([nodeA, nodeB]);
+    mocks.getCalendars.mockResolvedValue([]);
+    mocks.getCostTypes.mockResolvedValue({
+      items: [{ id: 100, code: "MO", name: "Main d'œuvre", kind: "labor", is_active: true } as CostType],
+      total: 1,
+    });
+    mocks.getCostCategories.mockResolvedValue({
+      items: [
+        { id: 200, cost_type_id: 100, accounting_code: "MO-DEV", category_code: null, name: "Développement", is_active: true } as never,
+      ],
+      total: 1,
+    });
+    mocks.getCostRates.mockResolvedValue([]);
+    mocks.getInflationRates.mockResolvedValue([]);
+    mocks.getRoleCapacities.mockResolvedValue([]);
+    mocks.getUsers.mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("requests the panel's own paginated, node-scoped page independently from the unpaginated reference list CapacityTable/RoleCalendarsTable rely on", async () => {
+    // Genuinely different item sets for the two call shapes, like the equivalent
+    // cost-types test: if the paginated slice ever got wired into the reference-data
+    // consumers (or vice versa), this test catches it by which roles show up where.
+    const fullList = [roleFixture2({ id: 10, name: "Développeur", node_id: nodeA.id })];
+    const paginatedSlice = [roleFixture2({ id: 99, name: "RôlePage", node_id: nodeA.id })];
+    mocks.getResourceRoles.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, nodeId: unknown, _includeDescendants: unknown, listParams: unknown) => {
+        if (listParams === undefined) return Promise.resolve({ items: fullList, total: fullList.length });
+        // CapacityTable's own paginated call (nodeId undefined) -- not under
+        // test here, kept empty so its rendering can't collide with the
+        // panel-specific assertions below.
+        if (nodeId === undefined) return Promise.resolve({ items: [], total: 0 });
+        return Promise.resolve({ items: paginatedSlice, total: 25 });
+      },
+    );
+
+    await openRessourcesTab();
+    // 3, not 2: the reference list, the panel's own node-scoped page, and
+    // CapacityTable's own (unscoped) paginated page -- also mounted on the same
+    // "Ressources" tab and also calling `getResourceRoles`.
+    await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalledTimes(3));
+
+    const calls = mocks.getResourceRoles.mock.calls as [unknown, unknown, unknown, unknown, unknown][];
+    // The full reference list (feeds CapacityTable/RoleCalendarsTable) is requested
+    // with no node filter and no pagination params at all.
+    expect(calls.some(([, , nodeId, , listParams]) => nodeId === undefined && listParams === undefined)).toBe(true);
+    // The panel's own view is requested separately, scoped to the selected node
+    // (defaulted to the first loaded node) with an explicit page size.
+    expect(
+      calls.some(
+        ([, , nodeId, , listParams]) =>
+          nodeId === nodeA.id &&
+          typeof listParams === "object" &&
+          listParams !== null &&
+          (listParams as { limit?: number }).limit === 20 &&
+          (listParams as { offset?: number }).offset === 0,
+      ),
+    ).toBe(true);
+
+    // CapacityTable (fed by the full, unpaginated list) shows the reference role...
+    // Shows up in both CapacityTable and RoleCalendarsTable, which both render
+    // every role from the full, unpaginated reference list.
+    expect(screen.getAllByText(`Développeur — ${nodeA.code} (#10)`).length).toBeGreaterThan(0);
+    // ...while RolesPanel shows only its own paginated slice, not the full list.
+    expect(screen.getByText("RôlePage (#99)")).toBeInTheDocument();
+    expect(screen.queryByText("Développeur (#10)")).not.toBeInTheDocument();
+    expect(screen.queryByText(`RôlePage — ${nodeA.code} (#99)`)).not.toBeInTheDocument();
+  });
+
+  it("selecting a different node in the organization tree resets pagination to offset 0 and re-scopes the request to the new node", async () => {
+    mocks.getResourceRoles.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, _nodeId: unknown, _includeDescendants: unknown, listParams: unknown) =>
+        Promise.resolve(
+          listParams === undefined
+            ? { items: [], total: 0 }
+            : { items: [roleFixture2({})], total: 25 },
+        ),
+    );
+
+    await openRessourcesTab();
+    // Scoped to RolesPanel's own card: CapacityTable, on the same tab, has its
+    // own "Suivant" button too.
+    const suivant = await within(rolesPanelCard()).findByRole("button", { name: "Suivant" });
+    await waitFor(() => expect(suivant).toBeEnabled());
+    fireEvent.click(suivant);
+
+    await waitFor(() =>
+      expect(mocks.getResourceRoles).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        nodeA.id,
+        false,
+        expect.objectContaining({ limit: 20, offset: 20 }),
+      ),
+    );
+
+    const nodeBRow = screen.getByText(nodeB.code).closest("tr");
+    if (!nodeBRow) throw new Error("node row not found");
+    fireEvent.click(nodeBRow);
+
+    await waitFor(() =>
+      expect(mocks.getResourceRoles).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        nodeB.id,
+        false,
+        expect.objectContaining({ limit: 20, offset: 0 }),
+      ),
+    );
+  });
+
+  it("scopes search to the selected node: typing sends q alongside node_id, resetting to offset 0", async () => {
+    mocks.getResourceRoles.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, _nodeId: unknown, _includeDescendants: unknown, listParams: unknown) =>
+        Promise.resolve(
+          listParams === undefined
+            ? { items: [], total: 0 }
+            : { items: [roleFixture2({})], total: 1 },
+        ),
+    );
+
+    await openRessourcesTab();
+    // Scoped to RolesPanel's own card: CapacityTable, on the same tab, uses
+    // the exact same search placeholder ("Rechercher un rôle").
+    const searchInput = await within(rolesPanelCard()).findByLabelText("Rechercher un rôle");
+
+    fireEvent.change(searchInput, { target: { value: "dev" } });
+
+    await waitFor(() =>
+      expect(mocks.getResourceRoles).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        nodeA.id,
+        false,
+        expect.objectContaining({ q: "dev", offset: 0 }),
+      ),
+    );
+  });
+
+  it("sorts: clicking the Nom column header refetches with sort=name, still scoped to the selected node", async () => {
+    mocks.getResourceRoles.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, _nodeId: unknown, _includeDescendants: unknown, listParams: unknown) =>
+        Promise.resolve(
+          listParams === undefined
+            ? { items: [], total: 0 }
+            : { items: [roleFixture2({})], total: 1 },
+        ),
+    );
+
+    await openRessourcesTab();
+    // Only RolesPanel's "Nom" column is sortable (rendered as a button inside the
+    // header); OrganizationTree's and CalendarsTable's own "Nom" columns are plain
+    // text, so this is unambiguous even though several "Nom" column headers exist
+    // on the page at once.
+    const sortButton = await screen.findByRole("button", { name: "Nom" });
+
+    fireEvent.click(sortButton);
+
+    await waitFor(() =>
+      expect(mocks.getResourceRoles).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        nodeA.id,
+        false,
+        expect.objectContaining({ sort: "name" }),
+      ),
+    );
+  });
+
+  it("refetches the panel's page after creating a role, on top of the existing local roles list update", async () => {
+    mocks.getResourceRoles.mockResolvedValue({ items: [], total: 0 });
+    mocks.createResourceRole.mockResolvedValue(roleFixture2({ id: 42, name: "Nouveau rôle" }));
+
+    await openRessourcesTab();
+    // 3, not 2: the reference list, the panel's own page, and CapacityTable's
+    // own paginated page -- also mounted on the same "Ressources" tab.
+    await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalledTimes(3));
+
+    const nameInput = screen.getByLabelText("Nom");
+    fireEvent.change(nameInput, { target: { value: "Nouveau rôle" } });
+    fireEvent.change(screen.getByLabelText("Nœud"), { target: { value: String(nodeA.id) } });
+    fireEvent.change(screen.getByLabelText("Code comptable"), { target: { value: "200" } });
+    const roleForm = nameInput.closest("form");
+    if (!roleForm) throw new Error("role create form not found");
+    fireEvent.click(within(roleForm).getByRole("button", { name: "Ajouter" }));
+
+    await waitFor(() => expect(mocks.createResourceRole).toHaveBeenCalledTimes(1));
+    // The initial load made 3 calls; creating a role triggers both its own
+    // panel reload and CapacityTable's reload (addRole calls both), for 5 total.
+    await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalledTimes(5));
+  });
+
+  it("redirects to login when the roles panel's own paginated fetch reports session expiry", async () => {
+    mocks.getResourceRoles.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, _nodeId: unknown, _includeDescendants: unknown, listParams: unknown) =>
+        listParams === undefined
+          ? Promise.resolve({ items: [], total: 0 })
+          : Promise.reject(new SessionExpiredError()),
+    );
+
+    await openRessourcesTab();
+
+    await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith("/login"));
+  });
+
+  it("does not leave the panel's loading indicator stuck when a mutation's reload races an in-flight pagination fetch", async () => {
+    let resolveStalePage!: (page: { items: ResourceRole[]; total: number }) => void;
+    const stalePagePromise = new Promise<{ items: ResourceRole[]; total: number }>((resolve) => {
+      resolveStalePage = resolve;
+    });
+    let paginatedCallCount = 0;
+    mocks.getResourceRoles.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, nodeId: unknown, _includeDescendants: unknown, listParams: unknown) => {
+        if (listParams === undefined) return Promise.resolve({ items: [], total: 0 });
+        // CapacityTable's own paginated call (nodeId undefined) -- not under
+        // test here, kept out of the panel-specific counter below.
+        if (nodeId === undefined) return Promise.resolve({ items: [], total: 0 });
+        paginatedCallCount += 1;
+        if (paginatedCallCount === 1) return stalePagePromise;
+        return Promise.resolve({ items: [roleFixture2({ id: 42, name: "Nouveau rôle" })], total: 1 });
+      },
+    );
+    mocks.createResourceRole.mockResolvedValue(roleFixture2({ id: 42, name: "Nouveau rôle" }));
+
+    await openRessourcesTab();
+    // 3, not 2: the reference list, the panel's own page, and CapacityTable's
+    // own paginated page -- also mounted on the same "Ressources" tab.
+    await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalledTimes(3));
+    // Scoped to RolesPanel's own card: CapacityTable shows the same
+    // role="status" skeleton while its own (harmless, already-resolved) fetch
+    // is briefly in flight.
+    await waitFor(() =>
+      expect(within(rolesPanelCard()).getByRole("status", { name: "Chargement des données" })).toBeInTheDocument(),
+    );
+
+    const nameInput = screen.getByLabelText("Nom");
+    fireEvent.change(nameInput, { target: { value: "Nouveau rôle" } });
+    fireEvent.change(screen.getByLabelText("Nœud"), { target: { value: String(nodeA.id) } });
+    fireEvent.change(screen.getByLabelText("Code comptable"), { target: { value: "200" } });
+    const roleForm = nameInput.closest("form");
+    if (!roleForm) throw new Error("role create form not found");
+    fireEvent.click(within(roleForm).getByRole("button", { name: "Ajouter" }));
+
+    await waitFor(() => expect(mocks.createResourceRole).toHaveBeenCalledTimes(1));
+    // The mutation's own reload (2nd panel-scoped paginated call) resolves
+    // immediately and must clear the loading state on its own -- it must not
+    // wait for the stale 1st call.
+    await waitFor(() =>
+      expect(within(rolesPanelCard()).queryByRole("status", { name: "Chargement des données" })).not.toBeInTheDocument(),
+    );
+
+    resolveStalePage({ items: [], total: 0 });
+    await waitFor(() => expect(screen.getByText("Nouveau rôle (#42)")).toBeInTheDocument());
+    expect(within(rolesPanelCard()).queryByRole("status", { name: "Chargement des données" })).not.toBeInTheDocument();
+  });
+
+  it("does not leave the panel's loading indicator stuck when the selected node is deleted while its own paginated fetch is still in flight", async () => {
+    let resolvePendingPage!: (page: { items: ResourceRole[]; total: number }) => void;
+    const pendingPagePromise = new Promise<{ items: ResourceRole[]; total: number }>((resolve) => {
+      resolvePendingPage = resolve;
+    });
+    let paginatedCallCount = 0;
+    mocks.getResourceRoles.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, nodeId: unknown, _includeDescendants: unknown, listParams: unknown) => {
+        if (listParams === undefined) return Promise.resolve({ items: [], total: 0 });
+        // CapacityTable's own paginated call (nodeId undefined) -- not under
+        // test here, kept out of the panel-specific counter below.
+        if (nodeId === undefined) return Promise.resolve({ items: [], total: 0 });
+        paginatedCallCount += 1;
+        // First paginated call (for nodeA, on initial load) is left pending on
+        // purpose, to simulate the node being deleted while it's still in flight.
+        if (paginatedCallCount === 1) return pendingPagePromise;
+        return Promise.resolve({ items: [], total: 0 });
+      },
+    );
+    mocks.deleteResourceNode.mockResolvedValue(undefined);
+    const confirmSpy = vi.spyOn(globalThis, "confirm").mockReturnValue(true);
+
+    await openRessourcesTab();
+    // 3, not 2: the reference list, the panel's own page, and CapacityTable's
+    // own paginated page -- also mounted on the same "Ressources" tab.
+    await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalledTimes(3));
+    // Scoped to RolesPanel's own card: CapacityTable shows the same
+    // role="status" skeleton while its own (harmless, already-resolved) fetch
+    // is briefly in flight.
+    await waitFor(() =>
+      expect(within(rolesPanelCard()).getByRole("status", { name: "Chargement des données" })).toBeInTheDocument(),
+    );
+
+    const nodeARow = screen.getByText(nodeA.code).closest("tr");
+    if (!nodeARow) throw new Error("node row not found");
+    fireEvent.click(within(nodeARow).getByRole("button", { name: "Supprimer" }));
+
+    await waitFor(() => expect(mocks.deleteResourceNode).toHaveBeenCalledWith(nodeA.id, expect.anything(), expect.anything()));
+    // Deleting the selected node clears `selectedNodeId`, which takes the panel
+    // effect's early-return branch on its next run -- that branch must clear the
+    // loading indicator itself, since the still-pending first fetch's own
+    // generation is now stale and its `finally` block is guarded out.
+    await waitFor(() =>
+      expect(within(rolesPanelCard()).queryByRole("status", { name: "Chargement des données" })).not.toBeInTheDocument(),
+    );
+    expect(screen.getByText("Sélectionnez un nœud pour voir ses rôles.")).toBeInTheDocument();
+
+    // Releasing the stale fetch afterwards must not resurrect the loading state.
+    resolvePendingPage({ items: [], total: 0 });
+    await waitFor(() =>
+      expect(within(rolesPanelCard()).queryByRole("status", { name: "Chargement des données" })).not.toBeInTheDocument(),
+    );
+
+    confirmSpy.mockRestore();
+  });
+
+  it("does not overwrite the panel with a stale node's data when the selection changes while a role creation's reload is still pending", async () => {
+    const nodeARole = roleFixture2({ id: 10, name: "RôleA", node_id: nodeA.id });
+    const nodeBRole = roleFixture2({ id: 20, name: "RôleB", node_id: nodeB.id });
+    mocks.getResourceRoles.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, nodeId: unknown, _includeDescendants: unknown, listParams: unknown) => {
+        if (listParams === undefined) return Promise.resolve({ items: [], total: 0 });
+        if (nodeId === nodeA.id) return Promise.resolve({ items: [nodeARole], total: 1 });
+        if (nodeId === nodeB.id) return Promise.resolve({ items: [nodeBRole], total: 1 });
+        return Promise.resolve({ items: [], total: 0 });
+      },
+    );
+    let resolveCreate!: (role: ResourceRole) => void;
+    mocks.createResourceRole.mockReturnValue(
+      new Promise<ResourceRole>((resolve) => {
+        resolveCreate = resolve;
+      }),
+    );
+
+    await openRessourcesTab();
+    await waitFor(() => expect(screen.getByText("RôleA (#10)")).toBeInTheDocument());
+
+    const nameInput = screen.getByLabelText("Nom");
+    fireEvent.change(nameInput, { target: { value: "Nouveau rôle" } });
+    fireEvent.change(screen.getByLabelText("Nœud"), { target: { value: String(nodeA.id) } });
+    fireEvent.change(screen.getByLabelText("Code comptable"), { target: { value: "200" } });
+    const roleForm = nameInput.closest("form");
+    if (!roleForm) throw new Error("role create form not found");
+    fireEvent.click(within(roleForm).getByRole("button", { name: "Ajouter" }));
+    await waitFor(() => expect(mocks.createResourceRole).toHaveBeenCalledTimes(1));
+
+    // Switch to node B in the org tree while node A's role creation is still
+    // pending (org-tree row selection isn't disabled by `actionBusy`).
+    const nodeBRow = screen.getByText(nodeB.code).closest("tr");
+    if (!nodeBRow) throw new Error("node row not found");
+    fireEvent.click(nodeBRow);
+    await waitFor(() => expect(screen.getByText("RôleB (#20)")).toBeInTheDocument());
+
+    // Resolving the creation now must not re-fetch/apply node A's page: the
+    // reload it triggers must target the *currently* selected node (B), not the
+    // node that was selected when the create form was submitted (A). Captures
+    // the call count first and inspects the *next* call specifically: node B's
+    // own selection already issued a `nodeB.id` call before `resolveCreate`
+    // below, so a plain `toHaveBeenCalledWith` here could be satisfied by that
+    // earlier call alone, without actually proving the creation's own reload
+    // (not just the prior node-switch) targets B.
+    const callCountBeforeResolve = mocks.getResourceRoles.mock.calls.length;
+    resolveCreate(roleFixture2({ id: 30, name: "Nouveau rôle", node_id: nodeA.id }));
+    // `addRole` reloads both the panel's own page and CapacityTable's (a call
+    // with `nodeId === undefined`), in that order but not necessarily settling
+    // in that order -- so the reload under test isn't reliably the *last* new
+    // call, only *a* new call scoped to node B.
+    await waitFor(() =>
+      expect(
+        mocks.getResourceRoles.mock.calls
+          .slice(callCountBeforeResolve)
+          .some((call) => call[2] === nodeB.id && call[4] && (call[4] as { offset?: number }).offset === 0),
+      ).toBe(true),
+    );
+    expect(screen.getByText("RôleB (#20)")).toBeInTheDocument();
+    expect(screen.queryByText("RôleA (#10)")).not.toBeInTheDocument();
+  });
+
+  it("does not apply a stale offset to the reload triggered by creating a role, if the user paginated away while the creation was in flight", async () => {
+    const pageAtOffset0 = { items: [roleFixture2({ id: 1, name: "Page 1 role", node_id: nodeA.id })], total: 25 };
+    const pageAtOffset20 = { items: [roleFixture2({ id: 2, name: "Page 2 role", node_id: nodeA.id })], total: 25 };
+    mocks.getResourceRoles.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, nodeId: unknown, _includeDescendants: unknown, listParams: unknown) => {
+        if (listParams === undefined) return Promise.resolve({ items: [], total: 0 });
+        if (nodeId === undefined) return Promise.resolve({ items: [], total: 0 });
+        const offset = (listParams as { offset?: number }).offset ?? 0;
+        return Promise.resolve(offset === 0 ? pageAtOffset0 : pageAtOffset20);
+      },
+    );
+    let resolveCreate!: (role: ResourceRole) => void;
+    mocks.createResourceRole.mockReturnValue(
+      new Promise<ResourceRole>((resolve) => {
+        resolveCreate = resolve;
+      }),
+    );
+
+    await openRessourcesTab();
+    await waitFor(() => expect(screen.getByText("Page 1 role (#1)")).toBeInTheDocument());
+
+    const nameInput = screen.getByLabelText("Nom");
+    fireEvent.change(nameInput, { target: { value: "Nouveau rôle" } });
+    fireEvent.change(screen.getByLabelText("Nœud"), { target: { value: String(nodeA.id) } });
+    fireEvent.change(screen.getByLabelText("Code comptable"), { target: { value: "200" } });
+    const roleForm = nameInput.closest("form");
+    if (!roleForm) throw new Error("role create form not found");
+    fireEvent.click(within(roleForm).getByRole("button", { name: "Ajouter" }));
+    await waitFor(() => expect(mocks.createResourceRole).toHaveBeenCalledTimes(1));
+
+    // Paginate to offset 20 while the role creation is still in flight.
+    const suivant = await within(rolesPanelCard()).findByRole("button", { name: "Suivant" });
+    fireEvent.click(suivant);
+    await waitFor(() => expect(screen.getByText("Page 2 role (#2)")).toBeInTheDocument());
+
+    // Resolving the creation now must not refetch/display offset 0's stale page:
+    // the reload it triggers must target the *current* offset (20), not the
+    // offset that was current when "Ajouter" was clicked.
+    resolveCreate(roleFixture2({ id: 9, name: "Nouveau rôle", node_id: nodeA.id }));
+    await waitFor(() =>
+      expect(mocks.getResourceRoles).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        nodeA.id,
+        false,
+        expect.objectContaining({ offset: 20 }),
+      ),
+    );
+    expect(screen.getByText("Page 2 role (#2)")).toBeInTheDocument();
+    expect(screen.queryByText("Page 1 role (#1)")).not.toBeInTheDocument();
+  });
+
+  it("treats selecting the placeholder option in the create form's node dropdown as no selection, not as node id 0 (which would fetch every node's roles unscoped)", async () => {
+    mocks.getResourceRoles.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, nodeId: unknown, _includeDescendants: unknown, listParams: unknown) => {
+        if (listParams === undefined) return Promise.resolve({ items: [], total: 0 });
+        return Promise.resolve({ items: [roleFixture2({ node_id: nodeId as number })], total: 1 });
+      },
+    );
+
+    await openRessourcesTab();
+    await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      nodeA.id,
+      false,
+      expect.anything(),
+    ));
+
+    fireEvent.change(screen.getByLabelText("Nœud"), { target: { value: "" } });
+
+    // Must take the "no selection" branch (no paginated fetch at all for the
+    // placeholder), never a call with `nodeId` coerced to `0` -- `Number("")`
+    // is `0`, and `getResourceRoles` only adds a `node_id` filter for truthy
+    // values, so a literal `0` would silently fetch every node's roles unscoped.
+    await waitFor(() => expect(screen.getByText("Sélectionnez un nœud pour voir ses rôles.")).toBeInTheDocument());
+    expect(mocks.getResourceRoles).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      0,
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it("does not go on showing the previous node's roles under the newly selected node's heading when that node's own fetch fails", async () => {
+    mocks.getResourceRoles.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, nodeId: unknown, _includeDescendants: unknown, listParams: unknown) => {
+        if (listParams === undefined) return Promise.resolve({ items: [], total: 0 });
+        if (nodeId === nodeA.id) return Promise.resolve({ items: [roleFixture2({ id: 10, name: "RôleA", node_id: nodeA.id })], total: 1 });
+        return Promise.reject(new ApiError(500, "Chargement impossible"));
+      },
+    );
+
+    await openRessourcesTab();
+    await waitFor(() => expect(screen.getByText("RôleA (#10)")).toBeInTheDocument());
+
+    const nodeBRow = screen.getByText(nodeB.code).closest("tr");
+    if (!nodeBRow) throw new Error("node row not found");
+    fireEvent.click(nodeBRow);
+
+    // Node B's own fetch fails -- the panel must not go on displaying node A's
+    // roles (now scoped to the wrong node) once the loading skeleton clears.
+    await waitFor(() => expect(screen.getByText("Chargement impossible")).toBeInTheDocument());
+    expect(screen.queryByText("RôleA (#10)")).not.toBeInTheDocument();
+  });
+
+  it("shows the node-selection prompt, not the generic no-results message, when the selected node is cleared while a search is still active", async () => {
+    mocks.getResourceRoles.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, nodeId: unknown, _includeDescendants: unknown, listParams: unknown) =>
+        Promise.resolve(
+          listParams === undefined || nodeId === undefined
+            ? { items: [], total: 0 }
+            : { items: [roleFixture2({ node_id: nodeId as number })], total: 1 },
+        ),
+    );
+    mocks.deleteResourceNode.mockResolvedValue(undefined);
+    const confirmSpy = vi.spyOn(globalThis, "confirm").mockReturnValue(true);
+
+    await openRessourcesTab();
+    const searchInput = await within(rolesPanelCard()).findByLabelText("Rechercher un rôle");
+    fireEvent.change(searchInput, { target: { value: "dev" } });
+    await waitFor(() =>
+      expect(mocks.getResourceRoles).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        nodeA.id,
+        false,
+        expect.objectContaining({ q: "dev" }),
+      ),
+    );
+
+    // Delete the selected node (search query left untouched) -- `DataTable`
+    // prefers `noResultsState` over `emptyState` whenever a search is active,
+    // so without a node-aware `noResultsState` this would silently show the
+    // generic "no results" message instead of the "select a node" prompt.
+    const nodeARow = screen.getByText(nodeA.code).closest("tr");
+    if (!nodeARow) throw new Error("node row not found");
+    fireEvent.click(within(nodeARow).getByRole("button", { name: "Supprimer" }));
+    await waitFor(() => expect(mocks.deleteResourceNode).toHaveBeenCalledWith(nodeA.id, expect.anything(), expect.anything()));
+
+    await waitFor(() => expect(screen.getByText("Sélectionnez un nœud pour voir ses rôles.")).toBeInTheDocument());
+    expect(screen.queryByText("Aucun résultat pour cette recherche.")).not.toBeInTheDocument();
+
+    confirmSpy.mockRestore();
+  });
+});
+
 const resourceRoleFixture = (overrides: Partial<ResourceRole> = {}): ResourceRole =>
   ({
     id: 1,
@@ -848,7 +1410,10 @@ describe("ResourcesPage capacity table (E8-05)", () => {
     render(<ResourcesPage />);
     await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
     fireEvent.click(screen.getByRole("tab", { name: "Ressources" }));
-    await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalledTimes(2));
+    // 3, not 2: the reference list, the capacity table's own page, and
+    // RolesPanel's own (node-scoped) paginated page -- also mounted on the
+    // same "Ressources" tab.
+    await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalledTimes(3));
 
     const calls = mocks.getResourceRoles.mock.calls as [unknown, unknown, unknown, unknown, unknown][];
     // The full reference list (feeds RolesPanel/RoleCalendarsTable/capacity drafts) is
@@ -914,7 +1479,9 @@ describe("ResourcesPage capacity table (E8-05)", () => {
     render(<ResourcesPage />);
     await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
     fireEvent.click(screen.getByRole("tab", { name: "Ressources" }));
-    const searchInput = await screen.findByLabelText("Rechercher un rôle");
+    // Scoped to the capacity table's own card: RolesPanel, on the same tab,
+    // uses the exact same search placeholder ("Rechercher un rôle").
+    const searchInput = await within(capacityCard()).findByLabelText("Rechercher un rôle");
 
     fireEvent.change(searchInput, { target: { value: "dev" } });
 
@@ -990,7 +1557,10 @@ describe("ResourcesPage capacity table (E8-05)", () => {
     render(<ResourcesPage />);
     await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
     fireEvent.click(screen.getByRole("tab", { name: "Ressources" }));
-    await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalledTimes(2));
+    // 3, not 2: the reference list, the capacity table's own page, and
+    // RolesPanel's own paginated page -- also mounted on the same "Ressources"
+    // tab.
+    await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalledTimes(3));
 
     const nameInput = screen.getByLabelText("Nom");
     fireEvent.change(nameInput, { target: { value: "Nouveau rôle" } });
@@ -1000,9 +1570,9 @@ describe("ResourcesPage capacity table (E8-05)", () => {
     fireEvent.click(within(rolesForm).getByRole("button", { name: "Ajouter" }));
 
     await waitFor(() => expect(mocks.createResourceRole).toHaveBeenCalledTimes(1));
-    // The initial load made 2 calls (reference list + capacity table page); creating a
-    // role must trigger a 3rd, to refresh the table's own paginated view.
-    await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalledTimes(3));
+    // The initial load made 3 calls; creating a role triggers both RolesPanel's
+    // own reload and the capacity table's reload (addRole calls both), for 5 total.
+    await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalledTimes(5));
   });
 
   it("redirects to login when the capacity table's own paginated fetch reports session expiry", async () => {
@@ -1079,8 +1649,11 @@ describe("ResourcesPage capacity table (E8-05)", () => {
     mocks.getCostCategories.mockResolvedValue({ items: [category], total: 1 });
     let paginatedCallCount = 0;
     mocks.getResourceRoles.mockImplementation(
-      (_tokens: unknown, _refresh: unknown, _nodeId: unknown, _includeDescendants: unknown, listParams: unknown) => {
+      (_tokens: unknown, _refresh: unknown, nodeId: unknown, _includeDescendants: unknown, listParams: unknown) => {
         if (listParams === undefined) return Promise.resolve({ items: [], total: 0 });
+        // RolesPanel's own paginated call (nodeId defined) -- not under test
+        // here, kept out of the capacity-table-specific counter below.
+        if (nodeId !== undefined) return Promise.resolve({ items: [], total: 0 });
         paginatedCallCount += 1;
         // First paginated call: the initial load, succeeds. Second paginated call: the
         // reload triggered by the role creation below, fails transiently.
@@ -1093,7 +1666,10 @@ describe("ResourcesPage capacity table (E8-05)", () => {
     render(<ResourcesPage />);
     await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
     fireEvent.click(screen.getByRole("tab", { name: "Ressources" }));
-    await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalledTimes(2));
+    // 3, not 2: the reference list, the capacity table's own page, and
+    // RolesPanel's own paginated page -- also mounted on the same "Ressources"
+    // tab.
+    await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalledTimes(3));
 
     const nameInput = screen.getByLabelText("Nom");
     fireEvent.change(nameInput, { target: { value: "Nouveau rôle" } });
@@ -1135,8 +1711,11 @@ describe("ResourcesPage capacity table (E8-05)", () => {
     });
     let paginatedCallCount = 0;
     mocks.getResourceRoles.mockImplementation(
-      (_tokens: unknown, _refresh: unknown, _nodeId: unknown, _includeDescendants: unknown, listParams: unknown) => {
+      (_tokens: unknown, _refresh: unknown, nodeId: unknown, _includeDescendants: unknown, listParams: unknown) => {
         if (listParams === undefined) return Promise.resolve({ items: [], total: 0 });
+        // RolesPanel's own paginated call (nodeId defined) -- not under test
+        // here, kept out of the capacity-table-specific counter below.
+        if (nodeId !== undefined) return Promise.resolve({ items: [], total: 0 });
         paginatedCallCount += 1;
         if (paginatedCallCount === 1) return stalePagePromise;
         return Promise.resolve({
@@ -1152,7 +1731,10 @@ describe("ResourcesPage capacity table (E8-05)", () => {
     // Signaled by call count rather than the generic `status` role: the capacity
     // table's own loading skeleton is also a `role="status"`, and stays mounted
     // throughout this test by design, so it can't be used as a page-ready signal.
-    await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalledTimes(2));
+    // 3, not 2: the reference list, the capacity table's own page, and
+    // RolesPanel's own paginated page -- also mounted on the same "Ressources"
+    // tab.
+    await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalledTimes(3));
     await waitFor(() =>
       expect(within(capacityCard()).getByRole("status", { name: "Chargement des données" })).toBeInTheDocument(),
     );

@@ -94,7 +94,31 @@ export default function ResourcesPage() {
   const [activeTab, setActiveTab] = useState<SettingsTab>("costs");
   const [nodes, setNodes] = useState<ResourceNode[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null);
+  // Mirrors `selectedNodeId` synchronously (updated at every write site below,
+  // not via a `useEffect`) so an async continuation resumed after selection has
+  // since changed (e.g. `reloadRolesPanelPage`, called from `addRole` after
+  // `await createResourceRole`) can read the *live* selection instead of the
+  // value closed over when it started -- otherwise a role created for node A
+  // while the user has since switched to node B would fetch and display A's
+  // page under B's heading.
+  const selectedNodeIdRef = useRef<number | null>(null);
+  // `roles` (full, unfiltered across every node) feeds CapacityTable and
+  // RoleCalendarsTable, which both need the complete reference list (they display
+  // every role, labelled with its own node code, not just the currently selected
+  // node's roles). Per the same EPIC E7/E8 guarantee as `costTypes` below, this must
+  // stay a plain unpaginated fetch. RolesPanel's own view -- scoped to the selected
+  // node, with server search/sort/pagination -- is a second, independent fetch
+  // (`rolesPanelPage` below), not a client-side slice of `roles`.
   const [roles, setRoles] = useState<ResourceRole[]>([]);
+  const [rolesPanelPage, setRolesPanelPage] = useState<{ items: ResourceRole[]; total: number }>({
+    items: [],
+    total: 0,
+  });
+  const [rolesPanelLoading, setRolesPanelLoading] = useState(false);
+  const [rolesPanelOffset, setRolesPanelOffset] = useState(0);
+  const [rolesPanelLimit] = useState(20);
+  const [rolesPanelSort, setRolesPanelSort] = useState<string | null>(null);
+  const [rolesPanelQuery, setRolesPanelQuery] = useState("");
   const [calendars, setCalendars] = useState<Calendar[]>([]);
   // `costTypes` (full, unfiltered) feeds other panels that need the complete list as
   // reference data (RolesPanel, CostCategoriesTable's type dropdown, ValuationPanel) --
@@ -257,7 +281,11 @@ export default function ResourcesPage() {
         ]);
         if (!isCurrentGeneration()) return;
         setNodes(nodeData);
-        setSelectedNodeId((previous) => previous ?? nodeData[0]?.id ?? null);
+        setSelectedNodeId((previous) => {
+          const next = previous ?? nodeData[0]?.id ?? null;
+          selectedNodeIdRef.current = next;
+          return next;
+        });
         setRoleNodeId((previous) => previous || (nodeData[0] ? String(nodeData[0].id) : ""));
         setRoles(roleData);
         setCalendars(calendarData);
@@ -385,6 +413,147 @@ export default function ResourcesPage() {
       }
     } finally {
       if (costTypesGenerationRef.current === generation) setCostTypesLoading(false);
+    }
+  }
+
+  // RolesPanel's own paginated view: scoped to the selected node (the panel's
+  // structural filter, sourced from the organization tree -- never overridden by
+  // free-text search) and refetched whenever the selected node, pagination, sort,
+  // or search change, plus once more after creating a role (`reloadRolesPanelPage`
+  // below), since that mutation only appends to the full `roles` list and has no
+  // way to patch this separate, server-ordered/filtered page in place.
+  //
+  // The backend applies `node_id` as a plain WHERE filter *before* the free-text
+  // search (see `list_roles` in resources.py: the node filter narrows the query,
+  // then `apply_pagination` searches only within what's left) -- so search here is
+  // scoped to the selected node's roles, never the whole organization. That keeps
+  // what's searched consistent with what's displayed (no need for a "node" column
+  // on results, since every row already belongs to the single node shown in the
+  // panel's heading) and matches how this panel has always behaved: a per-node
+  // view, not an organization-wide one.
+  //
+  // No fetch happens while no node is selected (`selectedNodeId === null`):
+  // mirrors the previous client-side-filtered behavior, where the list was simply
+  // empty until a node was picked.
+  const rolesPanelGenerationRef = useRef(0);
+  // Mirrors `rolesPanelOffset`/`rolesPanelSort`/`rolesPanelQuery` synchronously
+  // (updated at every write site below, not via a `useEffect`) so
+  // `reloadRolesPanelPage` -- called from `addRole` after an `await` -- reads
+  // the *live* pagination/sort/search state instead of the value closed over
+  // when `addRole` started. Otherwise: the table remains interactive while
+  // `createResourceRole` is pending, so a user can page/sort/search before it
+  // resolves -- the reload it triggers would then silently commit rows fetched
+  // with the stale parameters under the new controls. Same bug class and fix
+  // as `reloadRolesPage`/`reloadRoleCalendarsPage`.
+  const rolesPanelOffsetRef = useRef(rolesPanelOffset);
+  const rolesPanelSortRef = useRef(rolesPanelSort);
+  const rolesPanelQueryRef = useRef(rolesPanelQuery);
+
+  useEffect(() => {
+    const generation = ++rolesPanelGenerationRef.current;
+    // The generation counter alone only orders requests -- it doesn't verify a
+    // resolved request still matches what's currently selected. The refs are
+    // updated synchronously in the handlers (selectNode/pagination/sort/search),
+    // strictly before React re-renders and re-runs this effect: a request
+    // started for one set of parameters can therefore still resolve, generation
+    // unchanged, in the window after the user has already moved on (e.g.
+    // clicked a different node) but before this effect gets to run again for
+    // that change. Comparing every captured parameter against the live refs
+    // closes that window, the same way `reloadRolesPanelPage` already does for
+    // `nodeId`.
+    const capturedNodeId = selectedNodeId;
+    const capturedOffset = rolesPanelOffset;
+    const capturedSort = rolesPanelSort;
+    const capturedQuery = rolesPanelQuery;
+    const isStillCurrent = () =>
+      rolesPanelGenerationRef.current === generation &&
+      selectedNodeIdRef.current === capturedNodeId &&
+      rolesPanelOffsetRef.current === capturedOffset &&
+      rolesPanelSortRef.current === capturedSort &&
+      rolesPanelQueryRef.current === capturedQuery;
+
+    async function load() {
+      if (!session || selectedNodeId === null) {
+        setRolesPanelPage({ items: [], total: 0 });
+        // Also clears any loading state a still-in-flight, now-obsolete fetch left
+        // behind (e.g. the selected node was deleted, or the session was cleared,
+        // while a request for it was pending): that fetch's own generation is now
+        // stale, so its `finally` block is guarded out and will never fire this
+        // itself, which would otherwise leave the indicator stuck forever.
+        setRolesPanelLoading(false);
+        return;
+      }
+      setRolesPanelLoading(true);
+      // Cleared unconditionally, not just on the no-selection branch above: if
+      // this request fails (e.g. right after switching to a different node),
+      // the table must not go on showing the *previous* node's rows under the
+      // newly selected node's heading once the loading skeleton disappears.
+      setRolesPanelPage({ items: [], total: 0 });
+      try {
+        const page = await getResourceRoles(session, onSessionRefresh, selectedNodeId, false, {
+          limit: rolesPanelLimit,
+          offset: rolesPanelOffset,
+          sort: rolesPanelSort,
+          q: rolesPanelQuery || undefined,
+        });
+        if (!isStillCurrent()) return;
+        setRolesPanelPage(page);
+      } catch (cause) {
+        if (!isStillCurrent()) return;
+        if (cause instanceof SessionExpiredError) {
+          clearSession();
+          router.push("/login");
+          return;
+        }
+        if (cause instanceof ApiError && cause.status === 401) {
+          clearSession();
+          router.push("/login");
+          return;
+        }
+        setNotice({
+          kind: "error",
+          message: cause instanceof ApiError ? cause.message : "Chargement des rôles impossible",
+        });
+      } finally {
+        if (isStillCurrent()) setRolesPanelLoading(false);
+      }
+    }
+
+    void load();
+  }, [session, onSessionRefresh, router, selectedNodeId, rolesPanelLimit, rolesPanelOffset, rolesPanelSort, rolesPanelQuery]);
+
+  // Mirrors `reloadCostTypesPage`: deliberately swallows its own non-session
+  // errors (see that function's comment for the full rationale) and sets
+  // `rolesPanelLoading` itself, guarded by the shared generation counter, so a
+  // mutation's reload racing an in-flight pagination/sort/search fetch can't leave
+  // the loading indicator stuck forever.
+  async function reloadRolesPanelPage() {
+    // Reads the live selection via the ref, not the `selectedNodeId` closed over
+    // when this function's caller was invoked -- see `selectedNodeIdRef`'s
+    // comment above. The ref is re-checked again below after the request
+    // resolves, since the selection can also change while this request is
+    // itself in flight.
+    const nodeId = selectedNodeIdRef.current;
+    if (!session || nodeId === null) return;
+    const generation = ++rolesPanelGenerationRef.current;
+    setRolesPanelLoading(true);
+    try {
+      const page = await getResourceRoles(session, onSessionRefresh, nodeId, false, {
+        limit: rolesPanelLimit,
+        offset: rolesPanelOffsetRef.current,
+        sort: rolesPanelSortRef.current,
+        q: rolesPanelQueryRef.current || undefined,
+      });
+      if (rolesPanelGenerationRef.current === generation && selectedNodeIdRef.current === nodeId) {
+        setRolesPanelPage(page);
+      }
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
+        clearSession();
+        router.push("/login");
+      }
+    } finally {
+      if (rolesPanelGenerationRef.current === generation) setRolesPanelLoading(false);
     }
   }
 
@@ -616,7 +785,16 @@ export default function ResourcesPage() {
     await submitAction(async () => {
       await deleteResourceNode(node.id, session, onSessionRefresh);
       setNodes((previous) => previous.filter((item) => item.id !== node.id));
-      setSelectedNodeId((previous) => previous === node.id ? null : previous);
+      // Reads the live selection via the ref (see `selectedNodeIdRef`'s comment
+      // above), not the value closed over when `removeNode` started -- otherwise
+      // deleting node A while the user has since switched to node B would
+      // incorrectly reset B's own pagination back to page 1.
+      if (selectedNodeIdRef.current === node.id) {
+        selectedNodeIdRef.current = null;
+        setSelectedNodeId(null);
+        rolesPanelOffsetRef.current = 0;
+        setRolesPanelOffset(0);
+      }
     }, "Nœud supprimé.");
   }
 
@@ -746,6 +924,7 @@ export default function ResourcesPage() {
       );
       setRoles((prev) => [...prev, created].sort((left, right) => left.name.localeCompare(right.name)));
       setRoleName("");
+      await reloadRolesPanelPage();
       await reloadRolesPage();
     }, "Rôle créé.");
   }
@@ -972,11 +1151,13 @@ export default function ResourcesPage() {
   );
   const organizationRows = useMemo(() => flattenOrganization(nodes, collapsedNodeIds), [nodes, collapsedNodeIds]);
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? null;
-  const selectedRoles = selectedNodeId === null ? [] : roles.filter((role) => role.node_id === selectedNodeId);
 
   function selectNode(nodeId: number) {
+    selectedNodeIdRef.current = nodeId;
     setSelectedNodeId(nodeId);
     setRoleNodeId(String(nodeId));
+    rolesPanelOffsetRef.current = 0;
+    setRolesPanelOffset(0);
   }
 
   function toggleNodeCollapsed(nodeId: number) {
@@ -1083,7 +1264,7 @@ export default function ResourcesPage() {
             onNodeChange={(field, value) => { if (field === "code") setNodeCode(value); if (field === "name") setNodeName(value); if (field === "parent") setNodeParentId(value); }}
           />
 
-          <RolesPanel selectedNode={selectedNode} selectedRoles={selectedRoles} nodes={nodes} categories={categories} costTypes={costTypes} roleName={roleName} roleNodeId={roleNodeId} roleCategoryId={roleCategoryId} actionBusy={actionBusy} categoryNames={categoryNameById} onSubmit={addRole} onNameChange={setRoleName} onNodeChange={(value) => { setRoleNodeId(value); setSelectedNodeId(Number(value)); }} onCategoryChange={setRoleCategoryId} />
+          <RolesPanel selectedNode={selectedNode} items={rolesPanelPage.items} pagination={{ total: rolesPanelPage.total, limit: rolesPanelLimit, offset: rolesPanelOffset }} onPaginationChange={(next) => { rolesPanelOffsetRef.current = next.offset; setRolesPanelOffset(next.offset); }} sort={rolesPanelSort} onSortChange={(next) => { rolesPanelSortRef.current = next; setRolesPanelSort(next); }} search={rolesPanelQuery} onSearchChange={(next) => { rolesPanelQueryRef.current = next; setRolesPanelQuery(next); rolesPanelOffsetRef.current = 0; setRolesPanelOffset(0); }} isLoading={rolesPanelLoading} nodes={nodes} categories={categories} costTypes={costTypes} roleName={roleName} roleNodeId={roleNodeId} roleCategoryId={roleCategoryId} actionBusy={actionBusy} categoryNames={categoryNameById} onSubmit={addRole} onNameChange={setRoleName} onNodeChange={(value) => { setRoleNodeId(value); const nextNodeId = value === "" ? null : Number(value); selectedNodeIdRef.current = nextNodeId; setSelectedNodeId(nextNodeId); rolesPanelOffsetRef.current = 0; setRolesPanelOffset(0); }} onCategoryChange={setRoleCategoryId} />
 
           </div>
           <CapacityTable items={rolesPage.items} pagination={{ total: rolesPage.total, limit: rolesLimit, offset: rolesOffset }} onPaginationChange={(next) => { rolesOffsetRef.current = next.offset; setRolesOffset(next.offset); }} sort={rolesSort} onSortChange={(next) => { rolesSortRef.current = next; setRolesSort(next); }} search={rolesQuery} onSearchChange={(next) => { rolesQueryRef.current = next; setRolesQuery(next); rolesOffsetRef.current = 0; setRolesOffset(0); }} isLoading={rolesPageLoading} drafts={capacityDrafts} actionBusy={actionBusy} nodeCodeById={nodeCodeById} onDraftChange={(roleId, draft) => setCapacityDrafts((previous) => ({ ...previous, [roleId]: draft }))} onSave={(roleId) => void saveRoleCapacity(roleId)} />
