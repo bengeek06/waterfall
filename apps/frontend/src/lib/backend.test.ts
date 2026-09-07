@@ -7,6 +7,7 @@ import {
   getCostTypes,
   getPlanning,
   getPlanningTaskDeleteConflict,
+  getProjects,
   getResourceRoles,
   getUsers,
   movePlanningTasks,
@@ -72,6 +73,62 @@ describe("getCostTypes query building", () => {
     const page = await getCostTypes({ accessToken: "token" }, vi.fn(), true, { limit: 1, offset: 0 });
 
     expect(page).toEqual({ items, total: 12 });
+  });
+});
+
+describe("getProjects query building", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("sends no query string at all when called with no listParams and includeArchived false", async () => {
+    const fetchMock = vi.fn<(input: RequestInfo | URL) => Promise<Response>>(async () => jsonResponse({ items: [], total: 0 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getProjects({ accessToken: "token" }, vi.fn());
+
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain("?");
+  });
+
+  it("sends limit, offset, sort, and q together, plus include_archived as its own flag", async () => {
+    const fetchMock = vi.fn<(input: RequestInfo | URL) => Promise<Response>>(async () => jsonResponse({ items: [], total: 0 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getProjects({ accessToken: "token" }, vi.fn(), true, {
+      limit: 20,
+      offset: 40,
+      sort: "-name",
+      q: "abc",
+    });
+
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain("include_archived=true");
+    expect(url).toContain("limit=20");
+    expect(url).toContain("offset=40");
+    expect(url).toContain("sort=-name");
+    expect(url).toContain("q=abc");
+  });
+
+  it("omits include_archived when false, rather than sending it explicitly", async () => {
+    const fetchMock = vi.fn<(input: RequestInfo | URL) => Promise<Response>>(async () => jsonResponse({ items: [], total: 0 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getProjects({ accessToken: "token" }, vi.fn(), false, { limit: 5, offset: 0 });
+
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain("limit=5");
+    expect(url).toContain("offset=0");
+    expect(url).not.toContain("include_archived");
+  });
+
+  it("returns items and total from the response envelope", async () => {
+    const items = [{ id: 1, name: "Projet test", status: "en_cours" }];
+    const fetchMock = vi.fn(async () => jsonResponse({ items, total: 3 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const page = await getProjects({ accessToken: "token" }, vi.fn(), false, { limit: 1, offset: 0 });
+
+    expect(page).toEqual({ items, total: 3 });
   });
 });
 

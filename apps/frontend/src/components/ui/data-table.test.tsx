@@ -367,6 +367,42 @@ describe("DataTable", () => {
   });
 });
 
+describe("DataTable row click", () => {
+  it("calls onRowClick with the row's own data when a data row is clicked", () => {
+    const onRowClick = vi.fn();
+    const data = [{ id: 1, name: "Alpha" }, { id: 2, name: "Bravo" }];
+    renderTable({ data, pagination: { total: 2, limit: 10, offset: 0 }, onRowClick });
+
+    fireEvent.click(screen.getByText("Bravo"));
+
+    expect(onRowClick).toHaveBeenCalledExactlyOnceWith({ id: 2, name: "Bravo" });
+  });
+
+  it("adds a cursor-pointer affordance to data rows only when onRowClick is set", () => {
+    const data = [{ id: 1, name: "Alpha" }];
+    const { rerender, props } = renderTable({ data, pagination: { total: 1, limit: 10, offset: 0 } });
+
+    expect(getDataRows()[0]).not.toHaveClass("cursor-pointer");
+
+    rerender(<DataTable {...props} onRowClick={() => {}} />);
+    expect(getDataRows()[0]).toHaveClass("cursor-pointer");
+  });
+
+  it("never applies onRowClick to the pinned row", () => {
+    const onRowClick = vi.fn();
+    renderTable({
+      data: [],
+      pagination: { total: 0, limit: 10, offset: 0 },
+      pinnedRow: <tr><td>Ligne épinglée</td></tr>,
+      onRowClick,
+    });
+
+    fireEvent.click(screen.getByText("Ligne épinglée"));
+
+    expect(onRowClick).not.toHaveBeenCalled();
+  });
+});
+
 describe("DataTable without search", () => {
   it("renders with no search input when the search prop is omitted", () => {
     renderTable({ data: [{ id: 1, name: "Alpha" }] });

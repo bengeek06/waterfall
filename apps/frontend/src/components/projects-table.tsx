@@ -1,30 +1,13 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import type { ColumnDef } from "@tanstack/react-table";
 import Link from "next/link";
-import {
-  flexRender,
-  functionalUpdate,
-  getCoreRowModel,
-  getSortedRowModel,
-  type ColumnDef,
-  type SortingState,
-  useReactTable,
-} from "@tanstack/react-table";
-import { ArrowDownUp, CircleCheck, CircleDot, CirclePlus, CircleX, LoaderCircle, Send } from "lucide-react";
+import { CircleCheck, CircleDot, CirclePlus, CircleX, LoaderCircle, Send } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { DataTable, type DataTablePaginationState } from "@/components/ui/data-table";
 import type { Project } from "@/lib/backend";
 
 const ARCHIVED_STATUSES = new Set<Project["status"]>(["perdu", "termine", "abandonne"]);
@@ -41,163 +24,156 @@ const PROJECT_STATUS_DETAILS: Record<
   abandonne: { label: "Abandonné", Icon: CircleX, variant: "destructive" },
 };
 
-type ProjectsTableProps = {
+export type ProjectsTableProps = {
   projects: Project[];
+  pagination: DataTablePaginationState;
+  onPaginationChange: (next: { offset: number; limit: number }) => void;
+  // Server-sortable columns are limited to what the backend's `sort` query
+  // parameter accepts (`openapi/spec/paths/projects.yaml`: name, -name, status,
+  // -status, id, -id) -- there is no server-side equivalent for "Code", which the
+  // pre-DataTable version of this table did sort client-side. That client-only
+  // sort is deliberately dropped rather than kept as a local, page-only sort that
+  // would silently stop applying to rows on other pages: only `name`/`status`
+  // declare `meta.sortColumn` below.
+  sort: string | null;
+  onSortChange: (next: string | null) => void;
+  search: string;
+  onSearchChange: (next: string) => void;
+  isLoading: boolean;
   selectedIds: Set<number>;
   onSelectedIdsChange: (projectIds: Set<number>) => void;
   onProjectOpen: (projectId: number) => void;
 };
 
-function SortableHeader({ label, column }: { label: string; column: { toggleSorting: (descending?: boolean) => void; getIsSorted: () => false | "asc" | "desc" } }) {
-  const direction = column.getIsSorted();
+export function ProjectsTable(props: ProjectsTableProps) {
+  const { projects, selectedIds, onSelectedIdsChange } = props;
 
-  return (
-    <Button variant="ghost" size="sm" className="-ml-2" onClick={() => column.toggleSorting(direction === "asc")}>
-      {label}
-      <ArrowDownUp aria-hidden="true" />
-    </Button>
-  );
-}
+  // "Select all" only ever applies to the rows currently rendered by this table --
+  // i.e. the current server page, since `projects` here is exactly one page, never
+  // the full dataset. It reads/writes `selectedIds` by merging/subtracting just
+  // this page's selectable ids, rather than replacing the whole set, so a caller
+  // that happened to keep a selection across an unrelated re-render wouldn't lose
+  // selections made on another page. In practice the parent page currently resets
+  // `selectedIds` on every reload (pagination included), but this table shouldn't
+  // rely on that to behave correctly.
+  const selectableProjects = projects.filter((project) => !ARCHIVED_STATUSES.has(project.status));
+  const allSelected = selectableProjects.length > 0 && selectableProjects.every((project) => selectedIds.has(project.id));
 
-export function ProjectsTable({
-  projects,
-  selectedIds,
-  onSelectedIdsChange,
-  onProjectOpen,
-}: ProjectsTableProps) {
-  const [sorting, setSorting] = useState<SortingState>([]);
-  const rowSelection = useMemo(
-    () => Object.fromEntries([...selectedIds].map((projectId) => [String(projectId), true])),
-    [selectedIds],
-  );
-  const columns = useMemo<ColumnDef<Project>[]>(
-    () => [
-      {
-        id: "select",
-        enableSorting: false,
-        header: ({ table }) => (
+  function toggleProject(projectId: number, checked: boolean) {
+    const next = new Set(selectedIds);
+    if (checked) {
+      next.add(projectId);
+    } else {
+      next.delete(projectId);
+    }
+    onSelectedIdsChange(next);
+  }
+
+  function toggleAllOnPage(checked: boolean) {
+    const next = new Set(selectedIds);
+    for (const project of selectableProjects) {
+      if (checked) {
+        next.add(project.id);
+      } else {
+        next.delete(project.id);
+      }
+    }
+    onSelectedIdsChange(next);
+  }
+
+  const columns: ColumnDef<Project>[] = [
+    {
+      id: "select",
+      header: () => (
+        <Checkbox
+          aria-label="Tout sélectionner sur cette page"
+          checked={allSelected}
+          onCheckedChange={(checked) => toggleAllOnPage(Boolean(checked))}
+        />
+      ),
+      cell: ({ row }) => (
+        // Stops the click from also bubbling up to DataTable's own `onRowClick`
+        // (whole-row navigation), which would otherwise both toggle the checkbox
+        // and navigate to the project on the same click.
+        <div onClick={(event) => event.stopPropagation()}>
           <Checkbox
-            aria-label="Tout sélectionner"
-            checked={table.getIsAllPageRowsSelected()}
-            onCheckedChange={(checked) => table.toggleAllPageRowsSelected(Boolean(checked))}
+            aria-label={`Sélectionner ${row.original.name}`}
+            checked={selectedIds.has(row.original.id)}
+            disabled={ARCHIVED_STATUSES.has(row.original.status)}
+            onCheckedChange={(checked) => toggleProject(row.original.id, Boolean(checked))}
           />
-        ),
-        cell: ({ row }) => (
-          <div onClick={(event) => event.stopPropagation()}>
-            <Checkbox
-              aria-label={`Sélectionner ${row.original.name}`}
-              checked={row.getIsSelected()}
-              disabled={!row.getCanSelect()}
-              onCheckedChange={(checked) => row.toggleSelected(Boolean(checked))}
-            />
-          </div>
-        ),
-      },
-      {
-        accessorKey: "code",
-        header: ({ column }) => <SortableHeader label="Code" column={column} />,
-        cell: ({ row }) => row.original.code ?? "-",
-      },
-      {
-        accessorKey: "name",
-        header: ({ column }) => <SortableHeader label="Nom" column={column} />,
-        cell: ({ row }) => (
-          <Link
-            href={`/projects/${row.original.id}`}
-            className="font-medium hover:underline"
-            onClick={(event) => event.stopPropagation()}
-          >
-            {row.original.name}
-          </Link>
-        ),
-      },
-      {
-        accessorKey: "status",
-        header: "Statut",
-        cell: ({ row }) => {
-          const status = PROJECT_STATUS_DETAILS[row.original.status];
-          const isReadOnly = ARCHIVED_STATUSES.has(row.original.status);
-
-          return (
-            <div className="flex items-center gap-2">
-              <Badge variant={status.variant} className="gap-1.5">
-                <status.Icon aria-hidden="true" />
-                {status.label}
-              </Badge>
-              {isReadOnly ? <span className="text-xs text-muted-foreground">Lecture seule</span> : null}
-            </div>
-          );
-        },
-      },
-      {
-        accessorKey: "short_description",
-        header: "Description",
-        cell: ({ row }) => (
-          <span className="block max-w-sm truncate text-muted-foreground">
-            {row.original.short_description ?? "-"}
-          </span>
-        ),
-      },
-    ],
-    [],
-  );
-  // TanStack Table's own row/column helpers are known-incompatible with React Compiler
-  // memoization (they return new function identities on every call); this component
-  // doesn't rely on referential stability of anything derived from `table`, so skipping
-  // compiler memoization here is safe.
-  // eslint-disable-next-line react-hooks/incompatible-library
-  const table = useReactTable({
-    data: projects,
-    columns,
-    getRowId: (project) => String(project.id),
-    enableRowSelection: (row) => !ARCHIVED_STATUSES.has(row.original.status),
-    onRowSelectionChange: (updater) => {
-      const nextSelection = functionalUpdate(updater, rowSelection);
-      onSelectedIdsChange(
-        new Set(
-          Object.entries(nextSelection)
-            .filter(([, selected]) => selected)
-            .map(([projectId]) => Number(projectId)),
-        ),
-      );
+        </div>
+      ),
     },
-    onSortingChange: setSorting,
-    getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    state: { rowSelection, sorting },
-  });
+    {
+      id: "code",
+      header: "Code",
+      cell: ({ row }) => row.original.code ?? "-",
+    },
+    {
+      id: "name",
+      header: "Nom",
+      meta: { sortColumn: "name" },
+      cell: ({ row }) => (
+        <Link
+          href={`/projects/${row.original.id}`}
+          className="font-medium hover:underline"
+          onClick={(event) => event.stopPropagation()}
+        >
+          {row.original.name}
+        </Link>
+      ),
+    },
+    {
+      id: "status",
+      header: "Statut",
+      meta: { sortColumn: "status" },
+      cell: ({ row }) => {
+        const status = PROJECT_STATUS_DETAILS[row.original.status];
+        const isReadOnly = ARCHIVED_STATUSES.has(row.original.status);
+
+        return (
+          <div className="flex items-center gap-2">
+            <Badge variant={status.variant} className="gap-1.5">
+              <status.Icon aria-hidden="true" />
+              {status.label}
+            </Badge>
+            {isReadOnly ? <span className="text-xs text-muted-foreground">Lecture seule</span> : null}
+          </div>
+        );
+      },
+    },
+    {
+      id: "description",
+      header: "Description",
+      cell: ({ row }) => (
+        <span className="block max-w-sm truncate text-muted-foreground">
+          {row.original.short_description ?? "-"}
+        </span>
+      ),
+    },
+  ];
 
   return (
-    <Table>
-      <TableHeader>
-        {table.getHeaderGroups().map((headerGroup) => (
-          <TableRow key={headerGroup.id}>
-            {headerGroup.headers.map((header) => (
-              <TableHead key={header.id}>
-                {header.isPlaceholder
-                  ? null
-                  : flexRender(header.column.columnDef.header, header.getContext())}
-              </TableHead>
-            ))}
-          </TableRow>
-        ))}
-      </TableHeader>
-      <TableBody>
-        {table.getRowModel().rows.map((row) => (
-          <TableRow
-            key={row.id}
-            data-state={row.getIsSelected() ? "selected" : undefined}
-            className="cursor-pointer"
-            onClick={() => onProjectOpen(row.original.id)}
-          >
-            {row.getVisibleCells().map((cell) => (
-              <TableCell key={cell.id}>
-                {flexRender(cell.column.columnDef.cell, cell.getContext())}
-              </TableCell>
-            ))}
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
+    <DataTable
+      columns={columns}
+      data={projects}
+      getRowId={(project) => String(project.id)}
+      pagination={props.pagination}
+      onPaginationChange={props.onPaginationChange}
+      sort={props.sort}
+      onSortChange={props.onSortChange}
+      search={{ value: props.search, onChange: props.onSearchChange, placeholder: "Rechercher un projet" }}
+      isLoading={props.isLoading}
+      onRowClick={(project) => props.onProjectOpen(project.id)}
+      // `DataTable` never sets `data-state` itself (unlike the old direct
+      // `useReactTable` render, which set `data-state="selected"` from TanStack's
+      // own row-selection model) -- `ui/table.tsx`'s `data-[state=selected]:bg-muted`
+      // styling only ever applies via an explicit class, so the selected-row
+      // highlight has to come through `getRowClassName` instead, same idiom as
+      // `calendars-table.tsx`/`cost-types-table.tsx` use for `is_active`.
+      getRowClassName={(project) => (selectedIds.has(project.id) ? "bg-muted" : undefined)}
+      emptyState="Aucun projet importé."
+    />
   );
 }
