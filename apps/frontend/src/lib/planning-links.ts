@@ -1,4 +1,5 @@
 import type { Task, TaskLinkWrite } from "./backend";
+import { formatCalendarDuration, type ProjectCalendar } from "./planning-calendar";
 
 // Pure predecessor-link domain helpers extracted from planning-tree-table.tsx (E4-12 / #152):
 // shared by the tree table's own "Prédécesseurs" column and the use-planning-task-links hook /
@@ -53,7 +54,7 @@ export function createLinkRowDraft(link?: {
   };
 }
 
-export function predecessorsLabel(task: Task): string {
+export function predecessorsLabel(task: Task, calendar: ProjectCalendar): string {
   if (!task.predecessor_links?.length) {
     return "-";
   }
@@ -61,8 +62,11 @@ export function predecessorsLabel(task: Task): string {
     .map((link) => {
       const type = LINK_TYPE_LABELS[link.link_type] ?? String(link.link_type);
       const lagMinutes = link.lag_tenth_minute ? link.lag_tenth_minute / 10 : 0;
-      const lagSign = lagMinutes > 0 ? "+" : "";
-      const lag = lagMinutes ? ` ${lagSign}${lagMinutes}min` : "";
+      // The sign is applied around the calendar-formatted absolute value, mirroring the
+      // pre-#142 lagSign/lagMinutes split: formatCalendarDuration itself only ever formats a
+      // non-negative duration (see its own doc comment).
+      const lagSign = lagMinutes > 0 ? "+" : lagMinutes < 0 ? "-" : "";
+      const lag = lagMinutes ? ` ${lagSign}${formatCalendarDuration(Math.abs(lagMinutes), calendar)}` : "";
       return `${link.predecessor_uid} (${type}${lag})`;
     })
     .join(", ");

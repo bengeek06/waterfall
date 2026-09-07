@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type Ref } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -25,6 +25,7 @@ import { usePlanningScheduleDrafts } from "@/hooks/use-planning-schedule-drafts"
 import { usePlanningTaskLinks } from "@/hooks/use-planning-task-links";
 import { usePlanningTreeSelection } from "@/hooks/use-planning-tree-selection";
 import type { PlanningTaskScheduleUpdate, Task, TaskLinkWrite } from "@/lib/backend";
+import { DEFAULT_PROJECT_CALENDAR, type ProjectCalendar } from "@/lib/planning-calendar";
 import { predecessorsLabel } from "@/lib/planning-links";
 import {
   computeIndentCommand,
@@ -117,7 +118,11 @@ function ColumnResizeHandle({
 // hear. Only once the text is truncated does it become a focusable Tooltip trigger, which is the
 // only way to reach the full name without a mouse hover in that case.
 function TaskNameLabel({ name, width, isMilestone }: { name: string; width: number; isMilestone: boolean }) {
-  const textRef = useRef<HTMLSpanElement>(null);
+  // Typed as the common base rather than HTMLSpanElement | HTMLButtonElement because the same ref
+  // is attached to either a plain <span> (untruncated case) or the Tooltip's <button> trigger
+  // (truncated case, see below) -- only scrollWidth/clientWidth are read from it, both of which
+  // are HTMLElement members, so this stays a pure typing fix with no runtime effect.
+  const textRef = useRef<HTMLElement>(null);
   const [isTruncated, setIsTruncated] = useState(false);
 
   // Re-checked whenever the name text or the Name column's own width changes -- either can flip
@@ -143,7 +148,7 @@ function TaskNameLabel({ name, width, isMilestone }: { name: string; width: numb
 
   if (!isTruncated) {
     return (
-      <span ref={textRef} className="min-w-0 truncate text-left">
+      <span ref={textRef as Ref<HTMLSpanElement>} className="min-w-0 truncate text-left">
         {label}
       </span>
     );
@@ -152,7 +157,7 @@ function TaskNameLabel({ name, width, isMilestone }: { name: string; width: numb
   return (
     <Tooltip>
       <TooltipTrigger
-        ref={textRef}
+        ref={textRef as Ref<HTMLButtonElement>}
         type="button"
         className="min-w-0 truncate text-left"
         onClick={(event: MouseEvent<HTMLButtonElement>) => event.stopPropagation()}
@@ -186,6 +191,14 @@ type PlanningTreeTableProps = Readonly<{
   tasks: Task[];
   /** Any value identifying the loaded planning version; changing it resets local expand/selection state. */
   versionKey: number | string | null;
+  /**
+   * The owning project's working calendar, used to format/parse the Duration cell and the
+   * Prédécesseurs column's lag in MS-Project-like units (day/week/month) instead of raw minutes.
+   * Optional (defaulting to DEFAULT_PROJECT_CALENDAR) so call sites that don't care about this
+   * formatting -- most of this component's own tests -- don't need to thread it through, mirroring
+   * readOnly/mutationBusy's own optional-with-default pattern below.
+   */
+  calendar?: ProjectCalendar;
   readOnly?: boolean;
   onMove?: (command: PlanningMoveCommand) => void;
   onScheduleUpdate?: (
@@ -226,6 +239,7 @@ type PlanningTreeTableProps = Readonly<{
 export function PlanningTreeTable({
   tasks,
   versionKey,
+  calendar = DEFAULT_PROJECT_CALENDAR,
   readOnly = false,
   onMove,
   onScheduleUpdate,
@@ -252,7 +266,7 @@ export function PlanningTreeTable({
     [columnWidths.widths],
   );
   const selection = usePlanningTreeSelection(tasks);
-  const scheduleDrafts = usePlanningScheduleDrafts({ onScheduleUpdate, mutationBusy });
+  const scheduleDrafts = usePlanningScheduleDrafts({ onScheduleUpdate, mutationBusy, calendar });
   const taskLinks = usePlanningTaskLinks({ tasks, onEditLinks });
   const singleSelectedTask = getSingleSelectedTask(selection.selectedUids, tasksByUid);
   const createTaskDialog = usePlanningCreateTaskDialog({ onCreateTask, singleSelectedTask });
@@ -417,6 +431,8 @@ export function PlanningTreeTable({
                       readOnly={readOnly}
                       hasScheduleUpdate={Boolean(onScheduleUpdate)}
                       mutationBusy={mutationBusy}
+                      calendar={calendar}
+                      durationError={scheduleDrafts.durationErrorFor(row)}
                       tasksByUid={tasksByUid}
                       onUpdateDraft={(field, value) => scheduleDrafts.updateScheduleDraft(row, field, value)}
                       onCommit={() => void scheduleDrafts.commitScheduleEdit(row)}
@@ -425,7 +441,7 @@ export function PlanningTreeTable({
                     />
                     <TableCell className="whitespace-normal break-words align-top">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="min-w-0">{predecessorsLabel(row)}</span>
+                        <span className="min-w-0">{predecessorsLabel(row, calendar)}</span>
                         {!readOnly && onEditLinks ? (
                           <Button
                             type="button"
