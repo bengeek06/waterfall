@@ -163,14 +163,22 @@ export function CapacityTable(props: CapacityTableProps) {
         },
       },
     ],
-    // Intentionally empty: see the comment above `propsRef`. `labelFor`,
     // `draftFor` and `handleFieldChange` are recreated every render but are
     // only used inside the memoized cell closures below as the *initial* seed
     // for `CapacityFieldInput` (only read once, at mount, per role) or as
-    // stable-enough-for-event-handlers indirection through `propsRef` -- none
-    // of them need to be dependencies for `columns` itself to stay correct.
+    // stable-enough-for-event-handlers indirection through `propsRef` -- they
+    // don't need to be dependencies for `columns` itself to stay correct.
+    //
+    // `props.nodeCodeById` *is* a dependency, though (via `labelFor`): unlike
+    // `props.drafts`, it changes only when the organization tree's nodes
+    // change (e.g. a node rename on the "Nœud" tab) -- a rare event, not a
+    // per-keystroke one -- so including it here doesn't reproduce the
+    // focus-loss bug this memoization exists to prevent, and it must be
+    // included: the displayed node code would otherwise go stale after a
+    // rename, since nothing else in this array would change to force
+    // `columns` (and the `labelFor` closure it captured) to rebuild.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
+    [props.nodeCodeById],
   );
 
   return (
