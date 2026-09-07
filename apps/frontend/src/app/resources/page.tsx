@@ -1572,6 +1572,26 @@ export default function ResourcesPage() {
   // would defeat that memoization just as surely as depending on a per-keystroke
   // prop directly.
   const nodeCodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node.code])), [nodes]);
+  // Memoized (not a plain `new Map()` on every render), for the same reason as
+  // `nodeCodeById` above: `CapacityTable` depends on it (via its own
+  // `hasUnsavedDraft` computation, to freeze pagination/sort/search while an
+  // unsaved draft is visible) and a fresh Map identity every render would
+  // defeat that memoization. `ResourceRole` itself doesn't carry
+  // `person_count`/`available_hours` (those live on a separate `RoleCapacity`,
+  // one per `role_id` that has ever had a capacity saved), so this is built
+  // from `capacities` instead -- a role absent here has never had a capacity
+  // saved, which `CapacityTable`'s own `defaultDraft` fallback already
+  // accounts for.
+  const savedByRoleId = useMemo(
+    () =>
+      new Map(
+        capacities.map((capacity) => [
+          capacity.role_id,
+          { personCount: String(capacity.person_count), availableHours: String(capacity.available_hours) },
+        ]),
+      ),
+    [capacities],
+  );
   // Memoized (not a plain `new Set()` on every render): `CalendarsTable` uses
   // this as a dependency of its own memoized `columns` (to keep cell renderers
   // at a stable identity while a draft is being typed elsewhere on the page --
@@ -1707,7 +1727,7 @@ export default function ResourcesPage() {
           <RolesPanel selectedNode={selectedNode} items={rolesPanelPage.items} pagination={{ total: rolesPanelPage.total, limit: rolesPanelLimit, offset: rolesPanelOffset }} onPaginationChange={(next) => { rolesPanelOffsetRef.current = next.offset; setRolesPanelOffset(next.offset); }} sort={rolesPanelSort} onSortChange={(next) => { rolesPanelSortRef.current = next; setRolesPanelSort(next); }} search={rolesPanelQuery} onSearchChange={(next) => { rolesPanelQueryRef.current = next; setRolesPanelQuery(next); rolesPanelOffsetRef.current = 0; setRolesPanelOffset(0); }} isLoading={rolesPanelLoading} nodes={nodes} categories={categories} costTypes={costTypes} roleName={roleName} roleNodeId={roleNodeId} roleCategoryId={roleCategoryId} actionBusy={actionBusy} categoryNames={categoryNameById} onSubmit={addRole} onNameChange={setRoleName} onNodeChange={(value) => { setRoleNodeId(value); const nextNodeId = value === "" ? null : Number(value); selectedNodeIdRef.current = nextNodeId; setSelectedNodeId(nextNodeId); rolesPanelOffsetRef.current = 0; setRolesPanelOffset(0); }} onCategoryChange={setRoleCategoryId} />
 
           </div>
-          <CapacityTable items={rolesPage.items} pagination={{ total: rolesPage.total, limit: rolesLimit, offset: rolesOffset }} onPaginationChange={(next) => { rolesOffsetRef.current = next.offset; setRolesOffset(next.offset); }} sort={rolesSort} onSortChange={(next) => { rolesSortRef.current = next; setRolesSort(next); }} search={rolesQuery} onSearchChange={(next) => { rolesQueryRef.current = next; setRolesQuery(next); rolesOffsetRef.current = 0; setRolesOffset(0); }} isLoading={rolesPageLoading} drafts={capacityDrafts} actionBusy={actionBusy} nodeCodeById={nodeCodeById} onDraftChange={(roleId, draft) => setCapacityDrafts((previous) => ({ ...previous, [roleId]: draft }))} onSave={(roleId) => void saveRoleCapacity(roleId)} />
+          <CapacityTable items={rolesPage.items} pagination={{ total: rolesPage.total, limit: rolesLimit, offset: rolesOffset }} onPaginationChange={(next) => { rolesOffsetRef.current = next.offset; setRolesOffset(next.offset); }} sort={rolesSort} onSortChange={(next) => { rolesSortRef.current = next; setRolesSort(next); }} search={rolesQuery} onSearchChange={(next) => { rolesQueryRef.current = next; setRolesQuery(next); rolesOffsetRef.current = 0; setRolesOffset(0); }} isLoading={rolesPageLoading} drafts={capacityDrafts} savedByRoleId={savedByRoleId} actionBusy={actionBusy} nodeCodeById={nodeCodeById} onDraftChange={(roleId, draft) => setCapacityDrafts((previous) => ({ ...previous, [roleId]: draft }))} onSave={(roleId) => void saveRoleCapacity(roleId)} />
           <RoleCalendarsTable roles={roleCalendarsPage.items} calendars={calendars} pagination={{ total: roleCalendarsPage.total, limit: roleCalendarsLimit, offset: roleCalendarsOffset }} onPaginationChange={(next) => { roleCalendarsOffsetRef.current = next.offset; setRoleCalendarsOffset(next.offset); }} sort={roleCalendarsSort} onSortChange={(next) => { roleCalendarsSortRef.current = next; setRoleCalendarsSort(next); }} search={roleCalendarsQuery} onSearchChange={(next) => { roleCalendarsQueryRef.current = next; setRoleCalendarsQuery(next); roleCalendarsOffsetRef.current = 0; setRoleCalendarsOffset(0); }} isLoading={roleCalendarsLoading} drafts={roleCalendarDrafts} actionBusy={actionBusy} nodeCodeById={nodeCodeById} onDraftChange={(roleId, calendarId) => setRoleCalendarDrafts((previous) => ({ ...previous, [roleId]: calendarId }))} onSave={(roleId) => void saveRoleCalendar(roleId)} />
           <CalendarsTable
             items={calendarsPage.items}

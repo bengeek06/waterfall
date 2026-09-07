@@ -22,6 +22,13 @@ export type CapacityTableProps = {
   onSearchChange: (next: string) => void;
   isLoading: boolean;
   drafts: Record<number, CapacityDraft>;
+  // The last-saved capacity for each role, keyed by `role_id` -- not derivable
+  // from `items` (a plain `ResourceRole`, which doesn't carry `person_count`/
+  // `available_hours`; those live on a separate `RoleCapacity`). Used only to
+  // detect an unsaved draft (see `hasUnsavedDraft` below), not to render
+  // anything: a role with no saved capacity is absent from this map, and
+  // `defaultDraft` below stands in for it on both sides of that comparison.
+  savedByRoleId: Map<number, CapacityDraft>;
   actionBusy: boolean;
   nodeCodeById: Map<number, string>;
   onDraftChange: (roleId: number, draft: CapacityDraft) => void;
@@ -29,6 +36,23 @@ export type CapacityTableProps = {
 };
 
 const defaultDraft: CapacityDraft = { personCount: "0.00", availableHours: "0.00" };
+
+// Compares a draft field to its saved value numerically, not as strings: a
+// freshly-saved capacity coming back from the API can be formatted
+// differently from what the user typed (e.g. saved "3.00" vs typed "3"),
+// which must not read as "still unsaved" (see `hasUnsavedDraft` below).
+//
+// A blank or otherwise non-numeric field is always treated as unsaved, never
+// compared numerically: `Number("")` is `0`, not `NaN`, so for a role whose
+// saved capacity is the common "0.00"/"0.00" default (a role that's never had
+// a capacity saved yet), clearing a field to retype it -- an entirely normal
+// editing gesture (select-all then type a new value) -- would otherwise make
+// `Number("") === Number("0.00")` true for the instant the field is empty,
+// prematurely lifting the freeze mid-edit.
+function fieldDiffers(draftValue: string, savedValue: string): boolean {
+  if (draftValue.trim() === "" || Number.isNaN(Number(draftValue))) return true;
+  return Number(draftValue) !== Number(savedValue);
+}
 
 // A stable-identity input for one capacity field of one role. `columns` below
 // is memoized so TanStack Table's `flexRender` keeps passing the *same*
@@ -104,6 +128,35 @@ export function CapacityTable(props: CapacityTableProps) {
     const current = propsRef.current.drafts[roleId] ?? defaultDraft;
     propsRef.current.onDraftChange(roleId, { ...current, [field]: value });
   }
+
+  // Freezes `DataTable`'s own pagination/sort/search (via `isEditing` below)
+  // while a *visible* row's draft differs from its last-saved capacity --
+  // there's no explicit edit mode here (every row is always editable), so
+  // "currently being edited" is defined structurally as "differs from what's
+  // saved" rather than tracked as its own state, unlike `cost-types-table.tsx`'s
+  // `editingId`.
+  //
+  // Deliberately scoped to `props.items` (the page currently on screen), not
+  // every draft that might exist in `props.drafts` -- a role's draft is never
+  // cleared once the user starts typing (see `saveRoleCapacity` in
+  // `resources/page.tsx`, which never removes it from `capacityDrafts`), so a
+  // role edited on a page, then paginated or searched away from, would
+  // otherwise freeze navigation forever even though nothing on screen shows
+  // it. Once a search excludes that role from `props.items` it drops out of
+  // this check and the freeze lifts -- its draft is untouched in the parent's
+  // state (no data is lost), only the *navigation block* goes away, which
+  // matches the issue's "while a *visible* row" wording.
+  //
+  const hasUnsavedDraft = useMemo(
+    () =>
+      props.items.some((role) => {
+        const draft = props.drafts[role.id];
+        if (!draft) return false;
+        const saved = props.savedByRoleId.get(role.id) ?? defaultDraft;
+        return fieldDiffers(draft.personCount, saved.personCount) || fieldDiffers(draft.availableHours, saved.availableHours);
+      }),
+    [props.items, props.drafts, props.savedByRoleId],
+  );
 
   const columns = useMemo<ColumnDef<ResourceRole>[]>(
     () => [
@@ -198,6 +251,8 @@ export function CapacityTable(props: CapacityTableProps) {
           // in resources.py. A leading "#" in the id part is stripped there, so
           // typing either "42" or "#42" finds the role.
           search={{ value: props.search, onChange: props.onSearchChange, placeholder: "Rechercher un rôle" }}
+          isEditing={hasUnsavedDraft}
+          editingReason="Enregistrez la saisie en cours, ou remettez sa valeur d'origine, avant de changer de page ou de filtrer."
           isLoading={props.isLoading}
         />
       </CardContent>

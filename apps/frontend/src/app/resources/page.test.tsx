@@ -10,6 +10,7 @@ import {
   type CostType,
   type ResourceNode,
   type ResourceRole,
+  type RoleCapacity,
 } from "@/lib/backend";
 import { defaultWeekdays } from "@/components/calendars-table";
 
@@ -1627,11 +1628,15 @@ describe("ResourcesPage role calendars table (E8-06)", () => {
     expect(screen.queryByRole("status", { name: "Chargement des données" })).not.toBeInTheDocument();
   });
 
-  it("does not apply a stale offset to the reload triggered by saving a role's calendar, if the user paginated away while the save was in flight", async () => {
+  it("freezes role-calendars pagination while a role's calendar save is in flight (E8-192), then applies the current offset -- not a stale one -- once it's re-enabled", async () => {
     // The pagination effect and `reloadRoleCalendarsPage` share one mock
     // implementation, so responses are distinguished by which offset they were
-    // actually called with rather than by call order.
-    const pageAtOffset0 = [roleFixture];
+    // actually called with rather than by call order. `currentCalendarId` lets
+    // the mock reflect the save's effect on a reload, the way a real backend
+    // would -- needed to observe the freeze (E8-192, `hasUnsavedDraft` in
+    // `role-calendars-table.tsx`) actually lift once the draft matches what
+    // comes back from the reload it triggers.
+    let currentCalendarId: number | null = roleFixture.calendar_id ?? null;
     const pageAtOffset20: ResourceRole[] = [{ ...roleFixture, id: 77, name: "Page 2 role" } as never];
     mocks.getResourceRoles.mockImplementation(
       (
@@ -1641,11 +1646,12 @@ describe("ResourcesPage role calendars table (E8-06)", () => {
         includeDescendants: unknown,
         listParams: unknown,
       ) => {
-        if (listParams === undefined) return Promise.resolve({ items: [roleFixture], total: 1 });
+        const roleAtOffset0 = { ...roleFixture, calendar_id: currentCalendarId };
+        if (listParams === undefined) return Promise.resolve({ items: [roleAtOffset0], total: 1 });
         if (nodeId !== undefined || includeDescendants === false) return Promise.resolve({ items: [], total: 0 });
         const offset = (listParams as { offset?: number }).offset ?? 0;
         return Promise.resolve({
-          items: offset === 0 ? pageAtOffset0 : pageAtOffset20,
+          items: offset === 0 ? [roleAtOffset0] : pageAtOffset20,
           total: 25,
         });
       },
@@ -1666,19 +1672,36 @@ describe("ResourcesPage role calendars table (E8-06)", () => {
     fireEvent.click(within(select.closest("tr")!).getByRole("button", { name: "Enregistrer" }));
     await waitFor(() => expect(mocks.updateResourceRole).toHaveBeenCalledTimes(1));
 
-    // Paginate to offset 20 while the save is still in flight.
+    // While the save is in flight, the role's draft (the newly picked calendar)
+    // still differs from what the currently-visible page shows as saved (the
+    // reload the save triggers hasn't landed yet) -- E8-192's freeze applies,
+    // so pagination is blocked, unlike before that feature existed (this test
+    // used to paginate away here and rely on `roleCalendarsOffsetRef` to avoid
+    // applying that stale offset once the save resolved). A disabled "Suivant"
+    // button ignores a click in the browser, and jsdom mirrors that.
     const roleCalendarsSuivant = within(roleCalendarsCard()).getByRole("button", { name: "Suivant" });
+    expect(roleCalendarsSuivant).toBeDisabled();
     fireEvent.click(roleCalendarsSuivant);
-    await waitFor(() =>
-      expect(
-        screen.getByLabelText(`Calendrier de Page 2 role — ${nodeFixture.code} (#77)`),
-      ).toBeInTheDocument(),
+    expect(screen.getByLabelText(roleCalendarSelectLabel)).toBeInTheDocument();
+
+    // Resolving the save updates what a reload reports as saved; the reload
+    // itself uses `roleCalendarsOffsetRef`'s *current* offset (still 0, since
+    // pagination was frozen throughout -- the very race that ref exists to
+    // guard against can no longer occur through the UI now that E8-192 blocks
+    // navigation until the draft and the reload agree).
+    currentCalendarId = activeCalendar.id;
+    resolveUpdate({ ...roleFixture, calendar_id: activeCalendar.id } as never);
+    await waitFor(() => expect(roleCalendarsSuivant).toBeEnabled());
+    expect(mocks.getResourceRoles).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      undefined,
+      undefined,
+      expect.objectContaining({ offset: 0 }),
     );
 
-    // Resolving the save now must not refetch/display offset 0's stale page: the
-    // reload it triggers must target the *current* offset (20), not the offset
-    // that was current when "Enregistrer" was clicked.
-    resolveUpdate({ ...roleFixture, calendar_id: activeCalendar.id } as never);
+    // Now that the freeze has lifted, pagination proceeds normally.
+    fireEvent.click(roleCalendarsSuivant);
     await waitFor(() =>
       expect(mocks.getResourceRoles).toHaveBeenCalledWith(
         expect.anything(),
@@ -2594,6 +2617,48 @@ describe("ResourcesPage capacity table (E8-05)", () => {
       ),
     );
     expect(mocks.updateRoleCapacity).not.toHaveBeenCalled();
+  });
+
+  it("freezes the capacity table's pagination while a visible role's capacity draft differs from its saved value, then re-enables it once saved (E8-192)", async () => {
+    const role = resourceRoleFixture({ id: 42, name: "Avec capacité" });
+    mocks.getResourceRoles.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, _nodeId: unknown, _includeDescendants: unknown, listParams: unknown) =>
+        Promise.resolve(listParams === undefined ? { items: [role], total: 1 } : { items: [role], total: 25 }),
+    );
+    mocks.getRoleCapacities.mockResolvedValue([
+      { id: 10, role_id: 42, person_count: "2.00", available_hours: "1600.00" } as never,
+    ]);
+    let resolveUpdate!: (capacity: RoleCapacity) => void;
+    mocks.updateRoleCapacity.mockReturnValue(
+      new Promise<RoleCapacity>((resolve) => {
+        resolveUpdate = resolve;
+      }),
+    );
+
+    render(<ResourcesPage />);
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("tab", { name: "Ressources" }));
+    await waitFor(() => expect(within(capacityCard()).getByText("Avec capacité — IT (#42)")).toBeInTheDocument());
+
+    const suivant = within(capacityCard()).getByRole("button", { name: "Suivant" });
+    await waitFor(() => expect(suivant).toBeEnabled());
+
+    // Typing a value that differs from the saved capacity (fed here through
+    // `savedByRoleId`, wired up in `resources/page.tsx` from `capacities`)
+    // freezes pagination -- exercises the real wiring, not just the
+    // presentational component in isolation (see `capacity-table.test.tsx`).
+    const personCountInput = within(capacityCard()).getByLabelText("Nombre de personnes pour Avec capacité — IT (#42)");
+    fireEvent.change(personCountInput, { target: { value: "3.00" } });
+    expect(suivant).toBeDisabled();
+
+    fireEvent.click(within(capacityCard()).getByRole("button", { name: "Enregistrer" }));
+    await waitFor(() => expect(mocks.updateRoleCapacity).toHaveBeenCalledTimes(1));
+    // Still frozen: the save is in flight, so `capacities`/`savedByRoleId`
+    // hasn't been updated to reflect it yet.
+    expect(suivant).toBeDisabled();
+
+    resolveUpdate({ id: 10, role_id: 42, person_count: "3.00", available_hours: "1600.00" } as never);
+    await waitFor(() => expect(suivant).toBeEnabled());
   });
 
   it("does not mask a successful role creation as failed when the follow-up capacity-table refresh fails", async () => {

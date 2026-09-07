@@ -127,6 +127,33 @@ export function RoleCalendarsTable(props: RoleCalendarsTableProps) {
     return props.calendars.find((calendar) => calendar.id === role.calendar_id);
   }
 
+  // Freezes `DataTable`'s own pagination/sort/search (via `isEditing` below)
+  // while a *visible* role's draft differs from its own saved `calendar_id` --
+  // there's no explicit edit mode here (every row is always editable), so
+  // "currently being edited" is defined structurally as "differs from what's
+  // saved" rather than tracked as its own state, mirroring the same approach
+  // in `capacity-table.tsx`.
+  //
+  // Deliberately scoped to `props.roles` (the page currently on screen), not
+  // every draft that might exist in `props.drafts` -- a role's draft is never
+  // cleared once the user starts picking (see `saveRoleCalendar` in
+  // `resources/page.tsx`, which never removes it from `roleCalendarDrafts`),
+  // so a role edited on a page, then paginated or searched away from, would
+  // otherwise freeze navigation forever even though nothing on screen shows
+  // it. Once a search excludes that role from `props.roles` it drops out of
+  // this check and the freeze lifts -- its draft is untouched in the parent's
+  // state (no data is lost), only the *navigation block* goes away, which
+  // matches the issue's "while a *visible* row" wording.
+  const hasUnsavedDraft = useMemo(
+    () =>
+      props.roles.some((role) => {
+        const draft = props.drafts[role.id];
+        if (draft === undefined) return false;
+        return draft !== String(role.calendar_id ?? "");
+      }),
+    [props.roles, props.drafts],
+  );
+
   // `columns` is memoized so its cell renderers (in particular
   // `RoleCalendarSelect`) keep a stable identity across renders -- otherwise,
   // since `flexRender` passes each cell renderer to React as a component
@@ -222,6 +249,8 @@ export function RoleCalendarsTable(props: RoleCalendarsTableProps) {
           sort={props.sort}
           onSortChange={props.onSortChange}
           search={{ value: props.search, onChange: props.onSearchChange, placeholder: "Rechercher un rôle" }}
+          isEditing={hasUnsavedDraft}
+          editingReason="Enregistrez la saisie en cours, ou remettez sa valeur d'origine, avant de changer de page ou de filtrer."
           isLoading={props.isLoading}
         />
       </CardContent>
