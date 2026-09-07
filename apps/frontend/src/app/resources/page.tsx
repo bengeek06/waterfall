@@ -42,6 +42,7 @@ import {
   getCostRates,
   getCostTypes,
   getInflationRates,
+  getMe,
   getResourceNodes,
   getResourceRoles,
   getRoleCapacities,
@@ -241,7 +242,22 @@ export default function ResourcesPage() {
   const [capacities, setCapacities] = useState<RoleCapacity[]>([]);
   const [capacityDrafts, setCapacityDrafts] = useState<Record<number, { personCount: string; availableHours: string }>>({});
   const [roleCalendarDrafts, setRoleCalendarDrafts] = useState<Record<number, string>>({});
-  const [users, setUsers] = useState<AuthUserAdmin[]>([]);
+  // Unlike `costTypes`/`costTypesPage`, there is no separate unfiltered list here:
+  // `users` isn't consumed anywhere else on this page (only `UsersTab` reads it), so
+  // its own server-paginated view is the single source of truth -- no risk of
+  // pagination/search silently narrowing a "complete list" guarantee another panel
+  // relies on.
+  // The logged-in admin's own id, fetched once via `getMe` alongside the rest of
+  // the initial load -- see `UsersTabProps.currentUserId`'s comment for why
+  // `UsersTab` needs it (disabling the one action per row that the backend
+  // itself would reject for your own account).
+  const [currentUserId, setCurrentUserId] = useState<number | null>(null);
+  const [usersPage, setUsersPage] = useState<{ items: AuthUserAdmin[]; total: number }>({ items: [], total: 0 });
+  const [usersLoading, setUsersLoading] = useState(false);
+  const [usersOffset, setUsersOffset] = useState(0);
+  const [usersLimit] = useState(20);
+  const [usersSort, setUsersSort] = useState<string | null>(null);
+  const [usersQuery, setUsersQuery] = useState("");
   const [busy, setBusy] = useState(true);
   const [actionBusy, setActionBusy] = useState(false);
   const [loadSucceeded, setLoadSucceeded] = useState(false);
@@ -341,6 +357,7 @@ export default function ResourcesPage() {
       setBusy(true);
       try {
         const [
+          meData,
           nodeData,
           roleData,
           calendarData,
@@ -349,8 +366,8 @@ export default function ResourcesPage() {
           rateData,
           inflationData,
           capacityData,
-          usersData,
         ] = await Promise.all([
+          getMe(session, onSessionRefresh),
           getResourceNodes(session, onSessionRefresh),
           getResourceRoles(session, onSessionRefresh).then((page) => page.items),
           getCalendars(session, onSessionRefresh, true).then((page) => page.items),
@@ -359,9 +376,9 @@ export default function ResourcesPage() {
           getCostRates(session, onSessionRefresh),
           getInflationRates(session, onSessionRefresh),
           getRoleCapacities(session, onSessionRefresh),
-          getUsers(session, onSessionRefresh),
         ]);
         if (!isCurrentGeneration()) return;
+        setCurrentUserId(meData.id);
         setNodes(nodeData);
         setSelectedNodeId((previous) => {
           const next = previous ?? nodeData[0]?.id ?? null;
@@ -380,7 +397,6 @@ export default function ResourcesPage() {
         setRateDrafts(Object.fromEntries(rateData.map((rate) => [`${rate.cost_category_id}:${rate.year}`, Number(rate.hourly_rate).toFixed(2)])));
         setCapacities(capacityData);
         setCapacityDrafts(Object.fromEntries(capacityData.map((capacity) => [capacity.role_id, { personCount: String(capacity.person_count), availableHours: String(capacity.available_hours) }])))
-        setUsers(usersData);
         setLoadSucceeded(true);
       } catch (cause) {
         if (!isCurrentGeneration()) return;
@@ -591,6 +607,117 @@ export default function ResourcesPage() {
       }
     } finally {
       if (costTypesGenerationRef.current === generation) setCostTypesLoading(false);
+    }
+  }
+
+  // The users tab's own server-paginated view, following the same shape as the
+  // cost-types table's effect above (own generation counter, session-expiry
+  // redirect, `usersLoading` reset in `finally`). Unlike cost types, list-fetch
+  // failures here are reported through `usersError` -- the pre-existing error slot
+  // rendered by `UsersTab` itself -- rather than the page-wide `notice`, since it
+  // was already the mechanism users saw for "the user list is unreachable" before
+  // this migration and there is no other consumer of this data to keep it in sync
+  // with.
+  const usersGenerationRef = useRef(0);
+  // Mirrors `usersOffset`/`usersSort`/`usersQuery` synchronously (updated at
+  // every write site below, not via a `useEffect`) so `reloadUsersPage` --
+  // called from `updateUserStatus`/`updateUserAdmin`/`addUser`/
+  // `deleteExistingUser` after an `await` -- reads the *live* pagination/sort/
+  // search state instead of the value closed over when the mutation started.
+  // Otherwise: an admin confirms a status/role/delete action (the confirmation
+  // dialog closes immediately, well before the mutation's own request
+  // resolves), pages/sorts/searches while it's still in flight, then the
+  // mutation resolves -- the reload it triggers would silently refetch and
+  // display stale data under the new controls' label. Same bug class and fix
+  // as `reloadRolesPage`/`reloadRoleCalendarsPage`/`reloadRolesPanelPage`.
+  const usersOffsetRef = useRef(usersOffset);
+  const usersSortRef = useRef(usersSort);
+  const usersQueryRef = useRef(usersQuery);
+
+  useEffect(() => {
+    const generation = ++usersGenerationRef.current;
+    const isCurrentGeneration = () => usersGenerationRef.current === generation;
+
+    async function load() {
+      if (!session) return;
+      setUsersLoading(true);
+      try {
+        const page = await getUsers(session, onSessionRefresh, {
+          limit: usersLimit,
+          offset: usersOffset,
+          sort: usersSort,
+          q: usersQuery || undefined,
+        });
+        if (!isCurrentGeneration()) return;
+        setUsersPage(page);
+        setUsersError(null);
+      } catch (cause) {
+        if (!isCurrentGeneration()) return;
+        if (cause instanceof SessionExpiredError) {
+          clearSession();
+          router.push("/login");
+          return;
+        }
+        if (cause instanceof ApiError && cause.status === 401) {
+          clearSession();
+          router.push("/login");
+          return;
+        }
+        setUsersError(cause instanceof ApiError ? cause.message : "Chargement des utilisateurs impossible");
+      } finally {
+        if (isCurrentGeneration()) setUsersLoading(false);
+      }
+    }
+
+    void load();
+  }, [session, onSessionRefresh, router, usersLimit, usersOffset, usersSort, usersQuery]);
+
+  // Refreshes the users tab's own page after a create/status/role/delete mutation
+  // succeeds, since (unlike cost types) there is no local list to patch in place --
+  // `usersPage` is the only copy of this data, and none of the callers below show
+  // a success notice of their own. Unlike `reloadCostTypesPage`, a failure here
+  // can't be swallowed silently: doing so would leave the user with zero feedback
+  // at all (the mutation itself succeeded server-side, but the table would just
+  // silently show stale data) -- so a non-session failure is surfaced via
+  // `usersError`, distinguished from a hard failure of the mutation itself.
+  // Guarded by the shared generation counter so a mutation reload racing an
+  // in-flight pagination/sort/search fetch can't leave `usersLoading` stuck.
+  async function reloadUsersPage() {
+    if (!session) return;
+    const generation = ++usersGenerationRef.current;
+    setUsersLoading(true);
+    try {
+      const page = await getUsers(session, onSessionRefresh, {
+        limit: usersLimit,
+        offset: usersOffsetRef.current,
+        sort: usersSortRef.current,
+        q: usersQueryRef.current || undefined,
+      });
+      if (usersGenerationRef.current !== generation) return;
+      // A delete (or a concurrent one from another admin) can leave the current
+      // offset past the end of the list -- e.g. deleting the last user on page 2
+      // drops the total to 20 while still viewing offset 20. Clamp to the last
+      // valid page and refetch once more instead of rendering an empty "Aucune
+      // donnée" table while data still exists on an earlier page.
+      if (usersOffsetRef.current > 0 && page.total <= usersOffsetRef.current) {
+        const clampedOffset = Math.max(0, Math.floor((page.total - 1) / usersLimit) * usersLimit);
+        usersOffsetRef.current = clampedOffset;
+        setUsersOffset(clampedOffset);
+        await reloadUsersPage();
+        return;
+      }
+      setUsersPage(page);
+      setUsersError(null);
+    } catch (cause) {
+      if (usersGenerationRef.current !== generation) return;
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      setUsersError("L'action a réussi, mais l'actualisation de la liste a échoué. Rechargez la page pour la voir à jour.");
+    } finally {
+      if (usersGenerationRef.current === generation) setUsersLoading(false);
     }
   }
 
@@ -1353,8 +1480,8 @@ export default function ResourcesPage() {
     const nextStatus = !user.is_active;
     setActionBusy(true);
     try {
-      const updated = await setUserStatus(user.id, nextStatus, session, onSessionRefresh);
-      setUsers((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+      await setUserStatus(user.id, nextStatus, session, onSessionRefresh);
+      await reloadUsersPage();
     } catch (cause) {
       if (cause instanceof SessionExpiredError) {
         clearSession();
@@ -1374,8 +1501,8 @@ export default function ResourcesPage() {
     const nextAdmin = !user.is_admin;
     setActionBusy(true);
     try {
-      const updated = await setUserRole(user.id, nextAdmin, session, onSessionRefresh);
-      setUsers((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+      await setUserRole(user.id, nextAdmin, session, onSessionRefresh);
+      await reloadUsersPage();
     } catch (cause) {
       if (cause instanceof SessionExpiredError) {
         clearSession();
@@ -1398,11 +1525,11 @@ export default function ResourcesPage() {
     setUsersError(null);
     setActionBusy(true);
     try {
-      const created = await createUser(newEmail, newPassword, session, onSessionRefresh);
-      setUsers((prev) => [...prev, created].sort((left, right) => left.id - right.id));
+      await createUser(newEmail, newPassword, session, onSessionRefresh);
       setNewEmail("");
       setNewPassword("");
       setCreateUserMode(false);
+      await reloadUsersPage();
     } catch (cause) {
       if (cause instanceof SessionExpiredError) {
         clearSession();
@@ -1424,7 +1551,7 @@ export default function ResourcesPage() {
     setActionBusy(true);
     try {
       await deleteUser(user.id, session, onSessionRefresh);
-      setUsers((prev) => prev.filter((item) => item.id !== user.id));
+      await reloadUsersPage();
     } catch (cause) {
       if (cause instanceof SessionExpiredError) {
         clearSession();
@@ -1493,9 +1620,10 @@ export default function ResourcesPage() {
 
     if (action.kind === "status") {
       const verb = action.user.is_active ? "désactiver" : "activer";
+      const participle = action.user.is_active ? "désactivé" : "activé";
       return {
         title: `${verb[0].toUpperCase()}${verb.slice(1)} cet utilisateur ?`,
-        description: `Le compte ${action.user.email} sera ${verb}.`,
+        description: `Le compte ${action.user.email} sera ${participle}.`,
         confirmLabel: verb[0].toUpperCase() + verb.slice(1),
         destructive: action.user.is_active,
       };
@@ -1624,7 +1752,7 @@ export default function ResourcesPage() {
         </>
       ) : null}
 
-      {!busy && activeTab === "users" ? <UsersTab users={users} usersError={usersError} createUserMode={createUserMode} newEmail={newEmail} newPassword={newPassword} actionBusy={actionBusy} onCreateUser={addUser} onSetCreateUserMode={setCreateUserMode} onEmailChange={setNewEmail} onPasswordChange={setNewPassword} onToggleStatus={(user) => setPendingUserAction({ kind: "status", user })} onToggleAdmin={(user) => setPendingUserAction({ kind: "admin", user })} onRemove={(user) => setPendingUserAction({ kind: "delete", user })} /> : null}
+      {!busy && activeTab === "users" ? <UsersTab items={usersPage.items} currentUserId={currentUserId} pagination={{ total: usersPage.total, limit: usersLimit, offset: usersOffset }} onPaginationChange={(next) => { usersOffsetRef.current = next.offset; setUsersOffset(next.offset); }} sort={usersSort} onSortChange={(next) => { usersSortRef.current = next; setUsersSort(next); }} search={usersQuery} onSearchChange={(next) => { usersQueryRef.current = next; setUsersQuery(next); usersOffsetRef.current = 0; setUsersOffset(0); }} isLoading={usersLoading} isActionPending={pendingUserAction !== null} usersError={usersError} createUserMode={createUserMode} newEmail={newEmail} newPassword={newPassword} actionBusy={actionBusy} onCreateUser={addUser} onSetCreateUserMode={setCreateUserMode} onEmailChange={setNewEmail} onPasswordChange={setNewPassword} onToggleStatus={(user) => setPendingUserAction({ kind: "status", user })} onToggleAdmin={(user) => setPendingUserAction({ kind: "admin", user })} onRemove={(user) => setPendingUserAction({ kind: "delete", user })} /> : null}
 
       {pendingUserAction ? (() => {
         const copy = getPendingUserActionCopy(pendingUserAction);

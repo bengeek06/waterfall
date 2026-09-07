@@ -8,6 +8,7 @@ import {
   getPlanning,
   getPlanningTaskDeleteConflict,
   getResourceRoles,
+  getUsers,
   movePlanningTasks,
   updateResourceRole,
 } from "./backend";
@@ -173,6 +174,62 @@ describe("getResourceRoles query building", () => {
     const page = await getResourceRoles({ accessToken: "token" }, vi.fn(), 1, false, { limit: 1, offset: 0 });
 
     expect(page).toEqual({ items, total: 7 });
+  });
+});
+
+describe("getUsers query building", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("sends no query string at all when called with no listParams, for the unpaginated reference-list case", async () => {
+    const fetchMock = vi.fn<(input: RequestInfo | URL) => Promise<Response>>(async () => jsonResponse({ items: [], total: 0 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getUsers({ accessToken: "token" }, vi.fn());
+
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain("?");
+  });
+
+  it("sends limit, offset, sort, and q together", async () => {
+    const fetchMock = vi.fn<(input: RequestInfo | URL) => Promise<Response>>(async () => jsonResponse({ items: [], total: 0 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getUsers({ accessToken: "token" }, vi.fn(), {
+      limit: 20,
+      offset: 40,
+      sort: "-email",
+      q: "alice",
+    });
+
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain("limit=20");
+    expect(url).toContain("offset=40");
+    expect(url).toContain("sort=-email");
+    expect(url).toContain("q=alice");
+  });
+
+  it("omits sort and q when absent, rather than sending them empty", async () => {
+    const fetchMock = vi.fn<(input: RequestInfo | URL) => Promise<Response>>(async () => jsonResponse({ items: [], total: 0 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getUsers({ accessToken: "token" }, vi.fn(), { limit: 5, offset: 0 });
+
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain("limit=5");
+    expect(url).toContain("offset=0");
+    expect(url).not.toContain("sort=");
+    expect(url).not.toContain("q=");
+  });
+
+  it("returns items and total from the response envelope", async () => {
+    const items = [{ id: 1, email: "alice@example.com", is_active: true, is_admin: false }];
+    const fetchMock = vi.fn(async () => jsonResponse({ items, total: 9 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const page = await getUsers({ accessToken: "token" }, vi.fn(), { limit: 1, offset: 0 });
+
+    expect(page).toEqual({ items, total: 9 });
   });
 });
 
