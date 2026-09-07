@@ -517,21 +517,6 @@ export function deleteCalendar(
   );
 }
 
-export async function getCostCategories(
-  tokens: SessionTokens,
-  onSessionRefresh: (next: SessionTokens) => void,
-  includeInactive = false,
-): Promise<CostCategory[]> {
-  const query = includeInactive ? "?include_inactive=true" : "";
-  const page = await authRequest<components["schemas"]["CostCategoryListRead"]>(
-    `/resources/categories${query}`,
-    tokens,
-    { method: "GET" },
-    onSessionRefresh,
-  );
-  return page.items;
-}
-
 // Generic envelope for a server-paginated list, and the query parameters a caller
 // supplies to request one page of it. `limit`/`offset` are known to the caller
 // already (it's what it asked for) and don't round-trip back through this type --
@@ -582,6 +567,22 @@ export async function getCostTypes(
   const query = buildListQuery(listParams, includeInactive ? { include_inactive: "true" } : undefined);
   const page = await authRequest<components["schemas"]["CostTypeListRead"]>(
     `/resources/cost-types${query}`,
+    tokens,
+    { method: "GET" },
+    onSessionRefresh,
+  );
+  return { items: page.items, total: page.total };
+}
+
+export async function getCostCategories(
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+  includeInactive = false,
+  listParams: ListQueryParams = {},
+): Promise<ListPage<CostCategory>> {
+  const query = buildListQuery(listParams, includeInactive ? { include_inactive: "true" } : undefined);
+  const page = await authRequest<components["schemas"]["CostCategoryListRead"]>(
+    `/resources/categories${query}`,
     tokens,
     { method: "GET" },
     onSessionRefresh,
