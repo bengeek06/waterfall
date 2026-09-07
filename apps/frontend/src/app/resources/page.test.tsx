@@ -186,6 +186,31 @@ describe("ResourcesPage calendar toggle", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Désactiver" })).toBeInTheDocument());
   });
 
+  it("keeps the row's displayed state on the just-applied toggle when the post-toggle reload silently fails", async () => {
+    // Regression test for the optimistic patch to `calendarsPage.items` in
+    // `toggleCalendarActive`: the mutation itself (`deleteCalendar`) succeeds, but the
+    // `reloadCalendarsPage()` call that follows fails with a non-auth error, which
+    // `reloadCalendarsPage` swallows silently (see its own comment in page.tsx) rather
+    // than surfacing it. Without the optimistic patch, the table's displayed row would
+    // be stuck showing the pre-toggle state forever, with no error to explain why.
+    mocks.deleteCalendar.mockResolvedValue(undefined);
+    await renderResourcesTab([activeCalendar]);
+    // Only the reload triggered by the toggle (the next call) must fail -- the initial
+    // page load above already resolved successfully via `renderResourcesTab`.
+    mocks.getCalendars.mockRejectedValueOnce(new ApiError(500, "Erreur serveur interne."));
+
+    fireEvent.click(screen.getByRole("button", { name: "Désactiver" }));
+
+    await waitFor(() => expect(mocks.deleteCalendar).toHaveBeenCalledWith(1, expect.anything(), expect.anything()));
+    // The row must flip to "Réactiver" from the optimistic patch alone, since the
+    // failed reload could not have supplied this value.
+    await waitFor(() => expect(screen.getByRole("button", { name: "Réactiver" })).toBeInTheDocument());
+    // The action is still reported as successful to the user -- the reload failure is
+    // deliberately silent -- and no error notice is shown.
+    expect(await screen.findByText("Calendrier désactivé.")).toBeInTheDocument();
+    expect(screen.queryByText("Erreur serveur interne.")).not.toBeInTheDocument();
+  });
+
   it("surfaces the 409 guard error and leaves the calendar active when deletion is blocked", async () => {
     mocks.deleteCalendar.mockRejectedValue(new ApiError(409, "Calendrier assigné à un rôle actif."));
     await renderResourcesTab([activeCalendar]);

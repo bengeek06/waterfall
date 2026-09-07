@@ -237,6 +237,30 @@ describe("CalendarsTable", () => {
     expect(onSubmit).toHaveBeenCalledTimes(1);
   });
 
+  it("disables the pinned Ajouter button while another row is being edited", () => {
+    // Regression test: creating a calendar while an existing row is mid-edit
+    // reloads the server-sorted page, which can push the row being edited onto a
+    // different page -- and isEditing freezes DataTable's pagination controls, so
+    // that row (with its unsaved "Enregistrer"/"Annuler" buttons) would become
+    // unreachable. Blocking "Ajouter" during an edit avoids the scenario entirely.
+    renderTable({ editingId: 1, busy: false });
+    expect(screen.getByRole("button", { name: "Ajouter" })).toBeDisabled();
+  });
+
+  it("keeps the pinned Ajouter button enabled when no row is being edited and the table isn't busy", () => {
+    renderTable({ editingId: null, busy: false });
+    expect(screen.getByRole("button", { name: "Ajouter" })).not.toBeDisabled();
+  });
+
+  it("keeps the Actions column and the pinned Ajouter cell pinned to the right edge of the scrollable table", () => {
+    renderTable();
+    expect(screen.getByRole("columnheader", { name: "Actions" })).toHaveClass("sticky", "right-0");
+    const actionsCell = screen.getByRole("button", { name: "Modifier" }).closest("td");
+    expect(actionsCell).toHaveClass("sticky", "right-0");
+    const addCell = screen.getByRole("button", { name: "Ajouter" }).closest("td");
+    expect(addCell).toHaveClass("sticky", "right-0");
+  });
+
   it("keeps focus on an edited calendar's code field across keystrokes, even though it round-trips through the parent's draft prop", () => {
     // Regression test for a real bug: TanStack Table's `flexRender` passes each
     // cell renderer to React as a component *type*. Rebuilding `columns`

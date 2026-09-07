@@ -7,7 +7,7 @@ import type { ColumnDef } from "@tanstack/react-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { DataTable, type DataTablePaginationState } from "@/components/ui/data-table";
+import { DataTable, STICKY_RIGHT_CELL_CLASSNAME, type DataTablePaginationState } from "@/components/ui/data-table";
 import { Input } from "@/components/ui/input";
 import { TableCell, TableRow } from "@/components/ui/table";
 import type { Calendar } from "@/lib/backend";
@@ -155,8 +155,8 @@ function renderPinnedRow(props: CalendarsTableProps) {
           </TableCell>
         );
       })}
-      <TableCell>
-        <Button size="sm" disabled={props.busy} type="submit">
+      <TableCell className={STICKY_RIGHT_CELL_CLASSNAME}>
+        <Button size="sm" disabled={props.busy || props.editingId !== null} type="submit">
           Ajouter
         </Button>
       </TableCell>
@@ -324,6 +324,7 @@ export function CalendarsTable(props: CalendarsTableProps) {
         {
           id: "actions",
           header: "Actions",
+          meta: { sticky: "right" },
           cell: ({ row }) => renderActionsCell(row.original),
         },
       ];

@@ -465,8 +465,15 @@ export default function ResourcesPage() {
   // here would just be overwritten by that success notice a moment later, while
   // *throwing* would make `submitAction` report the whole operation as failed even
   // though the actual mutation (already applied to `calendars` and the server)
-  // succeeded. The table's own view simply stays one refresh behind until the next
-  // pagination/sort/search interaction. Session expiry is the one exception: it must
+  // succeeded. `saveCalendar`/`toggleCalendarActive`/`setDefaultCalendar` also apply
+  // an optimistic patch to `calendarsPage.items` (the actual page rendered by
+  // `CalendarsTable`) right before calling this, so a silent failure here no longer
+  // leaves the visible row stale -- it only means the exact server sort/total isn't
+  // re-synced until the next pagination/sort/search interaction. `addCalendar` is the
+  // one exception: the new row can land on any page depending on the active server
+  // sort, so there's nothing sensible to patch optimistically into `calendarsPage`,
+  // and its view does stay a refresh behind on a silent failure, same as before.
+  // Session expiry is the one exception to the "swallow errors" rule itself: it must
   // still force a logout like every other data source on this page, regardless of
   // where it's detected.
   //
@@ -1238,6 +1245,10 @@ export default function ResourcesPage() {
         onSessionRefresh,
       );
       setCalendars((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+      setCalendarsPage((prev) => ({
+        ...prev,
+        items: prev.items.map((item) => (item.id === updated.id ? updated : item)),
+      }));
       setEditingCalendarId(null);
       await reloadCalendarsPage();
     }, "Calendrier modifié.");
@@ -1249,9 +1260,17 @@ export default function ResourcesPage() {
       if (calendar.is_active) {
         await deleteCalendar(calendar.id, session, onSessionRefresh);
         setCalendars((prev) => prev.map((item) => (item.id === calendar.id ? { ...item, is_active: false } : item)));
+        setCalendarsPage((prev) => ({
+          ...prev,
+          items: prev.items.map((item) => (item.id === calendar.id ? { ...item, is_active: false } : item)),
+        }));
       } else {
         const updated = await updateCalendar(calendar.id, { is_active: true }, session, onSessionRefresh);
         setCalendars((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+        setCalendarsPage((prev) => ({
+          ...prev,
+          items: prev.items.map((item) => (item.id === updated.id ? updated : item)),
+        }));
       }
       await reloadCalendarsPage();
     }, calendar.is_active ? "Calendrier désactivé." : "Calendrier réactivé.");
@@ -1261,10 +1280,12 @@ export default function ResourcesPage() {
     if (!session) return;
     await submitAction(async () => {
       const updated = await updateCalendar(calendar.id, { is_default: true }, session, onSessionRefresh);
-      setCalendars((prev) => prev.map((item) => {
+      const applyDefault = (item: Calendar) => {
         if (item.id === updated.id) return updated;
         return item.is_default ? { ...item, is_default: false } : item;
-      }));
+      };
+      setCalendars((prev) => prev.map(applyDefault));
+      setCalendarsPage((prev) => ({ ...prev, items: prev.items.map(applyDefault) }));
       await reloadCalendarsPage();
     }, "Calendrier par défaut mis à jour.");
   }
