@@ -355,4 +355,58 @@ describe("RoleCalendarsTable", () => {
     expect(screen.getByText("Développeur — ITSM (#1)")).toBeInTheDocument();
     expect(screen.queryByText("Développeur — IT (#1)")).not.toBeInTheDocument();
   });
+
+  it("freezes pagination, sorting and search while a visible role's draft differs from its saved calendar", () => {
+    renderTable({
+      roles: [{ id: 1, name: "Développeur", node_id: 1, calendar_id: null } as never],
+      drafts: { 1: "2" },
+      pagination: { total: 40, limit: 20, offset: 0 },
+    });
+
+    expect(
+      screen.getByText("Enregistrez la saisie en cours, ou remettez sa valeur d'origine, avant de changer de page ou de filtrer."),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Rechercher un rôle")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Rôle" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Suivant" })).toBeDisabled();
+  });
+
+  it("does not freeze navigation once a role's draft is saved (matches its calendar_id again)", () => {
+    renderTable({
+      roles: [{ id: 1, name: "Développeur", node_id: 1, calendar_id: 2 } as never],
+      drafts: { 1: "2" },
+      pagination: { total: 40, limit: 20, offset: 0 },
+    });
+
+    expect(screen.getByLabelText("Rechercher un rôle")).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Suivant" })).toBeEnabled();
+  });
+
+  it("lifts the freeze once the edited role is no longer visible on the current page", () => {
+    // The role with the unsaved draft (#1) has been paginated/searched away from
+    // -- `roles` no longer contains it. Its draft is untouched in `drafts` (no
+    // data is lost, see the comment on `hasUnsavedDraft`), but since it's not
+    // *visible* anymore, navigation is no longer blocked.
+    renderTable({
+      roles: [{ id: 2, name: "Autre rôle", node_id: 1, calendar_id: null } as never],
+      drafts: { 1: "2" },
+      pagination: { total: 40, limit: 20, offset: 0 },
+    });
+
+    expect(
+      screen.queryByText("Enregistrez la saisie en cours, ou remettez sa valeur d'origine, avant de changer de page ou de filtrer."),
+    ).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Rechercher un rôle")).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Suivant" })).toBeEnabled();
+  });
+
+  it("does not freeze navigation for a role with no draft at all, even when other roles' calendar_id is null", () => {
+    renderTable({
+      roles: [{ id: 1, name: "Développeur", node_id: 1, calendar_id: null } as never],
+      drafts: {},
+      pagination: { total: 40, limit: 20, offset: 0 },
+    });
+
+    expect(screen.getByRole("button", { name: "Suivant" })).toBeEnabled();
+  });
 });

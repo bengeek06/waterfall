@@ -17,6 +17,7 @@ function renderTable(overrides: Partial<CapacityTableProps> = {}) {
     onSearchChange: vi.fn(),
     isLoading: false,
     drafts: {},
+    savedByRoleId: new Map(),
     actionBusy: false,
     nodeCodeById,
     onDraftChange: vi.fn(),
@@ -137,6 +138,7 @@ describe("CapacityTable", () => {
           onSearchChange={vi.fn()}
           isLoading={false}
           drafts={drafts}
+          savedByRoleId={new Map()}
           actionBusy={false}
           nodeCodeById={nodeCodeById}
           onDraftChange={(id, draft) => setDrafts((previous) => ({ ...previous, [id]: draft }))}
@@ -198,6 +200,7 @@ describe("CapacityTable", () => {
             onSearchChange={vi.fn()}
             isLoading={false}
             drafts={drafts}
+            savedByRoleId={new Map()}
             actionBusy={false}
             nodeCodeById={codeById}
             onDraftChange={(id, draft) => setDrafts((previous) => ({ ...previous, [id]: draft }))}
@@ -218,5 +221,82 @@ describe("CapacityTable", () => {
     expect(screen.queryByText("Développeur — IT (#1)")).not.toBeInTheDocument();
     const renamedInput = screen.getByLabelText("Nombre de personnes pour Développeur — ITSM (#1)") as HTMLInputElement;
     expect(renamedInput.value).toBe("3");
+  });
+
+  it("freezes pagination, sorting and search while a visible role's draft differs from its saved capacity", () => {
+    renderTable({
+      drafts: { 1: { personCount: "3.00", availableHours: "3200.00" } },
+      savedByRoleId: new Map([[1, { personCount: "2.00", availableHours: "3200.00" }]]),
+      pagination: { total: 40, limit: 20, offset: 0 },
+    });
+
+    expect(
+      screen.getByText("Enregistrez la saisie en cours, ou remettez sa valeur d'origine, avant de changer de page ou de filtrer."),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Rechercher un rôle")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Rôle" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Suivant" })).toBeDisabled();
+  });
+
+  it("does not freeze navigation when a role's draft matches its saved capacity, even if formatted differently", () => {
+    // "2" (freshly typed) vs "2.00" (the saved/API-formatted value) must compare
+    // equal numerically -- a naive strict string comparison would wrongly report
+    // this role as having an unsaved draft.
+    renderTable({
+      drafts: { 1: { personCount: "2", availableHours: "3200.00" } },
+      savedByRoleId: new Map([[1, { personCount: "2.00", availableHours: "3200.00" }]]),
+      pagination: { total: 40, limit: 20, offset: 0 },
+    });
+
+    expect(screen.getByLabelText("Rechercher un rôle")).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Suivant" })).toBeEnabled();
+  });
+
+  it("lifts the freeze once the edited role is no longer visible on the current page", () => {
+    // The role with the unsaved draft (#1) has been paginated/searched away from
+    // -- `items` no longer contains it. Its draft is untouched in `drafts` (no
+    // data is lost, see the comment on `hasUnsavedDraft`), but since it's not
+    // *visible* anymore, navigation is no longer blocked.
+    renderTable({
+      items: [{ id: 2, name: "Autre rôle", node_id: 1 } as never],
+      drafts: { 1: { personCount: "3.00", availableHours: "3200.00" } },
+      savedByRoleId: new Map([[1, { personCount: "2.00", availableHours: "3200.00" }]]),
+      pagination: { total: 40, limit: 20, offset: 0 },
+    });
+
+    expect(
+      screen.queryByText("Enregistrez la saisie en cours, ou remettez sa valeur d'origine, avant de changer de page ou de filtrer."),
+    ).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Rechercher un rôle")).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Suivant" })).toBeEnabled();
+  });
+
+  it("lifts the freeze once a role without any prior saved capacity is saved and its draft matches the new zero-value default", () => {
+    // A role with no `RoleCapacity` yet (absent from `savedByRoleId`) falls back
+    // to `defaultDraft` ("0.00"/"0.00") on both sides of the comparison -- typing
+    // back to that same default value must not read as "still unsaved".
+    renderTable({
+      drafts: { 1: { personCount: "0.00", availableHours: "0.00" } },
+      savedByRoleId: new Map(),
+      pagination: { total: 40, limit: 20, offset: 0 },
+    });
+
+    expect(screen.getByRole("button", { name: "Suivant" })).toBeEnabled();
+  });
+
+  it("keeps the freeze active while a field is cleared for retyping, even against the common 0.00/0.00 saved default", () => {
+    // Regression test for a real bug: `Number("")` is `0`, not `NaN`. For a role
+    // whose saved capacity is the common "0.00"/"0.00" default (never had a
+    // capacity saved yet), a naive numeric comparison would read a blank field
+    // (mid-edit, e.g. select-all then retype) as "0 === 0", i.e. matching the
+    // saved value, and prematurely lift the freeze while the user is still
+    // typing.
+    renderTable({
+      drafts: { 1: { personCount: "", availableHours: "0.00" } },
+      savedByRoleId: new Map(),
+      pagination: { total: 40, limit: 20, offset: 0 },
+    });
+
+    expect(screen.getByRole("button", { name: "Suivant" })).toBeDisabled();
   });
 });
