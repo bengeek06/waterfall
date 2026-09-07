@@ -292,6 +292,24 @@ make test                   # pytest (backend) + vitest (frontend)
 
 Chaque cible existe aussi en version ciblée : `make lint-backend`, `make test-frontend`, etc.
 
+#### Complexité (ESLint `complexity` / backend Ruff C90)
+
+Le frontend applique la règle native ESLint `complexity` (même métrique McCabe
+que Ruff C90 côté backend, voir `apps/backend/README.md`) avec un seuil de
+complexité cyclomatique fixé à 15 (`apps/frontend/eslint.config.mjs`). C'est la
+seule métrique de complexité retenue pour ce frontend, symétrique à la décision
+backend : ce même seuil s'applique en local et en CI (job `frontend-quality`),
+puisqu'ils lisent tous la configuration ESLint partagée.
+
+Si une fonction dépasse légitimement ce seuil (cas résiduel documenté), la
+suppression du diagnostic avec `// eslint-disable-next-line complexity` doit
+obligatoirement s'accompagner d'un commentaire renvoyant vers l'issue de suivi
+qui trace sa décomposition.
+
+```bash
+npx eslint --rule '{"complexity": ["error", 15]}' apps/frontend/src
+```
+
 ### 6) Nettoyage
 
 ```bash
