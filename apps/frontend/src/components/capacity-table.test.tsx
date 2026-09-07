@@ -157,4 +157,66 @@ describe("CapacityTable", () => {
     expect(document.activeElement).toBe(input);
     expect(input.value).toBe("35");
   });
+
+  it("reflects a renamed node's code in the role label without losing an in-progress edit's value", () => {
+    // Regression test for a real bug: `labelFor` was only captured into the
+    // memoized `columns` cell closures when `columns` was rebuilt, which used
+    // to only happen once (the dependency array was `[]`) -- never on a
+    // `nodeCodeById`-only change. Renaming a node's code on the "Nœud" tab
+    // would otherwise leave this table showing the role's *old* node code
+    // indefinitely.
+    //
+    // `columns` is still memoized: it only rebuilds on a `nodeCodeById`
+    // change (rare, cross-tab), never on a `drafts` change (per-keystroke),
+    // so this doesn't reintroduce the focus-loss-per-keystroke bug the
+    // memoization exists to prevent (see the still-passing "keeps focus on a
+    // capacity input across keystrokes" test above, unaffected by this
+    // change). A `nodeCodeById` change does rebuild every column's cell
+    // closure -- including the capacity inputs, not just the label -- since
+    // `flexRender` treats each cell's function reference as its own React
+    // component type, so `CapacityFieldInput` does remount here (mirrors the
+    // same accepted trade-off in `role-calendars-table.tsx`'s equivalent
+    // rename test, which likewise doesn't assert DOM focus continuity across
+    // a rename). What must not regress is the *value*: it's re-seeded from
+    // `props.drafts`, which the keystroke already reported upward, so no
+    // unsaved edit is silently lost.
+    function Wrapper() {
+      const [codeById, setCodeById] = useState(new Map([[1, "IT"]]));
+      const [drafts, setDrafts] = useState<CapacityTableProps["drafts"]>({});
+      return (
+        <>
+          <button type="button" onClick={() => setCodeById(new Map([[1, "ITSM"]]))}>
+            Rename node
+          </button>
+          <CapacityTable
+            items={[{ id: 1, name: "Développeur", node_id: 1 } as never]}
+            pagination={{ total: 1, limit: 20, offset: 0 }}
+            onPaginationChange={vi.fn()}
+            sort={null}
+            onSortChange={vi.fn()}
+            search=""
+            onSearchChange={vi.fn()}
+            isLoading={false}
+            drafts={drafts}
+            actionBusy={false}
+            nodeCodeById={codeById}
+            onDraftChange={(id, draft) => setDrafts((previous) => ({ ...previous, [id]: draft }))}
+            onSave={vi.fn()}
+          />
+        </>
+      );
+    }
+
+    render(<Wrapper />);
+    expect(screen.getByText("Développeur — IT (#1)")).toBeInTheDocument();
+    const input = screen.getByLabelText("Nombre de personnes pour Développeur — IT (#1)") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "3" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Rename node" }));
+
+    expect(screen.getByText("Développeur — ITSM (#1)")).toBeInTheDocument();
+    expect(screen.queryByText("Développeur — IT (#1)")).not.toBeInTheDocument();
+    const renamedInput = screen.getByLabelText("Nombre de personnes pour Développeur — ITSM (#1)") as HTMLInputElement;
+    expect(renamedInput.value).toBe("3");
+  });
 });
