@@ -3273,7 +3273,7 @@ describe("ResourcesPage users table (E8-09)", () => {
     if (!aliceRow) throw new Error("row not found");
     fireEvent.click(within(aliceRow).getByRole("button", { name: "Désactiver" }));
     const alertDialog = await screen.findByRole("alertdialog");
-    expect(within(alertDialog).getByText(/alice@example.com sera désactiver/)).toBeInTheDocument();
+    expect(within(alertDialog).getByText(/alice@example.com sera désactivé/)).toBeInTheDocument();
 
     // Trigger the background session refresh now, with the dialog already open:
     // the users tab's own effect re-runs and replaces the underlying list --
@@ -3298,7 +3298,25 @@ describe("ResourcesPage users table (E8-09)", () => {
   it("targets the originally selected user's deletion even if the list is reordered by a concurrent sort change from elsewhere", async () => {
     const userA = userFixture({ id: 1, email: "alice@example.com" });
     const userB = userFixture({ id: 2, email: "bob@example.com" });
-    mocks.getUsers.mockResolvedValue({ items: [userA, userB], total: 2 });
+
+    // A session-token refresh is the one thing on this page that can trigger a
+    // background refetch of the users list without any user interaction (every
+    // control that could otherwise do so -- search, sort, pagination -- is
+    // unreachable for as long as the confirmation dialog is open). Capturing the
+    // stable `onSessionRefresh` callback lets the test trigger that refresh
+    // deliberately, once the dialog is already open, to simulate a concurrent
+    // sort change landing mid-confirmation.
+    let onSessionRefresh: ((next: { accessToken: string }) => void) | null = null;
+    mocks.getResourceRoles.mockImplementation(
+      (_tokens: unknown, refresh: (next: { accessToken: string }) => void) => {
+        onSessionRefresh ??= refresh;
+        return Promise.resolve({ items: [], total: 0 });
+      },
+    );
+    let reordered = false;
+    mocks.getUsers.mockImplementation(() =>
+      Promise.resolve(reordered ? { items: [userB, userA], total: 2 } : { items: [userA, userB], total: 2 }),
+    );
     mocks.deleteUser.mockResolvedValue(undefined);
 
     await openUsersTab();
@@ -3310,6 +3328,19 @@ describe("ResourcesPage users table (E8-09)", () => {
     fireEvent.click(within(bobRow).getByRole("button", { name: "Supprimer" }));
     const alertDialog = await screen.findByRole("alertdialog");
     expect(within(alertDialog).getByText(/bob@example.com/)).toBeInTheDocument();
+
+    // Trigger the background session refresh now, with the dialog already open:
+    // the users tab's own effect re-runs and the underlying list comes back
+    // reordered -- Bob is now the *first* row, and Alice occupies what used to be
+    // Bob's row. A fix that re-derives "the user at this row" instead of using the
+    // captured user object would delete Alice here.
+    reordered = true;
+    if (!onSessionRefresh) throw new Error("onSessionRefresh was never captured");
+    act(() => onSessionRefresh!({ accessToken: "refreshed-token" }));
+    await waitFor(() => {
+      const rows = screen.getAllByRole("row").filter((row) => within(row).queryByText(/@example\.com/));
+      expect(within(rows[0]).getByText("bob@example.com")).toBeInTheDocument();
+    });
 
     fireEvent.click(within(alertDialog).getByRole("button", { name: "Supprimer" }));
 
@@ -3396,6 +3427,151 @@ describe("ResourcesPage users table (E8-09)", () => {
     );
     expect(screen.getByText("page2@example.com")).toBeInTheDocument();
     expect(screen.queryByText("alice@example.com")).not.toBeInTheDocument();
+  });
+
+  it("does not log out or surface an error from a stale reload once a newer generation has already reloaded successfully", async () => {
+    // Simulates: `deleteExistingUser` triggers `reloadUsersPage` (generation N),
+    // then -- before that request resolves -- a session-token refresh triggers
+    // the page's own initial-load effect, which starts and resolves a fresher
+    // request (generation N+1). The stale generation-N request can still fail
+    // afterward (e.g. session expired mid-flight); that failure must be
+    // discarded, not force a logout or overwrite the fresh data with an error.
+    let onSessionRefresh: ((next: { accessToken: string }) => void) | null = null;
+    mocks.getResourceRoles.mockImplementation(
+      (_tokens: unknown, refresh: (next: { accessToken: string }) => void) => {
+        onSessionRefresh ??= refresh;
+        return Promise.resolve({ items: [], total: 0 });
+      },
+    );
+
+    const userA = userFixture({ id: 1, email: "alice@example.com" });
+    const freshUser = userFixture({ id: 3, email: "fresh@example.com" });
+    let rejectStale!: (cause: unknown) => void;
+    let getUsersCallCount = 0;
+    mocks.getUsers.mockImplementation(() => {
+      getUsersCallCount += 1;
+      if (getUsersCallCount === 1) return Promise.resolve({ items: [userA], total: 1 });
+      if (getUsersCallCount === 2) {
+        // The reload triggered below by `deleteExistingUser` (generation N),
+        // held pending until rejected explicitly once generation N+1 has
+        // already resolved.
+        return new Promise((_resolve, reject) => {
+          rejectStale = reject;
+        });
+      }
+      // The fresher request (generation N+1), triggered by the session refresh
+      // while call 2 is still in flight.
+      return Promise.resolve({ items: [freshUser], total: 1 });
+    });
+    mocks.deleteUser.mockResolvedValue(undefined);
+
+    await openUsersTab();
+    await waitFor(() => expect(screen.getByText("alice@example.com")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "Supprimer" }));
+    const alertDialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(alertDialog).getByRole("button", { name: "Supprimer" }));
+    await waitFor(() => expect(mocks.getUsers).toHaveBeenCalledTimes(2));
+
+    // A session refresh starts and resolves a fresher request while the delete's
+    // own reload (call 2, still pending) hasn't settled yet.
+    if (!onSessionRefresh) throw new Error("onSessionRefresh was never captured");
+    act(() => onSessionRefresh!({ accessToken: "refreshed-token" }));
+    await waitFor(() => expect(screen.getByText("fresh@example.com")).toBeInTheDocument());
+
+    // The stale generation-N request now fails, well after generation N+1
+    // already committed fresh data -- it must be discarded, not undo it.
+    rejectStale(new SessionExpiredError());
+    await waitFor(() => expect(screen.getByText("fresh@example.com")).toBeInTheDocument());
+    expect(mocks.router.push).not.toHaveBeenCalledWith("/login");
+    expect(
+      screen.queryByText("L'action a réussi, mais l'actualisation de la liste a échoué. Rechargez la page pour la voir à jour."),
+    ).not.toBeInTheDocument();
+  });
+
+  it("clears a previous list-refresh error once a later reload succeeds", async () => {
+    // `usersError` is the pre-existing error slot for "the mutation succeeded but
+    // the follow-up list refresh failed" (see the "surfaces feedback..." test
+    // above). A stale error banner from an earlier failed reload must not
+    // survive a later reload that succeeds -- otherwise the admin keeps seeing
+    // a stale warning even though the table now shows valid, current data.
+    const userA = userFixture({ id: 1, email: "alice@example.com" });
+    const userB = userFixture({ id: 2, email: "bob@example.com" });
+    mocks.getUsers.mockResolvedValueOnce({ items: [userA], total: 1 });
+    mocks.getUsers.mockRejectedValueOnce(new ApiError(500, "Actualisation impossible"));
+    mocks.getUsers.mockResolvedValueOnce({ items: [userB], total: 1 });
+    mocks.deleteUser.mockResolvedValue(undefined);
+
+    await openUsersTab();
+    await waitFor(() => expect(screen.getByText("alice@example.com")).toBeInTheDocument());
+
+    // First delete: the mutation succeeds but its own reload fails, surfacing
+    // the "reload failed" banner.
+    fireEvent.click(screen.getByRole("button", { name: "Supprimer" }));
+    let alertDialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(alertDialog).getByRole("button", { name: "Supprimer" }));
+    await waitFor(() =>
+      expect(
+        screen.getByText("L'action a réussi, mais l'actualisation de la liste a échoué. Rechargez la page pour la voir à jour."),
+      ).toBeInTheDocument(),
+    );
+
+    // Second delete: this time the reload succeeds -- the stale banner from the
+    // first attempt must be cleared, not left dangling over fresh data.
+    fireEvent.click(screen.getByRole("button", { name: "Supprimer" }));
+    alertDialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(alertDialog).getByRole("button", { name: "Supprimer" }));
+    await waitFor(() => expect(screen.getByText("bob@example.com")).toBeInTheDocument());
+    expect(
+      screen.queryByText("L'action a réussi, mais l'actualisation de la liste a échoué. Rechargez la page pour la voir à jour."),
+    ).not.toBeInTheDocument();
+  });
+
+  it("clamps to the last valid page and refetches when a delete leaves the current offset past the end of the list", async () => {
+    // Admin is on page 2 (offset 20, limit 20) and deletes the only remaining
+    // user there -- the new total (20) is no longer greater than that offset,
+    // so re-fetching at the stale offset 20 would return an empty page even
+    // though 20 users still exist on page 1. The reload must detect this and
+    // clamp back to the last valid page instead of rendering "Aucune donnée".
+    const page1Items = Array.from({ length: 20 }, (_, index) =>
+      userFixture({ id: index + 1, email: `user${index + 1}@example.com` }),
+    );
+    const lastUserOnPage2 = userFixture({ id: 21, email: "last@example.com" });
+    let totalUsers = 21;
+    mocks.getUsers.mockImplementation((_tokens: unknown, _refresh: unknown, listParams: unknown) => {
+      const offset = (listParams as { offset?: number } | undefined)?.offset ?? 0;
+      if (offset === 0) return Promise.resolve({ items: page1Items, total: totalUsers });
+      return Promise.resolve({ items: totalUsers > 20 ? [lastUserOnPage2] : [], total: totalUsers });
+    });
+    mocks.deleteUser.mockImplementation(() => {
+      totalUsers = 20;
+      return Promise.resolve(undefined);
+    });
+
+    await openUsersTab();
+    await waitFor(() => expect(screen.getByText("user1@example.com")).toBeInTheDocument());
+
+    const suivant = await screen.findByRole("button", { name: "Suivant" });
+    fireEvent.click(suivant);
+    await waitFor(() => expect(screen.getByText("last@example.com")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "Supprimer" }));
+    const alertDialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(alertDialog).getByRole("button", { name: "Supprimer" }));
+
+    // The reload at the stale offset 20 comes back empty; the page must then
+    // clamp back to offset 0 and refetch, rather than showing "Aucune donnée"
+    // while 20 users still exist on page 1.
+    await waitFor(() =>
+      expect(mocks.getUsers).toHaveBeenLastCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ offset: 0 }),
+      ),
+    );
+    await waitFor(() => expect(screen.getByText("user1@example.com")).toBeInTheDocument());
+    expect(screen.queryByText("Aucune donnée.")).not.toBeInTheDocument();
+    expect(screen.queryByText("last@example.com")).not.toBeInTheDocument();
   });
 
   it("disables deleting, deactivating, or demoting your own account, matching the backend's own rejection rules", async () => {

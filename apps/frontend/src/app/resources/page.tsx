@@ -650,6 +650,7 @@ export default function ResourcesPage() {
         });
         if (!isCurrentGeneration()) return;
         setUsersPage(page);
+        setUsersError(null);
       } catch (cause) {
         if (!isCurrentGeneration()) return;
         if (cause instanceof SessionExpiredError) {
@@ -692,8 +693,23 @@ export default function ResourcesPage() {
         sort: usersSortRef.current,
         q: usersQueryRef.current || undefined,
       });
-      if (usersGenerationRef.current === generation) setUsersPage(page);
+      if (usersGenerationRef.current !== generation) return;
+      // A delete (or a concurrent one from another admin) can leave the current
+      // offset past the end of the list -- e.g. deleting the last user on page 2
+      // drops the total to 20 while still viewing offset 20. Clamp to the last
+      // valid page and refetch once more instead of rendering an empty "Aucune
+      // donnée" table while data still exists on an earlier page.
+      if (usersOffsetRef.current > 0 && page.total <= usersOffsetRef.current) {
+        const clampedOffset = Math.max(0, Math.floor((page.total - 1) / usersLimit) * usersLimit);
+        usersOffsetRef.current = clampedOffset;
+        setUsersOffset(clampedOffset);
+        await reloadUsersPage();
+        return;
+      }
+      setUsersPage(page);
+      setUsersError(null);
     } catch (cause) {
+      if (usersGenerationRef.current !== generation) return;
       if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
         clearSession();
         router.push("/login");
@@ -1604,9 +1620,10 @@ export default function ResourcesPage() {
 
     if (action.kind === "status") {
       const verb = action.user.is_active ? "désactiver" : "activer";
+      const participle = action.user.is_active ? "désactivé" : "activé";
       return {
         title: `${verb[0].toUpperCase()}${verb.slice(1)} cet utilisateur ?`,
-        description: `Le compte ${action.user.email} sera ${verb}.`,
+        description: `Le compte ${action.user.email} sera ${participle}.`,
         confirmLabel: verb[0].toUpperCase() + verb.slice(1),
         destructive: action.user.is_active,
       };
