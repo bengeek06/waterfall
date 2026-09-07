@@ -1,7 +1,7 @@
 "use client";
 
 import type { FormEventHandler } from "react";
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
 
 import { Badge } from "@/components/ui/badge";
@@ -77,19 +77,35 @@ export type CalendarsTableProps = {
 // enters edit mode (which *is* a memo dependency, via `editingId`, so the seed
 // is always the value at that transition), reporting every keystroke upward
 // via `onChange` for `draft`/"Enregistrer" to use.
-function CalendarEditableField(props: {
-  ariaLabel: string;
-  type?: string;
-  min?: string;
-  max?: string;
-  step?: string;
-  className?: string;
-  initialValue: string;
-  onChange: (value: string) => void;
-}) {
+// Wrapped in `forwardRef` (the one exception to this codebase's usual "no
+// forwardRef" style) so callers can hold a live `HTMLInputElement` for this
+// field, to call native validation (`checkValidity`/`reportValidity`) on it,
+// e.g. from the "Enregistrer" handler below, which can't rely on the shared
+// `<form>`'s submit-time validation (see that handler's comment for why).
+// `forwardRef` is required here, not the plain React 19 ref-as-prop shortcut:
+// `eslint-plugin-react-hooks`'s static analysis treats any prop literally
+// named `ref` on a plain (non-`forwardRef`) component as a ref value and
+// flags every other prop read alongside it in the same JSX element as
+// "accessed during render" -- `forwardRef` is the pattern its ref-safety
+// analysis actually recognizes.
+const CalendarEditableField = forwardRef<
+  HTMLInputElement,
+  {
+    ariaLabel: string;
+    type?: string;
+    min?: string;
+    max?: string;
+    step?: string;
+    className?: string;
+    initialValue: string;
+    required?: boolean;
+    onChange: (value: string) => void;
+  }
+>(function CalendarEditableField(props, ref) {
   const [value, setValue] = useState(props.initialValue);
   return (
     <Input
+      ref={ref}
       aria-label={props.ariaLabel}
       type={props.type}
       min={props.min}
@@ -97,13 +113,14 @@ function CalendarEditableField(props: {
       step={props.step}
       className={props.className}
       value={value}
+      required={props.required}
       onChange={(event) => {
         setValue(event.target.value);
         props.onChange(event.target.value);
       }}
     />
   );
-}
+});
 
 // The three disable rules and their accompanying hint text, kept together since they
 // share the same inputs: a default calendar and a calendar assigned to an active
@@ -178,6 +195,28 @@ export function CalendarsTable(props: CalendarsTableProps) {
     propsRef.current = props;
   });
 
+  // Live DOM refs for the constrained fields (`min`/`max`/`step`, now also
+  // `required` -- an empty `<input type="number" min="1">` passes
+  // `checkValidity()` on its own, HTML5 only rejects blank via `required`, not
+  // `min`/`max`, so without it clearing the field and clicking "Enregistrer"
+  // would still slip an empty string through) of whichever row is currently
+  // being edited, so "Enregistrer" can run native HTML5 validation on just
+  // that row before calling `onSave` -- see that button's handler below for
+  // why this can't go through the shared `<form>`'s `onSubmit`/
+  // `reportValidity` instead. `code`/`name` are free text with no HTML5
+  // constraints on their editable fields (not even `required`, unlike their
+  // pinned-row counterparts -- editing never leaves them blank without also
+  // failing on `weeksPerYear`/the day-hours fields first, and adding
+  // `required` there is a separate, non-#194 concern), so they're
+  // intentionally excluded. Reset on every render of a given editing row (ref
+  // callbacks re-run) and effectively cleared when `editingId` changes, since
+  // the previous row's `<CalendarEditableField>`s unmount (calling their ref
+  // callbacks with `null`) as the new row's mount.
+  const editingFieldRefs = useRef<{
+    weeksPerYear: HTMLInputElement | null;
+    weekdays: Partial<Record<number, HTMLInputElement | null>>;
+  }>({ weeksPerYear: null, weekdays: {} });
+
   function renderCodeCell(item: Calendar) {
     if (props.editingId === item.id) {
       return (
@@ -217,8 +256,12 @@ export function CalendarsTable(props: CalendarsTableProps) {
           type="number"
           min="1"
           max="53"
+          required
           initialValue={props.draft.weeksPerYear}
           onChange={(value) => propsRef.current.onDraftChange("weeksPerYear", value)}
+          ref={(el) => {
+            editingFieldRefs.current.weeksPerYear = el;
+          }}
         />
       );
     }
@@ -236,8 +279,12 @@ export function CalendarsTable(props: CalendarsTableProps) {
           max="24"
           step="0.25"
           className="w-16"
+          required
           initialValue={value}
           onChange={(next) => propsRef.current.onDraftWeekdayChange(dayType, next)}
+          ref={(el) => {
+            editingFieldRefs.current.weekdays[dayType] = el;
+          }}
         />
       );
     }
@@ -253,7 +300,35 @@ export function CalendarsTable(props: CalendarsTableProps) {
       <div className="flex gap-2">
         {editing ? (
           <>
-            <Button size="sm" type="button" disabled={props.busy} onClick={() => propsRef.current.onSave(item)}>
+            <Button
+              size="sm"
+              type="button"
+              disabled={props.busy}
+              onClick={() => {
+                // Can't be `type="submit"`: the create row and every edit row
+                // share one `<form>` (see the `<form>` wrapping `DataTable`
+                // below), so submitting it would run `props.onSubmit` (the
+                // create handler) instead of saving this row. Can't call the
+                // shared form's `.reportValidity()` either: the pinned create
+                // row's `required` fields (`code`/`name`/`weeksPerYear`) are
+                // normally empty while editing an unrelated existing row,
+                // which would fail validation and block a valid save. So
+                // native HTML5 validation is run manually, scoped to just
+                // this row's constrained fields (`weeksPerYear` + the 7
+                // day-hours inputs -- `code`/`name` are free text with no
+                // HTML5 constraints, nothing to check there).
+                const fields = [
+                  editingFieldRefs.current.weeksPerYear,
+                  ...WEEKDAY_ORDER.map(({ dayType }) => editingFieldRefs.current.weekdays[dayType] ?? null),
+                ].filter((field): field is HTMLInputElement => field !== null);
+                const firstInvalid = fields.find((field) => !field.checkValidity());
+                if (firstInvalid) {
+                  firstInvalid.reportValidity();
+                  return;
+                }
+                propsRef.current.onSave(item);
+              }}
+            >
               Enregistrer
             </Button>
             <Button size="sm" variant="outline" type="button" onClick={() => propsRef.current.onCancel()}>

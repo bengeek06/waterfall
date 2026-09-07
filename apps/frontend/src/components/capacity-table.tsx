@@ -1,7 +1,7 @@
 "use client";
 
 import type { ColumnDef } from "@tanstack/react-table";
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -66,16 +66,32 @@ function fieldDiffers(draftValue: string, savedValue: string): boolean {
 // when it enters/re-enters view, e.g. on the initial load or a page change,
 // at which point there's no unsynced ref to worry about), and reports every
 // keystroke upward via `onChange` for `props.drafts`/"Enregistrer" to use.
-function CapacityFieldInput(props: {
-  role: ResourceRole;
-  field: CapacityField;
-  initialValue: string;
-  ariaLabel: string;
-  onChange: (roleId: number, field: CapacityField, value: string) => void;
-}) {
+// Wrapped in `forwardRef` (rather than the React 19 ref-as-prop shortcut of a
+// plain function component reading a prop named `ref`) so "Enregistrer" can
+// hold a live `HTMLInputElement` for each field to run native
+// `checkValidity`/`reportValidity` on before calling `onSave` -- see that
+// button's `onClick` below. `forwardRef` specifically, not ref-as-prop: this
+// codebase's ESLint config (`eslint-plugin-react-hooks`'s `refs` static
+// analysis) flags reading a plain-component prop literally named `ref`
+// (whatever its own name) as an unsafe render-time ref access and then
+// flags every other prop read in the same JSX element alongside it --
+// `forwardRef` is the pattern it actually recognizes as ref-safe (see the
+// equivalent note on `CalendarEditableField` in `calendars-table.tsx`, which
+// hit the same lint failure first).
+const CapacityFieldInput = forwardRef<
+  HTMLInputElement,
+  {
+    role: ResourceRole;
+    field: CapacityField;
+    initialValue: string;
+    ariaLabel: string;
+    onChange: (roleId: number, field: CapacityField, value: string) => void;
+  }
+>(function CapacityFieldInput(props, ref) {
   const [value, setValue] = useState(props.initialValue);
   return (
     <Input
+      ref={ref}
       type="number"
       min="0"
       step="0.01"
@@ -87,7 +103,7 @@ function CapacityFieldInput(props: {
       }}
     />
   );
-}
+});
 
 export function CapacityTable(props: CapacityTableProps) {
   // `columns` below is memoized so its cell renderers keep a stable identity
@@ -114,6 +130,28 @@ export function CapacityTable(props: CapacityTableProps) {
   useLayoutEffect(() => {
     propsRef.current = props;
   });
+
+  // Live DOM refs for each role's two capacity fields, keyed by role id
+  // (unlike `calendars-table.tsx`'s single-editing-row case, every row here
+  // is simultaneously editable, so a per-role-id map is needed rather than a
+  // single "currently editing" slot). Used by each row's own "Enregistrer" to
+  // run native HTML5 validation (`checkValidity`/`reportValidity`) on just
+  // that role's fields before calling `onSave` -- there's no shared `<form>`
+  // here (unlike `calendars-table.tsx`), so unlike that file this doesn't
+  // need to work around a create-row's `required` fields colliding with an
+  // unrelated row's save, but the underlying gap is the same: a raw
+  // `type="button"` `onClick={() => onSave(...)}` bypasses the `min`/`step`
+  // constraints declared on these inputs entirely.
+  const fieldRefsByRoleId = useRef<Map<number, { personCount: HTMLInputElement | null; availableHours: HTMLInputElement | null }>>(new Map());
+
+  function getFieldRefs(roleId: number) {
+    let entry = fieldRefsByRoleId.current.get(roleId);
+    if (!entry) {
+      entry = { personCount: null, availableHours: null };
+      fieldRefsByRoleId.current.set(roleId, entry);
+    }
+    return entry;
+  }
 
   function draftFor(role: ResourceRole): CapacityDraft {
     return props.drafts[role.id] ?? defaultDraft;
@@ -178,6 +216,9 @@ export function CapacityTable(props: CapacityTableProps) {
               initialValue={draftFor(role).personCount}
               ariaLabel={`Nombre de personnes pour ${labelFor(role)}`}
               onChange={handleFieldChange}
+              ref={(el) => {
+                getFieldRefs(role.id).personCount = el;
+              }}
             />
           );
         },
@@ -194,6 +235,9 @@ export function CapacityTable(props: CapacityTableProps) {
               initialValue={draftFor(role).availableHours}
               ariaLabel={`Heures disponibles pour ${labelFor(role)}`}
               onChange={handleFieldChange}
+              ref={(el) => {
+                getFieldRefs(role.id).availableHours = el;
+              }}
             />
           );
         },
@@ -208,7 +252,25 @@ export function CapacityTable(props: CapacityTableProps) {
               size="sm"
               type="button"
               disabled={propsRef.current.actionBusy}
-              onClick={() => propsRef.current.onSave(role.id)}
+              onClick={() => {
+                // Can't rely on a shared `<form>`'s submit-time validation
+                // (there isn't one here, unlike `calendars-table.tsx`): this
+                // button used to call `onSave` directly, bypassing the
+                // `min`/`step` constraints declared on this role's two
+                // fields entirely. Validated per-role via `fieldRefsByRoleId`
+                // rather than a single shared ref, since every row here can
+                // be edited (and saved) independently and simultaneously.
+                const refs = fieldRefsByRoleId.current.get(role.id);
+                const fields = [refs?.personCount ?? null, refs?.availableHours ?? null].filter(
+                  (field): field is HTMLInputElement => field !== null,
+                );
+                const firstInvalid = fields.find((field) => !field.checkValidity());
+                if (firstInvalid) {
+                  firstInvalid.reportValidity();
+                  return;
+                }
+                propsRef.current.onSave(role.id);
+              }}
             >
               Enregistrer
             </Button>

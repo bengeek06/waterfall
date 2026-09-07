@@ -46,6 +46,23 @@ describe("CapacityTable", () => {
     expect(onSave).toHaveBeenCalledWith(1);
   });
 
+  it("blocks Enregistrer and does not call onSave when a capacity field is set below its native HTML5 minimum", () => {
+    // Regression test for #194 (extended to capacity-table.tsx per review):
+    // before the fix, "Enregistrer" was a raw `type="button"` that called
+    // `onSave` directly, bypassing the `min="0"` constraint declared on this
+    // same field.
+    const onSave = vi.fn();
+    renderTable({
+      drafts: { 1: { personCount: "2.00", availableHours: "3200.00" } },
+      onSave,
+    });
+
+    fireEvent.change(screen.getByLabelText("Nombre de personnes pour Développeur — IT (#1)"), { target: { value: "-5" } });
+    fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
   it("defaults a role without an existing capacity draft to 0.00/0.00, still editable and creatable inline", () => {
     renderTable({ drafts: {} });
 
