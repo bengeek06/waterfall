@@ -42,6 +42,7 @@ import {
 } from "@/lib/backend";
 import { clearSession, getSession, setSession, type SessionTokens } from "@/lib/session";
 import { canRedo, canUndo, getPlanningHistory, type PlanningHistoryByPlanningId } from "@/lib/planning-history";
+import { validateImportFile } from "@/lib/planning-import-validation";
 import { usePlanningDetailEffect, type PlanningRevisionConflict } from "@/hooks/use-planning-detail";
 import { usePlanningHistoryCommand } from "@/hooks/use-planning-history-command";
 import { usePlanningImport } from "@/hooks/use-planning-import";
@@ -49,8 +50,6 @@ import { usePlanningStructureEditor } from "@/hooks/use-planning-structure-edito
 import { usePlanningTreeMutations } from "@/hooks/use-planning-tree-mutations";
 import { useEstimateCostLines } from "@/hooks/use-estimate-cost-lines";
 import { useProjectInfoEditor } from "@/hooks/use-project-info-editor";
-
-const MAX_IMPORT_FILE_SIZE = 25 * 1024 * 1024;
 
 function describeInitialProjectLoadError(cause: unknown): string {
   if (cause instanceof ApiError) {
@@ -149,6 +148,10 @@ export default function ProjectDetailsPage() {
   const [structureOpen, setStructureOpen] = useState(false);
   const [planningExportBusy, setPlanningExportBusy] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
+  // Kept in sync with `importFile` synchronously (not via a separate effect) so that an in-flight
+  // preview request can tell, once it resolves, whether the candidate file changed while it was
+  // waiting -- see the freshness guard in `preparePlanningImport`.
+  const latestImportFileRef = useRef<File | null>(null);
   const [importBusy, setImportBusy] = useState(false);
   const [importReview, setImportReview] = useState<{ batchId: number; diff: ImportDiff } | null>(null);
   const [importFeedback, setImportFeedback] = useState<string | null>(null);
@@ -316,14 +319,14 @@ export default function ProjectDetailsPage() {
         return;
       }
       try {
-        const [categories, typesPage] = await Promise.all([
+        const [categoriesPage, typesPage] = await Promise.all([
           getCostCategories(session, onSessionRefresh),
           getCostTypes(session, onSessionRefresh),
         ]);
         const laborTypeIds = new Set(
           typesPage.items.filter((type) => type.kind === "labor").map((type) => type.id),
         );
-        setCostCategories(categories.filter((category) => !laborTypeIds.has(category.cost_type_id)));
+        setCostCategories(categoriesPage.items.filter((category) => !laborTypeIds.has(category.cost_type_id)));
       } catch {
         // Non-blocking: the add-line form simply stays disabled without categories.
       }
@@ -473,19 +476,29 @@ export default function ProjectDetailsPage() {
     if (!session || !project || !importFile) {
       return;
     }
+    const requestFile = importFile;
     setImportBusy(true);
     setError(null);
     setImportFeedback(null);
     try {
       const batch = await createImportBatch(projectId, project.name, session, onSessionRefresh);
-      await uploadImportSourceXml(batch.id, importFile, session, onSessionRefresh);
+      await uploadImportSourceXml(batch.id, requestFile, session, onSessionRefresh);
       await runImportBatch(batch.id, session, onSessionRefresh, true, false);
       const diff = await getImportBatchDiff(batch.id, session, onSessionRefresh);
+      // The user may have selected a different candidate file while this request was in flight;
+      // if so, this result is stale and must be dropped silently rather than shown as a review
+      // for a file that is no longer selected (see fix for #132).
+      if (latestImportFileRef.current !== requestFile) {
+        return;
+      }
       setImportReview({ batchId: batch.id, diff });
     } catch (cause) {
       if (cause instanceof SessionExpiredError) {
         clearSession();
         router.push("/login");
+        return;
+      }
+      if (latestImportFileRef.current !== requestFile) {
         return;
       }
       setError(cause instanceof ApiError ? cause.message : "Impossible d'importer le planning.");
@@ -494,16 +507,58 @@ export default function ProjectDetailsPage() {
     }
   }
 
+  // Any change to the candidate file -- accepted or rejected -- invalidates a pending import
+  // preview: `importReview.batchId` refers to whatever file was uploaded when "Prévisualiser
+  // l'import" was last clicked, and confirming it after the candidate changed would silently
+  // apply the wrong batch. Clear it in every branch of both handlers below, not just the
+  // happy path.
   function onImportFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0] ?? null;
-    if (file && file.size > MAX_IMPORT_FILE_SIZE) {
+    if (file) {
+      const validationError = validateImportFile(file);
+      if (validationError) {
+        setImportFile(null);
+        latestImportFileRef.current = null;
+        setImportReview(null);
+        setError(validationError);
+        event.target.value = "";
+        return;
+      }
+    }
+    setError(null);
+    setImportFile(file);
+    latestImportFileRef.current = file;
+    setImportReview(null);
+  }
+
+  function onImportFilesDrop(files: FileList) {
+    if (files.length === 0) {
       setImportFile(null);
-      setError("Le fichier XML ne doit pas dépasser 25 MiB.");
-      event.target.value = "";
+      latestImportFileRef.current = null;
+      setImportReview(null);
+      setError("Le dépôt ne contient aucun fichier exploitable (dossier non pris en charge ou élément invalide).");
+      return;
+    }
+    if (files.length > 1) {
+      setImportFile(null);
+      latestImportFileRef.current = null;
+      setImportReview(null);
+      setError("Dépose un seul fichier à la fois.");
+      return;
+    }
+    const file = files[0];
+    const validationError = validateImportFile(file);
+    if (validationError) {
+      setImportFile(null);
+      latestImportFileRef.current = null;
+      setImportReview(null);
+      setError(validationError);
       return;
     }
     setError(null);
     setImportFile(file);
+    latestImportFileRef.current = file;
+    setImportReview(null);
   }
 
   const confirmPlanningImport = usePlanningImport({
@@ -565,6 +620,7 @@ export default function ProjectDetailsPage() {
           importFile={importFile}
           importBusy={importBusy}
           onFileChange={onImportFileChange}
+          onFilesDrop={onImportFilesDrop}
           onPreviewImport={() => void preparePlanningImport()}
           planningExportBusy={planningExportBusy}
           onExportXml={() => void exportPlanningXml()}

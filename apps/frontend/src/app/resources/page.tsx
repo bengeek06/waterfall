@@ -88,13 +88,74 @@ function flattenOrganization(nodes: ResourceNode[], collapsedIds: Set<number>): 
   return rows;
 }
 
+// Categories eligible for hourly-rate entry in the ValuationPanel grid: only those
+// whose cost type is "labor" (main d'œuvre). Shared between the grid's own
+// paginated view (`getValuationCategoryPage` below) and `saveAllValuation`, which
+// must act on the *complete* set of labor categories regardless of that grid's
+// current page -- see the draft-preservation comment in valuation-panel.tsx.
+function getLaborCategories(categories: CostCategory[], costTypes: CostType[]): CostCategory[] {
+  const laborCostTypeIds = new Set(costTypes.filter((type) => type.kind === "labor").map((type) => type.id));
+  return categories.filter((category) => laborCostTypeIds.has(category.cost_type_id));
+}
+
+// Computes the ValuationPanel grid's own search/sort/pagination in memory, over the
+// full, already-loaded `categories`/`costTypes` reference lists -- deliberately NOT
+// a server round-trip. See the long comment in valuation-panel.tsx for why:
+// `/resources/categories` has no cost-type-kind filter, so a server-paginated page
+// could contain non-labor categories that must never be shown here, and
+// post-filtering it client-side would produce incomplete or empty-looking pages.
+function getValuationCategoryPage(
+  categories: CostCategory[],
+  costTypes: CostType[],
+  { query, sort, offset, limit }: { query: string; sort: string | null; offset: number; limit: number },
+): { items: CostCategory[]; total: number } {
+  const laborCategories = getLaborCategories(categories, costTypes);
+  const needle = query.trim().toLowerCase();
+  const filtered = needle
+    ? laborCategories.filter((category) =>
+        [category.accounting_code, category.category_code, category.name]
+          .filter((value): value is string => Boolean(value))
+          .some((value) => value.toLowerCase().includes(needle)),
+      )
+    : laborCategories;
+  const descending = sort === "-accounting_code";
+  const sorted = [...filtered].sort(
+    (left, right) => (descending ? -1 : 1) * left.accounting_code.localeCompare(right.accounting_code),
+  );
+  return { items: sorted.slice(offset, offset + limit), total: sorted.length };
+}
+
 export default function ResourcesPage() {
   const router = useRouter();
   const [session, setSessionState] = useState<SessionTokens | null>(() => getSession());
   const [activeTab, setActiveTab] = useState<SettingsTab>("costs");
   const [nodes, setNodes] = useState<ResourceNode[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null);
+  // Mirrors `selectedNodeId` synchronously (updated at every write site below,
+  // not via a `useEffect`) so an async continuation resumed after selection has
+  // since changed (e.g. `reloadRolesPanelPage`, called from `addRole` after
+  // `await createResourceRole`) can read the *live* selection instead of the
+  // value closed over when it started -- otherwise a role created for node A
+  // while the user has since switched to node B would fetch and display A's
+  // page under B's heading.
+  const selectedNodeIdRef = useRef<number | null>(null);
+  // `roles` (full, unfiltered across every node) feeds CapacityTable and
+  // RoleCalendarsTable, which both need the complete reference list (they display
+  // every role, labelled with its own node code, not just the currently selected
+  // node's roles). Per the same EPIC E7/E8 guarantee as `costTypes` below, this must
+  // stay a plain unpaginated fetch. RolesPanel's own view -- scoped to the selected
+  // node, with server search/sort/pagination -- is a second, independent fetch
+  // (`rolesPanelPage` below), not a client-side slice of `roles`.
   const [roles, setRoles] = useState<ResourceRole[]>([]);
+  const [rolesPanelPage, setRolesPanelPage] = useState<{ items: ResourceRole[]; total: number }>({
+    items: [],
+    total: 0,
+  });
+  const [rolesPanelLoading, setRolesPanelLoading] = useState(false);
+  const [rolesPanelOffset, setRolesPanelOffset] = useState(0);
+  const [rolesPanelLimit] = useState(20);
+  const [rolesPanelSort, setRolesPanelSort] = useState<string | null>(null);
+  const [rolesPanelQuery, setRolesPanelQuery] = useState("");
   // `calendars` (full, unfiltered) feeds other panels that need the complete list as
   // reference data (RoleCalendarsTable's assignment dropdown, the
   // `calendarIdsInUseByActiveRoles` set, and the missing-default-calendar banner) --
@@ -132,8 +193,51 @@ export default function ResourcesPage() {
   const [costTypesLimit] = useState(20);
   const [costTypesSort, setCostTypesSort] = useState<string | null>(null);
   const [costTypesQuery, setCostTypesQuery] = useState("");
+  // The role-calendars table's own paginated/sortable/searchable-by-name view --
+  // independent of the full `roles` list above (still needed unpaginated by
+  // RolesPanel/CapacityTable/`calendarIdsInUseByActiveRoles`), mirroring the
+  // `costTypes` vs `costTypesPage` split for the same reason: slicing `roles`
+  // client-side would silently violate "recherche et tri delegues au serveur".
+  const [roleCalendarsPage, setRoleCalendarsPage] = useState<{ items: ResourceRole[]; total: number }>({
+    items: [],
+    total: 0,
+  });
+  const [roleCalendarsLoading, setRoleCalendarsLoading] = useState(false);
+  const [roleCalendarsOffset, setRoleCalendarsOffset] = useState(0);
+  const [roleCalendarsLimit] = useState(20);
+  const [roleCalendarsSort, setRoleCalendarsSort] = useState<string | null>(null);
+  const [roleCalendarsQuery, setRoleCalendarsQuery] = useState("");
+  // `categories` (full, unfiltered) feeds other panels that need the complete list as
+  // reference data (RolesPanel, ValuationPanel, the categoryNameById lookup) -- same
+  // reasoning as `costTypes` above. CostCategoriesTable's own paginated view is a
+  // second, independent fetch (`categoriesPage` below).
   const [categories, setCategories] = useState<CostCategory[]>([]);
+  const [categoriesPage, setCategoriesPage] = useState<{ items: CostCategory[]; total: number }>({
+    items: [],
+    total: 0,
+  });
+  const [categoriesLoading, setCategoriesLoading] = useState(false);
+  const [categoriesOffset, setCategoriesOffset] = useState(0);
+  const [categoriesLimit] = useState(20);
+  const [categoriesSort, setCategoriesSort] = useState<string | null>(null);
+  const [categoriesQuery, setCategoriesQuery] = useState("");
   const [rates, setRates] = useState<CostRate[]>([]);
+  // `roles` (full, unfiltered) feeds RolesPanel, RoleCalendarsTable, and the
+  // capacity/calendar drafts keyed by role id -- per EPIC E7/E8, that "absent limit,
+  // tout est renvoye" guarantee must not be broken by pagination. The capacity
+  // table's own view is therefore a second, independent fetch (`rolesPage` below),
+  // mirroring the `costTypes`/`costTypesPage` split above -- not a client-side slice
+  // of `roles`, which would silently violate the "recherche et tri delegues au
+  // serveur" requirement.
+  const [rolesPage, setRolesPage] = useState<{ items: ResourceRole[]; total: number }>({
+    items: [],
+    total: 0,
+  });
+  const [rolesPageLoading, setRolesPageLoading] = useState(false);
+  const [rolesOffset, setRolesOffset] = useState(0);
+  const [rolesLimit] = useState(20);
+  const [rolesSort, setRolesSort] = useState<string | null>(null);
+  const [rolesQuery, setRolesQuery] = useState("");
   const [capacities, setCapacities] = useState<RoleCapacity[]>([]);
   const [capacityDrafts, setCapacityDrafts] = useState<Record<number, { personCount: string; availableHours: string }>>({});
   const [roleCalendarDrafts, setRoleCalendarDrafts] = useState<Record<number, string>>({});
@@ -175,6 +279,19 @@ export default function ResourcesPage() {
   const [inflationValue, setInflationValue] = useState("");
   const [displayCurrency, setDisplayCurrency] = useState("EUR");
   const [rateDrafts, setRateDrafts] = useState<Record<string, string>>({});
+  // Computed once (mount) and shared between the ValuationPanel grid's displayed
+  // year columns and `saveAllValuation`'s save loop below -- if each recomputed
+  // its own `years` from `new Date()` independently, a page left open across a
+  // New Year's boundary would silently drop the oldest displayed column's drafts
+  // on save (see issue #122/E8-04 PR review).
+  const [valuationYears] = useState(() => [-4, -3, -2, -1, 0].map((offset) => new Date().getFullYear() + offset));
+  // The ValuationPanel grid's own search/sort/pagination controls (E8-04): see
+  // `getValuationCategoryPage` above for why these drive an in-memory computation
+  // rather than a second fetch, unlike `costTypesOffset`/`costTypesSort`/etc. below.
+  const [valuationOffset, setValuationOffset] = useState(0);
+  const [valuationLimit] = useState(20);
+  const [valuationSort, setValuationSort] = useState<string | null>(null);
+  const [valuationQuery, setValuationQuery] = useState("");
   const [createUserMode, setCreateUserMode] = useState(false);
   const [newEmail, setNewEmail] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -235,10 +352,10 @@ export default function ResourcesPage() {
           usersData,
         ] = await Promise.all([
           getResourceNodes(session, onSessionRefresh),
-          getResourceRoles(session, onSessionRefresh),
+          getResourceRoles(session, onSessionRefresh).then((page) => page.items),
           getCalendars(session, onSessionRefresh, true).then((page) => page.items),
           getCostTypes(session, onSessionRefresh, true).then((page) => page.items),
-          getCostCategories(session, onSessionRefresh, true),
+          getCostCategories(session, onSessionRefresh, true).then((page) => page.items),
           getCostRates(session, onSessionRefresh),
           getInflationRates(session, onSessionRefresh),
           getRoleCapacities(session, onSessionRefresh),
@@ -246,7 +363,11 @@ export default function ResourcesPage() {
         ]);
         if (!isCurrentGeneration()) return;
         setNodes(nodeData);
-        setSelectedNodeId((previous) => previous ?? nodeData[0]?.id ?? null);
+        setSelectedNodeId((previous) => {
+          const next = previous ?? nodeData[0]?.id ?? null;
+          selectedNodeIdRef.current = next;
+          return next;
+        });
         setRoleNodeId((previous) => previous || (nodeData[0] ? String(nodeData[0].id) : ""));
         setRoles(roleData);
         setCalendars(calendarData);
@@ -466,6 +587,408 @@ export default function ResourcesPage() {
     }
   }
 
+  // The role-calendars table's own paginated view, independent of the full `roles`
+  // list above -- refetched whenever pagination, sort, or search change, and again
+  // after `saveRoleCalendar` (see `reloadRoleCalendarsPage` below), since that
+  // mutates `roles` directly but has no way to patch this separate, server-ordered
+  // page in place. Guarded by its own generation counter, for the same reason as
+  // the main load and the cost-types page above.
+  const roleCalendarsGenerationRef = useRef(0);
+  // Mirrors `roleCalendarsOffset`/`roleCalendarsSort`/`roleCalendarsQuery`
+  // synchronously (updated at every write site below, not via a `useEffect`)
+  // so `reloadRoleCalendarsPage` -- called from `saveRoleCalendar` after an
+  // `await` -- reads the *live* pagination/sort/search state instead of the
+  // value closed over when `saveRoleCalendar` started. Otherwise: user saves a
+  // role's calendar (PATCH in flight), pages to offset 20 while it's pending,
+  // then the PATCH resolves -- the reload it triggers would silently refetch
+  // and display stale offset-0 data under the offset-20 label.
+  const roleCalendarsOffsetRef = useRef(roleCalendarsOffset);
+  const roleCalendarsSortRef = useRef(roleCalendarsSort);
+  const roleCalendarsQueryRef = useRef(roleCalendarsQuery);
+
+  useEffect(() => {
+    const generation = ++roleCalendarsGenerationRef.current;
+    const isCurrentGeneration = () => roleCalendarsGenerationRef.current === generation;
+
+    async function load() {
+      if (!session) return;
+      setRoleCalendarsLoading(true);
+      try {
+        const page = await getResourceRoles(session, onSessionRefresh, undefined, undefined, {
+          limit: roleCalendarsLimit,
+          offset: roleCalendarsOffset,
+          sort: roleCalendarsSort,
+          q: roleCalendarsQuery || undefined,
+        });
+        if (!isCurrentGeneration()) return;
+        setRoleCalendarsPage(page);
+      } catch (cause) {
+        if (!isCurrentGeneration()) return;
+        if (cause instanceof SessionExpiredError) {
+          clearSession();
+          router.push("/login");
+          return;
+        }
+        if (cause instanceof ApiError && cause.status === 401) {
+          clearSession();
+          router.push("/login");
+          return;
+        }
+        setNotice({
+          kind: "error",
+          message: cause instanceof ApiError ? cause.message : "Chargement des calendriers de rôles impossible",
+        });
+      } finally {
+        if (isCurrentGeneration()) setRoleCalendarsLoading(false);
+      }
+    }
+
+    void load();
+  }, [session, onSessionRefresh, router, roleCalendarsLimit, roleCalendarsOffset, roleCalendarsSort, roleCalendarsQuery]);
+
+  // Deliberately swallows its own non-session errors, like `reloadCostTypesPage`
+  // above, for the same reason: called from `saveRoleCalendar`, itself wrapped in
+  // `submitAction`, which already reports success/failure of the mutation itself.
+  // Also sets `roleCalendarsLoading` itself under the same generation counter, to
+  // avoid the same "stuck true forever" bug class documented on
+  // `reloadCostTypesPage`: a mutation reload can race an in-flight pagination/sort/
+  // search fetch, and only whichever one owns the current generation may touch the
+  // loading flag in its `finally`.
+  async function reloadRoleCalendarsPage() {
+    if (!session) return;
+    const generation = ++roleCalendarsGenerationRef.current;
+    setRoleCalendarsLoading(true);
+    try {
+      const page = await getResourceRoles(session, onSessionRefresh, undefined, undefined, {
+        limit: roleCalendarsLimit,
+        offset: roleCalendarsOffsetRef.current,
+        sort: roleCalendarsSortRef.current,
+        q: roleCalendarsQueryRef.current || undefined,
+      });
+      if (roleCalendarsGenerationRef.current === generation) setRoleCalendarsPage(page);
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
+        clearSession();
+        router.push("/login");
+      }
+    } finally {
+      if (roleCalendarsGenerationRef.current === generation) setRoleCalendarsLoading(false);
+    }
+  }
+
+  // RolesPanel's own paginated view: scoped to the selected node (the panel's
+  // structural filter, sourced from the organization tree -- never overridden by
+  // free-text search) and refetched whenever the selected node, pagination, sort,
+  // or search change, plus once more after creating a role (`reloadRolesPanelPage`
+  // below), since that mutation only appends to the full `roles` list and has no
+  // way to patch this separate, server-ordered/filtered page in place.
+  //
+  // The backend applies `node_id` as a plain WHERE filter *before* the free-text
+  // search (see `list_roles` in resources.py: the node filter narrows the query,
+  // then `apply_pagination` searches only within what's left) -- so search here is
+  // scoped to the selected node's roles, never the whole organization. That keeps
+  // what's searched consistent with what's displayed (no need for a "node" column
+  // on results, since every row already belongs to the single node shown in the
+  // panel's heading) and matches how this panel has always behaved: a per-node
+  // view, not an organization-wide one.
+  //
+  // No fetch happens while no node is selected (`selectedNodeId === null`):
+  // mirrors the previous client-side-filtered behavior, where the list was simply
+  // empty until a node was picked.
+  const rolesPanelGenerationRef = useRef(0);
+  // Mirrors `rolesPanelOffset`/`rolesPanelSort`/`rolesPanelQuery` synchronously
+  // (updated at every write site below, not via a `useEffect`) so
+  // `reloadRolesPanelPage` -- called from `addRole` after an `await` -- reads
+  // the *live* pagination/sort/search state instead of the value closed over
+  // when `addRole` started. Otherwise: the table remains interactive while
+  // `createResourceRole` is pending, so a user can page/sort/search before it
+  // resolves -- the reload it triggers would then silently commit rows fetched
+  // with the stale parameters under the new controls. Same bug class and fix
+  // as `reloadRolesPage`/`reloadRoleCalendarsPage`.
+  const rolesPanelOffsetRef = useRef(rolesPanelOffset);
+  const rolesPanelSortRef = useRef(rolesPanelSort);
+  const rolesPanelQueryRef = useRef(rolesPanelQuery);
+
+  useEffect(() => {
+    const generation = ++rolesPanelGenerationRef.current;
+    // The generation counter alone only orders requests -- it doesn't verify a
+    // resolved request still matches what's currently selected. The refs are
+    // updated synchronously in the handlers (selectNode/pagination/sort/search),
+    // strictly before React re-renders and re-runs this effect: a request
+    // started for one set of parameters can therefore still resolve, generation
+    // unchanged, in the window after the user has already moved on (e.g.
+    // clicked a different node) but before this effect gets to run again for
+    // that change. Comparing every captured parameter against the live refs
+    // closes that window, the same way `reloadRolesPanelPage` already does for
+    // `nodeId`.
+    const capturedNodeId = selectedNodeId;
+    const capturedOffset = rolesPanelOffset;
+    const capturedSort = rolesPanelSort;
+    const capturedQuery = rolesPanelQuery;
+    const isStillCurrent = () =>
+      rolesPanelGenerationRef.current === generation &&
+      selectedNodeIdRef.current === capturedNodeId &&
+      rolesPanelOffsetRef.current === capturedOffset &&
+      rolesPanelSortRef.current === capturedSort &&
+      rolesPanelQueryRef.current === capturedQuery;
+
+    async function load() {
+      if (!session || selectedNodeId === null) {
+        setRolesPanelPage({ items: [], total: 0 });
+        // Also clears any loading state a still-in-flight, now-obsolete fetch left
+        // behind (e.g. the selected node was deleted, or the session was cleared,
+        // while a request for it was pending): that fetch's own generation is now
+        // stale, so its `finally` block is guarded out and will never fire this
+        // itself, which would otherwise leave the indicator stuck forever.
+        setRolesPanelLoading(false);
+        return;
+      }
+      setRolesPanelLoading(true);
+      // Cleared unconditionally, not just on the no-selection branch above: if
+      // this request fails (e.g. right after switching to a different node),
+      // the table must not go on showing the *previous* node's rows under the
+      // newly selected node's heading once the loading skeleton disappears.
+      setRolesPanelPage({ items: [], total: 0 });
+      try {
+        const page = await getResourceRoles(session, onSessionRefresh, selectedNodeId, false, {
+          limit: rolesPanelLimit,
+          offset: rolesPanelOffset,
+          sort: rolesPanelSort,
+          q: rolesPanelQuery || undefined,
+        });
+        if (!isStillCurrent()) return;
+        setRolesPanelPage(page);
+      } catch (cause) {
+        if (!isStillCurrent()) return;
+        if (cause instanceof SessionExpiredError) {
+          clearSession();
+          router.push("/login");
+          return;
+        }
+        if (cause instanceof ApiError && cause.status === 401) {
+          clearSession();
+          router.push("/login");
+          return;
+        }
+        setNotice({
+          kind: "error",
+          message: cause instanceof ApiError ? cause.message : "Chargement des rôles impossible",
+        });
+      } finally {
+        if (isStillCurrent()) setRolesPanelLoading(false);
+      }
+    }
+
+    void load();
+  }, [session, onSessionRefresh, router, selectedNodeId, rolesPanelLimit, rolesPanelOffset, rolesPanelSort, rolesPanelQuery]);
+
+  // Mirrors `reloadCostTypesPage`: deliberately swallows its own non-session
+  // errors (see that function's comment for the full rationale) and sets
+  // `rolesPanelLoading` itself, guarded by the shared generation counter, so a
+  // mutation's reload racing an in-flight pagination/sort/search fetch can't leave
+  // the loading indicator stuck forever.
+  async function reloadRolesPanelPage() {
+    // Reads the live selection via the ref, not the `selectedNodeId` closed over
+    // when this function's caller was invoked -- see `selectedNodeIdRef`'s
+    // comment above. The ref is re-checked again below after the request
+    // resolves, since the selection can also change while this request is
+    // itself in flight.
+    const nodeId = selectedNodeIdRef.current;
+    if (!session || nodeId === null) return;
+    const generation = ++rolesPanelGenerationRef.current;
+    setRolesPanelLoading(true);
+    try {
+      const page = await getResourceRoles(session, onSessionRefresh, nodeId, false, {
+        limit: rolesPanelLimit,
+        offset: rolesPanelOffsetRef.current,
+        sort: rolesPanelSortRef.current,
+        q: rolesPanelQueryRef.current || undefined,
+      });
+      if (rolesPanelGenerationRef.current === generation && selectedNodeIdRef.current === nodeId) {
+        setRolesPanelPage(page);
+      }
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
+        clearSession();
+        router.push("/login");
+      }
+    } finally {
+      if (rolesPanelGenerationRef.current === generation) setRolesPanelLoading(false);
+    }
+  }
+
+  // The capacity table's own paginated view: independent of the full `roles` list
+  // above, refetched whenever pagination, sort, or search change. Unlike the
+  // cost-types table, no mutation here (`saveRoleCapacity` below) needs to trigger a
+  // reload of this page -- a capacity save never changes a role's own name/node_id,
+  // only `capacities` (fetched separately, in full, since a `RoleCapacity` row only
+  // exists once created for a role and the full set stays small). Guarded by its own
+  // generation counter for the same reason as the main load above.
+  const rolesPageGenerationRef = useRef(0);
+  // Mirrors `rolesOffset`/`rolesSort`/`rolesQuery` synchronously (updated at
+  // every write site below, not via a `useEffect`) so `reloadRolesPage` --
+  // called from `saveRoleCapacity` after an `await` -- reads the *live*
+  // pagination/sort/search state instead of the value closed over when
+  // `saveRoleCapacity` started. Otherwise: user saves a capacity (PATCH/POST in
+  // flight), pages to a later offset while it's pending, then the save
+  // resolves -- the reload it triggers would silently refetch and display
+  // stale data under the new offset's label. Same bug class and fix as #124
+  // (role-calendars-table)'s `reloadRoleCalendarsPage`.
+  const rolesOffsetRef = useRef(rolesOffset);
+  const rolesSortRef = useRef(rolesSort);
+  const rolesQueryRef = useRef(rolesQuery);
+
+  useEffect(() => {
+    const generation = ++rolesPageGenerationRef.current;
+    const isCurrentGeneration = () => rolesPageGenerationRef.current === generation;
+
+    async function load() {
+      if (!session) return;
+      setRolesPageLoading(true);
+      try {
+        const page = await getResourceRoles(session, onSessionRefresh, undefined, false, {
+          limit: rolesLimit,
+          offset: rolesOffset,
+          sort: rolesSort,
+          q: rolesQuery || undefined,
+        });
+        if (!isCurrentGeneration()) return;
+        setRolesPage(page);
+      } catch (cause) {
+        if (!isCurrentGeneration()) return;
+        if (cause instanceof SessionExpiredError) {
+          clearSession();
+          router.push("/login");
+          return;
+        }
+        if (cause instanceof ApiError && cause.status === 401) {
+          clearSession();
+          router.push("/login");
+          return;
+        }
+        setNotice({
+          kind: "error",
+          message: cause instanceof ApiError ? cause.message : "Chargement des rôles impossible",
+        });
+      } finally {
+        if (isCurrentGeneration()) setRolesPageLoading(false);
+      }
+    }
+
+    void load();
+  }, [session, onSessionRefresh, router, rolesLimit, rolesOffset, rolesSort, rolesQuery]);
+
+  // Called as the last step of `addRole` (wrapped in `submitAction`, which sets its
+  // own success notice right after `action()` returns): swallows its own non-session
+  // errors for the same reason as `reloadCostTypesPage` above -- the mutation itself
+  // (already applied to `roles` and the server) must not be reported as failed just
+  // because this follow-up refresh of the table's own page failed. Also sets
+  // `rolesPageLoading` itself, guarded by the shared generation counter, to avoid the
+  // same stuck-loading bug class fixed on the cost-types table (a mutation's reload
+  // racing an in-flight pagination/sort/search fetch must still clear the loading
+  // flag when it, not the now-obsolete fetch, is the one that settles).
+  async function reloadRolesPage() {
+    if (!session) return;
+    const generation = ++rolesPageGenerationRef.current;
+    setRolesPageLoading(true);
+    try {
+      const page = await getResourceRoles(session, onSessionRefresh, undefined, false, {
+        limit: rolesLimit,
+        offset: rolesOffsetRef.current,
+        sort: rolesSortRef.current,
+        q: rolesQueryRef.current || undefined,
+      });
+      if (rolesPageGenerationRef.current === generation) setRolesPage(page);
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
+        clearSession();
+        router.push("/login");
+      }
+    } finally {
+      if (rolesPageGenerationRef.current === generation) setRolesPageLoading(false);
+    }
+  }
+
+  // The cost-categories table's own paginated view: same rationale as `costTypesPage`
+  // above -- independent of the full `categories` list, refetched on pagination/sort/
+  // search changes and again after any create/update/toggle mutation (see
+  // `reloadCategoriesPage` below).
+  const categoriesGenerationRef = useRef(0);
+
+  useEffect(() => {
+    const generation = ++categoriesGenerationRef.current;
+    const isCurrentGeneration = () => categoriesGenerationRef.current === generation;
+
+    async function load() {
+      if (!session) return;
+      setCategoriesLoading(true);
+      try {
+        const page = await getCostCategories(session, onSessionRefresh, true, {
+          limit: categoriesLimit,
+          offset: categoriesOffset,
+          sort: categoriesSort,
+          q: categoriesQuery || undefined,
+        });
+        if (!isCurrentGeneration()) return;
+        setCategoriesPage(page);
+      } catch (cause) {
+        if (!isCurrentGeneration()) return;
+        if (cause instanceof SessionExpiredError) {
+          clearSession();
+          router.push("/login");
+          return;
+        }
+        if (cause instanceof ApiError && cause.status === 401) {
+          clearSession();
+          router.push("/login");
+          return;
+        }
+        setNotice({
+          kind: "error",
+          message: cause instanceof ApiError ? cause.message : "Chargement des catégories de coût impossible",
+        });
+      } finally {
+        if (isCurrentGeneration()) setCategoriesLoading(false);
+      }
+    }
+
+    void load();
+  }, [session, onSessionRefresh, router, categoriesLimit, categoriesOffset, categoriesSort, categoriesQuery]);
+
+  // Deliberately swallows its own non-session errors rather than letting them
+  // propagate: this is called as the last step of `addCategory`/`saveCategory`/
+  // `toggleCategoryActive`, all wrapped in `submitAction`, which sets its own success
+  // notice right after `action()` returns -- see `reloadCostTypesPage` above for the
+  // full reasoning (a `setNotice` call here would just be overwritten, while throwing
+  // would make `submitAction` report the whole operation as failed even though the
+  // mutation itself succeeded). Session expiry is the one exception: it must still
+  // force a logout.
+  //
+  // Also sets `categoriesLoading` itself (guarded by the shared generation counter,
+  // like the effect above) so a mutation racing an in-flight pagination/sort/search
+  // fetch can't leave `categoriesLoading` stuck `true` forever.
+  async function reloadCategoriesPage() {
+    if (!session) return;
+    const generation = ++categoriesGenerationRef.current;
+    setCategoriesLoading(true);
+    try {
+      const page = await getCostCategories(session, onSessionRefresh, true, {
+        limit: categoriesLimit,
+        offset: categoriesOffset,
+        sort: categoriesSort,
+        q: categoriesQuery || undefined,
+      });
+      if (categoriesGenerationRef.current === generation) setCategoriesPage(page);
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
+        clearSession();
+        router.push("/login");
+      }
+    } finally {
+      if (categoriesGenerationRef.current === generation) setCategoriesLoading(false);
+    }
+  }
+
   async function submitAction(action: () => Promise<void>, success: string) {
     setActionBusy(true);
     setNotice(null);
@@ -522,7 +1045,16 @@ export default function ResourcesPage() {
     await submitAction(async () => {
       await deleteResourceNode(node.id, session, onSessionRefresh);
       setNodes((previous) => previous.filter((item) => item.id !== node.id));
-      setSelectedNodeId((previous) => previous === node.id ? null : previous);
+      // Reads the live selection via the ref (see `selectedNodeIdRef`'s comment
+      // above), not the value closed over when `removeNode` started -- otherwise
+      // deleting node A while the user has since switched to node B would
+      // incorrectly reset B's own pagination back to page 1.
+      if (selectedNodeIdRef.current === node.id) {
+        selectedNodeIdRef.current = null;
+        setSelectedNodeId(null);
+        rolesPanelOffsetRef.current = 0;
+        setRolesPanelOffset(0);
+      }
     }, "Nœud supprimé.");
   }
 
@@ -544,6 +1076,7 @@ export default function ResourcesPage() {
       setCategoryCode("");
       setCategoryName("");
       setAccountingCode("");
+      await reloadCategoriesPage();
     }, "Catégorie créée.");
   }
 
@@ -618,6 +1151,7 @@ export default function ResourcesPage() {
       );
       setCategories((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
       setEditingCategoryId(null);
+      await reloadCategoriesPage();
     }, "Catégorie modifiée.");
   }
 
@@ -631,6 +1165,7 @@ export default function ResourcesPage() {
         onSessionRefresh,
       );
       setCategories((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+      await reloadCategoriesPage();
     }, category.is_active ? "Catégorie désactivée." : "Catégorie réactivée.");
   }
 
@@ -649,6 +1184,9 @@ export default function ResourcesPage() {
       );
       setRoles((prev) => [...prev, created].sort((left, right) => left.name.localeCompare(right.name)));
       setRoleName("");
+      await reloadRolesPanelPage();
+      await reloadRolesPage();
+      await reloadRoleCalendarsPage();
     }, "Rôle créé.");
   }
 
@@ -742,6 +1280,7 @@ export default function ResourcesPage() {
         onSessionRefresh,
       );
       setRoles((previous) => previous.map((role) => (role.id === updated.id ? updated : role)));
+      await reloadRoleCalendarsPage();
     }, "Calendrier du rôle enregistré.");
   }
 
@@ -752,10 +1291,16 @@ export default function ResourcesPage() {
         const percentage = Number(inflationValue);
         await setInflationRate(Number(inflationYear), String(1 + percentage / 100), session, onSessionRefresh);
       }
-      const years = [-4, -3, -2, -1, 0].map((offset) => new Date().getFullYear() + offset);
-      const laborCategories = categories.filter((category) => costTypes.find((type) => type.id === category.cost_type_id)?.kind === "labor");
+      // Deliberately the *full* labor-category set, not the ValuationPanel grid's
+      // currently visible page: see the draft-preservation comment in
+      // valuation-panel.tsx -- bulk save must act on every draft with a value,
+      // regardless of which page/search/sort was active when "Enregistrer" was
+      // clicked. `valuationYears` (not a fresh computation here) keeps this loop
+      // in sync with the grid's displayed columns -- see the comment on that
+      // state above.
+      const laborCategories = getLaborCategories(categories, costTypes);
       for (const category of laborCategories) {
-        for (const year of years) {
+        for (const year of valuationYears) {
           const value = rateDrafts[`${category.id}:${year}`]?.trim() ?? "";
           if (!value) continue;
           const existing = rates.find((rate) => rate.cost_category_id === category.id && rate.year === year);
@@ -872,7 +1417,13 @@ export default function ResourcesPage() {
   }
 
   const categoryNameById = new Map(categories.map((category) => [category.id, category.name]));
-  const nodeCodeById = new Map(nodes.map((node) => [node.id, node.code]));
+  // Memoized (not a plain `new Map()` on every render): `RoleCalendarsTable`
+  // depends on it in its own memoized `columns` (to keep its role labels correct
+  // after a node rename without rebuilding `columns` on every unrelated render),
+  // and a fresh Map identity every render -- even with the same *contents* --
+  // would defeat that memoization just as surely as depending on a per-keystroke
+  // prop directly.
+  const nodeCodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node.code])), [nodes]);
   // Memoized (not a plain `new Set()` on every render): `CalendarsTable` uses
   // this as a dependency of its own memoized `columns` (to keep cell renderers
   // at a stable identity while a draft is being typed elsewhere on the page --
@@ -885,11 +1436,19 @@ export default function ResourcesPage() {
   );
   const organizationRows = useMemo(() => flattenOrganization(nodes, collapsedNodeIds), [nodes, collapsedNodeIds]);
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? null;
-  const selectedRoles = selectedNodeId === null ? [] : roles.filter((role) => role.node_id === selectedNodeId);
+  const valuationPage = getValuationCategoryPage(categories, costTypes, {
+    query: valuationQuery,
+    sort: valuationSort,
+    offset: valuationOffset,
+    limit: valuationLimit,
+  });
 
   function selectNode(nodeId: number) {
+    selectedNodeIdRef.current = nodeId;
     setSelectedNodeId(nodeId);
     setRoleNodeId(String(nodeId));
+    rolesPanelOffsetRef.current = 0;
+    setRolesPanelOffset(0);
   }
 
   function toggleNodeCollapsed(nodeId: number) {
@@ -996,11 +1555,11 @@ export default function ResourcesPage() {
             onNodeChange={(field, value) => { if (field === "code") setNodeCode(value); if (field === "name") setNodeName(value); if (field === "parent") setNodeParentId(value); }}
           />
 
-          <RolesPanel selectedNode={selectedNode} selectedRoles={selectedRoles} nodes={nodes} categories={categories} costTypes={costTypes} roleName={roleName} roleNodeId={roleNodeId} roleCategoryId={roleCategoryId} actionBusy={actionBusy} categoryNames={categoryNameById} onSubmit={addRole} onNameChange={setRoleName} onNodeChange={(value) => { setRoleNodeId(value); setSelectedNodeId(Number(value)); }} onCategoryChange={setRoleCategoryId} />
+          <RolesPanel selectedNode={selectedNode} items={rolesPanelPage.items} pagination={{ total: rolesPanelPage.total, limit: rolesPanelLimit, offset: rolesPanelOffset }} onPaginationChange={(next) => { rolesPanelOffsetRef.current = next.offset; setRolesPanelOffset(next.offset); }} sort={rolesPanelSort} onSortChange={(next) => { rolesPanelSortRef.current = next; setRolesPanelSort(next); }} search={rolesPanelQuery} onSearchChange={(next) => { rolesPanelQueryRef.current = next; setRolesPanelQuery(next); rolesPanelOffsetRef.current = 0; setRolesPanelOffset(0); }} isLoading={rolesPanelLoading} nodes={nodes} categories={categories} costTypes={costTypes} roleName={roleName} roleNodeId={roleNodeId} roleCategoryId={roleCategoryId} actionBusy={actionBusy} categoryNames={categoryNameById} onSubmit={addRole} onNameChange={setRoleName} onNodeChange={(value) => { setRoleNodeId(value); const nextNodeId = value === "" ? null : Number(value); selectedNodeIdRef.current = nextNodeId; setSelectedNodeId(nextNodeId); rolesPanelOffsetRef.current = 0; setRolesPanelOffset(0); }} onCategoryChange={setRoleCategoryId} />
 
           </div>
-          <CapacityTable roles={roles} drafts={capacityDrafts} actionBusy={actionBusy} nodeCodeById={nodeCodeById} onDraftChange={(roleId, draft) => setCapacityDrafts((previous) => ({ ...previous, [roleId]: draft }))} onSave={(roleId) => void saveRoleCapacity(roleId)} />
-          <RoleCalendarsTable roles={roles} calendars={calendars} drafts={roleCalendarDrafts} actionBusy={actionBusy} nodeCodeById={nodeCodeById} onDraftChange={(roleId, calendarId) => setRoleCalendarDrafts((previous) => ({ ...previous, [roleId]: calendarId }))} onSave={(roleId) => void saveRoleCalendar(roleId)} />
+          <CapacityTable items={rolesPage.items} pagination={{ total: rolesPage.total, limit: rolesLimit, offset: rolesOffset }} onPaginationChange={(next) => { rolesOffsetRef.current = next.offset; setRolesOffset(next.offset); }} sort={rolesSort} onSortChange={(next) => { rolesSortRef.current = next; setRolesSort(next); }} search={rolesQuery} onSearchChange={(next) => { rolesQueryRef.current = next; setRolesQuery(next); rolesOffsetRef.current = 0; setRolesOffset(0); }} isLoading={rolesPageLoading} drafts={capacityDrafts} actionBusy={actionBusy} nodeCodeById={nodeCodeById} onDraftChange={(roleId, draft) => setCapacityDrafts((previous) => ({ ...previous, [roleId]: draft }))} onSave={(roleId) => void saveRoleCapacity(roleId)} />
+          <RoleCalendarsTable roles={roleCalendarsPage.items} calendars={calendars} pagination={{ total: roleCalendarsPage.total, limit: roleCalendarsLimit, offset: roleCalendarsOffset }} onPaginationChange={(next) => { roleCalendarsOffsetRef.current = next.offset; setRoleCalendarsOffset(next.offset); }} sort={roleCalendarsSort} onSortChange={(next) => { roleCalendarsSortRef.current = next; setRoleCalendarsSort(next); }} search={roleCalendarsQuery} onSearchChange={(next) => { roleCalendarsQueryRef.current = next; setRoleCalendarsQuery(next); roleCalendarsOffsetRef.current = 0; setRoleCalendarsOffset(0); }} isLoading={roleCalendarsLoading} drafts={roleCalendarDrafts} actionBusy={actionBusy} nodeCodeById={nodeCodeById} onDraftChange={(roleId, calendarId) => setRoleCalendarDrafts((previous) => ({ ...previous, [roleId]: calendarId }))} onSave={(roleId) => void saveRoleCalendar(roleId)} />
           <CalendarsTable
             items={calendarsPage.items}
             pagination={{ total: calendarsPage.total, limit: calendarsLimit, offset: calendarsOffset }}
@@ -1038,9 +1597,9 @@ export default function ResourcesPage() {
         <>
           <CostTypesTable items={costTypesPage.items} pagination={{ total: costTypesPage.total, limit: costTypesLimit, offset: costTypesOffset }} onPaginationChange={(next) => setCostTypesOffset(next.offset)} sort={costTypesSort} onSortChange={setCostTypesSort} search={costTypesQuery} onSearchChange={(next) => { setCostTypesQuery(next); setCostTypesOffset(0); }} isLoading={costTypesLoading} code={costTypeCode} name={costTypeName} kind={costTypeKind} draft={costTypeDraft} editingId={editingCostTypeId} busy={actionBusy} labels={costTypeKindLabels} onSubmit={addCostType} onCodeChange={setCostTypeCode} onNameChange={setCostTypeName} onKindChange={setCostTypeKind} onStartEdit={startEditCostType} onDraftChange={setCostTypeDraft} onSave={(item) => void saveCostType(item)} onCancel={() => setEditingCostTypeId(null)} onToggle={(item) => void toggleCostTypeActive(item)} />
 
-          <CostCategoriesTable items={categories} types={costTypes} typeId={categoryCostTypeId} accountingCode={categoryCode} categoryCode={accountingCode} name={categoryName} draft={categoryDraft} editingId={editingCategoryId} busy={actionBusy} onSubmit={addCategory} onTypeChange={setCategoryCostTypeId} onAccountingCodeChange={setCategoryCode} onCategoryCodeChange={setAccountingCode} onNameChange={setCategoryName} onStartEdit={startEditCategory} onDraftChange={(field, value) => setCategoryDraft((previous) => ({ ...previous, [field]: value }))} onSave={(item) => void saveCategory(item)} onCancel={() => setEditingCategoryId(null)} onToggle={(item) => void toggleCategoryActive(item)} />
+          <CostCategoriesTable items={categoriesPage.items} types={costTypes} pagination={{ total: categoriesPage.total, limit: categoriesLimit, offset: categoriesOffset }} onPaginationChange={(next) => setCategoriesOffset(next.offset)} sort={categoriesSort} onSortChange={setCategoriesSort} search={categoriesQuery} onSearchChange={(next) => { setCategoriesQuery(next); setCategoriesOffset(0); }} isLoading={categoriesLoading} typeId={categoryCostTypeId} accountingCode={categoryCode} categoryCode={accountingCode} name={categoryName} draft={categoryDraft} editingId={editingCategoryId} busy={actionBusy} onSubmit={addCategory} onTypeChange={setCategoryCostTypeId} onAccountingCodeChange={setCategoryCode} onCategoryCodeChange={setAccountingCode} onNameChange={setCategoryName} onStartEdit={startEditCategory} onDraftChange={(field, value) => setCategoryDraft((previous) => ({ ...previous, [field]: value }))} onSave={(item) => void saveCategory(item)} onCancel={() => setEditingCategoryId(null)} onToggle={(item) => void toggleCategoryActive(item)} />
 
-          <ValuationPanel categories={categories} costTypes={costTypes} inflationYear={inflationYear} inflationValue={inflationValue} currency={displayCurrency} drafts={rateDrafts} busy={actionBusy} onCurrencyChange={setDisplayCurrency} onInflationChange={setInflationValue} onRateChange={(key, value) => setRateDrafts((previous) => ({ ...previous, [key]: value }))} onSave={() => void saveAllValuation()} />
+          <ValuationPanel items={valuationPage.items} years={valuationYears} pagination={{ total: valuationPage.total, limit: valuationLimit, offset: valuationOffset }} onPaginationChange={(next) => setValuationOffset(next.offset)} sort={valuationSort} onSortChange={setValuationSort} search={valuationQuery} onSearchChange={(next) => { setValuationQuery(next); setValuationOffset(0); }} inflationYear={inflationYear} inflationValue={inflationValue} currency={displayCurrency} drafts={rateDrafts} busy={actionBusy} onCurrencyChange={setDisplayCurrency} onInflationChange={setInflationValue} onRateChange={(key, value) => setRateDrafts((previous) => ({ ...previous, [key]: value }))} onSave={() => void saveAllValuation()} />
         </>
       ) : null}
 

@@ -519,6 +519,30 @@ def test_create_project_with_code_and_description() -> None:
         assert payload["short_description"] == "Résumé court"
 
 
+def test_create_project_exposes_calendar_defaults() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+
+        create_response: Response = client.post(
+            "/projects",
+            json={"name": "Projet Calendrier"},
+            headers=headers,
+        )
+        assert create_response.status_code == 201
+        create_payload = cast(dict[str, Any], create_response.json())
+        assert create_payload["minutes_per_day"] == 480
+        assert create_payload["minutes_per_week"] == 2400
+        assert create_payload["days_per_month"] == 20
+
+        project_id = create_payload["id"]
+        get_response: Response = client.get(f"/projects/{project_id}", headers=headers)
+        assert get_response.status_code == 200
+        get_payload = cast(dict[str, Any], get_response.json())
+        assert get_payload["minutes_per_day"] == 480
+        assert get_payload["minutes_per_week"] == 2400
+        assert get_payload["days_per_month"] == 20
+
+
 def test_patch_project_code_and_description_partially() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)
