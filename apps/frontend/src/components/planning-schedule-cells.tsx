@@ -6,10 +6,10 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { TableCell } from "@/components/ui/table";
 import type { Task } from "@/lib/backend";
+import { formatCalendarDuration, type ProjectCalendar } from "@/lib/planning-calendar";
 import {
   durationInvalidForAutomatic,
   formatDate,
-  formatDurationMinutes,
   missingStartAnchorForAutomatic,
   taskModeLabel,
   type ScheduleDraft,
@@ -116,26 +116,43 @@ type DurationCellProps = {
   draft: ScheduleDraft;
   editability: ScheduleEditability;
   mutationBusy: boolean;
+  calendar: ProjectCalendar;
+  /** Format-parsing error (see lib/planning-calendar.ts) from the last commit attempt on this row's
+   * duration field, or null. Business-validation failures (e.g. a 0 duration on an automatic task)
+   * are still silently rejected with no message, unchanged from before #142 -- only an unrecognized
+   * *format* surfaces here. */
+  durationError: string | null;
   onUpdateDraft: (field: keyof ScheduleDraft, value: string) => void;
   onCommit: () => void;
   onFieldKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
 };
 
-function DurationCell({ row, draft, editability, mutationBusy, onUpdateDraft, onCommit, onFieldKeyDown }: DurationCellProps) {
+function DurationCell({
+  row,
+  draft,
+  editability,
+  mutationBusy,
+  calendar,
+  durationError,
+  onUpdateDraft,
+  onCommit,
+  onFieldKeyDown,
+}: DurationCellProps) {
   if (!editability.durationEditable) {
-    return <TableCell>{formatDurationMinutes(row.duration_minutes)}</TableCell>;
+    return <TableCell>{formatCalendarDuration(row.duration_minutes, calendar)}</TableCell>;
   }
+  const errorId = `duration-error-${row.uid}`;
   return (
     <TableCell>
       <Input
-        type="number"
-        // An automatic non-milestone task requires a strictly positive duration server-side
-        // (_apply_automatic_schedule rejects null/0/negative with a 400); a manual task's
-        // duration is always accepted, including 0/null. `min` is a browser hint only
-        // (commitScheduleEdit is the real guard against a doomed request).
-        min={row.is_manual ? 0 : 1}
-        step={1}
+        // A plain number input cannot accept the MS-Project-like unit suffixes ("3j", "1sm2j",
+        // ...) this field now accepts alongside raw minutes -- see lib/planning-calendar.ts.
+        // `min`/`step` are dropped along with it: commitScheduleEdit (via buildManualPayload /
+        // buildAutomaticPayload) remains the real guard against a doomed or malformed request.
+        type="text"
         aria-label={`Durée de ${row.name}`}
+        aria-invalid={durationError ? true : undefined}
+        aria-describedby={durationError ? errorId : undefined}
         value={draft.duration_minutes}
         disabled={mutationBusy}
         onClick={(event) => event.stopPropagation()}
@@ -143,6 +160,11 @@ function DurationCell({ row, draft, editability, mutationBusy, onUpdateDraft, on
         onBlur={onCommit}
         onKeyDown={onFieldKeyDown}
       />
+      {durationError ? (
+        <p id={errorId} role="alert" className="mt-1 text-xs text-destructive">
+          {durationError}
+        </p>
+      ) : null}
     </TableCell>
   );
 }
@@ -196,6 +218,8 @@ export type PlanningScheduleCellsProps = Readonly<{
   readOnly: boolean;
   hasScheduleUpdate: boolean;
   mutationBusy: boolean;
+  calendar: ProjectCalendar;
+  durationError: string | null;
   tasksByUid: Map<number, Task>;
   onUpdateDraft: (field: keyof ScheduleDraft, value: string) => void;
   onCommit: () => void;
@@ -213,6 +237,8 @@ export function PlanningScheduleCells({
   readOnly,
   hasScheduleUpdate,
   mutationBusy,
+  calendar,
+  durationError,
   tasksByUid,
   onUpdateDraft,
   onCommit,
@@ -224,7 +250,7 @@ export function PlanningScheduleCells({
     <>
       <StartCell row={row} draft={draft} editability={editability} mutationBusy={mutationBusy} onUpdateDraft={onUpdateDraft} onCommit={onCommit} onFieldKeyDown={onFieldKeyDown} />
       <FinishCell row={row} draft={draft} editability={editability} mutationBusy={mutationBusy} onUpdateDraft={onUpdateDraft} onCommit={onCommit} onFieldKeyDown={onFieldKeyDown} />
-      <DurationCell row={row} draft={draft} editability={editability} mutationBusy={mutationBusy} onUpdateDraft={onUpdateDraft} onCommit={onCommit} onFieldKeyDown={onFieldKeyDown} />
+      <DurationCell row={row} draft={draft} editability={editability} mutationBusy={mutationBusy} calendar={calendar} durationError={durationError} onUpdateDraft={onUpdateDraft} onCommit={onCommit} onFieldKeyDown={onFieldKeyDown} />
       <ModeCell row={row} editability={editability} mutationBusy={mutationBusy} tasksByUid={tasksByUid} onCommitModeChange={onCommitModeChange} />
     </>
   );

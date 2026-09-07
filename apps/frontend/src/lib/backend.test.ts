@@ -6,6 +6,7 @@ import {
   getCostTypes,
   getPlanning,
   getPlanningTaskDeleteConflict,
+  getResourceRoles,
   movePlanningTasks,
   updateResourceRole,
 } from "./backend";
@@ -69,6 +70,64 @@ describe("getCostTypes query building", () => {
     const page = await getCostTypes({ accessToken: "token" }, vi.fn(), true, { limit: 1, offset: 0 });
 
     expect(page).toEqual({ items, total: 12 });
+  });
+});
+
+describe("getResourceRoles query building", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("sends no query string at all when called with no nodeId or listParams, for the unpaginated reference-list case", async () => {
+    const fetchMock = vi.fn<(input: RequestInfo | URL) => Promise<Response>>(async () => jsonResponse({ items: [], total: 0 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getResourceRoles({ accessToken: "token" }, vi.fn());
+
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain("?");
+  });
+
+  it("combines the structural node_id/include_descendants filter with limit/offset/sort/q", async () => {
+    const fetchMock = vi.fn<(input: RequestInfo | URL) => Promise<Response>>(async () => jsonResponse({ items: [], total: 0 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getResourceRoles({ accessToken: "token" }, vi.fn(), 3, true, {
+      limit: 20,
+      offset: 40,
+      sort: "-name",
+      q: "dev",
+    });
+
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain("node_id=3");
+    expect(url).toContain("include_descendants=true");
+    expect(url).toContain("limit=20");
+    expect(url).toContain("offset=40");
+    expect(url).toContain("sort=-name");
+    expect(url).toContain("q=dev");
+  });
+
+  it("omits node_id/include_descendants when no node is given, even with pagination params", async () => {
+    const fetchMock = vi.fn<(input: RequestInfo | URL) => Promise<Response>>(async () => jsonResponse({ items: [], total: 0 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getResourceRoles({ accessToken: "token" }, vi.fn(), undefined, false, { limit: 20, offset: 0 });
+
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).not.toContain("node_id");
+    expect(url).not.toContain("include_descendants");
+    expect(url).toContain("limit=20");
+    expect(url).toContain("offset=0");
+  });
+
+  it("returns items and total from the response envelope", async () => {
+    const items = [{ id: 1, name: "Développeur", node_id: 1, cost_category_id: 1, calendar_id: null, is_active: true }];
+    const fetchMock = vi.fn(async () => jsonResponse({ items, total: 7 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const page = await getResourceRoles({ accessToken: "token" }, vi.fn(), 1, false, { limit: 1, offset: 0 });
+
+    expect(page).toEqual({ items, total: 7 });
   });
 });
 

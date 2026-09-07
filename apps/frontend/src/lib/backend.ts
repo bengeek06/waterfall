@@ -410,44 +410,31 @@ export function deleteResourceNode(
   );
 }
 
-// Overloaded rather than always returning `ListPage<ResourceRole>` (unlike
-// getCostTypes, which has no legacy array-returning caller to preserve): RolesPanel
-// and CapacityTable still need the full, unpaginated `roles` list as reference data
-// (see the `costTypes` vs `costTypesPage` split in app/resources/page.tsx for the
-// same reasoning applied to cost types), so the no-`listParams` call keeps returning
-// a plain array. Only a caller that opts in with `listParams` (role-calendars-table's
-// own paginated/sortable/searchable page) gets the `{items, total}` envelope back.
-export async function getResourceRoles(
-  tokens: SessionTokens,
-  onSessionRefresh: (next: SessionTokens) => void,
-  nodeId?: number,
-  includeDescendants?: boolean,
-): Promise<ResourceRole[]>;
-export async function getResourceRoles(
-  tokens: SessionTokens,
-  onSessionRefresh: (next: SessionTokens) => void,
-  nodeId: number | undefined,
-  includeDescendants: boolean | undefined,
-  listParams: ListQueryParams,
-): Promise<ListPage<ResourceRole>>;
+// `listParams` mirrors `getCostTypes`'s own extension for EPIC E8's DataTable
+// migrations (#123 onward): absent (the default), the backend's "no limit -> tout"
+// rule (see `ListParams`/`list_params` on the backend) means every existing caller
+// -- the `roles` reference list feeding RolesPanel/CapacityTable's per-role drafts/
+// RoleCalendarsTable -- keeps getting the complete, unfiltered set exactly as
+// before. A caller that does pass `listParams` (the capacity table's own paginated
+// view) gets the server-driven page instead.
 export async function getResourceRoles(
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
   nodeId?: number,
   includeDescendants = false,
-  listParams?: ListQueryParams,
-): Promise<ResourceRole[] | ListPage<ResourceRole>> {
+  listParams: ListQueryParams = {},
+): Promise<ListPage<ResourceRole>> {
   const extra = nodeId
     ? { node_id: String(nodeId), include_descendants: String(includeDescendants) }
     : undefined;
-  const query = buildListQuery(listParams ?? {}, extra);
+  const query = buildListQuery(listParams, extra);
   const page = await authRequest<components["schemas"]["ResourceRoleListRead"]>(
     `/resources/roles${query}`,
     tokens,
     { method: "GET" },
     onSessionRefresh,
   );
-  return listParams ? { items: page.items, total: page.total } : page.items;
+  return { items: page.items, total: page.total };
 }
 
 export function createResourceRole(
@@ -539,21 +526,6 @@ export function deleteCalendar(
   );
 }
 
-export async function getCostCategories(
-  tokens: SessionTokens,
-  onSessionRefresh: (next: SessionTokens) => void,
-  includeInactive = false,
-): Promise<CostCategory[]> {
-  const query = includeInactive ? "?include_inactive=true" : "";
-  const page = await authRequest<components["schemas"]["CostCategoryListRead"]>(
-    `/resources/categories${query}`,
-    tokens,
-    { method: "GET" },
-    onSessionRefresh,
-  );
-  return page.items;
-}
-
 // Generic envelope for a server-paginated list, and the query parameters a caller
 // supplies to request one page of it. `limit`/`offset` are known to the caller
 // already (it's what it asked for) and don't round-trip back through this type --
@@ -604,6 +576,22 @@ export async function getCostTypes(
   const query = buildListQuery(listParams, includeInactive ? { include_inactive: "true" } : undefined);
   const page = await authRequest<components["schemas"]["CostTypeListRead"]>(
     `/resources/cost-types${query}`,
+    tokens,
+    { method: "GET" },
+    onSessionRefresh,
+  );
+  return { items: page.items, total: page.total };
+}
+
+export async function getCostCategories(
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+  includeInactive = false,
+  listParams: ListQueryParams = {},
+): Promise<ListPage<CostCategory>> {
+  const query = buildListQuery(listParams, includeInactive ? { include_inactive: "true" } : undefined);
+  const page = await authRequest<components["schemas"]["CostCategoryListRead"]>(
+    `/resources/categories${query}`,
     tokens,
     { method: "GET" },
     onSessionRefresh,
