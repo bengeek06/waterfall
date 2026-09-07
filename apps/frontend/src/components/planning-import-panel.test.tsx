@@ -105,6 +105,47 @@ describe("PlanningImportPanel", () => {
     expect(droppedFiles.length).toBe(0);
   });
 
+  // Regression coverage for the round-2 Copilot review on #132: Chromium can expose a dropped
+  // directory as a zero-byte file-like entry that carries whatever name the directory has (e.g.
+  // "dossier.xml"), which would otherwise pass the extension/size checks downstream and be
+  // treated as a valid import. `webkitGetAsEntry()` is the only way to tell the entry is really a
+  // directory, so the drop must be rejected (forwarded as an empty FileList) before it ever
+  // reaches the page's file-based validation.
+  it("rejects a dropped directory disguised as a .xml file via webkitGetAsEntry", () => {
+    const originalDataTransfer = (globalThis as { DataTransfer?: unknown }).DataTransfer;
+    class FakeDataTransfer {
+      private readonly collected: File[] = [];
+      items = {
+        add: (file: File) => {
+          this.collected.push(file);
+        },
+      };
+      get files() {
+        return this.collected as unknown as FileList;
+      }
+    }
+    (globalThis as { DataTransfer?: unknown }).DataTransfer = FakeDataTransfer;
+
+    try {
+      const props = renderPanel();
+      const zone = getDropZone();
+      const disguisedDirectoryFile = new File([], "dossier.xml", { type: "application/xml" });
+
+      fireEvent.drop(zone, {
+        dataTransfer: {
+          files: [disguisedDirectoryFile],
+          items: [{ webkitGetAsEntry: () => ({ isDirectory: true }) }],
+        },
+      });
+
+      expect(props.onFilesDrop).toHaveBeenCalledTimes(1);
+      const droppedFiles = (props.onFilesDrop as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(droppedFiles.length).toBe(0);
+    } finally {
+      (globalThis as { DataTransfer?: unknown }).DataTransfer = originalDataTransfer;
+    }
+  });
+
   it("shows no file selected by default and reflects the importFile prop when set", () => {
     renderPanel();
     expect(screen.getByText("Aucun fichier sélectionné.")).toBeInTheDocument();

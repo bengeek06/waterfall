@@ -738,6 +738,154 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     expect(screen.queryByRole("heading", { name: "Remplacement à confirmer" })).not.toBeInTheDocument();
   });
 
+  // Regression coverage for the round-2 Copilot review on #132: `importReview.batchId` refers to
+  // whatever file was uploaded when the preview was last requested. Selecting a new candidate file
+  // afterwards -- even a valid one -- must invalidate that stale preview immediately, otherwise
+  // "Confirmer le remplacement" would still submit the previous (file A) batch while the UI shows
+  // file B as selected.
+  it("invalidates a pending import preview when a new file is selected before confirming", async () => {
+    const current = planning({ id: 2, version_number: 2, status: "validated" });
+    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: current.id }));
+    mocks.listPlannings.mockResolvedValue([current]);
+    mocks.getPlanning.mockResolvedValue(detail(current));
+
+    render(<ProjectDetailsPage />);
+    const fileA = new File(["<Project />"], "a.xml", { type: "application/xml" });
+    fireEvent.change(await screen.findByLabelText("Importer un planning MS Project (.xml)"), {
+      target: { files: [fileA] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Prévisualiser l'import" }));
+
+    await waitFor(() => expect(mocks.getImportBatchDiff).toHaveBeenCalledWith(
+      42,
+      expect.anything(),
+      expect.anything(),
+    ));
+    expect(screen.getByRole("heading", { name: "Remplacement à confirmer" })).toBeInTheDocument();
+
+    const fileB = new File(["<Project />"], "b.xml", { type: "application/xml" });
+    fireEvent.change(screen.getByLabelText("Importer un planning MS Project (.xml)"), {
+      target: { files: [fileB] },
+    });
+
+    expect(await screen.findByText("Fichier sélectionné : b.xml")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Remplacement à confirmer" })).not.toBeInTheDocument();
+  });
+
+  it("invalidates a pending import preview even when the newly selected file is rejected", async () => {
+    const current = planning({ id: 2, version_number: 2, status: "validated" });
+    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: current.id }));
+    mocks.listPlannings.mockResolvedValue([current]);
+    mocks.getPlanning.mockResolvedValue(detail(current));
+
+    render(<ProjectDetailsPage />);
+    const fileA = new File(["<Project />"], "a.xml", { type: "application/xml" });
+    fireEvent.change(await screen.findByLabelText("Importer un planning MS Project (.xml)"), {
+      target: { files: [fileA] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Prévisualiser l'import" }));
+
+    await waitFor(() => expect(mocks.getImportBatchDiff).toHaveBeenCalledWith(
+      42,
+      expect.anything(),
+      expect.anything(),
+    ));
+    expect(screen.getByRole("heading", { name: "Remplacement à confirmer" })).toBeInTheDocument();
+
+    const wrongTypeFile = new File(["not xml"], "b.docx", {
+      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    });
+    const dropZone = screen.getByRole("group", { name: "Zone de dépôt du fichier de planning à importer" });
+    fireEvent.drop(dropZone, { dataTransfer: { files: [wrongTypeFile] } });
+
+    expect(await screen.findByText("Seuls les fichiers .xml sont acceptés.")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Remplacement à confirmer" })).not.toBeInTheDocument();
+  });
+
+  // Regression coverage for the round-3 review on #132: invalidating `importReview` when the
+  // candidate file changes (see the two tests above) only covers the case where the change
+  // happens *after* a preview request has already settled. If the user swaps the candidate file
+  // WHILE the preview request for the previous file is still in flight, the request must not be
+  // allowed to resurrect a review banner for a file that is no longer selected once it resolves.
+  it("drops a stale preview result if the candidate file changed while the request was in flight", async () => {
+    const current = planning({ id: 2, version_number: 2, status: "validated" });
+    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: current.id }));
+    mocks.listPlannings.mockResolvedValue([current]);
+    mocks.getPlanning.mockResolvedValue(detail(current));
+
+    let resolveDiff!: (value: { batchId: number; identicalSource: boolean; items: never[] }) => void;
+    mocks.getImportBatchDiff.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveDiff = resolve;
+        }),
+    );
+
+    render(<ProjectDetailsPage />);
+    const fileA = new File(["<Project />"], "a.xml", { type: "application/xml" });
+    fireEvent.change(await screen.findByLabelText("Importer un planning MS Project (.xml)"), {
+      target: { files: [fileA] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Prévisualiser l'import" }));
+
+    await waitFor(() => expect(mocks.getImportBatchDiff).toHaveBeenCalledTimes(1));
+
+    const fileB = new File(["<Project />"], "b.xml", { type: "application/xml" });
+    fireEvent.change(screen.getByLabelText("Importer un planning MS Project (.xml)"), {
+      target: { files: [fileB] },
+    });
+    expect(await screen.findByText("Fichier sélectionné : b.xml")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Remplacement à confirmer" })).not.toBeInTheDocument();
+
+    resolveDiff({ batchId: 42, identicalSource: false, items: [] });
+    // Wait for the (now-stale) preview request to actually settle -- the busy button reverting to
+    // its idle label is the observable signal that `preparePlanningImport`'s `finally` block ran --
+    // before asserting the stale result was dropped rather than resurrecting the review banner.
+    await screen.findByRole("button", { name: "Prévisualiser l'import" });
+    expect(screen.queryByRole("heading", { name: "Remplacement à confirmer" })).not.toBeInTheDocument();
+    expect(screen.getByText("Fichier sélectionné : b.xml")).toBeInTheDocument();
+  });
+
+  it("does not show a stale import error if the candidate file changed while the request was in flight", async () => {
+    const current = planning({ id: 2, version_number: 2, status: "validated" });
+    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: current.id }));
+    mocks.listPlannings.mockResolvedValue([current]);
+    mocks.getPlanning.mockResolvedValue(detail(current));
+
+    let rejectDiff!: (error: Error) => void;
+    mocks.getImportBatchDiff.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectDiff = reject;
+        }),
+    );
+
+    render(<ProjectDetailsPage />);
+    const fileA = new File(["<Project />"], "a.xml", { type: "application/xml" });
+    fireEvent.change(await screen.findByLabelText("Importer un planning MS Project (.xml)"), {
+      target: { files: [fileA] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Prévisualiser l'import" }));
+
+    await waitFor(() => expect(mocks.getImportBatchDiff).toHaveBeenCalledTimes(1));
+
+    const fileB = new File(["<Project />"], "b.xml", { type: "application/xml" });
+    fireEvent.change(screen.getByLabelText("Importer un planning MS Project (.xml)"), {
+      target: { files: [fileB] },
+    });
+    expect(await screen.findByText("Fichier sélectionné : b.xml")).toBeInTheDocument();
+
+    rejectDiff(new Error("boom"));
+    // Wait for the (now-stale) preview request to actually settle -- the busy button reverting to
+    // its idle label is the observable signal that `preparePlanningImport`'s `finally` block ran --
+    // before asserting no error message was shown for a request tied to a file that is no longer
+    // selected.
+    await screen.findByRole("button", { name: "Prévisualiser l'import" });
+    expect(screen.queryByText("Impossible d'importer le planning.")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Remplacement à confirmer" })).not.toBeInTheDocument();
+    expect(screen.getByText("Fichier sélectionné : b.xml")).toBeInTheDocument();
+  });
+
   it("imports a dropped file the same way as a manually selected file", async () => {
     const current = planning({ id: 2, version_number: 2, status: "validated" });
     mocks.getProject

@@ -88,12 +88,24 @@ export function PlanningImportPanel({
   function onDropZoneDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
     setDragDepth(0);
+    // Chromium can represent a dropped directory as a zero-byte file-like entry, so a directory
+    // named e.g. "planning.xml" would otherwise pass the extension/size checks downstream and be
+    // treated as a valid import file. `dataTransfer.files` alone can't tell a directory apart from
+    // a real file, so inspect `dataTransfer.items` via the (widely supported, if oddly prefixed)
+    // `webkitGetAsEntry()` API and reject the whole drop as unusable if any entry is a directory.
+    const items = event.dataTransfer.items;
+    const hasDirectoryEntry = items
+      ? Array.from(items).some((item) => {
+          const entry = typeof item.webkitGetAsEntry === "function" ? item.webkitGetAsEntry() : null;
+          return entry?.isDirectory === true;
+        })
+      : false;
     // Always forward the drop, even an empty FileList: some browsers (e.g. Firefox dropping a
     // directory) report zero files, and a silent no-op here would leave the user without any
     // feedback. Let the page decide how to report an unusable drop (see onImportFilesDrop) --
     // the native input is then synced from its decision (the `importFile` prop) by the effect
     // above, not from this raw, possibly-rejected FileList.
-    onFilesDrop(event.dataTransfer.files);
+    onFilesDrop(hasDirectoryEntry ? new DataTransfer().files : event.dataTransfer.files);
   }
 
   return (

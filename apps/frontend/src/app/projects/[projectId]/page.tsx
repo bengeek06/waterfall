@@ -148,6 +148,10 @@ export default function ProjectDetailsPage() {
   const [structureOpen, setStructureOpen] = useState(false);
   const [planningExportBusy, setPlanningExportBusy] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
+  // Kept in sync with `importFile` synchronously (not via a separate effect) so that an in-flight
+  // preview request can tell, once it resolves, whether the candidate file changed while it was
+  // waiting -- see the freshness guard in `preparePlanningImport`.
+  const latestImportFileRef = useRef<File | null>(null);
   const [importBusy, setImportBusy] = useState(false);
   const [importReview, setImportReview] = useState<{ batchId: number; diff: ImportDiff } | null>(null);
   const [importFeedback, setImportFeedback] = useState<string | null>(null);
@@ -472,19 +476,29 @@ export default function ProjectDetailsPage() {
     if (!session || !project || !importFile) {
       return;
     }
+    const requestFile = importFile;
     setImportBusy(true);
     setError(null);
     setImportFeedback(null);
     try {
       const batch = await createImportBatch(projectId, project.name, session, onSessionRefresh);
-      await uploadImportSourceXml(batch.id, importFile, session, onSessionRefresh);
+      await uploadImportSourceXml(batch.id, requestFile, session, onSessionRefresh);
       await runImportBatch(batch.id, session, onSessionRefresh, true, false);
       const diff = await getImportBatchDiff(batch.id, session, onSessionRefresh);
+      // The user may have selected a different candidate file while this request was in flight;
+      // if so, this result is stale and must be dropped silently rather than shown as a review
+      // for a file that is no longer selected (see fix for #132).
+      if (latestImportFileRef.current !== requestFile) {
+        return;
+      }
       setImportReview({ batchId: batch.id, diff });
     } catch (cause) {
       if (cause instanceof SessionExpiredError) {
         clearSession();
         router.push("/login");
+        return;
+      }
+      if (latestImportFileRef.current !== requestFile) {
         return;
       }
       setError(cause instanceof ApiError ? cause.message : "Impossible d'importer le planning.");
@@ -493,12 +507,19 @@ export default function ProjectDetailsPage() {
     }
   }
 
+  // Any change to the candidate file -- accepted or rejected -- invalidates a pending import
+  // preview: `importReview.batchId` refers to whatever file was uploaded when "Prévisualiser
+  // l'import" was last clicked, and confirming it after the candidate changed would silently
+  // apply the wrong batch. Clear it in every branch of both handlers below, not just the
+  // happy path.
   function onImportFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0] ?? null;
     if (file) {
       const validationError = validateImportFile(file);
       if (validationError) {
         setImportFile(null);
+        latestImportFileRef.current = null;
+        setImportReview(null);
         setError(validationError);
         event.target.value = "";
         return;
@@ -506,16 +527,22 @@ export default function ProjectDetailsPage() {
     }
     setError(null);
     setImportFile(file);
+    latestImportFileRef.current = file;
+    setImportReview(null);
   }
 
   function onImportFilesDrop(files: FileList) {
     if (files.length === 0) {
       setImportFile(null);
+      latestImportFileRef.current = null;
+      setImportReview(null);
       setError("Le dépôt ne contient aucun fichier exploitable (dossier non pris en charge ou élément invalide).");
       return;
     }
     if (files.length > 1) {
       setImportFile(null);
+      latestImportFileRef.current = null;
+      setImportReview(null);
       setError("Dépose un seul fichier à la fois.");
       return;
     }
@@ -523,11 +550,15 @@ export default function ProjectDetailsPage() {
     const validationError = validateImportFile(file);
     if (validationError) {
       setImportFile(null);
+      latestImportFileRef.current = null;
+      setImportReview(null);
       setError(validationError);
       return;
     }
     setError(null);
     setImportFile(file);
+    latestImportFileRef.current = file;
+    setImportReview(null);
   }
 
   const confirmPlanningImport = usePlanningImport({
