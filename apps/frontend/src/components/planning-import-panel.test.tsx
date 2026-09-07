@@ -1,12 +1,12 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PlanningImportPanel, type PlanningImportPanelProps } from "./planning-import-panel";
 
 afterEach(() => cleanup());
 
-function renderPanel(overrides: Partial<PlanningImportPanelProps> = {}) {
-  const props: PlanningImportPanelProps = {
+function buildProps(overrides: Partial<PlanningImportPanelProps> = {}): PlanningImportPanelProps {
+  return {
     projectStatusInitialise: true,
     importFile: null,
     importBusy: false,
@@ -19,6 +19,10 @@ function renderPanel(overrides: Partial<PlanningImportPanelProps> = {}) {
     onConfirmImport: vi.fn(),
     ...overrides,
   };
+}
+
+function renderPanel(overrides: Partial<PlanningImportPanelProps> = {}) {
+  const props = buildProps(overrides);
   render(<PlanningImportPanel {...props} />);
   return props;
 }
@@ -88,5 +92,124 @@ describe("PlanningImportPanel", () => {
   it("keeps the manual file input available and labelled", () => {
     renderPanel();
     expect(screen.getByLabelText("Importer un planning MS Project (.xml)")).toBeInTheDocument();
+  });
+
+  it("still forwards an empty dropped file list instead of silently ignoring the drop", () => {
+    const props = renderPanel();
+    const zone = getDropZone();
+
+    fireEvent.drop(zone, { dataTransfer: { files: [] } });
+
+    expect(props.onFilesDrop).toHaveBeenCalledTimes(1);
+    const droppedFiles = (props.onFilesDrop as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(droppedFiles.length).toBe(0);
+  });
+
+  it("shows no file selected by default and reflects the importFile prop when set", () => {
+    renderPanel();
+    expect(screen.getByText("Aucun fichier sélectionné.")).toBeInTheDocument();
+
+    const file = new File(["<Project />"], "planning.xml", { type: "application/xml" });
+    cleanup();
+    renderPanel({ importFile: file });
+    expect(screen.getByText("Fichier sélectionné : planning.xml")).toBeInTheDocument();
+    expect(screen.queryByText("Aucun fichier sélectionné.")).not.toBeInTheDocument();
+  });
+
+  // Regression coverage for #132: the native file input must follow the `importFile` prop (the
+  // page's accept/reject decision), never the raw FileList a drop happened to carry. jsdom doesn't
+  // implement `DataTransfer` at all, and its native `HTMLInputElement.files` setter rejects
+  // anything that isn't a real, browser-constructed FileList -- both throw under test, which used
+  // to silently mask the bug (the `catch` branch always ran, never the `try`). Stubbing both lets
+  // the component's actual try-path run so these tests can fail against the old, buggy code.
+  describe("native file input sync with the importFile prop", () => {
+    let filesValue: FileList | undefined;
+    let originalFilesDescriptor: PropertyDescriptor | undefined;
+    let originalDataTransfer: unknown;
+
+    beforeEach(() => {
+      filesValue = undefined;
+      originalFilesDescriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "files");
+      Object.defineProperty(HTMLInputElement.prototype, "files", {
+        configurable: true,
+        get() {
+          return filesValue;
+        },
+        set(value: FileList) {
+          filesValue = value;
+        },
+      });
+
+      originalDataTransfer = (globalThis as { DataTransfer?: unknown }).DataTransfer;
+      class FakeDataTransfer {
+        private readonly collected: File[] = [];
+        items = {
+          add: (file: File) => {
+            this.collected.push(file);
+          },
+        };
+        get files() {
+          return this.collected as unknown as FileList;
+        }
+      }
+      (globalThis as { DataTransfer?: unknown }).DataTransfer = FakeDataTransfer;
+    });
+
+    afterEach(() => {
+      if (originalFilesDescriptor) {
+        Object.defineProperty(HTMLInputElement.prototype, "files", originalFilesDescriptor);
+      }
+      (globalThis as { DataTransfer?: unknown }).DataTransfer = originalDataTransfer;
+    });
+
+    function getNativeInput() {
+      return screen.getByLabelText("Importer un planning MS Project (.xml)") as HTMLInputElement;
+    }
+
+    it("reflects the accepted file on the native input", () => {
+      const fileA = new File(["<Project />"], "a.xml", { type: "application/xml" });
+      renderPanel({ importFile: fileA });
+
+      expect(getNativeInput().files?.[0]).toBe(fileA);
+    });
+
+    it("clears the native input once a previously accepted file is rejected (importFile goes back to null)", () => {
+      const fileA = new File(["<Project />"], "a.xml", { type: "application/xml" });
+      const props = buildProps({ importFile: fileA });
+      const { rerender } = render(<PlanningImportPanel {...props} />);
+      expect(getNativeInput().files?.[0]).toBe(fileA);
+
+      // Simulates the page rejecting a subsequent drop/selection (wrong type, several files, ...)
+      // by resetting `importFile` to null -- exactly what happens after `onImportFilesDrop` bails
+      // out with an error, without ever touching the native input directly.
+      rerender(<PlanningImportPanel {...props} importFile={null} />);
+
+      expect(getNativeInput().value).toBe("");
+    });
+
+    it("reflects a newly accepted file on the native input (importFile from null to a file)", () => {
+      const props = buildProps({ importFile: null });
+      const { rerender } = render(<PlanningImportPanel {...props} />);
+
+      const fileB = new File(["<Project />"], "b.xml", { type: "application/xml" });
+      rerender(<PlanningImportPanel {...props} importFile={fileB} />);
+
+      expect(getNativeInput().files?.[0]).toBe(fileB);
+    });
+
+    it("does not sync the native input from a raw drop directly, only from the resulting importFile prop", () => {
+      // `onFilesDrop` is a plain vi.fn() here, exactly like a page that hasn't yet decided whether
+      // to accept the drop: the panel must never assume the drop is accepted and must leave the
+      // native input alone until it's told to via a new `importFile` value.
+      renderPanel({ importFile: null });
+      const zone = screen.getByRole("group", { name: "Zone de dépôt du fichier de planning à importer" });
+      const wrongTypeFile = new File(["not xml"], "planning.docx", {
+        type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      });
+
+      fireEvent.drop(zone, { dataTransfer: { files: [wrongTypeFile] } });
+
+      expect(getNativeInput().files).toBeUndefined();
+    });
   });
 });

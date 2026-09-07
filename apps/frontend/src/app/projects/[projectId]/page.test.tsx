@@ -825,6 +825,83 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     expect(mocks.createImportBatch).not.toHaveBeenCalled();
   });
 
+  it("refuses an empty drop (e.g. a dropped directory) with an explicit error instead of staying silent", async () => {
+    const current = planning({ id: 2, version_number: 2, status: "validated" });
+    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: current.id }));
+    mocks.listPlannings.mockResolvedValue([current]);
+    mocks.getPlanning.mockResolvedValue(detail(current));
+
+    render(<ProjectDetailsPage />);
+    const dropZone = await screen.findByRole("group", {
+      name: "Zone de dépôt du fichier de planning à importer",
+    });
+    fireEvent.drop(dropZone, { dataTransfer: { files: [] } });
+
+    expect(
+      await screen.findByText(
+        "Le dépôt ne contient aucun fichier exploitable (dossier non pris en charge ou élément invalide).",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Prévisualiser l'import" })).toBeDisabled();
+    expect(mocks.createImportBatch).not.toHaveBeenCalled();
+  });
+
+  it("replaces a manually selected file with a subsequently dropped one, not the other way around", async () => {
+    const current = planning({ id: 2, version_number: 2, status: "validated" });
+    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: current.id }));
+    mocks.listPlannings.mockResolvedValue([current]);
+    mocks.getPlanning.mockResolvedValue(detail(current));
+
+    render(<ProjectDetailsPage />);
+    const fileA = new File(["<Project />"], "a.xml", { type: "application/xml" });
+    const fileB = new File(["<Project />"], "b.xml", { type: "application/xml" });
+
+    fireEvent.change(await screen.findByLabelText("Importer un planning MS Project (.xml)"), {
+      target: { files: [fileA] },
+    });
+    expect(await screen.findByText("Fichier sélectionné : a.xml")).toBeInTheDocument();
+
+    const dropZone = screen.getByRole("group", { name: "Zone de dépôt du fichier de planning à importer" });
+    fireEvent.drop(dropZone, { dataTransfer: { files: [fileB] } });
+
+    expect(await screen.findByText("Fichier sélectionné : b.xml")).toBeInTheDocument();
+    expect(screen.queryByText("Fichier sélectionné : a.xml")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Prévisualiser l'import" }));
+    await waitFor(() => expect(mocks.uploadImportSourceXml).toHaveBeenCalledWith(
+      42,
+      fileB,
+      expect.anything(),
+      expect.anything(),
+    ));
+  });
+
+  it("clears the displayed selection when a drop is rejected after a valid manual selection", async () => {
+    const current = planning({ id: 2, version_number: 2, status: "validated" });
+    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: current.id }));
+    mocks.listPlannings.mockResolvedValue([current]);
+    mocks.getPlanning.mockResolvedValue(detail(current));
+
+    render(<ProjectDetailsPage />);
+    const fileA = new File(["<Project />"], "a.xml", { type: "application/xml" });
+    const wrongTypeFile = new File(["not xml"], "planning.docx", {
+      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    });
+
+    fireEvent.change(await screen.findByLabelText("Importer un planning MS Project (.xml)"), {
+      target: { files: [fileA] },
+    });
+    expect(await screen.findByText("Fichier sélectionné : a.xml")).toBeInTheDocument();
+
+    const dropZone = screen.getByRole("group", { name: "Zone de dépôt du fichier de planning à importer" });
+    fireEvent.drop(dropZone, { dataTransfer: { files: [wrongTypeFile] } });
+
+    expect(await screen.findByText("Seuls les fichiers .xml sont acceptés.")).toBeInTheDocument();
+    expect(screen.getByText("Aucun fichier sélectionné.")).toBeInTheDocument();
+    expect(screen.queryByText("Fichier sélectionné : a.xml")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Prévisualiser l'import" })).toBeDisabled();
+  });
+
   it("keeps the import success visible when a post-import refresh fails", async () => {
     const current = planning({ id: 2, version_number: 2, status: "validated" });
     mocks.getProject

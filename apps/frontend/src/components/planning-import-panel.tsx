@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ChangeEvent, type DragEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type DragEvent } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -45,6 +45,31 @@ export function PlanningImportPanel({
   // pointer has actually left every nested element, at which point the visual affordance clears.
   const [dragDepth, setDragDepth] = useState(0);
   const isDraggingOver = dragDepth > 0;
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Keep the native input in sync with `importFile`, the single source of truth for what was
+  // actually accepted -- not with whatever raw FileList a drop happened to carry. `importFile` is
+  // set by the page after it has decided whether a drop/selection is usable (right type, single
+  // file, ...), so this effect covers both the manual-picker and drag-and-drop paths without
+  // duplicating that decision here.
+  useEffect(() => {
+    const nativeInput = fileInputRef.current;
+    if (!nativeInput) {
+      return;
+    }
+    if (importFile) {
+      try {
+        const transfer = new DataTransfer();
+        transfer.items.add(importFile);
+        nativeInput.files = transfer.files;
+      } catch {
+        // Best-effort only: the canonical, always-accurate visible/announced state is the
+        // paragraph below driven directly by `importFile`, not this native input's own display.
+      }
+    } else {
+      nativeInput.value = "";
+    }
+  }, [importFile]);
 
   function onDropZoneDragEnter(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
@@ -63,9 +88,12 @@ export function PlanningImportPanel({
   function onDropZoneDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
     setDragDepth(0);
-    if (event.dataTransfer.files.length > 0) {
-      onFilesDrop(event.dataTransfer.files);
-    }
+    // Always forward the drop, even an empty FileList: some browsers (e.g. Firefox dropping a
+    // directory) report zero files, and a silent no-op here would leave the user without any
+    // feedback. Let the page decide how to report an unusable drop (see onImportFilesDrop) --
+    // the native input is then synced from its decision (the `importFile` prop) by the effect
+    // above, not from this raw, possibly-rejected FileList.
+    onFilesDrop(event.dataTransfer.files);
   }
 
   return (
@@ -91,11 +119,15 @@ export function PlanningImportPanel({
                   Glissez-déposez un fichier XML ici, ou choisissez-le ci-dessous.
                 </p>
                 <Input
+                  ref={fileInputRef}
                   id="planning-import-file"
                   type="file"
                   accept=".xml,application/xml,text/xml"
                   onChange={onFileChange}
                 />
+                <p className="text-sm" aria-live="polite">
+                  {importFile ? `Fichier sélectionné : ${importFile.name}` : "Aucun fichier sélectionné."}
+                </p>
               </div>
               <Button type="button" disabled={!importFile || importBusy} onClick={onPreview}>
                 {importBusy ? "Prévisualisation..." : "Prévisualiser l'import"}

@@ -510,6 +510,8 @@ export default function ProjectDetailsPage() {
 
   function onImportFilesDrop(files: FileList) {
     if (files.length === 0) {
+      setImportFile(null);
+      setError("Le dépôt ne contient aucun fichier exploitable (dossier non pris en charge ou élément invalide).");
       return;
     }
     if (files.length > 1) {
