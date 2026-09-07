@@ -26,12 +26,22 @@ import {
 // `sort` query parameter expects. TanStack's own `accessorKey`/`id` may not always
 // match that name, so sortability is declared explicitly via `meta.sortColumn`
 // rather than inferred from `enableSorting`/`accessorKey`.
+//
+// `sticky: "right"` pins a column (typically "actions") to the right edge of the
+// table's own `overflow-x-auto` scroll container (see `Table` in `ui/table.tsx`),
+// so it stays reachable on wide tables instead of scrolling out of the viewport.
 declare module "@tanstack/react-table" {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   interface ColumnMeta<TData extends RowData, TValue> {
     sortColumn?: string;
+    sticky?: "right";
   }
 }
+
+// Shared with the pinned create-row's own last cell (see e.g. `calendars-table.tsx`'s
+// `renderPinnedRow`), which doesn't go through `columns`/`flexRender` and so can't
+// pick up `meta.sticky` automatically -- it applies this exact class list directly.
+export const STICKY_RIGHT_CELL_CLASSNAME = "sticky right-0 z-10 bg-background shadow-[-4px_0_4px_-4px_rgba(0,0,0,0.15)]";
 
 const DEFAULT_SEARCH_DEBOUNCE_MS = 300;
 const LOADING_SKELETON_ROWS = 3;
@@ -124,7 +134,12 @@ function SortIcon({ direction }: { direction: "ascending" | "descending" | "none
 // window would cancel and reschedule the pending timeout, and typing would appear to
 // do nothing -- verified empirically, not just in theory. Reading the latest
 // `onChange` via a ref removes the need for callers to memoize it at all.
-function useDebouncedSearchValue(value: string, delay: number, onChange: (next: string) => void) {
+// `suspend`, when true, cancels any pending debounce timer (via the effect's own
+// cleanup re-running on the dependency change below) and skips scheduling a new one,
+// without touching `localValue` -- the caller (`DataTable`, via `isEditing`) keeps the
+// typed text visible in the disabled input. See `abandonedValue` below for what
+// happens to a search that was pending when `suspend` became true.
+function useDebouncedSearchValue(value: string, delay: number, onChange: (next: string) => void, suspend = false) {
   const [localValue, setLocalValue] = useState(value);
   const [previousValue, setPreviousValue] = useState(value);
   if (value !== previousValue) {
@@ -137,13 +152,47 @@ function useDebouncedSearchValue(value: string, delay: number, onChange: (next: 
     onChangeRef.current = onChange;
   });
 
+  // Tracks the `localValue` a pending search was cancelled at when `suspend` last
+  // became true (e.g. the user started editing a row mid-debounce, see
+  // `CalendarsTable`'s "Modifier" flow). That particular search is abandoned for
+  // good rather than resumed once `suspend` goes back to `false`: firing it late,
+  // after editing ends, could load a filtered page that no longer contains the row
+  // being edited -- unreachable "Enregistrer"/"Annuler" buttons, exactly the bug
+  // this parameter exists to prevent. Silent abandonment is deliberate and simpler
+  // than replaying it: typing further characters once `suspend` clears schedules a
+  // fresh, non-abandoned debounce as normal.
+  //
+  // Captured and consumed in state (not a ref: reading/writing a ref during render is
+  // disallowed by this codebase's lint rules, and a plain effect can't call setState
+  // synchronously either, per react-hooks/set-state-in-effect), using the same
+  // "adjust state during render" pattern as `previousValue` above, right on the
+  // `suspend` transition. `localValue` cannot change while `suspend` is true (the
+  // input is disabled, see `DataTable`), so capturing it synchronously here, instead
+  // of in an effect, cannot miss a later keystroke. Consuming the abandonment (right
+  // when `suspend` clears, if nothing was retyped since) also resyncs the visible
+  // input onto `value`: the abandoned text was never applied, so leaving it displayed
+  // would silently mislead the user into thinking their search is still in effect.
+  const [abandonedValue, setAbandonedValue] = useState<string | null>(null);
+  const [previousSuspend, setPreviousSuspend] = useState(suspend);
+  if (suspend !== previousSuspend) {
+    setPreviousSuspend(suspend);
+    if (suspend) {
+      setAbandonedValue(localValue);
+    } else if (localValue === abandonedValue) {
+      setAbandonedValue(null);
+      if (localValue !== value) {
+        setLocalValue(value);
+      }
+    }
+  }
+
   useEffect(() => {
-    if (localValue === value) {
+    if (suspend || localValue === value || localValue === abandonedValue) {
       return;
     }
     const timeoutId = setTimeout(() => onChangeRef.current(localValue), delay);
     return () => clearTimeout(timeoutId);
-  }, [localValue, value, delay]);
+  }, [localValue, value, delay, suspend, abandonedValue]);
 
   return [localValue, setLocalValue] as const;
 }
@@ -190,6 +239,7 @@ export function DataTable<TData>({
     search?.value ?? "",
     search?.debounceMs ?? DEFAULT_SEARCH_DEBOUNCE_MS,
     search?.onChange ?? noop,
+    isEditing,
   );
 
   const rows = table.getRowModel().rows;
@@ -242,18 +292,24 @@ export function DataTable<TData>({
             <TableRow key={headerGroup.id}>
               {headerGroup.headers.map((header) => {
                 const sortColumn = header.column.columnDef.meta?.sortColumn;
+                const sticky = header.column.columnDef.meta?.sticky;
+                const stickyClassName = sticky === "right" ? STICKY_RIGHT_CELL_CLASSNAME : undefined;
                 const content = header.isPlaceholder
                   ? null
                   : flexRender(header.column.columnDef.header, header.getContext());
 
                 if (!sortColumn) {
-                  return <TableHead key={header.id}>{content}</TableHead>;
+                  return (
+                    <TableHead key={header.id} className={stickyClassName}>
+                      {content}
+                    </TableHead>
+                  );
                 }
 
                 const direction = getSortDirection(sortColumn, sort);
 
                 return (
-                  <TableHead key={header.id} aria-sort={direction}>
+                  <TableHead key={header.id} aria-sort={direction} className={stickyClassName}>
                     <Button
                       variant="ghost"
                       size="sm"
@@ -294,9 +350,14 @@ export function DataTable<TData>({
           ) : (
             rows.map((row) => (
               <TableRow key={row.id} className={getRowClassName?.(row.original)}>
-                {row.getVisibleCells().map((cell) => (
-                  <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
-                ))}
+                {row.getVisibleCells().map((cell) => {
+                  const sticky = cell.column.columnDef.meta?.sticky;
+                  return (
+                    <TableCell key={cell.id} className={sticky === "right" ? STICKY_RIGHT_CELL_CLASSNAME : undefined}>
+                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                    </TableCell>
+                  );
+                })}
               </TableRow>
             ))
           )}
