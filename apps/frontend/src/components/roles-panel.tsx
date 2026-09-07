@@ -85,6 +85,12 @@ export function RolesPanel(props: RolesPanelProps) {
           search={{ value: props.search, onChange: props.onSearchChange, placeholder: "Rechercher un rôle" }}
           isLoading={props.isLoading}
           emptyState={props.selectedNode ? "Aucun rôle pour ce nœud." : "Sélectionnez un nœud pour voir ses rôles."}
+          // `DataTable` prefers `noResultsState` over `emptyState` whenever a
+          // search is active. Clearing the selected node (e.g. deleting it)
+          // doesn't clear the search box, so without this the "no node
+          // selected" prompt above would be silently replaced by the generic
+          // "no search results" message while a query is still typed in.
+          noResultsState={props.selectedNode ? undefined : "Sélectionnez un nœud pour voir ses rôles."}
         />
       </CardContent>
     </Card>

@@ -1176,15 +1176,25 @@ describe("ResourcesPage roles panel (E8-08)", () => {
 
     // Resolving the creation now must not re-fetch/apply node A's page: the
     // reload it triggers must target the *currently* selected node (B), not the
-    // node that was selected when the create form was submitted (A).
+    // node that was selected when the create form was submitted (A). Captures
+    // the call count first and inspects the *next* call specifically: node B's
+    // own selection already issued a `nodeB.id` call before `resolveCreate`
+    // below, so a plain `toHaveBeenCalledWith` here could be satisfied by that
+    // earlier call alone, without actually proving the creation's own reload
+    // (not just the prior node-switch) targets B.
+    const callCountBeforeResolve = mocks.getResourceRoles.mock.calls.length;
     resolveCreate(roleFixture2({ id: 30, name: "Nouveau rôle", node_id: nodeA.id }));
-    await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.anything(),
-      nodeB.id,
-      false,
-      expect.objectContaining({ limit: 20, offset: 0 }),
-    ));
+    // `addRole` reloads both the panel's own page and CapacityTable's (a call
+    // with `nodeId === undefined`), in that order but not necessarily settling
+    // in that order -- so the reload under test isn't reliably the *last* new
+    // call, only *a* new call scoped to node B.
+    await waitFor(() =>
+      expect(
+        mocks.getResourceRoles.mock.calls
+          .slice(callCountBeforeResolve)
+          .some((call) => call[2] === nodeB.id && call[4] && (call[4] as { offset?: number }).offset === 0),
+      ).toBe(true),
+    );
     expect(screen.getByText("RôleB (#20)")).toBeInTheDocument();
     expect(screen.queryByText("RôleA (#10)")).not.toBeInTheDocument();
   });
@@ -1272,6 +1282,68 @@ describe("ResourcesPage roles panel (E8-08)", () => {
       expect.anything(),
       expect.anything(),
     );
+  });
+
+  it("does not go on showing the previous node's roles under the newly selected node's heading when that node's own fetch fails", async () => {
+    mocks.getResourceRoles.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, nodeId: unknown, _includeDescendants: unknown, listParams: unknown) => {
+        if (listParams === undefined) return Promise.resolve({ items: [], total: 0 });
+        if (nodeId === nodeA.id) return Promise.resolve({ items: [roleFixture2({ id: 10, name: "RôleA", node_id: nodeA.id })], total: 1 });
+        return Promise.reject(new ApiError(500, "Chargement impossible"));
+      },
+    );
+
+    await openRessourcesTab();
+    await waitFor(() => expect(screen.getByText("RôleA (#10)")).toBeInTheDocument());
+
+    const nodeBRow = screen.getByText(nodeB.code).closest("tr");
+    if (!nodeBRow) throw new Error("node row not found");
+    fireEvent.click(nodeBRow);
+
+    // Node B's own fetch fails -- the panel must not go on displaying node A's
+    // roles (now scoped to the wrong node) once the loading skeleton clears.
+    await waitFor(() => expect(screen.getByText("Chargement impossible")).toBeInTheDocument());
+    expect(screen.queryByText("RôleA (#10)")).not.toBeInTheDocument();
+  });
+
+  it("shows the node-selection prompt, not the generic no-results message, when the selected node is cleared while a search is still active", async () => {
+    mocks.getResourceRoles.mockImplementation(
+      (_tokens: unknown, _refresh: unknown, nodeId: unknown, _includeDescendants: unknown, listParams: unknown) =>
+        Promise.resolve(
+          listParams === undefined || nodeId === undefined
+            ? { items: [], total: 0 }
+            : { items: [roleFixture2({ node_id: nodeId as number })], total: 1 },
+        ),
+    );
+    mocks.deleteResourceNode.mockResolvedValue(undefined);
+    const confirmSpy = vi.spyOn(globalThis, "confirm").mockReturnValue(true);
+
+    await openRessourcesTab();
+    const searchInput = await within(rolesPanelCard()).findByLabelText("Rechercher un rôle");
+    fireEvent.change(searchInput, { target: { value: "dev" } });
+    await waitFor(() =>
+      expect(mocks.getResourceRoles).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        nodeA.id,
+        false,
+        expect.objectContaining({ q: "dev" }),
+      ),
+    );
+
+    // Delete the selected node (search query left untouched) -- `DataTable`
+    // prefers `noResultsState` over `emptyState` whenever a search is active,
+    // so without a node-aware `noResultsState` this would silently show the
+    // generic "no results" message instead of the "select a node" prompt.
+    const nodeARow = screen.getByText(nodeA.code).closest("tr");
+    if (!nodeARow) throw new Error("node row not found");
+    fireEvent.click(within(nodeARow).getByRole("button", { name: "Supprimer" }));
+    await waitFor(() => expect(mocks.deleteResourceNode).toHaveBeenCalledWith(nodeA.id, expect.anything(), expect.anything()));
+
+    await waitFor(() => expect(screen.getByText("Sélectionnez un nœud pour voir ses rôles.")).toBeInTheDocument());
+    expect(screen.queryByText("Aucun résultat pour cette recherche.")).not.toBeInTheDocument();
+
+    confirmSpy.mockRestore();
   });
 });
 

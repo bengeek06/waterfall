@@ -451,7 +451,26 @@ export default function ResourcesPage() {
 
   useEffect(() => {
     const generation = ++rolesPanelGenerationRef.current;
-    const isCurrentGeneration = () => rolesPanelGenerationRef.current === generation;
+    // The generation counter alone only orders requests -- it doesn't verify a
+    // resolved request still matches what's currently selected. The refs are
+    // updated synchronously in the handlers (selectNode/pagination/sort/search),
+    // strictly before React re-renders and re-runs this effect: a request
+    // started for one set of parameters can therefore still resolve, generation
+    // unchanged, in the window after the user has already moved on (e.g.
+    // clicked a different node) but before this effect gets to run again for
+    // that change. Comparing every captured parameter against the live refs
+    // closes that window, the same way `reloadRolesPanelPage` already does for
+    // `nodeId`.
+    const capturedNodeId = selectedNodeId;
+    const capturedOffset = rolesPanelOffset;
+    const capturedSort = rolesPanelSort;
+    const capturedQuery = rolesPanelQuery;
+    const isStillCurrent = () =>
+      rolesPanelGenerationRef.current === generation &&
+      selectedNodeIdRef.current === capturedNodeId &&
+      rolesPanelOffsetRef.current === capturedOffset &&
+      rolesPanelSortRef.current === capturedSort &&
+      rolesPanelQueryRef.current === capturedQuery;
 
     async function load() {
       if (!session || selectedNodeId === null) {
@@ -465,6 +484,11 @@ export default function ResourcesPage() {
         return;
       }
       setRolesPanelLoading(true);
+      // Cleared unconditionally, not just on the no-selection branch above: if
+      // this request fails (e.g. right after switching to a different node),
+      // the table must not go on showing the *previous* node's rows under the
+      // newly selected node's heading once the loading skeleton disappears.
+      setRolesPanelPage({ items: [], total: 0 });
       try {
         const page = await getResourceRoles(session, onSessionRefresh, selectedNodeId, false, {
           limit: rolesPanelLimit,
@@ -472,10 +496,10 @@ export default function ResourcesPage() {
           sort: rolesPanelSort,
           q: rolesPanelQuery || undefined,
         });
-        if (!isCurrentGeneration()) return;
+        if (!isStillCurrent()) return;
         setRolesPanelPage(page);
       } catch (cause) {
-        if (!isCurrentGeneration()) return;
+        if (!isStillCurrent()) return;
         if (cause instanceof SessionExpiredError) {
           clearSession();
           router.push("/login");
@@ -491,7 +515,7 @@ export default function ResourcesPage() {
           message: cause instanceof ApiError ? cause.message : "Chargement des rôles impossible",
         });
       } finally {
-        if (isCurrentGeneration()) setRolesPanelLoading(false);
+        if (isStillCurrent()) setRolesPanelLoading(false);
       }
     }
 
