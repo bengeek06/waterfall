@@ -7,10 +7,11 @@ import {
   getPlanning,
   getPlanningStructureDraft,
   PlanningDetail,
+  PlanningStructureDraftRead,
   SessionExpiredError,
 } from "@/lib/backend";
 import { clearSession, type SessionTokens } from "@/lib/session";
-import { getPlanningHistory, type PlanningHistoryByPlanningId } from "@/lib/planning-history";
+import { getPlanningHistory, type PlanningHistoryByPlanningId, type PlanningHistoryState } from "@/lib/planning-history";
 import {
   getPlanningStructureDraftRows,
   structureToDraftRows,
@@ -28,6 +29,89 @@ export type PlanningRevisionConflict = {
   currentRevision: number;
   message: string;
 };
+
+// Derives the structure-draft rows to apply after loading a planning: the saved draft's rows if
+// there is one, otherwise the rows inferred from the planning detail itself -- but only if every
+// row is fully filled in (post/lot keys, names and deliverables all non-blank); an incomplete
+// derivation returns `null` so the caller leaves the current draft untouched. Extracted from
+// loadPlanningDetail (E4-20 / #206) -- same ternary + `every(...)` validation as before.
+export function deriveStructureDraftRows(
+  savedDraft: PlanningStructureDraftRead | null,
+  detail: PlanningDetail,
+): PlanningStructureDraftRow[] | null {
+  const rows = savedDraft ? structureToDraftRows(savedDraft.structure) : getPlanningStructureDraftRows(detail);
+  const isComplete =
+    rows.length > 0 &&
+    rows.every(
+      (row) =>
+        row.postKey.trim() &&
+        row.postName.trim() &&
+        row.lotKey.trim() &&
+        row.lotName.trim() &&
+        row.deliverables.trim(),
+    );
+  return isComplete ? rows : null;
+}
+
+// Detects a revision conflict between the locally-tracked undo/redo history and the just-loaded
+// planning detail, and records it via `setPlanningConflictByPlanningId` if one is found (no-op
+// when the history has no tracked revision yet, or when it still matches). Extracted from
+// loadPlanningDetail (E4-20 / #206) -- same condition and conflict payload as before.
+export function recordRevisionConflictIfAny(
+  history: PlanningHistoryState,
+  detail: PlanningDetail,
+  selectedPlanningId: number,
+  projectId: number,
+  setPlanningConflictByPlanningId: (
+    updater: (
+      previous: Record<number, PlanningRevisionConflict>,
+    ) => Record<number, PlanningRevisionConflict>,
+  ) => void,
+): void {
+  const historyRevision = history.revision;
+  if (historyRevision === null || historyRevision === detail.revision) {
+    return;
+  }
+  setPlanningConflictByPlanningId((previous) => ({
+    ...previous,
+    [selectedPlanningId]: {
+      projectId,
+      expectedRevision: historyRevision,
+      currentRevision: detail.revision,
+      message: "Ce planning a été modifié entre-temps : recharge-le avant de continuer.",
+    },
+  }));
+}
+
+// Guards `loadPlanningDetail`'s catch/finally branches: whether a load that was scheduled as
+// `loadGeneration` is still the most recent one and hasn't been cancelled (by the effect's
+// cleanup running -- e.g. selection/session/project changed, or the component unmounted).
+// Extracted from loadPlanningDetail (E4-20 / #206).
+export function isPlanningLoadStillActive(
+  cancelled: boolean,
+  loadGeneration: number,
+  currentGeneration: number,
+): boolean {
+  return !cancelled && loadGeneration === currentGeneration;
+}
+
+// Guards `loadPlanningDetail`'s try branch: same as `isPlanningLoadStillActive`, plus the
+// additional check (not needed in the catch/finally branches) that the selection hasn't moved on
+// to a different planning while this load was in flight. Extracted from loadPlanningDetail
+// (E4-20 / #206) -- kept distinct from `isPlanningLoadStillActive` rather than merged, since the
+// two guards are not equivalent.
+export function isPlanningLoadResultCurrent(
+  cancelled: boolean,
+  loadGeneration: number,
+  currentGeneration: number,
+  selectedPlanningIdRefCurrent: number | null,
+  selectedPlanningId: number,
+): boolean {
+  return (
+    isPlanningLoadStillActive(cancelled, loadGeneration, currentGeneration) &&
+    selectedPlanningIdRefCurrent === selectedPlanningId
+  );
+}
 
 interface UsePlanningDetailEffectParams {
   session: SessionTokens | null;
@@ -70,11 +154,6 @@ export function usePlanningDetailEffect({
   useEffect(() => {
     let cancelled = false;
 
-    // Complexity exception (E4-17, #157): generation-guarded load + revision-conflict
-    // detection + structure-draft derivation + session-expiry handling in one function.
-    // Decomposition tracked in #206 (E4-20) rather than bundled into #157's gate-activation
-    // scope.
-    // eslint-disable-next-line complexity
     async function loadPlanningDetail() {
       const loadGeneration = ++planningLoadGenerationRef.current;
       if (!session || selectedPlanningId === null) {
@@ -88,43 +167,30 @@ export function usePlanningDetailEffect({
         const detail = await getPlanning(projectId, selectedPlanningId, session, onSessionRefresh);
         const savedDraft = await getPlanningStructureDraft(projectId, session, onSessionRefresh);
         if (
-          !cancelled &&
-          loadGeneration === planningLoadGenerationRef.current &&
-          selectedPlanningIdRef.current === selectedPlanningId
+          isPlanningLoadResultCurrent(
+            cancelled,
+            loadGeneration,
+            planningLoadGenerationRef.current,
+            selectedPlanningIdRef.current,
+            selectedPlanningId,
+          )
         ) {
           const history = getPlanningHistory(historyByPlanningIdRef.current, selectedPlanningId);
-          const historyRevision = history.revision;
-          if (historyRevision !== null && historyRevision !== detail.revision) {
-            setPlanningConflictByPlanningId((previous) => ({
-              ...previous,
-              [selectedPlanningId]: {
-                projectId,
-                expectedRevision: historyRevision,
-                currentRevision: detail.revision,
-                message: "Ce planning a été modifié entre-temps : recharge-le avant de continuer.",
-              },
-            }));
-          }
+          recordRevisionConflictIfAny(
+            history,
+            detail,
+            selectedPlanningId,
+            projectId,
+            setPlanningConflictByPlanningId,
+          );
           setPlanningDetail(detail);
-          const rows = savedDraft
-            ? structureToDraftRows(savedDraft.structure)
-            : getPlanningStructureDraftRows(detail);
-          if (
-            rows.length &&
-            rows.every(
-              (row) =>
-                row.postKey.trim() &&
-                row.postName.trim() &&
-                row.lotKey.trim() &&
-                row.lotName.trim() &&
-                row.deliverables.trim(),
-            )
-          ) {
+          const rows = deriveStructureDraftRows(savedDraft, detail);
+          if (rows) {
             setStructureDraft(rows);
           }
         }
       } catch (cause) {
-        if (cancelled || loadGeneration !== planningLoadGenerationRef.current) {
+        if (!isPlanningLoadStillActive(cancelled, loadGeneration, planningLoadGenerationRef.current)) {
           return;
         }
         if (cause instanceof SessionExpiredError) {
@@ -134,7 +200,7 @@ export function usePlanningDetailEffect({
         }
         setError(cause instanceof ApiError ? cause.message : "Impossible de charger le planning.");
       } finally {
-        if (!cancelled && loadGeneration === planningLoadGenerationRef.current) {
+        if (isPlanningLoadStillActive(cancelled, loadGeneration, planningLoadGenerationRef.current)) {
           setPlanningDetailBusy(false);
         }
       }
