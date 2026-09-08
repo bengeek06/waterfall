@@ -406,6 +406,98 @@ describe("parseError", () => {
       message: "Ce planning a été modifié entre-temps : recharge-le avant de réessayer.",
     } as Partial<ApiError>);
   });
+
+  it("turns a GENERIC_ERROR detail into the generic French fallback message", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ detail: { code: "GENERIC_ERROR" } }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      movePlanningTasks(
+        1,
+        7,
+        { task_uids: [1], target_parent_uid: null, position: 1, expected_revision: 0 },
+        { accessToken: "token" },
+        vi.fn(),
+      ),
+    ).rejects.toMatchObject({
+      status: 500,
+      message: "Une erreur est survenue. Réessayez ou contactez le support si le problème persiste.",
+    } as Partial<ApiError>);
+  });
+
+  it("turns a PLANNING_STRUCTURE_REOPEN_REQUIRES_VALIDATION detail into a readable message", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({ detail: { code: "PLANNING_STRUCTURE_REOPEN_REQUIRES_VALIDATION" } }),
+        { status: 409, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      movePlanningTasks(
+        1,
+        7,
+        { task_uids: [1], target_parent_uid: null, position: 1, expected_revision: 0 },
+        { accessToken: "token" },
+        vi.fn(),
+      ),
+    ).rejects.toMatchObject({
+      status: 409,
+      message: "Cette structure doit d'abord être validée avant de pouvoir être rouverte.",
+    } as Partial<ApiError>);
+  });
+
+  it("turns a PLANNING_STRUCTURE_REOPEN_INTEGRITY_CONFLICT detail into a readable message", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({ detail: { code: "PLANNING_STRUCTURE_REOPEN_INTEGRITY_CONFLICT" } }),
+        { status: 409, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      movePlanningTasks(
+        1,
+        7,
+        { task_uids: [1], target_parent_uid: null, position: 1, expected_revision: 0 },
+        { accessToken: "token" },
+        vi.fn(),
+      ),
+    ).rejects.toMatchObject({
+      status: 409,
+      message: "Cette structure ne peut pas être rouverte : son intégrité a été compromise depuis sa validation.",
+    } as Partial<ApiError>);
+  });
+
+  it("falls back to the generic French message (never the raw JSON body) for an unrecognized structured code", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ detail: { code: "SOME_FUTURE_CODE" } }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      movePlanningTasks(
+        1,
+        7,
+        { task_uids: [1], target_parent_uid: null, position: 1, expected_revision: 0 },
+        { accessToken: "token" },
+        vi.fn(),
+      ),
+    ).rejects.toMatchObject({
+      status: 500,
+      message: "Une erreur est survenue. Réessayez ou contactez le support si le problème persiste.",
+    } as Partial<ApiError>);
+  });
 });
 
 describe("getPlanningTaskDeleteConflict", () => {
