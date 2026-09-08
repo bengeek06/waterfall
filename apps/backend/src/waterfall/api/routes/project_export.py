@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from waterfall.api.dependencies import get_current_active_user
 from waterfall.api.routes.planning_support import (
+    order_ms_tasks_depth_first,
     order_snapshots_depth_first,
 )
 from waterfall.api.routes.project_access import (
@@ -47,8 +48,11 @@ def export_project_xml(
             .all()
         )
     else:
-        tasks = (
-            db.query(MsTask).filter(MsTask.project_id == project_id).order_by(MsTask.id.asc()).all()
+        # Depth-first, not MsTask.id.asc(): the exported <ID> is the task's row_number
+        # (#147/E9-02, #148/E9-03), which must match its actual displayed rank, not creation
+        # order.
+        tasks = order_ms_tasks_depth_first(
+            db.query(MsTask).filter(MsTask.project_id == project_id).all()
         )
         links = (
             db.query(MsTaskLink)

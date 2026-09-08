@@ -297,6 +297,58 @@ def test_export_xml_contains_task_notes_from_description() -> None:
         assert notes_by_uid.get(task_uid) == description
 
 
+def test_export_id_follows_depth_first_row_number_not_creation_order() -> None:
+    """Issue #148 (E9-03): the exported <ID> must be the task's row_number (#147/E9-02) --
+    its 1-based rank in depth-first display order -- never a stale/creation-order value.
+    Seeds two root siblings with `position` deliberately reversed relative to `MsTask.id`/
+    `uid` creation order, so a regression back to ordering by id/uid (as `export_project_xml`
+    did before this issue) would produce <ID> 1/2 in the wrong order.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_response: Response = client.post(
+            "/projects", json={"name": "Export row_number order"}, headers=headers
+        )
+        assert project_response.status_code == 201
+        project_id = cast(int, project_response.json()["id"])
+
+        first_uid = _create_legacy_task(project_id, "Created first, positioned second")
+        second_uid = _create_legacy_task(project_id, "Created second, positioned first")
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            first_task = (
+                session.query(MsTask)
+                .filter(MsTask.project_id == project_id, MsTask.uid == first_uid)
+                .one()
+            )
+            second_task = (
+                session.query(MsTask)
+                .filter(MsTask.project_id == project_id, MsTask.uid == second_uid)
+                .one()
+            )
+            first_task.position = 2
+            second_task.position = 1
+            session.commit()
+
+        export_response: Response = client.get(
+            f"/projects/{project_id}/export.xml",
+            headers=headers,
+        )
+        assert export_response.status_code == 200
+        root = ET.fromstring(cast(bytes, export_response.content))
+        id_by_uid: dict[int, int] = {}
+        for task_node in root.findall("ms:Tasks/ms:Task", NS):
+            uid_node = task_node.find("ms:UID", NS)
+            id_node = task_node.find("ms:ID", NS)
+            assert uid_node is not None and uid_node.text is not None
+            assert id_node is not None and id_node.text is not None
+            id_by_uid[int(uid_node.text)] = int(id_node.text)
+
+        assert id_by_uid[second_uid] == 1
+        assert id_by_uid[first_uid] == 2
+
+
 def test_export_includes_task_calendar_and_reference_minutes() -> None:
     with TestClient(app) as client:
         headers = _admin_headers(client, "export.calendars@example.com")
