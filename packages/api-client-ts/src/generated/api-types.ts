@@ -1357,11 +1357,12 @@ export interface components {
         };
         ImportDiffItem: {
             /** @enum {string} */
-            kind: "added" | "modified" | "removed" | "conflict";
+            kind: "added" | "modified" | "removed" | "conflict" | "calendar_mismatch";
             uid: number;
             message: string;
             fields: string[];
             linkChanges?: components["schemas"]["ImportLinkChange"][];
+            calendarMismatch?: components["schemas"]["ImportCalendarMismatch"] | null;
         };
         ImportLinkChange: {
             /** @enum {string} */
@@ -1976,6 +1977,11 @@ export interface components {
         };
         UserAdminListRead: components["schemas"]["PaginationMeta"] & {
             items: components["schemas"]["UserAdminRead"][];
+        };
+        ImportCalendarMismatch: {
+            taskUid: number;
+            fileDurationMinutes: number;
+            expectedDurationMinutes: number;
         };
         /** @enum {string} */
         ProjectSetupWarningCode: "no_default_calendar" | "default_calendar_has_no_working_day" | "no_active_cost_category" | "no_active_resource_role";

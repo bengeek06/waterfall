@@ -2912,6 +2912,7 @@ components:
             - modified
             - removed
             - conflict
+            - calendar_mismatch
         uid:
           type: integer
           minimum: 1
@@ -2925,6 +2926,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ImportLinkChange'
+        calendarMismatch:
+          anyOf:
+            - $ref: '#/components/schemas/ImportCalendarMismatch'
+            - type: 'null'
     ImportLinkChange:
       type: object
       required:
@@ -4872,6 +4877,22 @@ components:
               type: array
               items:
                 $ref: '#/components/schemas/UserAdminRead'
+    ImportCalendarMismatch:
+      type: object
+      required:
+        - taskUid
+        - fileDurationMinutes
+        - expectedDurationMinutes
+      properties:
+        taskUid:
+          type: integer
+          minimum: 1
+        fileDurationMinutes:
+          type: integer
+          minimum: 0
+        expectedDurationMinutes:
+          type: integer
+          minimum: 0
     ProjectSetupWarningCode:
       type: string
       enum:
