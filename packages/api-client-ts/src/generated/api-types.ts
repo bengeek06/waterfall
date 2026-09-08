@@ -928,6 +928,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{projectId}/cost-codes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lister l'arbre des codes d'imputation d'un projet */
+        get: operations["listProjectCostCodes"];
+        put?: never;
+        /** Creer un code d'imputation dans l'arbre du projet */
+        post: operations["createProjectCostCode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{projectId}/cost-codes/{costCodeId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lire un code d'imputation du projet */
+        get: operations["getProjectCostCode"];
+        put?: never;
+        post?: never;
+        /** Desactiver un code d'imputation du projet */
+        delete: operations["deleteProjectCostCode"];
+        options?: never;
+        head?: never;
+        /** Modifier ou desactiver un code d'imputation du projet */
+        patch: operations["updateProjectCostCode"];
+        trace?: never;
+    };
     "/projects/{projectId}/export.xml": {
         parameters: {
             query?: never;
@@ -2025,6 +2062,29 @@ export interface components {
             links: components["schemas"]["TaskLinkWrite"][];
             expected_revision: number;
         };
+        ProjectCostCodeCreate: {
+            code: string;
+            name: string;
+            parent_id?: number | null;
+        };
+        ProjectCostCodeRead: components["schemas"]["ProjectCostCodeCreate"] & {
+            id: number;
+            project_id: number;
+            is_active: boolean;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        ProjectCostCodeListRead: components["schemas"]["PaginationMeta"] & {
+            items: components["schemas"]["ProjectCostCodeRead"][];
+        };
+        ProjectCostCodeUpdate: {
+            code?: string;
+            name?: string;
+            parent_id?: number | null;
+            is_active?: boolean;
+        };
     };
     responses: {
         /** @description Requete invalide */
@@ -2358,6 +2418,8 @@ export interface components {
         Offset: number;
         /** @description Recherche plein texte simple (sous-chaine, insensible a la casse), sur le sous-ensemble de colonnes documente par chaque ressource dans la description de ce parametre au niveau de l'operation. A distinguer des filtres structures deja existants sur certaines ressources (`include_inactive`, `node_id`, `role_id`, ...), qui restent des parametres dedies et se combinent avec `q`. */
         Search: string;
+        /** @description Identifiant technique du code d'imputation du projet */
+        CostCodeId: number;
     };
     requestBodies: never;
     headers: never;
@@ -4213,6 +4275,148 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["ProjectNotFound"];
+        };
+    };
+    listProjectCostCodes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Arbre complet des codes d'imputation actifs du projet. Non paginable (meme motif que GET /resources/nodes) : l'arbre doit toujours etre renvoye en entier, jamais tronque. `limit` est donc toujours `null` et `total` egale `items.length`. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectCostCodeListRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+        };
+    };
+    createProjectCostCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectCostCodeCreate"];
+            };
+        };
+        responses: {
+            /** @description Code d'imputation cree */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectCostCodeRead"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getProjectCostCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique du code d'imputation du projet */
+                costCodeId: components["parameters"]["CostCodeId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Code d'imputation */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectCostCodeRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+        };
+    };
+    deleteProjectCostCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique du code d'imputation du projet */
+                costCodeId: components["parameters"]["CostCodeId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Code d'imputation desactive */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    updateProjectCostCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique du code d'imputation du projet */
+                costCodeId: components["parameters"]["CostCodeId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectCostCodeUpdate"];
+            };
+        };
+        responses: {
+            /** @description Code d'imputation modifie */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectCostCodeRead"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     exportProjectXml: {

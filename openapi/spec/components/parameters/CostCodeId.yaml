@@ -1,0 +1,7 @@
+name: costCodeId
+in: path
+required: true
+schema:
+  type: integer
+  minimum: 1
+description: Identifiant technique du code d'imputation du projet

@@ -1198,6 +1198,133 @@
         $ref: ../components/responses/Unauthorized.yaml
       '404':
         $ref: ../components/responses/ProjectNotFound.yaml
+/projects/{projectId}/cost-codes:
+  get:
+    tags:
+    - projects
+    summary: Lister l'arbre des codes d'imputation d'un projet
+    operationId: listProjectCostCodes
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    responses:
+      '200':
+        description: >-
+          Arbre complet des codes d'imputation actifs du projet. Non
+          paginable (meme motif que GET /resources/nodes) : l'arbre doit
+          toujours etre renvoye en entier, jamais tronque. `limit` est
+          donc toujours `null` et `total` egale `items.length`.
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ProjectCostCodeListRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+  post:
+    tags:
+    - projects
+    summary: Creer un code d'imputation dans l'arbre du projet
+    operationId: createProjectCostCode
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/ProjectCostCodeCreate.yaml
+    responses:
+      '201':
+        description: Code d'imputation cree
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ProjectCostCodeRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
+/projects/{projectId}/cost-codes/{costCodeId}:
+  get:
+    tags:
+    - projects
+    summary: Lire un code d'imputation du projet
+    operationId: getProjectCostCode
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/CostCodeId.yaml
+    responses:
+      '200':
+        description: Code d'imputation
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ProjectCostCodeRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+  patch:
+    tags:
+    - projects
+    summary: Modifier ou desactiver un code d'imputation du projet
+    operationId: updateProjectCostCode
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/CostCodeId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/ProjectCostCodeUpdate.yaml
+    responses:
+      '200':
+        description: Code d'imputation modifie
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ProjectCostCodeRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
+  delete:
+    tags:
+    - projects
+    summary: Desactiver un code d'imputation du projet
+    operationId: deleteProjectCostCode
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/CostCodeId.yaml
+    responses:
+      '204':
+        description: Code d'imputation desactive
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
 /projects/{projectId}/export.xml:
   get:
     tags:

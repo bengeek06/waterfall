@@ -1783,6 +1783,129 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/ProjectNotFound'
+  /projects/{projectId}/cost-codes:
+    get:
+      tags:
+        - projects
+      summary: Lister l'arbre des codes d'imputation d'un projet
+      operationId: listProjectCostCodes
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      responses:
+        '200':
+          description: 'Arbre complet des codes d''imputation actifs du projet. Non paginable (meme motif que GET /resources/nodes) : l''arbre doit toujours etre renvoye en entier, jamais tronque. `limit` est donc toujours `null` et `total` egale `items.length`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectCostCodeListRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+    post:
+      tags:
+        - projects
+      summary: Creer un code d'imputation dans l'arbre du projet
+      operationId: createProjectCostCode
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectCostCodeCreate'
+      responses:
+        '201':
+          description: Code d'imputation cree
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectCostCodeRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /projects/{projectId}/cost-codes/{costCodeId}:
+    get:
+      tags:
+        - projects
+      summary: Lire un code d'imputation du projet
+      operationId: getProjectCostCode
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/CostCodeId'
+      responses:
+        '200':
+          description: Code d'imputation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectCostCodeRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+    patch:
+      tags:
+        - projects
+      summary: Modifier ou desactiver un code d'imputation du projet
+      operationId: updateProjectCostCode
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/CostCodeId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectCostCodeUpdate'
+      responses:
+        '200':
+          description: Code d'imputation modifie
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectCostCodeRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    delete:
+      tags:
+        - projects
+      summary: Desactiver un code d'imputation du projet
+      operationId: deleteProjectCostCode
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/CostCodeId'
+      responses:
+        '204':
+          description: Code d'imputation desactive
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
   /projects/{projectId}/export.xml:
     get:
       tags:
@@ -5021,6 +5144,79 @@ components:
         expected_revision:
           type: integer
           minimum: 0
+    ProjectCostCodeCreate:
+      type: object
+      required:
+        - code
+        - name
+      properties:
+        code:
+          type: string
+          minLength: 1
+          maxLength: 64
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        parent_id:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
+    ProjectCostCodeRead:
+      allOf:
+        - $ref: '#/components/schemas/ProjectCostCodeCreate'
+        - type: object
+          required:
+            - id
+            - project_id
+            - is_active
+            - created_at
+            - updated_at
+          properties:
+            id:
+              type: integer
+              minimum: 1
+            project_id:
+              type: integer
+              minimum: 1
+            is_active:
+              type: boolean
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+    ProjectCostCodeListRead:
+      allOf:
+        - $ref: '#/components/schemas/PaginationMeta'
+        - type: object
+          required:
+            - items
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/ProjectCostCodeRead'
+    ProjectCostCodeUpdate:
+      type: object
+      properties:
+        code:
+          type: string
+          minLength: 1
+          maxLength: 64
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        parent_id:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
+        is_active:
+          type: boolean
   parameters:
     BatchId:
       name: batchId
@@ -5177,6 +5373,14 @@ components:
       schema:
         type: string
         minLength: 1
+    CostCodeId:
+      name: costCodeId
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+      description: Identifiant technique du code d'imputation du projet
   responses:
     BadRequest:
       description: Requete invalide

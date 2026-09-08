@@ -3,7 +3,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from waterfall.schemas.pagination import PaginatedList
 
@@ -669,3 +669,40 @@ class EstimateAggregatesRead(BaseModel):
     total_purchase_cost: Decimal
     total_unburdened_cost: Decimal
     by_category: dict[str, Decimal]
+
+
+class ProjectCostCodeBase(BaseModel):
+    code: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=255)
+
+    _normalize_code = field_validator("code")(_required_text)
+    _normalize_name = field_validator("name")(_required_text)
+
+
+class ProjectCostCodeCreate(ProjectCostCodeBase):
+    parent_id: int | None = Field(default=None, gt=0)
+
+
+class ProjectCostCodeUpdate(BaseModel):
+    code: str | None = Field(default=None, min_length=1, max_length=64)
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    parent_id: int | None = Field(default=None, gt=0)
+    is_active: bool | None = None
+
+    _normalize_code = field_validator("code")(_optional_text)
+    _normalize_name = field_validator("name")(_optional_text)
+
+
+class ProjectCostCodeRead(ProjectCostCodeBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    project_id: int
+    parent_id: int | None
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProjectCostCodeListRead(PaginatedList[ProjectCostCodeRead]):
+    pass

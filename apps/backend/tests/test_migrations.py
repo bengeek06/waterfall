@@ -203,7 +203,7 @@ def test_migration_upgrade_creates_expected_schema() -> None:
 
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260908_0008"
+                == "20260909_0009"
             )
 
 
@@ -475,7 +475,7 @@ def test_calendar_default_flag_migration_backfills_standard_and_enforces_uniquen
 
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260908_0008"
+                == "20260909_0009"
             )
 
         # STANDARD is already backfilled to is_default=1 above, so a second row
@@ -958,7 +958,7 @@ def _assert_create_all_schema_can_be_stamped_by_migrate_up(database_url: str) ->
     _run_alembic(database_url, "head")
 
     with _disposable_engine(database_url) as engine, engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260908_0008"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260909_0009"
         standard = connection.execute(
             text("SELECT id, is_active, is_default FROM wf_calendar WHERE code = 'STANDARD'")
         ).one()
@@ -1078,7 +1078,7 @@ def test_legacy_prepare_reuses_empty_alembic_version_table() -> None:
         with _disposable_engine(database_url) as engine, engine.connect() as connection:
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260908_0008"
+                == "20260909_0009"
             )
 
 
@@ -1106,7 +1106,7 @@ def test_create_all_schema_before_planning_revision_is_repaired_then_migrated() 
         with _disposable_engine(database_url) as engine, engine.connect() as connection:
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260908_0008"
+                == "20260909_0009"
             )
             planning_columns = {
                 column["name"] for column in inspect(connection).get_columns("wf_planning")
@@ -1213,7 +1213,7 @@ def test_schema_revision_check_rejects_database_behind_head() -> None:
             assert_database_schema_current(engine)
 
     assert error.value.current_revision == "20260901_0005"
-    assert error.value.expected_revision == "20260908_0008"
+    assert error.value.expected_revision == "20260909_0009"
     assert "Run `make migrate-up`" in str(error.value)
 
 
@@ -1259,7 +1259,7 @@ def test_postgres_migration_upgrade_head_succeeds(postgres_database_url: str) ->
             "wf_estimate",
             "wf_estimate_task_row",
         }.issubset(table_names)
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260908_0008"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260909_0009"
 
 
 def test_postgres_project_external_uid_accepts_canonical_guid(
@@ -1327,3 +1327,184 @@ def test_postgres_estimate_line_role_code_accepts_long_role_name(
         stored_role_code = connection.scalar(text("SELECT role_code FROM wf_estimate_line"))
         assert stored_role_code == long_role_name
         assert len(stored_role_code) == 200
+
+
+def _seed_project_at_revision(
+    database_url: str, revision: str, *, name: str, code: str | None
+) -> int:
+    """Seed a minimal `ms_project` row via the ORM on a database already migrated to
+    `revision`, and return its id. Used to seed a project *before* the
+    20260909_0009 migration runs, so its backfill logic has a pre-existing row to
+    act on."""
+    from sqlalchemy.orm import Session
+
+    from waterfall.models.ms_core import MsProject
+
+    _run_alembic(database_url, revision)
+    with _disposable_engine(database_url) as engine, Session(engine) as session:
+        project = MsProject(
+            source_version=2016,
+            save_version_out=16,
+            name=name,
+            code=code,
+            schedule_from_start=True,
+            start_date=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        session.add(project)
+        session.commit()
+        return project.id
+
+
+def test_project_cost_code_migration_backfills_root_from_code_and_prj_fallback() -> None:
+    """Issue #62 (E6-01): the 20260909_0009 migration creates wf_project_cost_code and
+    backfills a root cost code for every pre-existing project, using project.code when
+    set or the deterministic PRJ-{id} fallback when it is NULL."""
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "migration.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        project_with_code_id = _seed_project_at_revision(
+            database_url, "20260908_0008", name="Projet Avec Code", code="PRJ-042"
+        )
+        project_without_code_id = _seed_project_at_revision(
+            database_url, "20260908_0008", name="Projet Sans Code", code=None
+        )
+
+        _run_alembic(database_url, "head")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            table_names = set(inspect(connection).get_table_names())
+            assert "wf_project_cost_code" in table_names
+
+            with_code_row = connection.execute(
+                text(
+                    "SELECT parent_id, code, name FROM wf_project_cost_code WHERE project_id = :id"
+                ),
+                {"id": project_with_code_id},
+            ).one()
+            assert with_code_row[0] is None
+            assert with_code_row[1] == "PRJ-042"
+            assert with_code_row[2] == "Projet Avec Code"
+
+            without_code_row = connection.execute(
+                text(
+                    "SELECT parent_id, code, name FROM wf_project_cost_code WHERE project_id = :id"
+                ),
+                {"id": project_without_code_id},
+            ).one()
+            assert without_code_row[0] is None
+            assert without_code_row[1] == f"PRJ-{project_without_code_id}"
+
+            assert (
+                connection.scalar(text("SELECT version_num FROM alembic_version"))
+                == "20260909_0009"
+            )
+
+
+def test_project_cost_code_migration_enforces_one_root_per_project() -> None:
+    """The partial unique index (project_id, WHERE parent_id IS NULL) must reject a
+    second root row for a project that already has one -- including the backfilled
+    root inserted by this same migration."""
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "migration.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        project_id = _seed_project_at_revision(
+            database_url, "20260908_0008", name="Projet Unique Root", code="PRJ-ROOT"
+        )
+        _run_alembic(database_url, "head")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            with pytest.raises(Exception, match="UNIQUE constraint failed"):
+                connection.execute(
+                    text(
+                        "INSERT INTO wf_project_cost_code (project_id, parent_id, code, name, "
+                        "is_active, created_at, updated_at) VALUES (:project_id, NULL, "
+                        "'DUP-ROOT', 'Second racine', 1, '2026-01-01 00:00:00', "
+                        "'2026-01-01 00:00:00')"
+                    ),
+                    {"project_id": project_id},
+                )
+            connection.rollback()
+
+
+def test_project_cost_code_migration_is_reversible() -> None:
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "migration.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        _seed_project_at_revision(
+            database_url, "20260908_0008", name="Projet Reversible", code="PRJ-REV"
+        )
+        _run_alembic(database_url, "head")
+        _downgrade_alembic(database_url, "20260908_0008")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            table_names = set(inspect(connection).get_table_names())
+            assert "wf_project_cost_code" not in table_names
+            assert (
+                connection.scalar(text("SELECT version_num FROM alembic_version"))
+                == "20260908_0008"
+            )
+
+        _run_alembic(database_url, "head")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            table_names = set(inspect(connection).get_table_names())
+            assert "wf_project_cost_code" in table_names
+            # Re-upgrading after a downgrade-then-upgrade round trip re-runs the
+            # backfill against the still-existing project row, so it must not be
+            # duplicated or lost.
+            row_count = connection.scalar(text("SELECT COUNT(*) FROM wf_project_cost_code"))
+            assert row_count == 1
+
+
+def test_postgres_project_cost_code_migration_backfill_and_downgrade(
+    postgres_database_url: str,
+) -> None:
+    """PostgreSQL variant of the project cost code migration round trip, covering the
+    partial-index syntax difference (postgresql_where vs sqlite_where) on a real
+    PostgreSQL dialect."""
+    project_with_code_id = _seed_project_at_revision(
+        postgres_database_url, "20260908_0008", name="Projet PG Avec Code", code="PRJ-PG-1"
+    )
+    project_without_code_id = _seed_project_at_revision(
+        postgres_database_url, "20260908_0008", name="Projet PG Sans Code", code=None
+    )
+
+    _run_alembic(postgres_database_url, "head")
+
+    with _disposable_engine(postgres_database_url) as engine, engine.connect() as connection:
+        with_code_row = connection.execute(
+            text("SELECT parent_id, code FROM wf_project_cost_code WHERE project_id = :id"),
+            {"id": project_with_code_id},
+        ).one()
+        assert with_code_row[0] is None
+        assert with_code_row[1] == "PRJ-PG-1"
+
+        without_code_row = connection.execute(
+            text("SELECT parent_id, code FROM wf_project_cost_code WHERE project_id = :id"),
+            {"id": project_without_code_id},
+        ).one()
+        assert without_code_row[1] == f"PRJ-{project_without_code_id}"
+
+    with _disposable_engine(postgres_database_url) as engine, engine.connect() as connection:
+        with pytest.raises(Exception, match="uq_wf_project_cost_code_single_root"):
+            connection.execute(
+                text(
+                    "INSERT INTO wf_project_cost_code (project_id, parent_id, code, name, "
+                    "is_active, created_at, updated_at) VALUES (:project_id, NULL, "
+                    "'DUP-ROOT-PG', 'Second racine', true, now(), now())"
+                ),
+                {"project_id": project_with_code_id},
+            )
+        connection.rollback()
+
+    _downgrade_alembic(postgres_database_url, "20260908_0008")
+
+    with _disposable_engine(postgres_database_url) as engine, engine.connect() as connection:
+        table_names = set(inspect(connection).get_table_names())
+        assert "wf_project_cost_code" not in table_names
+
+    _run_alembic(postgres_database_url, "head")
+
+    with _disposable_engine(postgres_database_url) as engine, engine.connect() as connection:
+        table_names = set(inspect(connection).get_table_names())
+        assert "wf_project_cost_code" in table_names
