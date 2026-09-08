@@ -56,11 +56,6 @@ def _create_legacy_task(project_id: int, name: str) -> int:
         max_uid = (
             session.query(func.max(MsTask.uid)).filter(MsTask.project_id == project_id).scalar()
         )
-        max_id_display = (
-            session.query(func.max(MsTask.id_display))
-            .filter(MsTask.project_id == project_id)
-            .scalar()
-        )
         root_count = (
             session.query(MsTask)
             .filter(MsTask.project_id == project_id)
@@ -70,7 +65,6 @@ def _create_legacy_task(project_id: int, name: str) -> int:
         task = MsTask(
             project_id=project_id,
             uid=(max_uid or 0) + 1,
-            id_display=(max_id_display or 0) + 1,
             name=name,
             outline_number=str(root_count + 1),
             outline_level=1,

@@ -143,7 +143,6 @@ def test_validation_rejects_assignments_outside_estimate_planning_snapshot() -> 
             extra_task = MsTask(
                 project_id=project_id,
                 uid=9999,
-                id_display=9999,
                 name="Outside snapshot",
                 task_type=0,
                 outline_number="99",
@@ -209,7 +208,6 @@ def test_calculate_labor_lines_spanning_years() -> None:
             task = MsTask(
                 project_id=project.id,
                 uid=1001,
-                id_display=1,
                 name="Dev Task",
                 task_type=0,
                 outline_number="1",
@@ -312,7 +310,6 @@ def test_calculate_labor_lines_across_two_years() -> None:
             task = MsTask(
                 project_id=project.id,
                 uid=2001,
-                id_display=1,
                 name="Cross-year Task",
                 task_type=0,
                 outline_number="1",

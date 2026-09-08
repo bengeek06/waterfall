@@ -534,22 +534,15 @@ def create_planning_task(
             )
         insert_index = sibling_uids.index(insert_after_uid) + 1
 
-    # uid/id_display must be unique across every version of this project, not
-    # just the current draft: WfPlanningTaskSnapshot.uid is a stable identity
-    # reused across planning versions (see task_references.py) and MsTask
-    # rows carry legacy references that must never collide with a snapshot
-    # uid either. Scoping the max to the current draft's own tasks would let
-    # a freshly-deleted-then-recreated uid collide with a task still alive
-    # in another version of the same project.
+    # uid must be unique across every version of this project, not just the
+    # current draft: WfPlanningTaskSnapshot.uid is a stable identity reused
+    # across planning versions (see task_references.py) and MsTask rows carry
+    # legacy references that must never collide with a snapshot uid either.
+    # Scoping the max to the current draft's own tasks would let a
+    # freshly-deleted-then-recreated uid collide with a task still alive in
+    # another version of the same project.
     project_snapshot_max_uid = (
         db.query(func.max(WfPlanningTaskSnapshot.uid))
-        .join(WfPlanning, WfPlanning.id == WfPlanningTaskSnapshot.planning_id)
-        .filter(WfPlanning.project_id == planning.project_id)
-        .scalar()
-        or 0
-    )
-    project_snapshot_max_id_display = (
-        db.query(func.max(WfPlanningTaskSnapshot.id_display))
         .join(WfPlanning, WfPlanning.id == WfPlanningTaskSnapshot.planning_id)
         .filter(WfPlanning.project_id == planning.project_id)
         .scalar()
@@ -559,19 +552,11 @@ def create_planning_task(
         db.query(func.max(MsTask.uid)).filter(MsTask.project_id == planning.project_id).scalar()
         or 0
     )
-    project_ms_task_max_id_display = (
-        db.query(func.max(MsTask.id_display))
-        .filter(MsTask.project_id == planning.project_id)
-        .scalar()
-        or 0
-    )
     max_uid = max(project_snapshot_max_uid, project_ms_task_max_uid)
-    max_id_display = max(project_snapshot_max_id_display, project_ms_task_max_id_display)
 
     new_task = WfPlanningTaskSnapshot(
         planning_id=planning.id,
         uid=max_uid + 1,
-        id_display=max_id_display + 1,
         parent_uid=target_parent_uid,
         position=insert_index + 1,
         name=command.name,
@@ -721,7 +706,6 @@ def restore_planning_snapshot(
         tasks_by_uid[item.uid] = WfPlanningTaskSnapshot(
             planning_id=planning.id,
             uid=item.uid,
-            id_display=item.id_display,
             structure_key=item.structure_key,
             structure_kind=item.structure_kind,
             parent_uid=item.parent_uid,

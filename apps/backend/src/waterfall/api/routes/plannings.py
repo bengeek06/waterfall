@@ -168,7 +168,6 @@ def create_planning(
             WfPlanningTaskSnapshot(
                 planning_id=planning.id,
                 uid=task.uid,
-                id_display=task.id_display,
                 structure_key=task.structure_key,
                 structure_kind=task.structure_kind,
                 parent_uid=None,
@@ -233,7 +232,6 @@ def create_planning(
             WfPlanningTaskSnapshot(
                 planning_id=planning.id,
                 uid=task.uid,
-                id_display=task.id_display,
                 structure_key=task.structure_key,
                 structure_kind=task.structure_kind,
                 parent_uid=None,
@@ -841,7 +839,6 @@ def reopen_planning_structure(
         WfPlanningTaskSnapshot(
             planning_id=planning.id,
             uid=task.uid,
-            id_display=task.id_display,
             structure_key=task.structure_key,
             structure_kind=task.structure_kind,
             parent_uid=None,

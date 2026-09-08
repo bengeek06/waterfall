@@ -61,7 +61,6 @@ def _full_restore_payload(payload: dict[str, Any], expected_revision: int) -> di
         "tasks": [
             {
                 "uid": task["uid"],
-                "id_display": task.get("id_display"),
                 "structure_key": task.get("structure_key"),
                 "structure_kind": task.get("structure_kind"),
                 "parent_uid": task.get("parent_uid"),
@@ -104,7 +103,6 @@ def _full_restore_payload(payload: dict[str, Any], expected_revision: int) -> di
 def _task_payload(uid: int, name: str, **overrides: Any) -> dict[str, Any]:
     payload = {
         "uid": uid,
-        "id_display": None,
         "structure_key": None,
         "structure_kind": None,
         "parent_uid": None,
@@ -217,7 +215,6 @@ def test_restore_recreates_a_cascade_deleted_subtree_exactly() -> None:
                 "tasks": [
                     {
                         "uid": task["uid"],
-                        "id_display": task["id_display"],
                         "structure_key": task["structure_key"],
                         "structure_kind": task["structure_kind"],
                         "parent_uid": task["parent_uid"],
@@ -432,7 +429,6 @@ def test_restore_preserves_task_type() -> None:
         tasks = [
             {
                 "uid": task["uid"],
-                "id_display": task.get("id_display"),
                 "structure_key": task.get("structure_key"),
                 "structure_kind": task.get("structure_kind"),
                 "parent_uid": task.get("parent_uid"),

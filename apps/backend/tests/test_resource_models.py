@@ -66,7 +66,6 @@ def _seed_resource_graph() -> tuple[int, int, int]:
         task = MsTask(
             project_id=project.id,
             uid=1,
-            id_display=1,
             name="Implementation",
             task_type=0,
             outline_number="1",

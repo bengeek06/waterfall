@@ -167,14 +167,7 @@ def generate_planning_structure(
         .order_by(MsTask.uid.desc())
         .first()
     )
-    max_id = (
-        db.query(MsTask.id_display)
-        .filter(MsTask.project_id == project.id)
-        .order_by(MsTask.id_display.desc())
-        .first()
-    )
     next_uid = (max_uid[0] if max_uid else 0) + 1
-    next_id = (max_id[0] if max_id and max_id[0] is not None else 0) + 1
     uid_by_key: dict[str, int] = {}
     tasks: list[MsTask] = []
 
@@ -184,13 +177,11 @@ def generate_planning_structure(
             task = MsTask(
                 project_id=project.id,
                 uid=next_uid,
-                id_display=next_id,
                 structure_key=node.key,
                 task_type=0,
             )
             db.add(task)
             next_uid += 1
-            next_id += 1
         task.structure_kind = node.kind
         task.parent_uid = uid_by_key.get(node.parent_key) if node.parent_key else None
         task.position = node.position
@@ -334,7 +325,6 @@ def _create_or_update_node_snapshots(
             task = WfPlanningTaskSnapshot(
                 planning_id=planning.id,
                 uid=max_uid,
-                id_display=max_uid,
                 structure_key=node.key,
                 notes=None,
             )
@@ -344,7 +334,6 @@ def _create_or_update_node_snapshots(
             task = WfPlanningTaskSnapshot(
                 planning_id=planning.id,
                 uid=source_task.uid,
-                id_display=source_task.id_display,
                 structure_key=node.key,
                 notes=source_task.notes,
             )

@@ -192,10 +192,157 @@ def test_migration_upgrade_creates_expected_schema() -> None:
             role_columns = {column["name"] for column in inspector.get_columns("wf_resource_role")}
             assert "code" not in role_columns
 
+            task_columns = {column["name"] for column in inspector.get_columns("ms_task")}
+            assert "id_display" not in task_columns
+            snapshot_columns = {
+                column["name"] for column in inspector.get_columns("wf_planning_task_snapshot")
+            }
+            assert "id_display" not in snapshot_columns
+            task_index_names = {index["name"] for index in inspector.get_indexes("ms_task")}
+            assert "idx_ms_task_project_id_display" not in task_index_names
+
+            assert (
+                connection.scalar(text("SELECT version_num FROM alembic_version"))
+                == "20260908_0008"
+            )
+
+
+def test_task_id_display_removal_migration_upgrade_with_existing_data() -> None:
+    """E9-01 (#146): the migration must apply cleanly on a database that already has
+    ms_task/wf_planning_task_snapshot rows carrying non-null id_display values, and
+    must drop both the column and its supporting index."""
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "migration.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        _run_alembic(database_url, "20260906_0007")
+
+        with _disposable_engine(database_url) as engine, engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO ms_project (id, source_version, save_version_out, name, "
+                    "schedule_from_start, start_date, minutes_per_day, minutes_per_week, "
+                    "days_per_month, status, created_at, updated_at) VALUES (1, 2016, 16, "
+                    "'Project', 1, '2026-01-01', 480, 2400, 20, 'cree', "
+                    "'2026-01-01 00:00:00', '2026-01-01 00:00:00')"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO ms_task (id, project_id, uid, id_display, name, is_summary, "
+                    "is_milestone, created_at, updated_at) VALUES (1, 1, 1, 42, 'Task', 0, 0, "
+                    "'2026-01-01 00:00:00', '2026-01-01 00:00:00')"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO wf_planning (id, project_id, version_number, status, revision, "
+                    "created_at) VALUES (1, 1, 1, 'draft', 0, '2026-01-01 00:00:00')"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO wf_planning_task_snapshot (id, planning_id, uid, id_display, "
+                    "name, is_summary, is_milestone) VALUES (1, 1, 1, 7, 'Snapshot', 0, 0)"
+                )
+            )
+
+        _run_alembic(database_url, "head")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            inspector = inspect(connection)
+            task_columns = {column["name"] for column in inspector.get_columns("ms_task")}
+            assert "id_display" not in task_columns
+            snapshot_columns = {
+                column["name"] for column in inspector.get_columns("wf_planning_task_snapshot")
+            }
+            assert "id_display" not in snapshot_columns
+            task_index_names = {index["name"] for index in inspector.get_indexes("ms_task")}
+            assert "idx_ms_task_project_id_display" not in task_index_names
+
+            assert connection.scalar(text("SELECT uid FROM ms_task")) == 1
+            assert connection.scalar(text("SELECT uid FROM wf_planning_task_snapshot")) == 1
+
+
+def test_task_id_display_removal_migration_is_reversible() -> None:
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "migration.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        _run_alembic(database_url, "head")
+        _downgrade_alembic(database_url, "20260906_0007")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            inspector = inspect(connection)
+            task_columns = {column["name"] for column in inspector.get_columns("ms_task")}
+            assert "id_display" in task_columns
+            snapshot_columns = {
+                column["name"] for column in inspector.get_columns("wf_planning_task_snapshot")
+            }
+            assert "id_display" in snapshot_columns
+            task_index_names = {index["name"] for index in inspector.get_indexes("ms_task")}
+            assert "idx_ms_task_project_id_display" in task_index_names
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
                 == "20260906_0007"
             )
+
+        _run_alembic(database_url, "head")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            inspector = inspect(connection)
+            task_columns = {column["name"] for column in inspector.get_columns("ms_task")}
+            assert "id_display" not in task_columns
+
+
+def test_postgres_task_id_display_removal_migration_upgrade_and_downgrade(
+    postgres_database_url: str,
+) -> None:
+    """PostgreSQL variant of the id_display removal round trip (#146/E9-01)."""
+    _run_alembic(postgres_database_url, "20260906_0007")
+
+    with _disposable_engine(postgres_database_url) as engine, engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO users (email, hashed_password, is_active, is_admin, "
+                "token_version, failed_login_attempts, created_at, updated_at) VALUES "
+                "('e9-01-migration@example.com', 'x', true, true, 0, 0, now(), now())"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO ms_project (owner_id, source_version, save_version_out, name, "
+                "schedule_from_start, start_date, minutes_per_day, minutes_per_week, "
+                "days_per_month, status, created_at, updated_at) VALUES ("
+                "(SELECT id FROM users WHERE email = 'e9-01-migration@example.com'), "
+                "2016, 16, 'Project', true, now(), 480, 2400, 20, 'cree', now(), now())"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO ms_task (project_id, uid, id_display, name, is_summary, "
+                "is_milestone, created_at, updated_at) VALUES "
+                "((SELECT id FROM ms_project LIMIT 1), 1, 42, 'Task', false, false, "
+                "now(), now())"
+            )
+        )
+
+    _run_alembic(postgres_database_url, "head")
+
+    with _disposable_engine(postgres_database_url) as engine, engine.connect() as connection:
+        inspector = inspect(connection)
+        task_columns = {column["name"] for column in inspector.get_columns("ms_task")}
+        assert "id_display" not in task_columns
+        task_index_names = {index["name"] for index in inspector.get_indexes("ms_task")}
+        assert "idx_ms_task_project_id_display" not in task_index_names
+        assert connection.scalar(text("SELECT uid FROM ms_task")) == 1
+
+    _downgrade_alembic(postgres_database_url, "20260906_0007")
+
+    with _disposable_engine(postgres_database_url) as engine, engine.connect() as connection:
+        inspector = inspect(connection)
+        task_columns = {column["name"] for column in inspector.get_columns("ms_task")}
+        assert "id_display" in task_columns
+        task_index_names = {index["name"] for index in inspector.get_indexes("ms_task")}
+        assert "idx_ms_task_project_id_display" in task_index_names
 
 
 def test_migration_creates_calendar_tables_and_seeds_standard_calendar() -> None:
@@ -328,7 +475,7 @@ def test_calendar_default_flag_migration_backfills_standard_and_enforces_uniquen
 
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260906_0007"
+                == "20260908_0008"
             )
 
         # STANDARD is already backfilled to is_default=1 above, so a second row
@@ -811,7 +958,7 @@ def _assert_create_all_schema_can_be_stamped_by_migrate_up(database_url: str) ->
     _run_alembic(database_url, "head")
 
     with _disposable_engine(database_url) as engine, engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260906_0007"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260908_0008"
         standard = connection.execute(
             text("SELECT id, is_active, is_default FROM wf_calendar WHERE code = 'STANDARD'")
         ).one()
@@ -931,7 +1078,7 @@ def test_legacy_prepare_reuses_empty_alembic_version_table() -> None:
         with _disposable_engine(database_url) as engine, engine.connect() as connection:
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260906_0007"
+                == "20260908_0008"
             )
 
 
@@ -959,7 +1106,7 @@ def test_create_all_schema_before_planning_revision_is_repaired_then_migrated() 
         with _disposable_engine(database_url) as engine, engine.connect() as connection:
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260906_0007"
+                == "20260908_0008"
             )
             planning_columns = {
                 column["name"] for column in inspect(connection).get_columns("wf_planning")
@@ -1066,7 +1213,7 @@ def test_schema_revision_check_rejects_database_behind_head() -> None:
             assert_database_schema_current(engine)
 
     assert error.value.current_revision == "20260901_0005"
-    assert error.value.expected_revision == "20260906_0007"
+    assert error.value.expected_revision == "20260908_0008"
     assert "Run `make migrate-up`" in str(error.value)
 
 
@@ -1112,7 +1259,7 @@ def test_postgres_migration_upgrade_head_succeeds(postgres_database_url: str) ->
             "wf_estimate",
             "wf_estimate_task_row",
         }.issubset(table_names)
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260906_0007"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260908_0008"
 
 
 def test_postgres_project_external_uid_accepts_canonical_guid(

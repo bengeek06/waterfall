@@ -123,7 +123,7 @@ const detail = (version: Planning): PlanningDetail => ({
       id: 10,
       project_id: 1,
       uid: 10,
-      id_display: 10,
+      row_number: 0,
       structure_key: "post/lot/deliverable",
       structure_kind: "livrable",
       parent_uid: null,
@@ -515,7 +515,7 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     const emptyDetail: PlanningDetail = { ...draftAfterSkip, tasks: [], links: [] };
     const updatedDetail: PlanningDetail = {
       ...draftAfterSkip,
-      tasks: [{ ...detail(draftAfterSkip).tasks[0], uid: 11, id_display: 11, name: "Première tâche", position: 1 }],
+      tasks: [{ ...detail(draftAfterSkip).tasks[0], uid: 11, name: "Première tâche", position: 1 }],
       links: [],
     };
     mocks.getProject.mockResolvedValue(project());
@@ -566,7 +566,7 @@ describe("ProjectDetailsPage planning lifecycle", () => {
           id: 20,
           project_id: 1,
           uid: 20,
-          id_display: 20,
+          row_number: 0,
           structure_key: "post/lot/deliverable",
           structure_kind: "livrable",
           parent_uid: null,
@@ -587,7 +587,7 @@ describe("ProjectDetailsPage planning lifecycle", () => {
           id: 21,
           project_id: 1,
           uid: 21,
-          id_display: 21,
+          row_number: 0,
           structure_key: null,
           structure_kind: null,
           parent_uid: null,
@@ -1321,8 +1321,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     const siblingsDetail: PlanningDetail = {
       ...draft,
       tasks: [
-        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second", position: 2, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, name: "Second", position: 2, parent_uid: null },
       ],
       links: [],
     };
@@ -1330,8 +1330,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
       ...draft,
       revision: 1,
       tasks: [
-        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 2, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, name: "Second", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 10, name: "Premier", position: 2, parent_uid: null },
       ],
       links: [],
     };
@@ -1339,8 +1339,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
       ...draft,
       revision: 2,
       tasks: [
-        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second", position: 2, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, name: "Second", position: 2, parent_uid: null },
       ],
       links: [],
     };
@@ -1391,8 +1391,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     const detailA: PlanningDetail = {
       ...draftA,
       tasks: [
-        { ...detail(draftA).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
-        { ...detail(draftA).tasks[0], uid: 11, id_display: 11, name: "Second", position: 2, parent_uid: null },
+        { ...detail(draftA).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draftA).tasks[0], uid: 11, name: "Second", position: 2, parent_uid: null },
       ],
       links: [],
     };
@@ -1440,8 +1440,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     const detailA: PlanningDetail = {
       ...draftA,
       tasks: [
-        { ...detail(draftA).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
-        { ...detail(draftA).tasks[0], uid: 11, id_display: 11, name: "Second", position: 2, parent_uid: null },
+        { ...detail(draftA).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draftA).tasks[0], uid: 11, name: "Second", position: 2, parent_uid: null },
       ],
       links: [],
     };
@@ -1481,8 +1481,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     const siblingsDetail: PlanningDetail = {
       ...draft,
       tasks: [
-        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second", position: 2, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, name: "Second", position: 2, parent_uid: null },
       ],
       links: [],
     };
@@ -1490,8 +1490,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
       ...draft,
       revision: 1,
       tasks: [
-        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 2, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, name: "Second", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 10, name: "Premier", position: 2, parent_uid: null },
       ],
       links: [],
     };
@@ -1499,8 +1499,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
       ...draft,
       revision: 2,
       tasks: [
-        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second", position: 2, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, name: "Second", position: 2, parent_uid: null },
       ],
       links: [],
     };
@@ -1549,8 +1549,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     const siblingsDetail: PlanningDetail = {
       ...draft,
       tasks: [
-        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second", position: 2, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, name: "Second", position: 2, parent_uid: null },
       ],
       links: [],
     };
@@ -1558,8 +1558,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
       ...draft,
       revision: 1,
       tasks: [
-        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier rechargé", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second rechargé", position: 2, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 10, name: "Premier rechargé", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, name: "Second rechargé", position: 2, parent_uid: null },
       ],
       links: [],
     };
@@ -1602,8 +1602,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     const siblingsDetail: PlanningDetail = {
       ...draft,
       tasks: [
-        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second", position: 2, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, name: "Second", position: 2, parent_uid: null },
       ],
       links: [],
     };
@@ -1611,8 +1611,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
       ...draft,
       revision: 1,
       tasks: [
-        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 2, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, name: "Second", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 10, name: "Premier", position: 2, parent_uid: null },
       ],
       links: [],
     };
@@ -1642,8 +1642,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     const siblingsDetail: PlanningDetail = {
       ...draft,
       tasks: [
-        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second", position: 2, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, name: "Second", position: 2, parent_uid: null },
       ],
       links: [],
     };
@@ -1651,8 +1651,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
       ...draft,
       revision: 1,
       tasks: [
-        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier rechargé", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second rechargé", position: 2, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 10, name: "Premier rechargé", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, name: "Second rechargé", position: 2, parent_uid: null },
       ],
       links: [],
     };
@@ -1698,7 +1698,7 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     const draft = planning({ id: 2, status: "draft" });
     const initialDetail: PlanningDetail = {
       ...draft,
-      tasks: [{ ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Tâche éditable", duration_minutes: 480 }],
+      tasks: [{ ...detail(draft).tasks[0], uid: 10, name: "Tâche éditable", duration_minutes: 480 }],
       links: [],
     };
     const updatedDetail: PlanningDetail = {
@@ -1735,19 +1735,18 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     const siblingsDetail: PlanningDetail = {
       ...draft,
       tasks: [
-        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second", position: 2, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, name: "Second", position: 2, parent_uid: null },
       ],
       links: [],
     };
     const updatedDetail: PlanningDetail = {
       ...draft,
       tasks: [
-        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null },
         {
           ...detail(draft).tasks[0],
           uid: 11,
-          id_display: 11,
           name: "Second",
           position: 2,
           parent_uid: null,
@@ -1791,7 +1790,7 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     const draftB = planning({ id: 6, status: "draft", version_number: 2 });
     const detailA: PlanningDetail = {
       ...draftA,
-      tasks: [{ ...detail(draftA).tasks[0], uid: 10, id_display: 10, name: "Tâche éditable", duration_minutes: 480 }],
+      tasks: [{ ...detail(draftA).tasks[0], uid: 10, name: "Tâche éditable", duration_minutes: 480 }],
       links: [],
     };
     const detailB = detail(draftB);
@@ -1839,8 +1838,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     const siblingsDetail: PlanningDetail = {
       ...draft,
       tasks: [
-        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second", position: 2, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, name: "Second", position: 2, parent_uid: null },
       ],
       links: [],
     };
@@ -1875,8 +1874,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     const detailA: PlanningDetail = {
       ...draftA,
       tasks: [
-        { ...detail(draftA).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
-        { ...detail(draftA).tasks[0], uid: 11, id_display: 11, name: "Second", position: 2, parent_uid: null },
+        { ...detail(draftA).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draftA).tasks[0], uid: 11, name: "Second", position: 2, parent_uid: null },
       ],
       links: [],
     };
@@ -1927,14 +1926,14 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     const draft = planning({ id: 2, status: "draft" });
     const initialDetail: PlanningDetail = {
       ...draft,
-      tasks: [{ ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Tâche existante" }],
+      tasks: [{ ...detail(draft).tasks[0], uid: 10, name: "Tâche existante" }],
       links: [],
     };
     const updatedDetail: PlanningDetail = {
       ...draft,
       tasks: [
         ...initialDetail.tasks,
-        { ...initialDetail.tasks[0], uid: 11, id_display: 11, name: "Nouvelle tâche", position: 2 },
+        { ...initialDetail.tasks[0], uid: 11, name: "Nouvelle tâche", position: 2 },
       ],
       links: [],
     };
@@ -1973,8 +1972,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     const initialDetail: PlanningDetail = {
       ...draft,
       tasks: [
-        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "À conserver", position: 1 },
-        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "À supprimer", position: 2 },
+        { ...detail(draft).tasks[0], uid: 10, name: "À conserver", position: 1 },
+        { ...detail(draft).tasks[0], uid: 11, name: "À supprimer", position: 2 },
       ],
       links: [],
     };
@@ -2012,7 +2011,7 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     const draftB = planning({ id: 6, status: "draft", version_number: 2 });
     const detailA: PlanningDetail = {
       ...draftA,
-      tasks: [{ ...detail(draftA).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null }],
+      tasks: [{ ...detail(draftA).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null }],
       links: [],
     };
     const detailB = detail(draftB);
@@ -2062,8 +2061,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     const detailA: PlanningDetail = {
       ...draftA,
       tasks: [
-        { ...detail(draftA).tasks[0], uid: 10, id_display: 10, name: "Poste", position: 1, parent_uid: null, is_summary: true },
-        { ...detail(draftA).tasks[0], uid: 11, id_display: 11, name: "Lot", position: 1, parent_uid: 10 },
+        { ...detail(draftA).tasks[0], uid: 10, name: "Poste", position: 1, parent_uid: null, is_summary: true },
+        { ...detail(draftA).tasks[0], uid: 11, name: "Lot", position: 1, parent_uid: 10 },
       ],
       links: [],
     };

@@ -102,7 +102,6 @@ describe("snapshotFromPlanningDetail", () => {
           id: 1,
           project_id: 1,
           uid: 10,
-          id_display: 10,
           structure_key: "1",
           structure_kind: "task",
           parent_uid: null,
@@ -133,7 +132,6 @@ describe("snapshotFromPlanningDetail", () => {
     expect(snapshot.tasks).toEqual([
       {
         uid: 10,
-        id_display: 10,
         structure_key: "1",
         structure_kind: "task",
         parent_uid: null,

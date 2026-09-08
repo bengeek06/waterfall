@@ -1496,7 +1496,6 @@ export interface components {
         };
         PlanningTaskSnapshotWrite: {
             uid: number;
-            id_display: number | null;
             structure_key: string | null;
             /** @enum {string|null} */
             structure_kind: "poste" | "lot" | "livrable" | "milestone" | "task" | null;
@@ -1542,7 +1541,8 @@ export interface components {
             id: number;
             project_id: number;
             uid: number;
-            id_display?: number | null;
+            /** @description Rank of the task in the planning's current display order (flattened depth-first walk, siblings sorted the same way as `outline_number`). Recomputed on every read, never stored -- it changes whenever the task is moved, reparented, or another task is created/deleted ahead of it. Read-only: this field cannot be set by clients. */
+            readonly row_number: number;
             structure_key?: string | null;
             /** @enum {string|null} */
             structure_kind?: "poste" | "lot" | "livrable" | "milestone" | "task" | null;

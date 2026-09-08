@@ -388,7 +388,7 @@ export function PlanningTreeTable({
                     onFocus={() => selection.setFocusedUid(row.uid)}
                     onKeyDown={(event) => selection.onRowKeyDown(event, row)}
                   >
-                    <TableCell>{row.id_display ?? row.uid}</TableCell>
+                    <TableCell>{row.uid}</TableCell>
                     <TableCell className="overflow-hidden">
                       <div
                         className="flex min-w-0 items-center gap-1"
