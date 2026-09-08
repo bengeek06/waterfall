@@ -31,10 +31,12 @@ function task(overrides: Partial<Task>): Task {
   };
 }
 
+// row_number deliberately distinct from uid (not e.g. row_number = uid) so any assertion that
+// checks displayed row_number text cannot pass by accident against a leftover uid display.
 const threeLevelTasks: Task[] = [
-  task({ uid: 1, name: "Poste", parent_uid: null, position: 1, is_summary: true }),
-  task({ uid: 2, name: "Lot", parent_uid: 1, position: 1, is_summary: true }),
-  task({ uid: 3, name: "Livrable", parent_uid: 2, position: 1 }),
+  task({ uid: 1, row_number: 91, name: "Poste", parent_uid: null, position: 1, is_summary: true }),
+  task({ uid: 2, row_number: 92, name: "Lot", parent_uid: 1, position: 1, is_summary: true }),
+  task({ uid: 3, row_number: 93, name: "Livrable", parent_uid: 2, position: 1 }),
 ];
 
 describe("PlanningTreeTable", () => {
@@ -46,6 +48,28 @@ describe("PlanningTreeTable", () => {
     expect(screen.getByText("Poste")).toBeInTheDocument();
     expect(screen.getByText("Lot")).toBeInTheDocument();
     expect(screen.getByText("Livrable")).toBeInTheDocument();
+  });
+
+  it("labels the ID column 'ID' (not 'UID') and shows each task's row_number, not its uid", () => {
+    // uid and row_number are deliberately given unrelated values (rather than e.g. row_number =
+    // uid) so this test cannot pass by accident if the cell were still reading `row.uid` (E9-04).
+    const tasks: Task[] = [
+      task({ uid: 5, row_number: 42, name: "Première", parent_uid: null, position: 1 }),
+      task({ uid: 7, row_number: 43, name: "Seconde", parent_uid: null, position: 2 }),
+    ];
+    render(<PlanningTreeTable tasks={tasks} versionKey={1} />);
+
+    // The column header's accessible name also picks up its resize handle's own aria-label
+    // ("Redimensionner la colonne ID"), so this matches on the leading label text rather than an
+    // exact "ID" string.
+    expect(screen.getByRole("columnheader", { name: /^ID/ })).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: /UID/ })).not.toBeInTheDocument();
+
+    const rows = screen.getAllByRole("row").slice(1);
+    expect(within(rows[0]).getByText("42")).toBeInTheDocument();
+    expect(within(rows[0]).queryByText("5")).not.toBeInTheDocument();
+    expect(within(rows[1]).getByText("43")).toBeInTheDocument();
+    expect(within(rows[1]).queryByText("7")).not.toBeInTheDocument();
   });
 
   it("shows an empty state when the planning has no task", () => {
@@ -707,10 +731,20 @@ describe("PlanningTreeTable", () => {
   });
 
   it("formats a predecessor's lag using the project's own calendar instead of raw minutes", () => {
+    // The predecessor's uid (1) and row_number (99) are deliberately unrelated, so this test
+    // cannot pass by accident if the label were still built from the raw predecessor_uid (E9-04).
     const tasks: Task[] = [
-      task({ uid: 1, name: "Prédécesseur", parent_uid: null, position: 1, predecessor_links: [] }),
+      task({
+        uid: 1,
+        row_number: 99,
+        name: "Prédécesseur",
+        parent_uid: null,
+        position: 1,
+        predecessor_links: [],
+      }),
       task({
         uid: 2,
+        row_number: 2,
         name: "Successeur",
         parent_uid: null,
         position: 2,
@@ -719,6 +753,7 @@ describe("PlanningTreeTable", () => {
       }),
       task({
         uid: 3,
+        row_number: 3,
         name: "Successeur négatif",
         parent_uid: null,
         position: 3,
@@ -729,8 +764,26 @@ describe("PlanningTreeTable", () => {
     ];
     render(<PlanningTreeTable tasks={tasks} versionKey={1} />);
 
-    expect(screen.getByText("1 (FS +1j)")).toBeInTheDocument();
-    expect(screen.getByText("1 (FF -1j)")).toBeInTheDocument();
+    expect(screen.getByText("99 (FS +1j)")).toBeInTheDocument();
+    expect(screen.getByText("99 (FF -1j)")).toBeInTheDocument();
+  });
+
+  it("falls back to '?' for a predecessor label when the predecessor_uid has no resolvable row_number", () => {
+    // This should never happen in practice (every predecessor_uid should reference a task in the
+    // same planning), but must degrade gracefully rather than crash.
+    const tasks: Task[] = [
+      task({
+        uid: 2,
+        row_number: 2,
+        name: "Successeur orphelin",
+        parent_uid: null,
+        position: 1,
+        predecessor_links: [{ predecessor_uid: 999, link_type: 1, lag_tenth_minute: 0 }],
+      }),
+    ];
+    render(<PlanningTreeTable tasks={tasks} versionKey={1} />);
+
+    expect(screen.getByText("? (FS)")).toBeInTheDocument();
   });
 
   it("does not commit a schedule edit on blur when nothing was typed", () => {
@@ -1354,6 +1407,36 @@ describe("PlanningTreeTable", () => {
       });
     });
 
+    // Regression test for #149 (E9-04): the predecessor-candidate <option> text must show
+    // row_number, never the technical uid -- uid/row_number deliberately distinct so this
+    // can't pass by accident. key/value stay uid (verified separately: they're what's sent
+    // to the API in the "submits every row..." test above, unaffected by this issue).
+    it("labels predecessor candidates with row_number, not uid, while still submitting by uid", () => {
+      const tasksWithCandidates: Task[] = [
+        task({ uid: 1, row_number: 41, name: "Poste", parent_uid: null, position: 1 }),
+        task({ uid: 2, row_number: 42, name: "Autre", parent_uid: null, position: 2 }),
+        task({ uid: 3, row_number: 43, name: "Lot", parent_uid: null, position: 3 }),
+      ];
+      const onEditLinks = vi.fn().mockResolvedValue(undefined);
+      render(<PlanningTreeTable tasks={tasksWithCandidates} versionKey={1} onEditLinks={onEditLinks} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Éditer les prédécesseurs de Lot" }));
+      fireEvent.click(screen.getByRole("button", { name: "Ajouter une ligne" }));
+
+      const predecessorSelect = screen.getByLabelText("Tâche prédécesseure");
+      expect(within(predecessorSelect).getByRole("option", { name: "41 - Poste" })).toBeInTheDocument();
+      expect(within(predecessorSelect).getByRole("option", { name: "42 - Autre" })).toBeInTheDocument();
+      expect(within(predecessorSelect).queryByRole("option", { name: "1 - Poste" })).not.toBeInTheDocument();
+
+      fireEvent.change(predecessorSelect, { target: { value: "1" } });
+      fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+
+      expect(onEditLinks).toHaveBeenCalledWith({
+        taskUid: 3,
+        links: [{ predecessor_uid: 1, link_type: 1, lag_tenth_minute: 0, lag_format: 7 }],
+      });
+    });
+
     it("defaults a newly added row's lag_format to 7, even when the lag is left at its default of 0", () => {
       const onEditLinks = vi.fn().mockResolvedValue(undefined);
       const tasksWithoutLinks: Task[] = [
@@ -1654,8 +1737,12 @@ describe("PlanningTreeTable", () => {
       fireEvent.click(screen.getByRole("button", { name: "Supprimer la sélection" }));
 
       const alertDialog = await screen.findByRole("alertdialog");
-      expect(within(alertDialog).getByText(/Lot/)).toBeInTheDocument();
-      expect(within(alertDialog).getByText(/Livrable/)).toBeInTheDocument();
+      // Matches the full "row_number - name" substring, not just a name regex: row_number
+      // (92/93) is deliberately distinct from uid (2/3) on threeLevelTasks, so this can't pass
+      // against a leftover uid display (#149/E9-04's describeCascadeDescendants). The dialog
+      // renders one joined sentence, hence a substring regex rather than an exact match.
+      expect(within(alertDialog).getByText(/92 - Lot/)).toBeInTheDocument();
+      expect(within(alertDialog).getByText(/93 - Livrable/)).toBeInTheDocument();
 
       fireEvent.click(within(alertDialog).getByRole("button", { name: "Annuler" }));
 
