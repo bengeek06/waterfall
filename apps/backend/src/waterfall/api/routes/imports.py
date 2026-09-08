@@ -22,7 +22,6 @@ from waterfall.models.user import User
 from waterfall.models.wf_core import WfImportBatch
 from waterfall.schemas.imports import (
     BatchStatus,
-    ErrorResponse,
     ImportBatchCreateRequest,
     ImportBatchResponse,
     ImportBatchStatusResponse,
@@ -35,6 +34,7 @@ from waterfall.schemas.imports import (
     ImportRunAcceptedResponse,
     ImportRunRequest,
 )
+from waterfall.schemas.projects import FastAPIErrorResponse
 from waterfall.services.import_diff import build_import_diff
 from waterfall.services.msproject_xml import (
     MsProjectValidationError,
@@ -180,7 +180,7 @@ def _planning_counters(db: Session, planning_id: int) -> tuple[int, int]:
     "",
     response_model=ImportBatchResponse,
     status_code=status.HTTP_201_CREATED,
-    responses={400: {"model": ErrorResponse}, 401: {"model": ErrorResponse}},
+    responses={400: {"model": FastAPIErrorResponse}, 401: {"model": FastAPIErrorResponse}},
 )
 def create_batch(
     payload: ImportBatchCreateRequest,
@@ -221,9 +221,9 @@ def create_batch(
     response_model=ImportBatchResponse,
     status_code=status.HTTP_202_ACCEPTED,
     responses={
-        400: {"model": ErrorResponse},
-        401: {"model": ErrorResponse},
-        404: {"model": ErrorResponse},
+        400: {"model": FastAPIErrorResponse},
+        401: {"model": FastAPIErrorResponse},
+        404: {"model": FastAPIErrorResponse},
     },
 )
 async def upload_xml(
@@ -525,10 +525,10 @@ def _run_confirmed_import(
     response_model=ImportRunAcceptedResponse,
     status_code=status.HTTP_202_ACCEPTED,
     responses={
-        400: {"model": ErrorResponse},
-        401: {"model": ErrorResponse},
-        404: {"model": ErrorResponse},
-        409: {"model": ErrorResponse},
+        400: {"model": FastAPIErrorResponse},
+        401: {"model": FastAPIErrorResponse},
+        404: {"model": FastAPIErrorResponse},
+        409: {"model": FastAPIErrorResponse},
     },
 )
 def run_batch(
@@ -618,7 +618,7 @@ def get_batch_diff(
 @router.get(
     "/{batch_id}",
     response_model=ImportBatchStatusResponse,
-    responses={401: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+    responses={401: {"model": FastAPIErrorResponse}, 404: {"model": FastAPIErrorResponse}},
 )
 def get_batch(
     batch_id: int,
@@ -667,7 +667,7 @@ def get_batch(
 @router.get(
     "/{batch_id}/errors",
     response_model=ImportErrorListResponse,
-    responses={401: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+    responses={401: {"model": FastAPIErrorResponse}, 404: {"model": FastAPIErrorResponse}},
 )
 def list_batch_errors(
     batch_id: int,

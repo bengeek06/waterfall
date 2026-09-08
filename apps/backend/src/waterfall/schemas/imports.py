@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -111,9 +111,3 @@ class ImportBatchStatusResponse(ImportBatchResponse):
     project_id: int | None = Field(default=None, alias="projectId")
     counters: ImportCounters
     warnings: list[ImportIssue]
-
-
-class ErrorResponse(BaseModel):
-    error: str
-    message: str
-    details: dict[str, Any] | None = None

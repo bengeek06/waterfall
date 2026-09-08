@@ -139,13 +139,13 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/FastAPIErrorResponse'
         '429':
           description: Trop de tentatives de connexion
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/FastAPIErrorResponse'
   /auth/refresh:
     post:
       tags:
@@ -432,13 +432,13 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/FastAPIErrorResponse'
         '415':
           description: Media type non supporte
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/FastAPIErrorResponse'
   /imports/v1/batches/{batchId}/run:
     post:
       tags:
@@ -473,7 +473,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/FastAPIErrorResponse'
   /imports/v1/batches/{batchId}/diff:
     get:
       tags:
@@ -3049,20 +3049,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ImportIssue'
-    ErrorResponse:
-      type: object
-      required:
-        - error
-        - message
-      properties:
-        error:
-          type: string
-          example: INVALID_XML
-        message:
-          type: string
-        details:
-          type: object
-          additionalProperties: true
     FastAPIErrorResponse:
       type: object
       required:

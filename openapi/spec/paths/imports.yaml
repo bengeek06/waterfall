@@ -64,13 +64,13 @@
         content:
           application/json:
             schema:
-              $ref: ../components/schemas/ErrorResponse.yaml
+              $ref: ../components/schemas/FastAPIErrorResponse.yaml
       '413':
         description: Fichier XML trop volumineux
         content:
           application/json:
             schema:
-              $ref: ../components/schemas/ErrorResponse.yaml
+              $ref: ../components/schemas/FastAPIErrorResponse.yaml
 /imports/v1/batches/{batchId}/run:
   post:
     tags:
@@ -105,7 +105,7 @@
         content:
           application/json:
             schema:
-              $ref: ../components/schemas/ErrorResponse.yaml
+              $ref: ../components/schemas/FastAPIErrorResponse.yaml
 /imports/v1/batches/{batchId}/diff:
   get:
     tags:

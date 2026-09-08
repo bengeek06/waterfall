@@ -395,8 +395,8 @@ def test_generic_error_responses_document_fastapi_error_shape() -> None:
     raise `HTTPException`, which always serializes through `_generic_http_exception_handler`
     into `{"detail": ...}` (see test_error_handler.py) -- never the unrelated `{error,
     message}` shape of `ErrorResponse`. Guards against a future edit silently repointing one
-    of these back to `ErrorResponse` (e.g. by copy-pasting one of the 5 still-legitimate
-    `ErrorResponse` usages left in imports.yaml/auth.yaml, tracked separately on #232)."""
+    of these back to `ErrorResponse` (e.g. by copy-pasting the pattern from an inline response
+    that hasn't been migrated yet)."""
     raw_document: object = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
     static_document = cast(dict[str, Any], raw_document)
     static_responses = cast(dict[str, Any], static_document["components"])["responses"]
@@ -419,6 +419,52 @@ def test_generic_error_responses_document_fastapi_error_shape() -> None:
             "$ref"
         ]
         assert schema_ref == "#/components/schemas/FastAPIErrorResponse", response_name
+
+
+def test_inline_error_responses_document_fastapi_error_shape_and_error_response_is_gone() -> None:
+    """Issue #232: the 5 remaining inline (not shared-component) responses that still
+    referenced `ErrorResponse` after #223 -- upload-time 413/415, run-time 409 on the imports
+    batch endpoints, and login-time 423/429 on /auth/token -- all originate from routes that
+    raise `HTTPException` (`imports.py`, `auth.py`), except 415 which is documented but never
+    actually raised by any route today (a pre-existing orphan, tracked separately). Every one
+    of these serializes the same `{"detail": ...}` shape as every other error response in this
+    API. With these fixed, `ErrorResponse` has no remaining usage anywhere in the spec (nor in
+    the `responses={"model": ...}` metadata of any FastAPI route decorator, which independently
+    feeds `app.openapi()`/`/docs` and is not derived from the static spec at all) and was
+    removed entirely -- schema file, `components.schemas` registration, and the orphaned
+    `ErrorResponse` Pydantic model in `schemas/imports.py` -- rather than left as a dead,
+    misleading document fixture."""
+    raw_document: object = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
+    static_document = cast(dict[str, Any], raw_document)
+    static_paths = cast(dict[str, Any], static_document["paths"])
+    static_components = cast(dict[str, Any], static_document["components"])
+
+    for path, method, status_code in (
+        ("/imports/v1/batches/{batchId}/xml", "post", "413"),
+        ("/imports/v1/batches/{batchId}/xml", "post", "415"),
+        ("/imports/v1/batches/{batchId}/run", "post", "409"),
+        ("/auth/token", "post", "423"),
+        ("/auth/token", "post", "429"),
+    ):
+        schema_ref = static_paths[path][method]["responses"][status_code]["content"][
+            "application/json"
+        ]["schema"]["$ref"]
+        assert schema_ref == "#/components/schemas/FastAPIErrorResponse", (
+            path,
+            method,
+            status_code,
+        )
+
+    assert "ErrorResponse" not in static_components["schemas"]
+
+    # The static bundle isn't the only place this could regress: FastAPI route decorators
+    # declare their own `responses={status: {"model": ...}}` metadata independently, which
+    # feeds the *runtime* `app.openapi()` (and therefore `/docs`, `/openapi.json`) without ever
+    # touching the committed YAML. `imports.py`'s decorators referenced a distinct `ErrorResponse`
+    # Pydantic model (schemas/imports.py) that this same issue's fix also removed -- check the
+    # live schema, not just the static one, so this class of drift can't come back silently.
+    runtime_schemas = cast(dict[str, Any], app.openapi()["components"])["schemas"]
+    assert "ErrorResponse" not in runtime_schemas
 
 
 def test_generated_client_contains_every_static_operation() -> None:

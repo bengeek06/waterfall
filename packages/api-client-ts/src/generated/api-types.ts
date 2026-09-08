@@ -1405,14 +1405,6 @@ export interface components {
         ImportErrorListResponse: {
             items: components["schemas"]["ImportIssue"][];
         };
-        ErrorResponse: {
-            /** @example INVALID_XML */
-            error: string;
-            message: string;
-            details?: {
-                [key: string]: unknown;
-            };
-        };
         FastAPIErrorResponse: {
             detail: string | {
                 [key: string]: unknown;
@@ -2495,7 +2487,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["FastAPIErrorResponse"];
                 };
             };
             /** @description Trop de tentatives de connexion */
@@ -2504,7 +2496,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["FastAPIErrorResponse"];
                 };
             };
         };
@@ -2807,7 +2799,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["FastAPIErrorResponse"];
                 };
             };
             /** @description Media type non supporte */
@@ -2816,7 +2808,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["FastAPIErrorResponse"];
                 };
             };
         };
@@ -2855,7 +2847,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["FastAPIErrorResponse"];
                 };
             };
         };
