@@ -1130,6 +1130,11 @@ export default function ResourcesPage() {
       await action();
       setNotice({ kind: "success", message: success });
     } catch (cause) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
       setNotice({
         kind: "error",
         message: cause instanceof ApiError ? cause.message : "Opération impossible",
