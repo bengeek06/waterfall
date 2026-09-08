@@ -79,9 +79,17 @@ function formatValidationErrors(details: PydanticValidationErrorItem[]): string 
 
 type ParsedError = { message: string; detail?: unknown };
 
+// Generic French fallback shown whenever the backend detail code is either the catch-all
+// GENERIC_ERROR (see the global FastAPI exception handler, which rewrites any unstructured
+// `HTTPException.detail` to `{"code": "GENERIC_ERROR"}`) or a structured code this file does not
+// yet translate -- never fall back to the raw response text, which would leak untranslated
+// English or raw JSON to the user (see issue #137).
+const GENERIC_ERROR_MESSAGE = "Une erreur est survenue. Réessayez ou contactez le support si le problème persiste.";
+
 // Readable French copy for structured detail codes (PlanningTaskDeleteConflict's two codes, see
 // that generated schema, plus PLANNING_REVISION_CONFLICT shared by every versioned planning
-// mutation); anything else falls back to the raw response body via the caller in parseError.
+// mutation, and the two PLANNING_STRUCTURE_REOPEN_* codes raised by the structure reopen
+// endpoint); anything else falls back to GENERIC_ERROR_MESSAGE via the caller in parseError.
 function describeStructuredDetailCode(code: unknown): string | null {
   if (code === "CASCADE_CONFIRMATION_REQUIRED") {
     return "Cette tâche a des tâches enfants et nécessite une confirmation.";
@@ -91,6 +99,15 @@ function describeStructuredDetailCode(code: unknown): string | null {
   }
   if (code === "PLANNING_REVISION_CONFLICT") {
     return "Ce planning a été modifié entre-temps : recharge-le avant de réessayer.";
+  }
+  if (code === "PLANNING_STRUCTURE_REOPEN_REQUIRES_VALIDATION") {
+    return "Cette structure doit d'abord être validée avant de pouvoir être rouverte.";
+  }
+  if (code === "PLANNING_STRUCTURE_REOPEN_INTEGRITY_CONFLICT") {
+    return "Cette structure ne peut pas être rouverte : son intégrité a été compromise depuis sa validation.";
+  }
+  if (code === "GENERIC_ERROR") {
+    return GENERIC_ERROR_MESSAGE;
   }
   return null;
 }
@@ -116,7 +133,10 @@ async function parseError(response: Response): Promise<ParsedError> {
     // readable copy here, but also keep the raw object on ApiError.detail so a caller that needs
     // the structured fields (see getPlanningTaskDeleteConflict) does not have to re-parse it.
     if (payload.detail && typeof payload.detail === "object") {
-      return { message: describeStructuredDetailCode(payload.detail.code) ?? text, detail: payload.detail };
+      return {
+        message: describeStructuredDetailCode(payload.detail.code) ?? GENERIC_ERROR_MESSAGE,
+        detail: payload.detail,
+      };
     }
     return { message: payload.detail ?? payload.message ?? payload.error ?? text };
   } catch {
