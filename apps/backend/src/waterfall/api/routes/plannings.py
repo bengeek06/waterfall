@@ -815,7 +815,7 @@ def reopen_planning_structure(
     if source.status != "validated":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Planning reference must be validated",
+            detail={"code": "PLANNING_STRUCTURE_REOPEN_REQUIRES_VALIDATION"},
         )
     version_number = (
         db.query(func.max(WfPlanning.version_number))
@@ -896,7 +896,8 @@ def reopen_planning_structure(
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail="Planning reopen conflict"
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "PLANNING_STRUCTURE_REOPEN_INTEGRITY_CONFLICT"},
         ) from exc
     db.refresh(project)
     return to_project_read(project)

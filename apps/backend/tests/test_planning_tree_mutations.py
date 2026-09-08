@@ -324,10 +324,13 @@ def test_move_returns_400_when_no_usable_calendar_for_summary_recalculation() ->
             headers=headers,
         )
 
+        # The response body is now the generic, translatable error shape
+        # (issue #137): the underlying `PlanningTaskScheduleError` message --
+        # which does say "no usable working calendar" -- is still raised
+        # unchanged by the service layer, just no longer surfaced verbatim
+        # over HTTP.
         assert response.status_code == 400
-        detail = response.json()["detail"]
-        assert isinstance(detail, str)
-        assert "no usable working calendar" in detail
+        assert response.json()["detail"] == {"code": "GENERIC_ERROR"}
 
 
 def test_move_group_normalizes_selected_descendant_and_preserves_subtree_order() -> None:
@@ -428,11 +431,11 @@ def test_invalid_move_rolls_back_tree() -> None:
         assert cycle.status_code == 409
         cycle_payload = cast(dict[str, Any], cycle.json())
         assert set(cycle_payload) == {"detail"}
-        assert isinstance(cycle_payload["detail"], str)
+        assert cycle_payload["detail"] == {"code": "GENERIC_ERROR"}
         assert missing.status_code == 404
         missing_payload = cast(dict[str, Any], missing.json())
         assert set(missing_payload) == {"detail"}
-        assert isinstance(missing_payload["detail"], str)
+        assert missing_payload["detail"] == {"code": "GENERIC_ERROR"}
         assert _tasks_by_uid(cast(dict[str, Any], detail.json()))[3]["parent_uid"] == 1
 
 
@@ -455,7 +458,12 @@ def test_move_schema_validation_returns_bad_request() -> None:
             assert response.status_code == 400
             error_payload = cast(dict[str, Any], response.json())
             assert set(error_payload) == {"detail"}
-            assert isinstance(error_payload["detail"], list)
+            # The response body is now the generic, translatable error shape
+            # (issue #137): the underlying `RequestValidationError` list
+            # (raw Pydantic error dicts) is still what
+            # `_PlanningTaskBodyValidationRoute` catches, just no longer
+            # surfaced verbatim over HTTP.
+            assert error_payload["detail"] == {"code": "GENERIC_ERROR"}
 
 
 def test_move_recalculates_summary_invariants() -> None:
@@ -668,7 +676,7 @@ def test_move_recalculating_summary_with_near_date_max_child_returns_400_not_500
         )
 
         assert response.status_code == 400
-        assert isinstance(response.json()["detail"], str)
+        assert response.json()["detail"] == {"code": "GENERIC_ERROR"}
 
 
 def test_move_rejects_validated_planning_and_read_only_project() -> None:

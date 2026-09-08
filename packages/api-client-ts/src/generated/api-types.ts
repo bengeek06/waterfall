@@ -2317,6 +2317,15 @@ export interface components {
                 "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
+        /** @description Soit la reference de planning n'est pas validee, elle ne peut donc pas servir de base a la reouverture de la structure (code `PLANNING_STRUCTURE_REOPEN_REQUIRES_VALIDATION`), soit la reouverture entre en conflit avec les donnees existantes lors de l'enregistrement (code `PLANNING_STRUCTURE_REOPEN_INTEGRITY_CONFLICT`). */
+        ReopenPlanningStructureConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
+            };
+        };
     };
     parameters: {
         /** @description Identifiant technique wf_import_batch.id */
@@ -3656,7 +3665,7 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["ProjectNotFound"];
-            409: components["responses"]["Conflict"];
+            409: components["responses"]["ReopenPlanningStructureConflict"];
         };
     };
     skipPlanningStructure: {

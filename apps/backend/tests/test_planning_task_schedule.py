@@ -21,9 +21,11 @@ from waterfall.models.resources import (
     ResourceRole,
     TaskRoleAssignment,
 )
+from waterfall.schemas.projects import PlanningTaskScheduleUpdate
 from waterfall.services.planning_tree import (
     PlanningTaskScheduleError,
     _topological_cascade_order,  # pyright: ignore[reportPrivateUsage]
+    update_planning_task_schedule,
 )
 
 
@@ -317,7 +319,7 @@ def test_manual_task_requires_start_at() -> None:
         )
 
         assert response.status_code == 400
-        assert isinstance(response.json()["detail"], str)
+        assert response.json()["detail"] == {"code": "GENERIC_ERROR"}
 
 
 def test_manual_task_rejects_finish_before_start() -> None:
@@ -353,7 +355,7 @@ def test_automatic_task_requires_positive_duration() -> None:
         )
 
         assert response.status_code == 400
-        assert isinstance(response.json()["detail"], str)
+        assert response.json()["detail"] == {"code": "GENERIC_ERROR"}
 
 
 def test_automatic_task_without_predecessor_uses_payload_start_at() -> None:
@@ -423,7 +425,7 @@ def test_automatic_task_without_predecessor_or_any_start_at_is_rejected() -> Non
         )
 
         assert response.status_code == 400
-        assert isinstance(response.json()["detail"], str)
+        assert response.json()["detail"] == {"code": "GENERIC_ERROR"}
 
 
 def test_automatic_task_finish_start_predecessor_sets_start_after_predecessor_finish() -> None:
@@ -1248,7 +1250,7 @@ def test_summary_task_rejects_direct_schedule_edit() -> None:
         )
 
         assert response.status_code == 400
-        assert isinstance(response.json()["detail"], str)
+        assert response.json()["detail"] == {"code": "GENERIC_ERROR"}
 
 
 def test_milestone_forces_zero_duration_and_matching_finish_at() -> None:
@@ -1288,7 +1290,7 @@ def test_milestone_rejects_explicit_nonzero_duration() -> None:
         )
 
         assert response.status_code == 400
-        assert isinstance(response.json()["detail"], str)
+        assert response.json()["detail"] == {"code": "GENERIC_ERROR"}
 
 
 def test_milestone_rejects_explicit_finish_at_different_from_start_at() -> None:
@@ -1402,7 +1404,7 @@ def test_automatic_milestone_without_predecessor_or_any_start_at_is_rejected() -
         )
 
         assert response.status_code == 400
-        assert isinstance(response.json()["detail"], str)
+        assert response.json()["detail"] == {"code": "GENERIC_ERROR"}
 
 
 def test_editing_predecessor_reschedules_automatic_successor() -> None:
@@ -1832,10 +1834,64 @@ def test_cascade_successor_with_out_of_range_stored_duration_returns_400_not_500
             headers=headers,
         )
 
+        # The response body is now the generic, translatable error shape
+        # (issue #137): the underlying `PlanningTaskScheduleError` message --
+        # which does identify uid=8, not the caller's own uid=6 -- is still
+        # raised unchanged by the service layer (see
+        # `test_cascade_successor_out_of_range_stored_duration_is_attributed_to_candidate_task_uid`
+        # below for that assertion), just no longer surfaced verbatim over
+        # HTTP.
         assert response.status_code == 400
-        body = response.json()
-        assert "detail" in body
-        assert "8" in body["detail"]
+        assert response.json()["detail"] == {"code": "GENERIC_ERROR"}
+
+
+def test_cascade_successor_out_of_range_stored_duration_is_attributed_to_candidate_task_uid() -> (
+    None
+):
+    """Service-level counterpart to the HTTP test above (Haute finding on
+    the #137 review): now that the HTTP response body no longer carries the
+    human-readable message, the "attributed to uid=8, not the caller's own
+    uid=6" anti-regression protection (Reviewer finding #2) has to be
+    exercised directly against ``update_planning_task_schedule``, before the
+    route converts the exception into an ``HTTPException`` and this
+    generic-error handler flattens its detail further.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_hierarchy(project_id)
+
+    with get_session_factory()() as session:
+        session.add(
+            WfPlanningTaskSnapshot(
+                planning_id=planning_id,
+                uid=8,
+                name="Out-of-range successor",
+                position=5,
+                start_at=datetime(2026, 1, 10, 8, 0, tzinfo=UTC),
+                finish_at=datetime(2026, 1, 10, 9, 0, tzinfo=UTC),
+                duration_minutes=8_000_000,
+                is_summary=False,
+                is_milestone=False,
+                is_manual=False,
+            )
+        )
+        session.commit()
+    _add_link(planning_id, task_uid=8, predecessor_uid=6, link_type=1, lag_tenth_minute=0)
+
+    with get_session_factory()() as session:
+        planning = session.get(WfPlanning, planning_id)
+        assert planning is not None
+        payload = PlanningTaskScheduleUpdate(
+            is_manual=True,
+            start_at=datetime(2026, 3, 2, 8, 0),
+            finish_at=datetime(2026, 3, 2, 10, 0),
+            expected_revision=0,
+        )
+        with pytest.raises(PlanningTaskScheduleError) as exc_info:
+            update_planning_task_schedule(session, planning, 6, payload)
+
+    assert exc_info.value.task_uid == 8
 
 
 def test_cascade_milestone_successor_ignores_stray_stored_duration() -> None:
@@ -1944,14 +2000,60 @@ def test_cascade_successor_with_zero_stored_duration_returns_400_attributed_to_c
             headers=headers,
         )
 
+        # The response body is now the generic, translatable error shape
+        # (issue #137): the underlying `PlanningTaskScheduleError` message --
+        # which does identify uid=8, not the caller's own uid=6 -- is still
+        # raised unchanged by the service layer (see
+        # `test_cascade_successor_zero_stored_duration_is_attributed_to_candidate_task_uid`
+        # below for that assertion), just no longer surfaced verbatim over
+        # HTTP.
         assert response.status_code == 400
-        body = response.json()
-        assert "detail" in body
-        # Must identify uid=8 as the source of the failure, not a bare,
-        # unattributed message that looks like it is about the caller's own
-        # (valid) request against uid=6.
-        assert "8" in body["detail"]
-        assert "positive duration_minutes" in body["detail"]
+        assert response.json()["detail"] == {"code": "GENERIC_ERROR"}
+
+
+def test_cascade_successor_zero_stored_duration_is_attributed_to_candidate_task_uid() -> None:
+    """Service-level counterpart to the HTTP test above (Haute finding on
+    the #137 review): same rationale as
+    ``test_cascade_successor_out_of_range_stored_duration_is_attributed_to_candidate_task_uid``,
+    for the ``duration_minutes<=0`` branch (Cross-cutting review finding,
+    Haute) instead of the ``ValidationError`` branch.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_hierarchy(project_id)
+
+    with get_session_factory()() as session:
+        session.add(
+            WfPlanningTaskSnapshot(
+                planning_id=planning_id,
+                uid=8,
+                name="Degenerate-duration successor",
+                position=5,
+                start_at=datetime(2026, 1, 10, 8, 0, tzinfo=UTC),
+                finish_at=datetime(2026, 1, 10, 8, 0, tzinfo=UTC),
+                duration_minutes=0,
+                is_summary=False,
+                is_milestone=False,
+                is_manual=False,
+            )
+        )
+        session.commit()
+    _add_link(planning_id, task_uid=8, predecessor_uid=6, link_type=1, lag_tenth_minute=0)
+
+    with get_session_factory()() as session:
+        planning = session.get(WfPlanning, planning_id)
+        assert planning is not None
+        payload = PlanningTaskScheduleUpdate(
+            is_manual=True,
+            start_at=datetime(2026, 3, 2, 8, 0),
+            finish_at=datetime(2026, 3, 2, 10, 0),
+            expected_revision=0,
+        )
+        with pytest.raises(PlanningTaskScheduleError) as exc_info:
+            update_planning_task_schedule(session, planning, 6, payload)
+
+    assert exc_info.value.task_uid == 8
 
 
 def test_cascade_does_not_propagate_through_a_summary_task_acting_as_a_predecessor() -> None:
@@ -2154,7 +2256,7 @@ def test_automatic_task_start_at_near_datetime_max_returns_400_not_500() -> None
         )
 
         assert response.status_code == 400
-        assert isinstance(response.json()["detail"], str)
+        assert response.json()["detail"] == {"code": "GENERIC_ERROR"}
 
 
 def test_automatic_task_sparse_calendar_duration_rejected_without_hanging() -> None:
@@ -2198,7 +2300,7 @@ def test_automatic_task_sparse_calendar_duration_rejected_without_hanging() -> N
         )
 
         assert response.status_code == 400
-        assert isinstance(response.json()["detail"], str)
+        assert response.json()["detail"] == {"code": "GENERIC_ERROR"}
 
 
 def test_manual_task_near_date_max_recalculating_ancestor_summary_returns_400_not_500() -> None:
@@ -2236,7 +2338,7 @@ def test_manual_task_near_date_max_recalculating_ancestor_summary_returns_400_no
         )
 
         assert response.status_code == 400
-        assert isinstance(response.json()["detail"], str)
+        assert response.json()["detail"] == {"code": "GENERIC_ERROR"}
 
 
 def test_schedule_update_rejects_validated_planning_and_read_only_project() -> None:
@@ -2316,8 +2418,14 @@ def test_schedule_update_rejects_duration_minutes_above_upper_bound() -> None:
             headers=headers,
         )
 
+        # The response body is now the generic, translatable error shape
+        # (issue #137): `_PlanningTaskBodyValidationRoute` still converts the
+        # underlying `RequestValidationError` into `HTTPException(400,
+        # detail=exc.errors())` -- a list of raw Pydantic error dicts -- but
+        # the generic handler now rewrites a list detail the same way as a
+        # string one, so it no longer leaks over HTTP.
         assert response.status_code == 400
-        assert isinstance(response.json()["detail"], list)
+        assert response.json()["detail"] == {"code": "GENERIC_ERROR"}
 
 
 def test_schedule_update_accepts_duration_minutes_at_upper_bound() -> None:
@@ -2411,10 +2519,7 @@ def test_automatic_task_returns_400_when_no_usable_calendar() -> None:
         )
 
         assert response.status_code == 400
-        detail = response.json()["detail"]
-        assert isinstance(detail, str)
-        assert "Task 3" in detail
-        assert "no usable working calendar" in detail
+        assert response.json()["detail"] == {"code": "GENERIC_ERROR"}
 
 
 def test_automatic_milestone_returns_400_when_no_usable_calendar() -> None:
@@ -2439,10 +2544,7 @@ def test_automatic_milestone_returns_400_when_no_usable_calendar() -> None:
         )
 
         assert response.status_code == 400
-        detail = response.json()["detail"]
-        assert isinstance(detail, str)
-        assert "Task 5" in detail
-        assert "no usable working calendar" in detail
+        assert response.json()["detail"] == {"code": "GENERIC_ERROR"}
 
 
 def test_manual_task_returns_400_when_ancestor_summary_has_no_usable_calendar() -> None:
@@ -2473,6 +2575,4 @@ def test_manual_task_returns_400_when_ancestor_summary_has_no_usable_calendar() 
         )
 
         assert response.status_code == 400
-        detail = response.json()["detail"]
-        assert isinstance(detail, str)
-        assert "no usable working calendar" in detail
+        assert response.json()["detail"] == {"code": "GENERIC_ERROR"}
