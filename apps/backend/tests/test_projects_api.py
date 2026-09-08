@@ -871,6 +871,89 @@ def test_creates_first_planning_from_a_hierarchical_legacy_project() -> None:
         assert cloned_tasks[1]["parent_uid"] == 2
 
 
+def test_creates_first_planning_from_legacy_project_preserves_task_enrichment_notes() -> None:
+    # Regression for #178: create_planning's `else` branch (first clone of a legacy
+    # project's MsTask rows, when neither source_planning_id nor
+    # project.displayed_planning_id is set) built each cloned WfPlanningTaskSnapshot
+    # without carrying over the task's notes, unlike the sibling source_planning_id
+    # branch and reopen_planning_structure. MsTask itself has no `notes` column --
+    # legacy task notes live in WfTaskEnrichment, keyed by (project_id, task_uid), the
+    # same table update_task_description falls back to while no WfPlanning exists yet
+    # (see tasks.py). This covers both a task with an enrichment row (its description
+    # must land in WfPlanningTaskSnapshot.notes) and a task with none (must clone with
+    # notes=None, not raise).
+    with TestClient(app) as client:
+        headers = _auth_headers(client, "projects.legacy-enrichment-clone@example.com")
+        owner_id = _current_user_id(client, headers)
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            project = MsProject(
+                owner_id=owner_id,
+                source_version=2016,
+                save_version_out=16,
+                name="Legacy enrichment clone source",
+                schedule_from_start=True,
+                start_date=datetime(2026, 1, 5, tzinfo=UTC),
+                finish_date=datetime(2026, 1, 20, tzinfo=UTC),
+                minutes_per_day=480,
+                minutes_per_week=2400,
+                days_per_month=20,
+            )
+            session.add(project)
+            session.flush()
+            project_id = project.id
+
+            session.add(
+                MsTask(
+                    project_id=project_id,
+                    uid=1,
+                    id_display=1,
+                    parent_uid=None,
+                    name="Annotated task",
+                    task_type=1,
+                    outline_number="1",
+                    outline_level=1,
+                    is_summary=False,
+                    is_milestone=False,
+                )
+            )
+            session.add(
+                MsTask(
+                    project_id=project_id,
+                    uid=2,
+                    id_display=2,
+                    parent_uid=None,
+                    name="Bare task",
+                    task_type=1,
+                    outline_number="2",
+                    outline_level=1,
+                    is_summary=False,
+                    is_milestone=False,
+                )
+            )
+            now = datetime.now(UTC)
+            session.add(
+                WfTaskEnrichment(
+                    project_id=project_id,
+                    task_uid=1,
+                    description="Legacy notes must survive the first clone",
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+        # No source_planning_id and no displayed_planning_id yet: exercises
+        # create_planning's `else` branch.
+        clone_response = client.post(f"/projects/{project_id}/plannings", json={}, headers=headers)
+
+        assert clone_response.status_code == 201
+        cloned_tasks = {task["uid"]: task for task in clone_response.json()["tasks"]}
+        assert cloned_tasks[1]["description"] == "Legacy notes must survive the first clone"
+        assert cloned_tasks[2]["description"] is None
+
+
 def test_projects_are_isolated_by_owner() -> None:
     with TestClient(app) as client:
         owner_headers = _auth_headers(client)
