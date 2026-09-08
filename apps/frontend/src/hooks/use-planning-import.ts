@@ -69,7 +69,7 @@ export function applySettledRefresh<T>(
     onSuccess(result.value);
     return { sessionExpired: false, failureLabel: null };
   }
-  if (result.reason instanceof SessionExpiredError) {
+  if (result.reason instanceof SessionExpiredError || (result.reason instanceof ApiError && result.reason.status === 401)) {
     return { sessionExpired: true, failureLabel: null };
   }
   return { sessionExpired: false, failureLabel };
@@ -125,7 +125,7 @@ export async function refreshPlanningDetailAfterImport(
     setPlanningDetail(updatedDetail);
     return false;
   } catch (cause) {
-    if (cause instanceof SessionExpiredError) {
+    if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
       return true;
     }
     refreshFailures.push("le détail du planning");
@@ -223,7 +223,7 @@ export function usePlanningImport({
       updateSelectedPlanningId(nextPlanningId);
       setImportFeedback(buildImportFeedbackMessage(refreshFailures));
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
         clearSession();
         router.push("/login");
         return;

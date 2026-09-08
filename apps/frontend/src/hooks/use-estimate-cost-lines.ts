@@ -118,7 +118,7 @@ export function useEstimateCostLines({
       anchor.remove();
       window.URL.revokeObjectURL(objectUrl);
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
         clearSession();
         router.push("/login");
         return;
@@ -146,7 +146,7 @@ export function useEstimateCostLines({
       setSelectedEstimateId(estimate.id);
       setActiveTab("estimate");
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
         clearSession();
         router.push("/login");
         return;
@@ -185,7 +185,7 @@ export function useEstimateCostLines({
       setCostLines((previous) => [...previous, line]);
       setCostLineDraft({ categoryId: "", label: "", quantity: "1", unitCost: "0" });
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
         clearSession();
         router.push("/login");
         return;
@@ -230,7 +230,7 @@ export function useEstimateCostLines({
       setCostLines((previous) => previous.map((item) => (item.id === updated.id ? updated : item)));
       setEditingLineId(null);
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
         clearSession();
         router.push("/login");
         return;
@@ -252,7 +252,7 @@ export function useEstimateCostLines({
       await deleteEstimateCostLine(projectId, selectedEstimateId, line.id, session, onSessionRefresh);
       setCostLines((previous) => previous.filter((item) => item.id !== line.id));
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
         clearSession();
         router.push("/login");
         return;
@@ -274,7 +274,7 @@ export function useEstimateCostLines({
       const validated = await validateProjectEstimate(projectId, selectedEstimateId, session, onSessionRefresh);
       setEstimates((previous) => previous.map((item) => (item.id === validated.id ? validated : item)));
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
         clearSession();
         router.push("/login");
         return;

@@ -1,11 +1,16 @@
+import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ImportBatchStatus, Planning, PlanningDetail, Project } from "@/lib/backend";
-import { SessionExpiredError } from "@/lib/backend";
+import { ApiError, SessionExpiredError } from "@/lib/backend";
 
 const mocks = vi.hoisted(() => ({
   getPlanning: vi.fn(),
   getImportBatchStatus: vi.fn(),
+  runImportBatch: vi.fn(),
+  getProject: vi.fn(),
+  listPlannings: vi.fn(),
+  clearSession: vi.fn(),
 }));
 
 vi.mock("@/lib/backend", async () => {
@@ -14,8 +19,15 @@ vi.mock("@/lib/backend", async () => {
     ...actual,
     getPlanning: mocks.getPlanning,
     getImportBatchStatus: mocks.getImportBatchStatus,
+    runImportBatch: mocks.runImportBatch,
+    getProject: mocks.getProject,
+    listPlannings: mocks.listPlannings,
   };
 });
+
+vi.mock("@/lib/session", () => ({
+  clearSession: mocks.clearSession,
+}));
 
 import {
   applyImportRefreshes,
@@ -24,6 +36,7 @@ import {
   pickNextPlanningId,
   pollImportBatchStatus,
   refreshPlanningDetailAfterImport,
+  usePlanningImport,
 } from "@/hooks/use-planning-import";
 
 const session = { accessToken: "test-token" };
@@ -32,6 +45,10 @@ const onSessionRefresh = vi.fn();
 beforeEach(() => {
   mocks.getPlanning.mockReset();
   mocks.getImportBatchStatus.mockReset();
+  mocks.runImportBatch.mockReset();
+  mocks.getProject.mockReset();
+  mocks.listPlannings.mockReset();
+  mocks.clearSession.mockReset();
   onSessionRefresh.mockReset();
 });
 
@@ -52,6 +69,23 @@ describe("applySettledRefresh", () => {
     const onSuccess = vi.fn();
     const result = applySettledRefresh(
       { status: "rejected", reason: new SessionExpiredError() } as PromiseSettledResult<number>,
+      onSuccess,
+      "le projet",
+    );
+
+    expect(onSuccess).not.toHaveBeenCalled();
+    expect(result).toEqual({ sessionExpired: true, failureLabel: null });
+  });
+
+  // Regression test for #216: a refresh can succeed yet the retried request still
+  // come back 401 (account disabled/deleted between the two calls, server-side
+  // race) -- authFetch then rejects with a plain ApiError, not a
+  // SessionExpiredError. This must still be reported as a session expiry, not as
+  // a generic refresh failure.
+  it("reports a session expiry without calling onSuccess when rejected with a post-refresh 401 ApiError", () => {
+    const onSuccess = vi.fn();
+    const result = applySettledRefresh(
+      { status: "rejected", reason: new ApiError(401, "Unauthorized") } as PromiseSettledResult<number>,
       onSuccess,
       "le projet",
     );
@@ -203,6 +237,30 @@ describe("refreshPlanningDetailAfterImport", () => {
     expect(refreshFailures).toEqual([]);
   });
 
+  // Regression test for #216: a refresh can succeed yet the retried request still
+  // come back 401 (account disabled/deleted between the two calls, server-side
+  // race) -- authFetch then rejects with a plain ApiError, not a
+  // SessionExpiredError. This must still be signalled as a session expiry, not
+  // pushed as a generic refresh-failure label.
+  it("signals a session expiry without pushing a failure label on a post-refresh 401 ApiError", async () => {
+    const setPlanningDetail = vi.fn();
+    const refreshFailures: string[] = [];
+    mocks.getPlanning.mockRejectedValue(new ApiError(401, "Unauthorized"));
+
+    const sessionExpired = await refreshPlanningDetailAfterImport(
+      1,
+      2,
+      session,
+      onSessionRefresh,
+      setPlanningDetail,
+      refreshFailures,
+    );
+
+    expect(sessionExpired).toBe(true);
+    expect(setPlanningDetail).not.toHaveBeenCalled();
+    expect(refreshFailures).toEqual([]);
+  });
+
   it("pushes a failure label and does not signal a session expiry for other errors", async () => {
     const setPlanningDetail = vi.fn();
     const refreshFailures: string[] = [];
@@ -279,5 +337,48 @@ describe("pollImportBatchStatus", () => {
     mocks.getImportBatchStatus.mockResolvedValue({ status: "failed" } as ImportBatchStatus);
 
     await expect(pollImportBatchStatus(42, session, onSessionRefresh)).rejects.toThrow("Import en échec.");
+  });
+});
+
+describe("usePlanningImport confirmPlanningImport", () => {
+  // Regression test for #216: a refresh can succeed yet the retried request still
+  // come back 401 (account disabled/deleted between the two calls, server-side
+  // race) -- authFetch then rejects with a plain ApiError, not a
+  // SessionExpiredError. confirmPlanningImport's own catch (importReview /
+  // runImportBatch failing outright) must still detect that as a session expiry
+  // (clearSession + redirect), not surface it as a generic import error.
+  it("clears the session and redirects to login on a post-refresh 401 ApiError, instead of showing a generic error", async () => {
+    mocks.runImportBatch.mockRejectedValue(new ApiError(401, "Unauthorized"));
+    const router = { push: vi.fn() };
+    const setError = vi.fn();
+
+    const { result } = renderHook(() =>
+      usePlanningImport({
+        session,
+        project: { id: 1 } as Project,
+        importReview: { batchId: 1, diff: {} as never },
+        projectId: 1,
+        onSessionRefresh,
+        router: router as never,
+        plannings: [],
+        setProject: vi.fn(),
+        setPlannings: vi.fn(),
+        setPlanningDetail: vi.fn(),
+        updateSelectedPlanningId: vi.fn(),
+        setImportReview: vi.fn(),
+        setImportFile: vi.fn(),
+        setImportFeedback: vi.fn(),
+        setImportBusy: vi.fn(),
+        setError,
+      }),
+    );
+
+    await act(async () => {
+      await result.current();
+    });
+
+    expect(mocks.clearSession).toHaveBeenCalled();
+    expect(router.push).toHaveBeenCalledWith("/login");
+    expect(setError).not.toHaveBeenCalledWith("Impossible d'importer le planning.");
   });
 });

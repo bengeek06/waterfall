@@ -149,7 +149,7 @@ export function usePlanningHistoryCommand({
         return setPlanningHistory(current, planningId, { ...nextHistory, revision: updated.revision });
       });
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
         clearSession();
         router.push("/login");
         return;

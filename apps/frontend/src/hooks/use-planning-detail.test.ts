@@ -1,13 +1,35 @@
-import { describe, expect, it, vi } from "vitest";
+import { renderHook, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { PlanningDetail, PlanningStructureDraftRead } from "@/lib/backend";
+import { ApiError } from "@/lib/backend";
 import { createEmptyPlanningHistory, type PlanningHistoryState } from "@/lib/planning-history";
+
+const mocks = vi.hoisted(() => ({
+  getPlanning: vi.fn(),
+  getPlanningStructureDraft: vi.fn(),
+  clearSession: vi.fn(),
+}));
+
+vi.mock("@/lib/backend", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/backend")>("@/lib/backend");
+  return {
+    ...actual,
+    getPlanning: mocks.getPlanning,
+    getPlanningStructureDraft: mocks.getPlanningStructureDraft,
+  };
+});
+
+vi.mock("@/lib/session", () => ({
+  clearSession: mocks.clearSession,
+}));
 
 import {
   deriveStructureDraftRows,
   isPlanningLoadResultCurrent,
   isPlanningLoadStillActive,
   recordRevisionConflictIfAny,
+  usePlanningDetailEffect,
   type PlanningRevisionConflict,
 } from "@/hooks/use-planning-detail";
 
@@ -184,5 +206,46 @@ describe("isPlanningLoadResultCurrent", () => {
 
   it("is false when the selection has moved on to a different planning", () => {
     expect(isPlanningLoadResultCurrent(false, 2, 2, 11, 9)).toBe(false);
+  });
+});
+
+describe("usePlanningDetailEffect", () => {
+  beforeEach(() => {
+    mocks.getPlanning.mockReset();
+    mocks.getPlanningStructureDraft.mockReset();
+    mocks.clearSession.mockReset();
+  });
+
+  // Regression test for #216: a refresh can succeed yet the retried request still
+  // come back 401 (account disabled/deleted between the two calls, server-side
+  // race) -- authFetch then rejects with a plain ApiError, not a
+  // SessionExpiredError. loadPlanningDetail must still detect that as a session
+  // expiry (clearSession + redirect), not surface it as a generic load error.
+  it("clears the session and redirects to login on a post-refresh 401 ApiError, instead of showing a generic error", async () => {
+    mocks.getPlanning.mockRejectedValue(new ApiError(401, "Unauthorized"));
+    const router = { push: vi.fn() };
+    const setError = vi.fn();
+
+    renderHook(() =>
+      usePlanningDetailEffect({
+        session: { accessToken: "test-token" },
+        selectedPlanningId: 1,
+        projectId: 1,
+        onSessionRefresh: vi.fn(),
+        router: router as never,
+        planningLoadGenerationRef: { current: 0 },
+        selectedPlanningIdRef: { current: 1 },
+        historyByPlanningIdRef: { current: {} },
+        setPlanningDetail: vi.fn(),
+        setPlanningDetailBusy: vi.fn(),
+        setPlanningConflictByPlanningId: vi.fn(),
+        setStructureDraft: vi.fn(),
+        setError,
+      }),
+    );
+
+    await waitFor(() => expect(mocks.clearSession).toHaveBeenCalled());
+    expect(router.push).toHaveBeenCalledWith("/login");
+    expect(setError).not.toHaveBeenCalledWith("Impossible de charger le planning.");
   });
 });

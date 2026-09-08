@@ -193,7 +193,7 @@ export function usePlanningDetailEffect({
         if (!isPlanningLoadStillActive(cancelled, loadGeneration, planningLoadGenerationRef.current)) {
           return;
         }
-        if (cause instanceof SessionExpiredError) {
+        if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
           clearSession();
           router.push("/login");
           return;
