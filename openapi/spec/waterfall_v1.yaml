@@ -223,8 +223,6 @@ components:
       $ref: ./components/schemas/ImportIssue.yaml
     ImportErrorListResponse:
       $ref: ./components/schemas/ImportErrorListResponse.yaml
-    ErrorResponse:
-      $ref: ./components/schemas/ErrorResponse.yaml
     FastAPIErrorResponse:
       $ref: ./components/schemas/FastAPIErrorResponse.yaml
     ProjectRead:
