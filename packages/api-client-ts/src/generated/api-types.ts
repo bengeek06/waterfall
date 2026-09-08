@@ -2041,7 +2041,7 @@ export interface components {
                 [name: string]: unknown;
             };
             content: {
-                "application/json": components["schemas"]["ErrorResponse"];
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
         /** @description Authentification requise */
@@ -2050,7 +2050,7 @@ export interface components {
                 [name: string]: unknown;
             };
             content: {
-                "application/json": components["schemas"]["ErrorResponse"];
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
         /** @description Droits administrateur requis */
@@ -2059,7 +2059,7 @@ export interface components {
                 [name: string]: unknown;
             };
             content: {
-                "application/json": components["schemas"]["ErrorResponse"];
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
         /** @description Conflit avec une valeur existante */
@@ -2068,7 +2068,7 @@ export interface components {
                 [name: string]: unknown;
             };
             content: {
-                "application/json": components["schemas"]["ErrorResponse"];
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
         /** @description Batch introuvable */
@@ -2077,7 +2077,7 @@ export interface components {
                 [name: string]: unknown;
             };
             content: {
-                "application/json": components["schemas"]["ErrorResponse"];
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
         /** @description Projet introuvable */
@@ -2086,7 +2086,7 @@ export interface components {
                 [name: string]: unknown;
             };
             content: {
-                "application/json": components["schemas"]["ErrorResponse"];
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
         /** @description Planning introuvable */
@@ -2095,7 +2095,7 @@ export interface components {
                 [name: string]: unknown;
             };
             content: {
-                "application/json": components["schemas"]["ErrorResponse"];
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
         /** @description Projet, planning ou tache introuvable */
@@ -2104,7 +2104,7 @@ export interface components {
                 [name: string]: unknown;
             };
             content: {
-                "application/json": components["schemas"]["ErrorResponse"];
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
         /** @description Requete de deplacement invalide */
@@ -2200,7 +2200,7 @@ export interface components {
                 [name: string]: unknown;
             };
             content: {
-                "application/json": components["schemas"]["ErrorResponse"];
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
         /** @description Tache introuvable */
@@ -2209,7 +2209,7 @@ export interface components {
                 [name: string]: unknown;
             };
             content: {
-                "application/json": components["schemas"]["ErrorResponse"];
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
         /** @description Ressource introuvable */
@@ -2218,7 +2218,7 @@ export interface components {
                 [name: string]: unknown;
             };
             content: {
-                "application/json": components["schemas"]["ErrorResponse"];
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
         /** @description Utilisateur introuvable */
@@ -2227,7 +2227,7 @@ export interface components {
                 [name: string]: unknown;
             };
             content: {
-                "application/json": components["schemas"]["ErrorResponse"];
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
         /** @description Combinaison mode/dates/duree invalide pour la tache */

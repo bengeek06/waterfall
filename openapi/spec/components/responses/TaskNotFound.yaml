@@ -2,4 +2,4 @@ description: Tache introuvable
 content:
   application/json:
     schema:
-      $ref: ../schemas/ErrorResponse.yaml
+      $ref: ../schemas/FastAPIErrorResponse.yaml

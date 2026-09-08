@@ -5201,49 +5201,49 @@ components:
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/ErrorResponse'
+            $ref: '#/components/schemas/FastAPIErrorResponse'
     Unauthorized:
       description: Authentification requise
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/ErrorResponse'
+            $ref: '#/components/schemas/FastAPIErrorResponse'
     Forbidden:
       description: Droits administrateur requis
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/ErrorResponse'
+            $ref: '#/components/schemas/FastAPIErrorResponse'
     Conflict:
       description: Conflit avec une valeur existante
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/ErrorResponse'
+            $ref: '#/components/schemas/FastAPIErrorResponse'
     BatchNotFound:
       description: Batch introuvable
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/ErrorResponse'
+            $ref: '#/components/schemas/FastAPIErrorResponse'
     ProjectNotFound:
       description: Projet introuvable
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/ErrorResponse'
+            $ref: '#/components/schemas/FastAPIErrorResponse'
     PlanningNotFound:
       description: Planning introuvable
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/ErrorResponse'
+            $ref: '#/components/schemas/FastAPIErrorResponse'
     ProjectPlanningTaskNotFound:
       description: Projet, planning ou tache introuvable
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/ErrorResponse'
+            $ref: '#/components/schemas/FastAPIErrorResponse'
     MovePlanningTasksBadRequest:
       description: Requete de deplacement invalide
       content:
@@ -5309,25 +5309,25 @@ components:
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/ErrorResponse'
+            $ref: '#/components/schemas/FastAPIErrorResponse'
     TaskNotFound:
       description: Tache introuvable
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/ErrorResponse'
+            $ref: '#/components/schemas/FastAPIErrorResponse'
     ResourceNotFound:
       description: Ressource introuvable
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/ErrorResponse'
+            $ref: '#/components/schemas/FastAPIErrorResponse'
     UserNotFound:
       description: Utilisateur introuvable
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/ErrorResponse'
+            $ref: '#/components/schemas/FastAPIErrorResponse'
     UpdatePlanningTaskScheduleBadRequest:
       description: Combinaison mode/dates/duree invalide pour la tache
       content:
