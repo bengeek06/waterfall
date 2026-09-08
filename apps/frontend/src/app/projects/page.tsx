@@ -262,6 +262,11 @@ export default function ProjectsPage() {
       resetCreateFlow();
       await reloadProjectsPage();
     } catch (cause) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
       setCreateError(cause instanceof ApiError ? cause.message : "Impossible de créer le projet.");
     } finally {
       setActionBusy(null);
@@ -275,22 +280,31 @@ export default function ProjectsPage() {
 
     const projectIds = [...selectedIds];
     setActionBusy("Suppression des projets sélectionnés...");
+    let sessionExpired = false;
     try {
       for (const projectId of projectIds) {
         await deleteProject(projectId, session, onSessionRefresh);
       }
       toast.success(`${projectIds.length} projet(s) supprimé(s).`);
     } catch (cause) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
+        sessionExpired = true;
+        clearSession();
+        router.push("/login");
+        return;
+      }
       // A failure partway through the loop still leaves the earlier ids deleted
       // server-side -- `selectedIds`/the table's current page must not keep
       // referencing them as if nothing happened. `reloadProjectsPage()` below
-      // (in `finally`, so it always runs) resynchronizes on the real server
-      // state whether the loop fully succeeded, partially succeeded, or failed
-      // on the very first id.
+      // (in `finally`, so it runs on every non-session-expiry outcome) resynchronizes
+      // on the real server state whether the loop fully succeeded, partially
+      // succeeded, or failed on the very first id.
       toast.error(cause instanceof ApiError ? cause.message : "Impossible de supprimer les projets.");
     } finally {
-      setSelectedIds(new Set());
-      await reloadProjectsPage();
+      if (!sessionExpired) {
+        setSelectedIds(new Set());
+        await reloadProjectsPage();
+      }
       setActionBusy(null);
     }
   }

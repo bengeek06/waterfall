@@ -1,14 +1,15 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Project } from "@/lib/backend";
+import { SessionExpiredError, type Project } from "@/lib/backend";
 
-const { getProjects, createProject, deleteProject, router } = vi.hoisted(() => {
+const { getProjects, createProject, deleteProject, router, clearSession } = vi.hoisted(() => {
   return {
     getProjects: vi.fn(),
     createProject: vi.fn(),
     deleteProject: vi.fn(),
     router: { push: vi.fn() },
+    clearSession: vi.fn(),
   };
 });
 
@@ -29,7 +30,7 @@ vi.mock("@/lib/backend", async () => {
 });
 
 vi.mock("@/lib/session", () => ({
-  clearSession: vi.fn(),
+  clearSession,
   getSession: vi.fn(() => ({ accessToken: "test-token" })),
   setSession: vi.fn(),
 }));
@@ -214,6 +215,24 @@ describe("ProjectsPage", () => {
     await waitFor(() => expect(getProjects).toHaveBeenCalledTimes(2));
   });
 
+  // Regression test for #195: a mutation handler must clear the session and
+  // redirect to login on session expiry, the same way `reloadProjectsPage`
+  // already does, instead of surfacing a generic error message.
+  it("clears the session and redirects to login, instead of showing a generic error, when project creation reports session expiry", async () => {
+    createProject.mockRejectedValue(new SessionExpiredError());
+    render(<ProjectsPage />);
+    await waitFor(() => expect(getProjects).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "Créer projet" }));
+    fireEvent.change(screen.getByLabelText("Nom du projet"), { target: { value: "Nouveau projet" } });
+    fireEvent.change(screen.getByLabelText("Code projet"), { target: { value: "NP-1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Créer" }));
+
+    await waitFor(() => expect(clearSession).toHaveBeenCalled());
+    await waitFor(() => expect(router.push).toHaveBeenCalledWith("/login"));
+    expect(screen.queryByText("Impossible de créer le projet.")).not.toBeInTheDocument();
+  });
+
   it("deletes the selected projects and reloads the current page", async () => {
     deleteProject.mockResolvedValue(undefined);
     render(<ProjectsPage />);
@@ -225,6 +244,27 @@ describe("ProjectsPage", () => {
 
     await waitFor(() => expect(deleteProject).toHaveBeenCalledExactlyOnceWith(1, expect.anything(), expect.anything()));
     await waitFor(() => expect(getProjects).toHaveBeenCalledTimes(2));
+  });
+
+  // Regression test for #195: same as project creation above, but for the
+  // delete-selection mutation handler.
+  it("clears the session and redirects to login, instead of showing a generic error, when deleting selected projects reports session expiry", async () => {
+    deleteProject.mockRejectedValue(new SessionExpiredError());
+    render(<ProjectsPage />);
+    await waitFor(() => expect(screen.getByText("Projet test")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Sélectionner Projet test" }));
+    fireEvent.click(screen.getByRole("button", { name: "Supprimer la sélection" }));
+    fireEvent.click(screen.getByRole("button", { name: "Supprimer" }));
+
+    await waitFor(() => expect(clearSession).toHaveBeenCalled());
+    await waitFor(() => expect(router.push).toHaveBeenCalledWith("/login"));
+    expect(screen.queryByText("Impossible de supprimer les projets.")).not.toBeInTheDocument();
+    // The session is already invalidated at this point -- `reloadProjectsPage()`
+    // (normally called unconditionally in `onDeleteSelected`'s `finally`) must be
+    // skipped, not fired as a doomed extra request/refresh attempt. Only the
+    // initial page load's call should ever have happened.
+    expect(getProjects).toHaveBeenCalledTimes(1);
   });
 
   it("reloads the current page even when a delete fails partway through the selection", async () => {

@@ -46,6 +46,8 @@ const mocks = vi.hoisted(() => ({
   createRoleCapacity: vi.fn(),
   updateRoleCapacity: vi.fn(),
   createCostCategory: vi.fn(),
+  createResourceNode: vi.fn(),
+  clearSession: vi.fn(),
   router: { push: vi.fn() },
 }));
 
@@ -54,7 +56,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 vi.mock("@/lib/session", () => ({
-  clearSession: vi.fn(),
+  clearSession: mocks.clearSession,
   getSession: vi.fn(() => ({ accessToken: "test-token" })),
   setSession: vi.fn(),
 }));
@@ -89,6 +91,7 @@ vi.mock("@/lib/backend", async () => {
     createRoleCapacity: mocks.createRoleCapacity,
     updateRoleCapacity: mocks.updateRoleCapacity,
     createCostCategory: mocks.createCostCategory,
+    createResourceNode: mocks.createResourceNode,
   };
 });
 
@@ -237,6 +240,26 @@ describe("ResourcesPage calendar toggle", () => {
     await waitFor(() => expect(screen.getByText("Calendrier assigné à un rôle actif.")).toBeInTheDocument());
     expect(screen.getByRole("button", { name: "Désactiver" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Réactiver" })).not.toBeInTheDocument();
+  });
+
+  // Regression test for #195: `submitAction` (used by every mutation on this page,
+  // including `addNode`) must handle `SessionExpiredError` the same way the page's
+  // own reload functions already do (see `reloadCalendarsPage`), instead of falling
+  // through to the generic "Opération impossible" message.
+  it("clears the session and redirects to login, instead of showing a generic error, when a submitAction mutation reports session expiry", async () => {
+    mocks.createResourceNode.mockRejectedValue(new SessionExpiredError());
+    await renderResourcesTab([activeCalendar]);
+
+    const codeInput = screen.getByLabelText("Code du nouveau nœud");
+    fireEvent.change(codeInput, { target: { value: "IT" } });
+    fireEvent.change(screen.getByLabelText("Nom du nouveau nœud"), { target: { value: "Informatique" } });
+    const addRow = codeInput.closest("tr");
+    if (!addRow) throw new Error("add row not found");
+    fireEvent.click(within(addRow).getByRole("button", { name: "Ajouter" }));
+
+    await waitFor(() => expect(mocks.clearSession).toHaveBeenCalled());
+    await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith("/login"));
+    expect(screen.queryByText("Opération impossible")).not.toBeInTheDocument();
   });
 });
 
