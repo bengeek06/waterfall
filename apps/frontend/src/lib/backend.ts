@@ -23,6 +23,7 @@ export type PlanningStructureRead = components["schemas"]["PlanningStructureRead
 export type PlanningStructureDraftRead = components["schemas"]["PlanningStructureDraftRead"];
 export type Planning = components["schemas"]["PlanningRead"];
 export type PlanningDetail = components["schemas"]["PlanningDetailRead"];
+export type PlanningCreate = components["schemas"]["PlanningCreate"];
 export type PlanningTaskMove = components["schemas"]["PlanningTaskMove"];
 export type PlanningTaskCreate = components["schemas"]["PlanningTaskCreate"];
 export type PlanningTaskDelete = components["schemas"]["PlanningTaskDelete"];
@@ -78,9 +79,17 @@ function formatValidationErrors(details: PydanticValidationErrorItem[]): string 
 
 type ParsedError = { message: string; detail?: unknown };
 
+// Generic French fallback shown whenever the backend detail code is either the catch-all
+// GENERIC_ERROR (see the global FastAPI exception handler, which rewrites any unstructured
+// `HTTPException.detail` to `{"code": "GENERIC_ERROR"}`) or a structured code this file does not
+// yet translate -- never fall back to the raw response text, which would leak untranslated
+// English or raw JSON to the user (see issue #137).
+const GENERIC_ERROR_MESSAGE = "Une erreur est survenue. Réessayez ou contactez le support si le problème persiste.";
+
 // Readable French copy for structured detail codes (PlanningTaskDeleteConflict's two codes, see
 // that generated schema, plus PLANNING_REVISION_CONFLICT shared by every versioned planning
-// mutation); anything else falls back to the raw response body via the caller in parseError.
+// mutation, and the two PLANNING_STRUCTURE_REOPEN_* codes raised by the structure reopen
+// endpoint); anything else falls back to GENERIC_ERROR_MESSAGE via the caller in parseError.
 function describeStructuredDetailCode(code: unknown): string | null {
   if (code === "CASCADE_CONFIRMATION_REQUIRED") {
     return "Cette tâche a des tâches enfants et nécessite une confirmation.";
@@ -90,6 +99,15 @@ function describeStructuredDetailCode(code: unknown): string | null {
   }
   if (code === "PLANNING_REVISION_CONFLICT") {
     return "Ce planning a été modifié entre-temps : recharge-le avant de réessayer.";
+  }
+  if (code === "PLANNING_STRUCTURE_REOPEN_REQUIRES_VALIDATION") {
+    return "Cette structure doit d'abord être validée avant de pouvoir être rouverte.";
+  }
+  if (code === "PLANNING_STRUCTURE_REOPEN_INTEGRITY_CONFLICT") {
+    return "Cette structure ne peut pas être rouverte : son intégrité a été compromise depuis sa validation.";
+  }
+  if (code === "GENERIC_ERROR") {
+    return GENERIC_ERROR_MESSAGE;
   }
   return null;
 }
@@ -115,7 +133,10 @@ async function parseError(response: Response): Promise<ParsedError> {
     // readable copy here, but also keep the raw object on ApiError.detail so a caller that needs
     // the structured fields (see getPlanningTaskDeleteConflict) does not have to re-parse it.
     if (payload.detail && typeof payload.detail === "object") {
-      return { message: describeStructuredDetailCode(payload.detail.code) ?? text, detail: payload.detail };
+      return {
+        message: describeStructuredDetailCode(payload.detail.code) ?? GENERIC_ERROR_MESSAGE,
+        detail: payload.detail,
+      };
     }
     return { message: payload.detail ?? payload.message ?? payload.error ?? text };
   } catch {
@@ -1024,6 +1045,34 @@ export function exportEstimateExcel(
 
 export type ProjectCreateInput = components["schemas"]["ProjectCreate"];
 export type ProjectUpdateInput = components["schemas"]["ProjectUpdate"];
+export type ProjectSetupWarningCode = components["schemas"]["ProjectSetupWarningCode"];
+export type ProjectSetupWarning = components["schemas"]["ProjectSetupWarning"];
+export type ProjectSetupWarningsRead = components["schemas"]["ProjectSetupWarningsRead"];
+
+// French messages for each `ProjectSetupWarning.code`, naming the /resources tab where
+// the missing global prerequisite can be fixed (#109). `ProjectSetupWarning.message`
+// itself is an English diagnostic string never meant for direct display (see the
+// schema's own doc comment) -- callers must always go through this mapping instead of
+// showing it, same principle as `describeStructuredDetailCode` above.
+const projectSetupWarningMessages: Record<ProjectSetupWarningCode, string> = {
+  no_default_calendar:
+    "Aucun calendrier par défaut actif n'est défini. Définissez-en un dans l'onglet Ressources de la page Paramètres (/resources).",
+  default_calendar_has_no_working_day:
+    "Le calendrier par défaut n'a aucun jour travaillé. Ajoutez au moins un jour travaillé dans l'onglet Ressources de la page Paramètres (/resources).",
+  no_active_cost_category:
+    "Aucune catégorie de coût active n'est définie. Activez-en une dans l'onglet Coûts de la page Paramètres (/resources).",
+  no_active_resource_role:
+    "Aucun rôle actif n'est défini. Activez-en un dans l'onglet Ressources de la page Paramètres (/resources).",
+};
+
+// Falls back to a generic message for a code added server-side before this mapping is
+// updated, rather than crashing or rendering nothing.
+export function describeProjectSetupWarningCode(code: string): string {
+  return (
+    projectSetupWarningMessages[code as ProjectSetupWarningCode] ??
+    "Le paramétrage global comporte un point à vérifier avant de créer un projet. Consultez la page Paramètres (/resources)."
+  );
+}
 
 export function createProject(
   payload: ProjectCreateInput,
@@ -1075,6 +1124,18 @@ export function deleteProject(
     {
       method: "DELETE",
     },
+    onSessionRefresh,
+  );
+}
+
+export function getProjectSetupWarnings(
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<ProjectSetupWarningsRead>(
+    "/projects/setup-warnings",
+    tokens,
+    { method: "GET" },
     onSessionRefresh,
   );
 }
@@ -1256,6 +1317,27 @@ export function getPlanning(
   onSessionRefresh: (next: SessionTokens) => void,
 ) {
   return getCompletePlanning(projectId, planningId, tokens, onSessionRefresh);
+}
+
+// Creates a brand new planning version, optionally cloning `source_planning_id`'s tasks/links
+// into a fresh draft (see #143: this is what lets the UI offer an explicit "new version from a
+// validated planning" action, distinct from the planning-structure wizard).
+export function createPlanning(
+  projectId: number,
+  payload: PlanningCreate,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<PlanningDetail>(
+    `/projects/${projectId}/plannings`,
+    tokens,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    onSessionRefresh,
+  );
 }
 
 const PLANNING_PAGE_SIZE = 200;

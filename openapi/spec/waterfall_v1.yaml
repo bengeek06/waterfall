@@ -70,6 +70,8 @@ paths:
     $ref: ./paths/imports.yaml#/~1imports~1v1~1batches~1{batchId}~1errors
   /projects:
     $ref: ./paths/projects.yaml#/~1projects
+  /projects/setup-warnings:
+    $ref: ./paths/projects.yaml#/~1projects~1setup-warnings
   /projects/{projectId}:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}
   /projects/{projectId}/status:

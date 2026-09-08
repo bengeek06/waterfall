@@ -1,0 +1,15 @@
+type: object
+required:
+- code
+- message
+properties:
+  code:
+    $ref: ProjectSetupWarningCode.yaml
+  message:
+    type: string
+    description: |-
+      Texte de diagnostic en anglais, non localise et non destine a un
+      affichage direct. Le frontend doit toujours se baser sur `code` pour
+      choisir son propre message utilisateur (francais) -- meme principe que
+      l'issue #137 pour `HTTPException.detail` -- plutot que d'afficher ce
+      champ tel quel.

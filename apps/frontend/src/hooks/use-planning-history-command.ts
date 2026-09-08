@@ -48,6 +48,50 @@ interface UsePlanningHistoryCommandParams {
   setRetryableError: (message: string, retry: () => void) => void;
 }
 
+type PlanningHistoryCommandGuardParams = {
+  session: SessionTokens | null;
+  selectedPlanning: Planning | null;
+  isReadOnlyProject: boolean;
+  planningDetail: PlanningDetail | null;
+};
+
+// Guards `applyPlanningHistoryCommand`: whether an undo/redo command can be applied at all to the
+// currently-selected planning (a session exists, a draft planning is selected, the project isn't
+// read-only, and the loaded detail actually matches the selected planning). Extracted from
+// applyPlanningHistoryCommand (E4-21 / #207) -- same 6-condition guard as before, inverted into a
+// positive predicate. Declared as a type predicate (rather than a plain boolean) so the call site
+// can narrow `session`/`selectedPlanning`/`planningDetail` to non-null without a non-null
+// assertion.
+export function canApplyPlanningHistoryCommand(
+  params: PlanningHistoryCommandGuardParams,
+): params is PlanningHistoryCommandGuardParams & {
+  session: SessionTokens;
+  selectedPlanning: Planning;
+  planningDetail: PlanningDetail;
+} {
+  const { session, selectedPlanning, isReadOnlyProject, planningDetail } = params;
+  return Boolean(
+    session &&
+      selectedPlanning &&
+      selectedPlanning.status === "draft" &&
+      !isReadOnlyProject &&
+      planningDetail &&
+      planningDetail.id === selectedPlanning.id,
+  );
+}
+
+// Builds the error message shown for a failed undo/redo command: the backend's message when the
+// failure is an `ApiError`, otherwise a generic message conditioned on the command's direction.
+// Extracted from applyPlanningHistoryCommand (E4-21 / #207) -- same ternary as before.
+export function buildPlanningHistoryErrorMessage(cause: unknown, direction: "undo" | "redo"): string {
+  if (cause instanceof ApiError) {
+    return cause.message;
+  }
+  return direction === "undo"
+    ? "Impossible d'annuler la dernière modification."
+    : "Impossible de rétablir la modification annulée.";
+}
+
 // Extracted verbatim from ProjectDetailsPage (E4-10 / #150): applies an undo/redo command against
 // the currently-selected planning. Pure mechanical move -- see page.tsx call sites (undo/redo
 // buttons) for wiring.
@@ -69,23 +113,13 @@ export function usePlanningHistoryCommand({
   setHistoryByPlanningId,
   setRetryableError,
 }: UsePlanningHistoryCommandParams) {
-  // Complexity exception (E4-17, #157): multi-condition guard + conditional display
-  // update + three-branch error handling (session expiry, revision conflict, generic
-  // retryable error) in one function. Decomposition tracked in #207 (E4-21) rather
-  // than bundled into #157's gate-activation scope.
-  // eslint-disable-next-line complexity
   async function applyPlanningHistoryCommand(direction: "undo" | "redo") {
-    if (
-      !session ||
-      !selectedPlanning ||
-      selectedPlanning.status !== "draft" ||
-      isReadOnlyProject ||
-      !planningDetail ||
-      planningDetail.id !== selectedPlanning.id
-    ) {
+    const guardParams = { session, selectedPlanning, isReadOnlyProject, planningDetail };
+    if (!canApplyPlanningHistoryCommand(guardParams)) {
       return;
     }
-    const planningId = selectedPlanning.id;
+    const { session: activeSession, selectedPlanning: activePlanning, planningDetail: activeDetail } = guardParams;
+    const planningId = activePlanning.id;
     const history = getPlanningHistory(historyByPlanningId, planningId);
     const command = direction === "undo" ? peekUndo(history) : peekRedo(history);
     if (!command) {
@@ -99,8 +133,8 @@ export function usePlanningHistoryCommand({
       const updated = await restorePlanningSnapshot(
         projectId,
         planningId,
-        { ...delta, expected_revision: planningDetail.revision },
-        session,
+        { ...delta, expected_revision: activeDetail.revision },
+        activeSession,
         onSessionRefresh,
       );
       // The stack transition is unconditional: the undo/redo genuinely succeeded server-side
@@ -115,7 +149,7 @@ export function usePlanningHistoryCommand({
         return setPlanningHistory(current, planningId, { ...nextHistory, revision: updated.revision });
       });
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
         clearSession();
         router.push("/login");
         return;
@@ -134,12 +168,7 @@ export function usePlanningHistoryCommand({
         return;
       }
       if (selectedPlanningIdRef.current === planningId) {
-        const message =
-          cause instanceof ApiError
-            ? cause.message
-            : direction === "undo"
-              ? "Impossible d'annuler la dernière modification."
-              : "Impossible de rétablir la modification annulée.";
+        const message = buildPlanningHistoryErrorMessage(cause, direction);
         setRetryableError(message, () => void applyPlanningHistoryCommand(direction));
       }
     } finally {

@@ -366,12 +366,20 @@ def _reject_diff_conflicts(
     db: Session, project: MsProject, parsed_project: ParsedProject | None
 ) -> None:
     # Reject referenced tasks that the diff preview flagged as conflicts before
-    # mutating any state, keeping the batch reusable (still pending).
+    # mutating any state, keeping the batch reusable (still pending). Called
+    # while still holding the project-row lock taken by _relock_pending_batch
+    # (see _run_confirmed_import), so include_calendar_mismatch=False skips
+    # issue #176's calendar-mismatch diagnostic here: only "conflict" items
+    # are ever read below, and computing the mismatch diagnostic anyway would
+    # resolve calendars (and pay a DB round trip per unresolvable task) for a
+    # result never consumed, entirely under this lock -- the exact
+    # avoidable-costly-work-under-lock anti-pattern already guarded against
+    # elsewhere in this module.
     if parsed_project is None:
         return
     conflicting_uids = [
         item["uid"]
-        for item in build_import_diff(db, project, parsed_project)
+        for item in build_import_diff(db, project, parsed_project, include_calendar_mismatch=False)
         if item.get("kind") == "conflict"
     ]
     if conflicting_uids:

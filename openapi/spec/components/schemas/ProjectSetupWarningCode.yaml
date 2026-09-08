@@ -1,0 +1,6 @@
+type: string
+enum:
+- no_default_calendar
+- default_calendar_has_no_working_day
+- no_active_cost_category
+- no_active_resource_role

@@ -1,10 +1,15 @@
 """Calendar-aware duration/date scheduling (E5-04).
 
 Resolves the working calendar that applies to a planning task from its
-assigned resource role (falling back to the org-wide calendar flagged
-``is_default``, and -- only when no *usable* calendar remains, i.e. none
-exists or the ones that do exist have zero working capacity -- to an
-implicit 24h/day calendar), and exposes pure duration<->dates
+assigned resource role, falling back to the org-wide calendar flagged
+``is_default``. When no *usable* calendar remains -- i.e. neither exists, or
+the ones that do exist have zero working capacity -- resolution fails
+explicitly with :class:`NoUsableCalendarError` instead of silently
+substituting an implicit 24h/day calendar (issue #109: the setup-warnings
+gate at project creation, see ``api/routes/projects.py``, is meant to make
+this case unreachable in normal use; this exception is the remaining safety
+net for a default calendar deactivated or emptied of its working days after
+a project was created). This module also exposes pure duration<->dates
 scheduling functions. These are used today by the summary-task duration
 recalculation in :mod:`waterfall.services.planning_tree`, and are designed
 to be reused by a future "automatic mode" task scheduler (E3-03, out of
@@ -34,7 +39,31 @@ from waterfall.models.resources import Calendar, CalendarWeekday, ResourceRole, 
 WeekdayHours = dict[int, Decimal]
 """MS Project DayType (1=Sunday .. 7=Saturday) -> working hours per day."""
 
-_WALL_CLOCK_WEEKDAY_HOURS: WeekdayHours = {day_type: Decimal(24) for day_type in range(1, 8)}
+
+class NoUsableCalendarError(Exception):
+    """No usable working calendar could be resolved for a task.
+
+    Raised by :func:`resolve_calendars_for_tasks` when a task uid resolves
+    to neither a usable role-assigned calendar nor a usable org-wide default
+    calendar (see :func:`_has_any_working_day`) -- i.e. no calendar flagged
+    ``is_default`` exists, it is inactive, or it has no working day at all.
+
+    This is a plain, FastAPI-agnostic exception: :mod:`calendar_schedule` is
+    a service module and must not depend on ``fastapi``. Each caller (see
+    :mod:`waterfall.services.planning_tree`) is responsible for converting
+    it into an actionable ``HTTPException(400, ...)``. A future issue (#176)
+    is expected to catch this exception directly to exclude the affected
+    task from a read-only MS Project duration comparison instead of failing
+    the whole request, which is why this is a dedicated, catchable type
+    rather than a value silently baked into :class:`ResolvedCalendar`.
+    """
+
+    def __init__(self, task_uid: int) -> None:
+        self.task_uid = task_uid
+        super().__init__(
+            f"No usable working calendar could be resolved for task {task_uid}: "
+            "no active default calendar with at least one working day is configured"
+        )
 
 
 @dataclass(frozen=True)
@@ -50,11 +79,11 @@ class ResolvedCalendar:
       :func:`resolve_task_calendar_ids`).
     - ``"default"``: no role calendar was found, but the org-wide calendar
       flagged ``is_default`` exists and was used instead.
-    - ``"wall_clock_fallback"``: no *usable* calendar remains -- neither a
-      role-assigned one nor one flagged ``is_default`` exists with at least
-      one working day (see :func:`_has_any_working_day` and the note below);
-      every day is treated as a 24h/day working day, which is the only way
-      to keep this tier from inventing non-working days nobody configured.
+
+    When neither tier yields a usable calendar, :func:`resolve_calendars_for_tasks`
+    raises :class:`NoUsableCalendarError` instead of returning a
+    :class:`ResolvedCalendar` at all -- there is no third, always-succeeding
+    fallback tier anymore (see issue #109).
 
     A calendar that resolves but has no configured working day at all (no
     ``CalendarWeekday`` rows, or every row's ``hours_per_day`` is ``0``) is
@@ -67,7 +96,7 @@ class ResolvedCalendar:
     calendar_id: int | None
     code: str
     weekday_hours: WeekdayHours
-    source: Literal["role", "default", "wall_clock_fallback"]
+    source: Literal["role", "default"]
 
 
 def resolve_task_calendar_ids(db: Session, project_id: int, task_uids: set[int]) -> dict[int, int]:
@@ -227,10 +256,14 @@ def resolve_calendars_for_tasks(
     A calendar with no configured working day at all (no ``CalendarWeekday``
     rows, or all of them at ``hours_per_day == 0``) is treated as if it had
     not been resolved: a role calendar with no working day falls through to
-    the calendar flagged ``is_default``, and a default calendar with no
-    working day falls through to ``"wall_clock_fallback"``. This prevents an
-    under-configured calendar from silently zeroing out a task's computed
-    duration (see :func:`_has_any_working_day`).
+    the calendar flagged ``is_default``. This prevents an under-configured
+    calendar from silently zeroing out a task's computed duration (see
+    :func:`_has_any_working_day`).
+
+    Raises :class:`NoUsableCalendarError` for the first task uid (iteration
+    order over ``task_uids``, a ``set``, is not guaranteed) that resolves to
+    neither a usable role calendar nor a usable default calendar -- there is
+    no third, always-succeeding fallback tier (see issue #109).
     """
     if not task_uids:
         return {}
@@ -258,14 +291,7 @@ def resolve_calendars_for_tasks(
                 weekday.hours_per_day
             )
 
-    wall_clock_resolved = ResolvedCalendar(
-        calendar_id=None,
-        code="",
-        weekday_hours=dict(_WALL_CLOCK_WEEKDAY_HOURS),
-        source="wall_clock_fallback",
-    )
-
-    default_resolved: ResolvedCalendar = wall_clock_resolved
+    default_resolved: ResolvedCalendar | None = None
     if default_calendar_id is not None:
         default_weekday_hours = weekday_hours_by_calendar_id.get(default_calendar_id, {})
         if _has_any_working_day(default_weekday_hours):
@@ -279,19 +305,19 @@ def resolve_calendars_for_tasks(
     resolved: dict[int, ResolvedCalendar] = {}
     for uid in task_uids:
         calendar_id = task_calendar_ids.get(uid)
-        if calendar_id is None:
-            resolved[uid] = default_resolved
-            continue
-        role_weekday_hours = weekday_hours_by_calendar_id.get(calendar_id, {})
-        if not _has_any_working_day(role_weekday_hours):
-            resolved[uid] = default_resolved
-            continue
-        resolved[uid] = ResolvedCalendar(
-            calendar_id=calendar_id,
-            code=calendars_by_id[calendar_id].code,
-            weekday_hours=role_weekday_hours,
-            source="role",
-        )
+        if calendar_id is not None:
+            role_weekday_hours = weekday_hours_by_calendar_id.get(calendar_id, {})
+            if _has_any_working_day(role_weekday_hours):
+                resolved[uid] = ResolvedCalendar(
+                    calendar_id=calendar_id,
+                    code=calendars_by_id[calendar_id].code,
+                    weekday_hours=role_weekday_hours,
+                    source="role",
+                )
+                continue
+        if default_resolved is None:
+            raise NoUsableCalendarError(uid)
+        resolved[uid] = default_resolved
     return resolved
 
 

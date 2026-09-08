@@ -1,7 +1,9 @@
 import json
 import xml.etree.ElementTree as ET
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -14,6 +16,7 @@ from waterfall.models.ms_core import MsProject, MsTask
 from waterfall.models.planning import WfPlanning, WfPlanningLinkSnapshot, WfPlanningTaskSnapshot
 from waterfall.models.resources import Calendar, CalendarWeekday
 from waterfall.models.wf_core import WfChargeLine, WfImportBatch
+from waterfall.services.calendar_schedule import resolve_calendars_for_tasks
 
 NS = {"ms": "http://schemas.microsoft.com/project"}
 EXAMPLE_XML = Path(__file__).resolve().parent / "planning_test.xml"
@@ -360,6 +363,79 @@ def test_confirmation_succeeds_when_removed_task_is_not_referenced() -> None:
 
         assert run.status_code == 202
         assert run.json()["status"] == "success"
+
+
+def test_confirmed_run_never_resolves_calendars_under_the_project_lock() -> None:
+    """Issue #176 regression: _reject_diff_conflicts (called from
+    _run_confirmed_import while still holding the project-row lock taken by
+    _relock_pending_batch) must never trigger the calendar-mismatch
+    diagnostic's calendar resolution -- it only ever reads "conflict" items,
+    and resolving calendars for a result it never consumes would hold that
+    lock longer for nothing (see build_import_diff's include_calendar_mismatch
+    parameter). Spies on resolve_calendars_for_tasks to prove the confirmed
+    run path never calls it, while the unlocked GET .../diff preview endpoint
+    (which does need the diagnostic) still does."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client, "import.calendar.lock@example.com")
+        project_id = _create_project(client, headers)
+
+        with get_session_factory()() as session:
+            calendar = Calendar(
+                code="STANDARD", name="Standard", weeks_per_year=52, is_default=True
+            )
+            session.add(calendar)
+            session.flush()
+            session.add_all(
+                CalendarWeekday(
+                    calendar_id=calendar.id,
+                    day_type=day_type,
+                    hours_per_day=Decimal("0.00") if day_type in (1, 7) else Decimal("8.00"),
+                )
+                for day_type in range(1, 8)
+            )
+            session.commit()
+
+        # Start/Finish spans two working days (Mon 08:00 -> Tue 16:00) but
+        # Duration only claims one (480 min) -- a genuine calendar_mismatch
+        # candidate if the diagnostic actually ran.
+        xml = (
+            b'<Project xmlns="http://schemas.microsoft.com/project">'
+            b"<SaveVersion>16</SaveVersion><ScheduleFromStart>1</ScheduleFromStart>"
+            b"<StartDate>2026-01-05T08:00:00</StartDate>"
+            b"<Tasks><Task><UID>1</UID><ID>1</ID><Name>Mismatch candidate</Name>"
+            b"<Type>0</Type><Summary>0</Summary><Milestone>0</Milestone><Manual>0</Manual>"
+            b"<Start>2026-01-05T08:00:00</Start><Finish>2026-01-06T16:00:00</Finish>"
+            b"<Duration>PT480M</Duration></Task></Tasks></Project>"
+        )
+        batch_id = _prepare_pending_batch(client, headers, project_id, xml)
+
+        with patch(
+            "waterfall.services.import_diff.resolve_calendars_for_tasks",
+            wraps=resolve_calendars_for_tasks,
+        ) as spy:
+            diff_response = client.get(
+                f"/imports/v1/batches/{batch_id}/diff",
+                headers=headers,
+            )
+            assert diff_response.status_code == 200
+            mismatch_items = [
+                item
+                for item in diff_response.json()["items"]
+                if item["kind"] == "calendar_mismatch"
+            ]
+            assert mismatch_items, "fixture must actually produce a calendar_mismatch candidate"
+            assert spy.call_count >= 1
+
+            spy.reset_mock()
+
+            run = client.post(
+                f"/imports/v1/batches/{batch_id}/run",
+                json={"dryRun": False, "confirm": True},
+                headers=headers,
+            )
+            assert run.status_code == 202
+            assert run.json()["status"] == "success"
+            assert spy.call_count == 0
 
 
 def test_invalid_import_exposes_structured_validation_errors() -> None:

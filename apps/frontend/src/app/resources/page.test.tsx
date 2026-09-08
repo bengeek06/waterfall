@@ -46,6 +46,8 @@ const mocks = vi.hoisted(() => ({
   createRoleCapacity: vi.fn(),
   updateRoleCapacity: vi.fn(),
   createCostCategory: vi.fn(),
+  createResourceNode: vi.fn(),
+  clearSession: vi.fn(),
   router: { push: vi.fn() },
 }));
 
@@ -54,7 +56,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 vi.mock("@/lib/session", () => ({
-  clearSession: vi.fn(),
+  clearSession: mocks.clearSession,
   getSession: vi.fn(() => ({ accessToken: "test-token" })),
   setSession: vi.fn(),
 }));
@@ -89,6 +91,7 @@ vi.mock("@/lib/backend", async () => {
     createRoleCapacity: mocks.createRoleCapacity,
     updateRoleCapacity: mocks.updateRoleCapacity,
     createCostCategory: mocks.createCostCategory,
+    createResourceNode: mocks.createResourceNode,
   };
 });
 
@@ -237,6 +240,26 @@ describe("ResourcesPage calendar toggle", () => {
     await waitFor(() => expect(screen.getByText("Calendrier assigné à un rôle actif.")).toBeInTheDocument());
     expect(screen.getByRole("button", { name: "Désactiver" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Réactiver" })).not.toBeInTheDocument();
+  });
+
+  // Regression test for #195: `submitAction` (used by every mutation on this page,
+  // including `addNode`) must handle `SessionExpiredError` the same way the page's
+  // own reload functions already do (see `reloadCalendarsPage`), instead of falling
+  // through to the generic "Opération impossible" message.
+  it("clears the session and redirects to login, instead of showing a generic error, when a submitAction mutation reports session expiry", async () => {
+    mocks.createResourceNode.mockRejectedValue(new SessionExpiredError());
+    await renderResourcesTab([activeCalendar]);
+
+    const codeInput = screen.getByLabelText("Code du nouveau nœud");
+    fireEvent.change(codeInput, { target: { value: "IT" } });
+    fireEvent.change(screen.getByLabelText("Nom du nouveau nœud"), { target: { value: "Informatique" } });
+    const addRow = codeInput.closest("tr");
+    if (!addRow) throw new Error("add row not found");
+    fireEvent.click(within(addRow).getByRole("button", { name: "Ajouter" }));
+
+    await waitFor(() => expect(mocks.clearSession).toHaveBeenCalled());
+    await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith("/login"));
+    expect(screen.queryByText("Opération impossible")).not.toBeInTheDocument();
   });
 });
 
@@ -401,6 +424,92 @@ describe("ResourcesPage calendar mutations", () => {
     expect(within(standardRow).queryByText("Par défaut")).not.toBeInTheDocument();
     expect(within(otherRow).getByText("Par défaut")).toBeInTheDocument();
   });
+
+  // Regression test for issue #138: every one of this page's data-loading
+  // effects used to depend on `session` itself, whose *identity* changes on
+  // every token rotation (see `onSessionRefresh` in page.tsx) -- not just on
+  // a real login/logout transition. A token refresh firing while a mutation's
+  // own request was still in flight therefore re-ran the calendars table's
+  // own paginated-view effect too, starting a concurrent GET whose response
+  // could land right after the mutation's optimistic patch and silently
+  // overwrite it with pre-mutation data.
+  it("does not let a concurrent token refresh during setDefaultCalendar's mutation overwrite the optimistic update it applies", async () => {
+    const previousDefault: Calendar = { ...activeCalendar, id: 1, code: "STANDARD", is_default: true };
+    const candidate: Calendar = {
+      id: 3,
+      code: "OTHER",
+      name: "Autre calendrier",
+      weeks_per_year: 44,
+      is_active: true,
+      is_default: false,
+      created_at: "2026-08-01T00:00:00Z",
+      updated_at: "2026-08-01T00:00:00Z",
+      weekdays: [],
+    };
+    const promoted: Calendar = { ...candidate, is_default: true };
+
+    // Captures the shared `onSessionRefresh` callback (the same stable
+    // reference passed to every effect and mutation on this page) via
+    // `getResourceRoles`, called once at mount -- same pattern used by the
+    // users-table tests below. Rendered by hand here, rather than via the
+    // `renderResourcesTab` helper, since that helper unconditionally
+    // overwrites `getResourceRoles` with its own non-capturing mock.
+    let onSessionRefresh: ((next: { accessToken: string }) => void) | null = null;
+    mocks.getResourceNodes.mockResolvedValue([]);
+    mocks.getResourceRoles.mockImplementation(
+      (_tokens: unknown, refresh: (next: { accessToken: string }) => void) => {
+        onSessionRefresh ??= refresh;
+        return Promise.resolve({ items: [], total: 0 });
+      },
+    );
+    mocks.getCalendars.mockResolvedValue({ items: [previousDefault, candidate], total: 2 });
+    mocks.getCostTypes.mockResolvedValue({ items: [], total: 0 });
+    mocks.getCostCategories.mockResolvedValue({ items: [], total: 0 });
+    mocks.getCostRates.mockResolvedValue([]);
+    mocks.getInflationRates.mockResolvedValue([]);
+    mocks.getRoleCapacities.mockResolvedValue([]);
+    mocks.getUsers.mockResolvedValue({ items: [], total: 0 });
+
+    render(<ResourcesPage />);
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("tab", { name: "Ressources" }));
+    await waitFor(() => expect(screen.getByText("OTHER")).toBeInTheDocument());
+    if (!onSessionRefresh) throw new Error("onSessionRefresh was never captured");
+
+    let resolveUpdate!: (calendar: Calendar) => void;
+    mocks.updateCalendar.mockReturnValue(
+      new Promise<Calendar>((resolve) => {
+        resolveUpdate = resolve;
+      }),
+    );
+    // Once `updateCalendar` resolves, `setDefaultCalendar` reloads the table's
+    // own paginated page -- simulated here the same way as the sibling
+    // "promotes a calendar as default..." test above.
+    mocks.getCalendars.mockResolvedValue({ items: [{ ...previousDefault, is_default: false }, promoted], total: 2 });
+
+    const otherRow = screen.getByText("OTHER").closest("tr");
+    if (!otherRow) throw new Error("row not found");
+    fireEvent.click(within(otherRow).getByRole("button", { name: "Définir par défaut" }));
+    await waitFor(() => expect(mocks.updateCalendar).toHaveBeenCalledTimes(1));
+
+    // A token rotation fires now, with `updateCalendar`'s own request still
+    // pending. Before the #138 fix, this alone re-ran the calendars table's
+    // paginated-view effect (it depended on `session`'s identity, not just its
+    // presence) and started a concurrent GET.
+    const getCalendarsCallsBeforeRefresh = mocks.getCalendars.mock.calls.length;
+    act(() => onSessionRefresh!({ accessToken: "refreshed-token" }));
+    expect(mocks.getCalendars.mock.calls.length).toBe(getCalendarsCallsBeforeRefresh);
+
+    // `updateCalendar` now resolves: `setDefaultCalendar` applies its
+    // optimistic patch, then triggers its own (legitimate) reload.
+    resolveUpdate(promoted);
+
+    await waitFor(() => expect(screen.getAllByText("Par défaut")).toHaveLength(1));
+    const standardRow = screen.getByText("STANDARD").closest("tr");
+    if (!standardRow) throw new Error("row not found");
+    expect(within(standardRow).queryByText("Par défaut")).not.toBeInTheDocument();
+    expect(within(otherRow).getByText("Par défaut")).toBeInTheDocument();
+  });
 });
 
 describe("ResourcesPage default calendar warning", () => {
@@ -473,21 +582,31 @@ describe("ResourcesPage default calendar warning", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("does not show the warning when a later reload (triggered by a session refresh) fails after an initial successful load", async () => {
-    let nodeCallCount = 0;
-    mocks.getResourceNodes.mockImplementation((_tokens: unknown, onSessionRefresh: (next: { accessToken: string }) => void) => {
-      nodeCallCount += 1;
-      if (nodeCallCount === 1) {
-        // Simulate a token refresh happening mid-request during the first, successful load,
-        // which re-triggers the load effect (session changes) for a second, failing load.
-        return Promise.resolve([]).then((result) => {
-          onSessionRefresh({ accessToken: "refreshed-token" });
-          return result;
-        });
-      }
-      return Promise.reject(new ApiError(500, "Rechargement impossible"));
+  // Regression test for issue #138: this effect used to depend on `session`
+  // itself, whose *identity* changes on every token rotation (see
+  // `onSessionRefresh` in page.tsx) -- not just on a real login/logout
+  // transition. A token refresh firing mid-request during the initial load
+  // therefore re-ran this same effect for a second, full reload, which could
+  // race an in-flight optimistic mutation elsewhere on the page and overwrite
+  // its freshly-applied state. It no longer does: a token rotation alone must
+  // not start a second reload of the initial data at all.
+  it("does not start a second reload of the initial data when a session refresh fires mid-flight during the initial load", async () => {
+    let onSessionRefresh: ((next: { accessToken: string }) => void) | null = null;
+    let resolveNodes!: (nodes: ResourceNode[]) => void;
+    const nodesPromise = new Promise<ResourceNode[]>((resolve) => {
+      resolveNodes = resolve;
     });
-    mocks.getResourceRoles.mockResolvedValue({ items: [], total: 0 });
+    mocks.getResourceNodes.mockImplementation(() => nodesPromise);
+    mocks.getResourceRoles.mockImplementation(
+      (_tokens: unknown, refresh: (next: { accessToken: string }) => void) => {
+        // Fires mid-flight, before the initial load's own `Promise.all` has
+        // settled -- mirroring `authFetch` calling `onSessionRefresh` before a
+        // retried request settles.
+        onSessionRefresh ??= refresh;
+        refresh({ accessToken: "refreshed-token" });
+        return Promise.resolve({ items: [], total: 0 });
+      },
+    );
     mocks.getCalendars.mockResolvedValue({ items: [activeCalendar], total: 1 });
     mocks.getCostTypes.mockResolvedValue({ items: [], total: 0 });
     mocks.getCostCategories.mockResolvedValue({ items: [], total: 0 });
@@ -498,12 +617,21 @@ describe("ResourcesPage default calendar warning", () => {
 
     render(<ResourcesPage />);
 
-    await waitFor(() => expect(mocks.getResourceNodes).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(screen.getByText("Rechargement impossible")).toBeInTheDocument());
+    await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalled());
+    if (!onSessionRefresh) throw new Error("onSessionRefresh was never captured");
+    // The mid-flight session refresh above must not have started a second
+    // initial load.
+    expect(mocks.getResourceNodes).toHaveBeenCalledTimes(1);
 
+    resolveNodes([]);
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+
+    // The warning still reflects the *one* successful load's data -- no
+    // second, failing reload ever ran to flip it off.
     expect(
-      screen.queryByText("Aucun calendrier par défaut n'est défini. Désignez un calendrier par défaut dans l'onglet Ressources."),
-    ).not.toBeInTheDocument();
+      screen.getByText("Aucun calendrier par défaut n'est défini. Désignez un calendrier par défaut dans l'onglet Ressources."),
+    ).toBeInTheDocument();
+    expect(mocks.getResourceNodes).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -516,37 +644,29 @@ describe("ResourcesPage reload race", () => {
     cleanup();
   });
 
-  it("keeps the most recently triggered reload's data even when an older, obsolete reload resolves later", async () => {
+  // Regression test for issue #138: before the fix, a session refresh firing
+  // mid-flight during the initial load re-ran that same effect (it depended on
+  // `session`'s identity, not just its presence), starting a second, "more
+  // recently triggered" reload -- exercised below as generation guard
+  // (`loadGenerationRef`) coverage. It no longer does: a token rotation alone
+  // must not start a redundant reload, so the single in-flight load's own
+  // data is what ends up rendered once it resolves, whatever order its
+  // `Promise.all` calls settle in.
+  it("does not start a redundant reload when a session refresh fires mid-flight during the initial load, and renders the single in-flight load's own data", async () => {
     const genOneNode: ResourceNode = { id: 1, code: "GEN1", name: "Génération 1", parent_id: null } as never;
-    const genTwoNode: ResourceNode = { id: 2, code: "GEN2", name: "Génération 2", parent_id: null } as never;
 
-    let resolveFirstNodes!: (nodes: ResourceNode[]) => void;
-    const firstNodesPromise = new Promise<ResourceNode[]>((resolve) => {
-      resolveFirstNodes = resolve;
+    let resolveNodes!: (nodes: ResourceNode[]) => void;
+    const nodesPromise = new Promise<ResourceNode[]>((resolve) => {
+      resolveNodes = resolve;
     });
+    mocks.getResourceNodes.mockImplementation(() => nodesPromise);
 
-    let nodeCallCount = 0;
-    mocks.getResourceNodes.mockImplementation(() => {
-      nodeCallCount += 1;
-      // First call: the initial (mount) reload. Stays pending until the test
-      // explicitly releases it below, once the second reload has committed --
-      // simulating an older reload that resolves after a newer one.
-      if (nodeCallCount === 1) return firstNodesPromise;
-      // Second call: the reload triggered by the mid-flight session refresh
-      // below. Resolves immediately, well before the first call is released.
-      return Promise.resolve([genTwoNode]);
-    });
-
-    let rolesCallCount = 0;
     mocks.getResourceRoles.mockImplementation(
       (_tokens: unknown, onSessionRefresh: (next: { accessToken: string }) => void) => {
-        rolesCallCount += 1;
-        if (rolesCallCount === 1) {
-          // Fires mid-flight during the first reload's still-pending Promise.all,
-          // mirroring `authFetch` calling `onSessionRefresh` before a retried
-          // request settles. This starts a second, more recently triggered reload.
-          onSessionRefresh({ accessToken: "refreshed-token" });
-        }
+        // Fires mid-flight, before the initial load's own `Promise.all` has
+        // settled -- mirroring `authFetch` calling `onSessionRefresh` before a
+        // retried request settles.
+        onSessionRefresh({ accessToken: "refreshed-token" });
         return Promise.resolve({ items: [], total: 0 });
       },
     );
@@ -561,21 +681,18 @@ describe("ResourcesPage reload race", () => {
 
     render(<ResourcesPage />);
 
-    // The second (more recently triggered) reload completes first: its own
-    // getResourceNodes call resolves immediately.
-    await waitFor(() => expect(nodeCallCount).toBe(2));
+    await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalled());
+    // The mid-flight session refresh above must not have started a second,
+    // redundant call.
+    expect(mocks.getResourceNodes).toHaveBeenCalledTimes(1);
+
+    resolveNodes([genOneNode]);
     await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
     fireEvent.click(screen.getByRole("tab", { name: "Ressources" }));
-    await waitFor(() => expect(screen.getByText("GEN2")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("GEN1")).toBeInTheDocument());
 
-    // Now release the first (obsolete) reload's stale data, after the second
-    // reload has already committed its own.
-    resolveFirstNodes([genOneNode]);
-
-    // The obsolete first reload must not overwrite the more recently triggered
-    // second reload's committed state.
-    await waitFor(() => expect(screen.queryByText("GEN1")).not.toBeInTheDocument());
-    expect(screen.getByText("GEN2")).toBeInTheDocument();
+    // Still only ever called once, even after the single in-flight load settles.
+    expect(mocks.getResourceNodes).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -3302,19 +3419,22 @@ describe("ResourcesPage users table (E8-09)", () => {
     expect(screen.getByRole("button", { name: "Suivant", hidden: true })).toBeDisabled();
   });
 
-  it("targets the originally selected user's status update even if the underlying list changes while the confirmation is open", async () => {
+  // Regression tests for issue #138. Before the fix, a session-token refresh
+  // was the one thing on this page that could trigger a background refetch of
+  // the users list without any user interaction (every control that could
+  // otherwise do so -- search, sort, pagination, and even "Ajouter un
+  // utilisateur" behind the modal overlay -- is unreachable for as long as a
+  // confirmation dialog is open, per the "freezes pagination and search..."
+  // test above). Since `session`'s identity (a token rotation) no longer
+  // re-runs this effect -- only a genuine presence transition does, see
+  // `hasSession` in page.tsx -- there is now no trigger left at all that
+  // could refetch this list while a confirmation dialog is open: the dialog's
+  // captured target user and the underlying table can no longer drift apart
+  // during that window.
+  it("does not refetch the users list, and still targets the originally selected user's status update, when a session refresh fires while the confirmation is open", async () => {
     const userA = userFixture({ id: 1, email: "alice@example.com", is_active: true });
     const userB = userFixture({ id: 2, email: "bob@example.com", is_active: true });
-    const userC = userFixture({ id: 3, email: "carol@example.com", is_active: true });
 
-    // A session-token refresh is the one thing on this page that can trigger a
-    // background refetch of the users list without any user interaction (every
-    // control that could otherwise do so -- search, sort, pagination, and even the
-    // "Ajouter un utilisateur" button behind the modal overlay -- is unreachable
-    // for as long as the confirmation dialog is open). Capturing the stable
-    // `onSessionRefresh` callback lets the test trigger that refresh deliberately,
-    // once the dialog is already open, instead of racing it against the initial
-    // load.
     let onSessionRefresh: ((next: { accessToken: string }) => void) | null = null;
     mocks.getResourceRoles.mockImplementation(
       (_tokens: unknown, refresh: (next: { accessToken: string }) => void) => {
@@ -3322,10 +3442,7 @@ describe("ResourcesPage users table (E8-09)", () => {
         return Promise.resolve({ items: [], total: 0 });
       },
     );
-    let listReplaced = false;
-    mocks.getUsers.mockImplementation(() =>
-      Promise.resolve(listReplaced ? { items: [userB, userC], total: 2 } : { items: [userA, userB], total: 2 }),
-    );
+    mocks.getUsers.mockResolvedValue({ items: [userA, userB], total: 2 });
     mocks.setUserStatus.mockResolvedValue({ ...userA, is_active: false });
 
     render(<ResourcesPage />);
@@ -3340,19 +3457,16 @@ describe("ResourcesPage users table (E8-09)", () => {
     const alertDialog = await screen.findByRole("alertdialog");
     expect(within(alertDialog).getByText(/alice@example.com sera désactivé/)).toBeInTheDocument();
 
-    // Trigger the background session refresh now, with the dialog already open:
-    // the users tab's own effect re-runs and replaces the underlying list --
-    // Alice isn't even in it any more.
-    listReplaced = true;
+    // Fire the session refresh now, with the dialog already open.
+    const getUsersCallsBeforeRefresh = mocks.getUsers.mock.calls.length;
     if (!onSessionRefresh) throw new Error("onSessionRefresh was never captured");
     act(() => onSessionRefresh!({ accessToken: "refreshed-token" }));
-    await waitFor(() => expect(screen.getByText("carol@example.com")).toBeInTheDocument());
-    expect(screen.queryByText("alice@example.com")).not.toBeInTheDocument();
 
-    // The confirmation dialog itself must be unaffected by the list swap and must
-    // still target Alice specifically when confirmed -- not "whoever is now in that
-    // row" and not silently dropped.
+    // No refetch happens: the list, and Alice's row in it, are untouched.
+    expect(mocks.getUsers.mock.calls.length).toBe(getUsersCallsBeforeRefresh);
+    expect(screen.getByText("alice@example.com")).toBeInTheDocument();
     expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+
     fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Désactiver" }));
 
     await waitFor(() =>
@@ -3360,17 +3474,10 @@ describe("ResourcesPage users table (E8-09)", () => {
     );
   });
 
-  it("targets the originally selected user's deletion even if the list is reordered by a concurrent sort change from elsewhere", async () => {
+  it("does not refetch the users list, and still targets the originally selected user's deletion, when a session refresh fires while the confirmation is open", async () => {
     const userA = userFixture({ id: 1, email: "alice@example.com" });
     const userB = userFixture({ id: 2, email: "bob@example.com" });
 
-    // A session-token refresh is the one thing on this page that can trigger a
-    // background refetch of the users list without any user interaction (every
-    // control that could otherwise do so -- search, sort, pagination -- is
-    // unreachable for as long as the confirmation dialog is open). Capturing the
-    // stable `onSessionRefresh` callback lets the test trigger that refresh
-    // deliberately, once the dialog is already open, to simulate a concurrent
-    // sort change landing mid-confirmation.
     let onSessionRefresh: ((next: { accessToken: string }) => void) | null = null;
     mocks.getResourceRoles.mockImplementation(
       (_tokens: unknown, refresh: (next: { accessToken: string }) => void) => {
@@ -3378,10 +3485,7 @@ describe("ResourcesPage users table (E8-09)", () => {
         return Promise.resolve({ items: [], total: 0 });
       },
     );
-    let reordered = false;
-    mocks.getUsers.mockImplementation(() =>
-      Promise.resolve(reordered ? { items: [userB, userA], total: 2 } : { items: [userA, userB], total: 2 }),
-    );
+    mocks.getUsers.mockResolvedValue({ items: [userA, userB], total: 2 });
     mocks.deleteUser.mockResolvedValue(undefined);
 
     await openUsersTab();
@@ -3394,18 +3498,14 @@ describe("ResourcesPage users table (E8-09)", () => {
     const alertDialog = await screen.findByRole("alertdialog");
     expect(within(alertDialog).getByText(/bob@example.com/)).toBeInTheDocument();
 
-    // Trigger the background session refresh now, with the dialog already open:
-    // the users tab's own effect re-runs and the underlying list comes back
-    // reordered -- Bob is now the *first* row, and Alice occupies what used to be
-    // Bob's row. A fix that re-derives "the user at this row" instead of using the
-    // captured user object would delete Alice here.
-    reordered = true;
+    // Fire the session refresh now, with the dialog already open.
+    const getUsersCallsBeforeRefresh = mocks.getUsers.mock.calls.length;
     if (!onSessionRefresh) throw new Error("onSessionRefresh was never captured");
     act(() => onSessionRefresh!({ accessToken: "refreshed-token" }));
-    await waitFor(() => {
-      const rows = screen.getAllByRole("row").filter((row) => within(row).queryByText(/@example\.com/));
-      expect(within(rows[0]).getByText("bob@example.com")).toBeInTheDocument();
-    });
+
+    // No refetch happens: the list is untouched.
+    expect(mocks.getUsers.mock.calls.length).toBe(getUsersCallsBeforeRefresh);
+    expect(screen.getByText("bob@example.com")).toBeInTheDocument();
 
     fireEvent.click(within(alertDialog).getByRole("button", { name: "Supprimer" }));
 
@@ -3496,19 +3596,17 @@ describe("ResourcesPage users table (E8-09)", () => {
 
   it("does not log out or surface an error from a stale reload once a newer generation has already reloaded successfully", async () => {
     // Simulates: `deleteExistingUser` triggers `reloadUsersPage` (generation N),
-    // then -- before that request resolves -- a session-token refresh triggers
-    // the page's own initial-load effect, which starts and resolves a fresher
-    // request (generation N+1). The stale generation-N request can still fail
-    // afterward (e.g. session expired mid-flight); that failure must be
-    // discarded, not force a logout or overwrite the fresh data with an error.
-    let onSessionRefresh: ((next: { accessToken: string }) => void) | null = null;
-    mocks.getResourceRoles.mockImplementation(
-      (_tokens: unknown, refresh: (next: { accessToken: string }) => void) => {
-        onSessionRefresh ??= refresh;
-        return Promise.resolve({ items: [], total: 0 });
-      },
-    );
-
+    // then -- before that request resolves -- the admin changes the sort
+    // (the confirmation dialog has already closed by then, so sorting is
+    // reachable again; unlike pagination, the sort header isn't disabled while
+    // a fetch is in flight -- see `DataTable`), starting the paginated-view
+    // effect's own fresher request (generation N+1). The stale generation-N
+    // request can still fail afterward (e.g. session expired mid-flight);
+    // that failure must be discarded, not force a logout or overwrite the
+    // fresh data with an error. (A session-token refresh can no longer be the
+    // trigger for a background reload here -- see issue #138 -- so a sort
+    // change is used instead, which remains a valid trigger once the dialog
+    // has closed.)
     const userA = userFixture({ id: 1, email: "alice@example.com" });
     const freshUser = userFixture({ id: 3, email: "fresh@example.com" });
     let rejectStale!: (cause: unknown) => void;
@@ -3524,8 +3622,8 @@ describe("ResourcesPage users table (E8-09)", () => {
           rejectStale = reject;
         });
       }
-      // The fresher request (generation N+1), triggered by the session refresh
-      // while call 2 is still in flight.
+      // The fresher request (generation N+1), triggered by the sort change
+      // below while call 2 is still in flight.
       return Promise.resolve({ items: [freshUser], total: 1 });
     });
     mocks.deleteUser.mockResolvedValue(undefined);
@@ -3538,10 +3636,11 @@ describe("ResourcesPage users table (E8-09)", () => {
     fireEvent.click(within(alertDialog).getByRole("button", { name: "Supprimer" }));
     await waitFor(() => expect(mocks.getUsers).toHaveBeenCalledTimes(2));
 
-    // A session refresh starts and resolves a fresher request while the delete's
-    // own reload (call 2, still pending) hasn't settled yet.
-    if (!onSessionRefresh) throw new Error("onSessionRefresh was never captured");
-    act(() => onSessionRefresh!({ accessToken: "refreshed-token" }));
+    // Changes the sort now -- the confirmation dialog has already closed,
+    // well before the delete's own reload (call 2, still pending) has
+    // settled.
+    fireEvent.click(screen.getByRole("button", { name: "Email" }));
+    await waitFor(() => expect(mocks.getUsers).toHaveBeenCalledTimes(3));
     await waitFor(() => expect(screen.getByText("fresh@example.com")).toBeInTheDocument());
 
     // The stale generation-N request now fails, well after generation N+1
@@ -3664,5 +3763,73 @@ describe("ResourcesPage users table (E8-09)", () => {
     expect(within(otherRow).getByRole("button", { name: "Désactiver" })).toBeEnabled();
     expect(within(otherRow).getByRole("button", { name: "Promouvoir admin" })).toBeEnabled();
     expect(within(otherRow).getByRole("button", { name: "Supprimer" })).toBeEnabled();
+  });
+
+  // Regression tests for #216: a refresh can succeed yet the retried request still
+  // come back 401 (account disabled/deleted between the two calls, server-side
+  // race) -- authFetch then rejects with a plain ApiError, not a
+  // SessionExpiredError. Every user-management mutation handler on this page must
+  // still detect that as a session expiry (clearSession + redirect), not surface
+  // it as a generic business error.
+  it("clears the session and redirects to login when creating a user reports a post-refresh 401, not a generic error", async () => {
+    mocks.getUsers.mockResolvedValue({ items: [], total: 0 });
+    mocks.createUser.mockRejectedValue(new ApiError(401, "Unauthorized"));
+
+    await openUsersTab();
+    fireEvent.click(screen.getByRole("button", { name: "Ajouter un utilisateur" }));
+    fireEvent.change(screen.getByLabelText("Email"), { target: { value: "new@example.com" } });
+    fireEvent.change(screen.getByLabelText("Mot de passe"), { target: { value: "password123" } });
+    fireEvent.click(screen.getByRole("button", { name: "Créer" }));
+
+    await waitFor(() => expect(mocks.clearSession).toHaveBeenCalled());
+    expect(mocks.router.push).toHaveBeenCalledWith("/login");
+    expect(screen.queryByText("Impossible de créer l'utilisateur")).not.toBeInTheDocument();
+  });
+
+  it("clears the session and redirects to login when deleting a user reports a post-refresh 401, not a generic error", async () => {
+    const userA = userFixture({ id: 1, email: "alice@example.com" });
+    mocks.getUsers.mockResolvedValue({ items: [userA], total: 1 });
+    mocks.deleteUser.mockRejectedValue(new ApiError(401, "Unauthorized"));
+
+    await openUsersTab();
+    await waitFor(() => expect(screen.getByText("alice@example.com")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Supprimer" }));
+    const alertDialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(alertDialog).getByRole("button", { name: "Supprimer" }));
+
+    await waitFor(() => expect(mocks.clearSession).toHaveBeenCalled());
+    expect(mocks.router.push).toHaveBeenCalledWith("/login");
+  });
+
+  it("clears the session and redirects to login when toggling a user's status reports a post-refresh 401, not a generic error", async () => {
+    const userA = userFixture({ id: 1, email: "alice@example.com", is_active: true });
+    mocks.getUsers.mockResolvedValue({ items: [userA], total: 1 });
+    mocks.setUserStatus.mockRejectedValue(new ApiError(401, "Unauthorized"));
+
+    await openUsersTab();
+    await waitFor(() => expect(screen.getByText("alice@example.com")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Désactiver" }));
+    const alertDialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(alertDialog).getByRole("button", { name: "Désactiver" }));
+
+    await waitFor(() => expect(mocks.clearSession).toHaveBeenCalled());
+    expect(mocks.router.push).toHaveBeenCalledWith("/login");
+    expect(screen.queryByText("Impossible de modifier le statut")).not.toBeInTheDocument();
+  });
+
+  it("clears the session and redirects to login when toggling a user's admin role reports a post-refresh 401, not a generic error", async () => {
+    const userA = userFixture({ id: 1, email: "alice@example.com", is_admin: false });
+    mocks.getUsers.mockResolvedValue({ items: [userA], total: 1 });
+    mocks.setUserRole.mockRejectedValue(new ApiError(401, "Unauthorized"));
+
+    await openUsersTab();
+    await waitFor(() => expect(screen.getByText("alice@example.com")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Promouvoir admin" }));
+    const alertDialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(alertDialog).getByRole("button", { name: "Promouvoir administrateur" }));
+
+    await waitFor(() => expect(mocks.clearSession).toHaveBeenCalled());
+    expect(mocks.router.push).toHaveBeenCalledWith("/login");
+    expect(screen.queryByText("Impossible de modifier le role")).not.toBeInTheDocument();
   });
 });

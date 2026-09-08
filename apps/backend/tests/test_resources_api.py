@@ -446,7 +446,7 @@ def test_calendar_duplicate_code_conflicts() -> None:
         assert client.post("/resources/calendars", json=payload, headers=headers).status_code == 201
         duplicate: Response = client.post("/resources/calendars", json=payload, headers=headers)
         assert duplicate.status_code == 409
-        assert duplicate.json()["detail"] == "Calendar code already exists"
+        assert duplicate.json()["detail"] == {"code": "GENERIC_ERROR"}
 
 
 def test_first_calendar_created_becomes_default_automatically() -> None:
@@ -758,7 +758,7 @@ def test_role_rejects_unknown_or_inactive_calendar() -> None:
             headers=headers,
         )
         assert unknown.status_code == 404
-        assert unknown.json()["detail"] == "Calendar not found"
+        assert unknown.json()["detail"] == {"code": "GENERIC_ERROR"}
 
         calendar_id = cast(
             dict[str, Any],
@@ -784,7 +784,7 @@ def test_role_rejects_unknown_or_inactive_calendar() -> None:
             headers=headers,
         )
         assert inactive.status_code == 400
-        assert inactive.json()["detail"] == "Calendar is inactive and cannot be assigned"
+        assert inactive.json()["detail"] == {"code": "GENERIC_ERROR"}
 
         role_id = cast(
             dict[str, Any],
@@ -870,7 +870,7 @@ def test_role_reactivation_revalidates_effective_calendar() -> None:
             headers=headers,
         )
         assert reactivate_role.status_code == 400
-        assert reactivate_role.json()["detail"] == "Calendar is inactive and cannot be assigned"
+        assert reactivate_role.json()["detail"] == {"code": "GENERIC_ERROR"}
 
         # The role must remain inactive -- the rejected PATCH must not have
         # partially applied.
@@ -921,9 +921,7 @@ def test_calendar_patch_deactivate_blocked_when_default() -> None:
             headers=headers,
         )
         assert blocked.status_code == 409
-        assert blocked.json()["detail"] == (
-            "Calendar is the system default calendar and cannot be deactivated or deleted"
-        )
+        assert blocked.json()["detail"] == {"code": "GENERIC_ERROR"}
 
 
 def test_calendar_delete_blocked_when_default() -> None:
@@ -934,9 +932,7 @@ def test_calendar_delete_blocked_when_default() -> None:
 
         blocked: Response = client.delete(f"/resources/calendars/{calendar_id}", headers=headers)
         assert blocked.status_code == 409
-        assert blocked.json()["detail"] == (
-            "Calendar is the system default calendar and cannot be deactivated or deleted"
-        )
+        assert blocked.json()["detail"] == {"code": "GENERIC_ERROR"}
 
 
 def test_calendar_patch_cannot_unset_default_without_promoting_replacement() -> None:
@@ -951,10 +947,7 @@ def test_calendar_patch_cannot_unset_default_without_promoting_replacement() -> 
             headers=headers,
         )
         assert blocked.status_code == 409
-        assert blocked.json()["detail"] == (
-            "Cannot unset the default calendar directly; promote another calendar as "
-            "default instead (PATCH it with is_default=true)"
-        )
+        assert blocked.json()["detail"] == {"code": "GENERIC_ERROR"}
 
         # The rejected PATCH must not have applied.
         unchanged: Response = client.get(f"/resources/calendars/{calendar_id}", headers=headers)
@@ -1063,7 +1056,7 @@ def test_calendar_patch_promote_requires_active_calendar() -> None:
 
         promote: Response = _promote_default(client, headers, calendar_id)
         assert promote.status_code == 400
-        assert promote.json()["detail"] == "Only an active calendar can be set as default"
+        assert promote.json()["detail"] == {"code": "GENERIC_ERROR"}
 
 
 def test_calendar_patch_promote_allows_activating_and_promoting_in_same_request() -> None:
@@ -1111,9 +1104,7 @@ def test_calendar_patch_deactivate_and_promote_in_one_request_on_current_default
             headers=headers,
         )
         assert response.status_code == 409
-        assert response.json()["detail"] == (
-            "Calendar is the system default calendar and cannot be deactivated or deleted"
-        )
+        assert response.json()["detail"] == {"code": "GENERIC_ERROR"}
 
 
 def test_calendar_patch_deactivate_and_promote_in_one_request_on_non_default() -> None:
@@ -1134,7 +1125,7 @@ def test_calendar_patch_deactivate_and_promote_in_one_request_on_non_default() -
             headers=headers,
         )
         assert response.status_code == 400
-        assert response.json()["detail"] == "Only an active calendar can be set as default"
+        assert response.json()["detail"] == {"code": "GENERIC_ERROR"}
 
 
 def test_calendar_patch_explicit_null_is_default_matches_false_on_current_default() -> None:
@@ -1153,10 +1144,7 @@ def test_calendar_patch_explicit_null_is_default_matches_false_on_current_defaul
             headers=headers,
         )
         assert response.status_code == 409
-        assert response.json()["detail"] == (
-            "Cannot unset the default calendar directly; promote another calendar as "
-            "default instead (PATCH it with is_default=true)"
-        )
+        assert response.json()["detail"] == {"code": "GENERIC_ERROR"}
 
         unchanged: Response = client.get(f"/resources/calendars/{calendar_id}", headers=headers)
         assert unchanged.json()["is_default"] is True

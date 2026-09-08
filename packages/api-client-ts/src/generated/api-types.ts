@@ -352,6 +352,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/setup-warnings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Verifier le parametrage global avant la creation d'un projet
+         * @description Verifie les 3 prerequis de parametrage global verifiables independamment
+         *     de tout projet (issue #109) : un calendrier actif flague par defaut avec
+         *     au moins un jour travaille, au moins une categorie de cout active, et au
+         *     moins un role de ressource actif. Purement informatif : ne bloque jamais
+         *     `POST /projects`, qui reste possible meme si des avertissements sont
+         *     retournes.
+         */
+        get: operations["getProjectSetupWarnings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/projects/{projectId}": {
         parameters: {
             query?: never;
@@ -1332,11 +1357,12 @@ export interface components {
         };
         ImportDiffItem: {
             /** @enum {string} */
-            kind: "added" | "modified" | "removed" | "conflict";
+            kind: "added" | "modified" | "removed" | "conflict" | "calendar_mismatch";
             uid: number;
             message: string;
             fields: string[];
             linkChanges?: components["schemas"]["ImportLinkChange"][];
+            calendarMismatch?: components["schemas"]["ImportCalendarMismatch"] | null;
         };
         ImportLinkChange: {
             /** @enum {string} */
@@ -1952,6 +1978,27 @@ export interface components {
         UserAdminListRead: components["schemas"]["PaginationMeta"] & {
             items: components["schemas"]["UserAdminRead"][];
         };
+        ImportCalendarMismatch: {
+            taskUid: number;
+            fileDurationMinutes: number;
+            expectedDurationMinutes: number;
+        };
+        /** @enum {string} */
+        ProjectSetupWarningCode: "no_default_calendar" | "default_calendar_has_no_working_day" | "no_active_cost_category" | "no_active_resource_role";
+        ProjectSetupWarning: {
+            code: components["schemas"]["ProjectSetupWarningCode"];
+            /**
+             * @description Texte de diagnostic en anglais, non localise et non destine a un
+             *     affichage direct. Le frontend doit toujours se baser sur `code` pour
+             *     choisir son propre message utilisateur (francais) -- meme principe que
+             *     l'issue #137 pour `HTTPException.detail` -- plutot que d'afficher ce
+             *     champ tel quel.
+             */
+            message: string;
+        };
+        ProjectSetupWarningsRead: {
+            warnings: components["schemas"]["ProjectSetupWarning"][];
+        };
         PlanningTaskDeleteConflict: {
             detail: {
                 /** @enum {string} */
@@ -2263,6 +2310,15 @@ export interface components {
         };
         /** @description Le snapshot entre en conflit avec le planning (cycle, parent orphelin, milestone avec enfants), ou `expected_revision` ne correspond plus a la revision persistee (code `PLANNING_REVISION_CONFLICT`). */
         RestorePlanningSnapshotConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
+            };
+        };
+        /** @description Soit la reference de planning n'est pas validee, elle ne peut donc pas servir de base a la reouverture de la structure (code `PLANNING_STRUCTURE_REOPEN_REQUIRES_VALIDATION`), soit la reouverture entre en conflit avec les donnees existantes lors de l'enregistrement (code `PLANNING_STRUCTURE_REOPEN_INTEGRITY_CONFLICT`). */
+        ReopenPlanningStructureConflict: {
             headers: {
                 [name: string]: unknown;
             };
@@ -2937,6 +2993,27 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
         };
     };
+    getProjectSetupWarnings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Liste des prerequis de parametrage manquants (vide si le parametrage est complet) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectSetupWarningsRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
     getProject: {
         parameters: {
             query?: never;
@@ -3588,7 +3665,7 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["ProjectNotFound"];
-            409: components["responses"]["Conflict"];
+            409: components["responses"]["ReopenPlanningStructureConflict"];
         };
     };
     skipPlanningStructure: {

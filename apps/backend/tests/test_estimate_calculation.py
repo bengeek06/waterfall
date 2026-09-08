@@ -174,7 +174,7 @@ def test_validation_rejects_assignments_outside_estimate_planning_snapshot() -> 
             headers=headers,
         )
         assert validation.status_code == 409
-        assert "outside its planning snapshot" in validation.json()["detail"]
+        assert validation.json()["detail"] == {"code": "GENERIC_ERROR"}
 
 
 def test_calculate_labor_lines_spanning_years() -> None:

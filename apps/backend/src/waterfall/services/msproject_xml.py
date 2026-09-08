@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import xml.etree.ElementTree as ET
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
@@ -50,6 +51,51 @@ class ParsedTask:
     is_manual: bool | None
     calendar_uid: int | None
     notes: str | None
+
+
+def _is_valid_outline_number(outline_number: str | None) -> bool:
+    return bool(outline_number) and all(part.isdigit() for part in outline_number.split("."))
+
+
+def outline_parent_uids(
+    uid_outline_pairs: Iterable[tuple[int, str | None]],
+) -> dict[int, int | None]:
+    """Derive each item's parent uid from its dotted ``outline_number``
+    (e.g. outline number "1.2.3"'s parent is whichever item carries outline
+    number "1.2").
+
+    Shared by ``waterfall.services.msproject_xml_import._populate_parent_metadata``
+    (mutates an already-persisted ``WfPlanningTaskSnapshot`` in place) and the
+    calendar-mismatch import diagnostic (``waterfall.services.import_diff``,
+    issue #176, read-only over a raw, not-yet-persisted ``ParsedTask`` list) --
+    both need the exact same outline-number-to-parent derivation, just applied
+    to a different object shape (``WfPlanningTaskSnapshot.uid``/``outline_number``
+    are SQLAlchemy ``Mapped[...]`` columns, not plain attributes, which
+    pyright's structural typing does not consider interchangeable with a
+    plain ``int``/``str | None`` Protocol; the caller narrows each side down
+    to a plain ``(uid, outline_number)`` pair instead of this function taking
+    either ORM/dataclass object directly).
+
+    An item with a missing or malformed (not dot-separated digits)
+    ``outline_number`` is omitted from the result entirely -- callers must
+    treat a uid absent from the returned mapping as "parent unknown", exactly
+    like ``_populate_parent_metadata`` already skips it for both
+    ``position``/``parent_uid``.
+    """
+    materialized = list(uid_outline_pairs)
+    by_outline = {
+        outline_number: uid
+        for uid, outline_number in materialized
+        if _is_valid_outline_number(outline_number)
+    }
+    result: dict[int, int | None] = {}
+    for uid, outline_number in materialized:
+        if not _is_valid_outline_number(outline_number):
+            continue
+        assert outline_number is not None  # narrowed by _is_valid_outline_number
+        parts = outline_number.split(".")
+        result[uid] = by_outline.get(".".join(parts[:-1]))
+    return result
 
 
 @dataclass(frozen=True)

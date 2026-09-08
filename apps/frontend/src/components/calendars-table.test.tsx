@@ -150,6 +150,63 @@ describe("CalendarsTable", () => {
     expect(onSave).toHaveBeenCalledWith(item);
   });
 
+  it("accepts a two-decimal hours-per-day value (7.4) when editing an existing calendar", () => {
+    // Regression test for #108: the field used to carry `step="0.25"`, which
+    // made a value like 7.4 (a legitimate 37h/5-day week) fail native HTML5
+    // step validation and block "Enregistrer". `step="0.01"` matches the
+    // backend contract's two-decimal precision (`Numeric(4, 2)`).
+    const onSave = vi.fn();
+    const item = calendar({});
+    renderTable({
+      items: [item],
+      draft: { code: "STANDARD", name: "Calendrier standard", weeksPerYear: "47", weekdays: defaultWeekdays() },
+      editingId: 1,
+      onSave,
+    });
+
+    const input = screen.getByLabelText("Heures du Lun de STANDARD") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "7.4" } });
+    expect(input.checkValidity()).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+    expect(onSave).toHaveBeenCalledWith(item);
+  });
+
+  it("accepts a two-decimal hours-per-day value (7.4) on the pinned create row", () => {
+    const onWeekdayChange = vi.fn();
+    renderTable({ onWeekdayChange });
+
+    const input = screen.getByLabelText("Heures du Lun pour le nouveau calendrier") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "7.4" } });
+
+    expect(input.checkValidity()).toBe(true);
+    expect(onWeekdayChange).toHaveBeenCalledWith(2, "7.4");
+  });
+
+  it("blocks Enregistrer and does not call onSave when an hours-per-day field has more than two decimals", () => {
+    // A value like 7.456 is not a multiple of `step="0.01"`, so the browser's
+    // native step-mismatch validation rejects it (jsdom reproduces this the
+    // same way real browsers do: `checkValidity()` returns false and reports
+    // `validity.stepMismatch`), giving the user the native, understandable
+    // "please match the requested format" message rather than silently
+    // truncating or accepting more precision than the backend stores.
+    const onSave = vi.fn();
+    renderTable({
+      items: [calendar({})],
+      draft: { code: "STANDARD", name: "Calendrier standard", weeksPerYear: "47", weekdays: defaultWeekdays() },
+      editingId: 1,
+      onSave,
+    });
+
+    const input = screen.getByLabelText("Heures du Lun de STANDARD") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "7.456" } });
+    expect(input.checkValidity()).toBe(false);
+    expect(input.validity.stepMismatch).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
   it("shows an input in place of the weekday cell while that row is being edited", () => {
     const onDraftWeekdayChange = vi.fn();
     renderTable({

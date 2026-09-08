@@ -16,6 +16,7 @@ from waterfall.models.resources import (
     TaskRoleAssignment,
 )
 from waterfall.services.calendar_schedule import (
+    NoUsableCalendarError,
     _has_any_working_day,  # pyright: ignore[reportPrivateUsage]
     compute_finish_at,
     compute_start_at,
@@ -90,6 +91,23 @@ def test_compute_finish_at_hours_that_previously_truncated_to_zero_no_longer_han
 
     assert finish == datetime(2026, 1, 9, 8, 1, tzinfo=UTC)
     assert compute_working_minutes_between(start, finish, all_days_barely_positive_hours) == 5
+
+
+def test_compute_working_minutes_between_handles_a_centihour_workday() -> None:
+    """Documents issue #108's acceptance criterion: hours_per_day is a
+    Numeric(4, 2) column, so a value like Decimal("7.40") (a 37h/5-day week)
+    is a legal, ordinary input, not an edge case -- unlike the barely-above-
+    zero Decimal("0.01") values exercised above. 7.4 * 60 = 444.0 exactly,
+    so this is a clean case with no rounding ambiguity: it only needs to
+    keep working once the frontend's step="0.25" restriction (which used to
+    make 7.4 unreachable through the UI) is lifted to step="0.01"."""
+    start = datetime(2026, 1, 5, 8, 0, tzinfo=UTC)
+    all_days_centihour = {day_type: Decimal("7.40") for day_type in range(1, 8)}
+
+    finish = compute_finish_at(start, 444, all_days_centihour)
+
+    assert finish == datetime(2026, 1, 5, 15, 24, tzinfo=UTC)
+    assert compute_working_minutes_between(start, finish, all_days_centihour) == 444
 
 
 def test_compute_finish_at_still_rejects_a_calendar_whose_capacity_rounds_to_zero() -> None:
@@ -499,14 +517,13 @@ def test_compute_working_minutes_between_returns_zero_when_finish_not_after_star
 def test_compute_working_minutes_between_matches_wall_clock_diff_under_24h_calendar(
     start: datetime, finish: datetime
 ) -> None:
-    """A uniform 24h/day calendar (what the "wall_clock_fallback" tier uses)
+    """A uniform 24h/day calendar (a legally configurable ``Calendar`` with
+    every ``CalendarWeekday.hours_per_day`` set to ``24``, not a fallback --
+    see issue #109, which removed the implicit wall-clock fallback tier)
     must be mathematically equivalent to the raw wall-clock difference,
     regardless of start_at's time-of-day: each day's shift window tiles
     exactly 24h back-to-back starting from start_at's clock time, so the
-    per-day overlap sum always collapses back to the literal elapsed time.
-    This is what lets planning_tree._recalculate_summary_fields route every
-    ResolvedCalendar source (including "wall_clock_fallback") through
-    compute_working_minutes_between via a single code path."""
+    per-day overlap sum always collapses back to the literal elapsed time."""
     wall_clock_hours = {day_type: Decimal(24) for day_type in range(1, 8)}
 
     assert compute_working_minutes_between(start, finish, wall_clock_hours) == int(
@@ -599,16 +616,18 @@ def test_resolve_default_calendar_id_ignores_standard_code_without_flag() -> Non
         assert resolve_default_calendar_id(session) is None
 
 
-def test_resolve_calendars_for_tasks_falls_back_to_wall_clock_when_no_calendar_exists() -> None:
+def test_resolve_calendars_for_tasks_raises_when_no_calendar_exists() -> None:
+    """Issue #109: the implicit 24h/7d wall-clock fallback is removed. With
+    no role calendar and no calendar at all in the system (so no active
+    ``is_default`` calendar either), resolution must fail explicitly instead
+    of silently computing on a fictitious calendar."""
     project_id, _ = _create_project_with_task(uid=1)
 
     session_factory = get_session_factory()
-    with session_factory() as session:
-        resolved = resolve_calendars_for_tasks(session, project_id, {1})
+    with session_factory() as session, pytest.raises(NoUsableCalendarError) as exc_info:
+        resolve_calendars_for_tasks(session, project_id, {1})
 
-    assert resolved[1].source == "wall_clock_fallback"
-    assert resolved[1].calendar_id is None
-    assert all(hours == Decimal(24) for hours in resolved[1].weekday_hours.values())
+    assert exc_info.value.task_uid == 1
 
 
 def test_resolve_calendars_for_tasks_resolves_role_calendar_with_minimal_legal_hours() -> None:
@@ -687,11 +706,13 @@ def test_resolve_calendars_for_tasks_resolves_role_calendar_with_minimal_legal_h
     assert finish == datetime(2026, 1, 9, 8, 1, tzinfo=UTC)
 
 
-def test_resolve_calendars_for_tasks_falls_through_when_role_calendar_has_no_working_day() -> None:
+def test_resolve_calendars_for_tasks_raises_when_role_calendar_has_no_working_day() -> None:
     """A calendar with zero configured working days must not be reported as
     a usable "role" resolution: it would silently zero out every duration
-    computed from it. With no STANDARD calendar in the DB either, this must
-    fall all the way through to the wall-clock tier."""
+    computed from it. With no STANDARD (or otherwise usable) default
+    calendar in the DB either, resolution must raise
+    :class:`NoUsableCalendarError` (issue #109) instead of falling through
+    to the removed wall-clock tier."""
     session_factory = get_session_factory()
     with session_factory() as session:
         empty_calendar = Calendar(code="EMPTY", name="Empty", weeks_per_year=47)
@@ -742,9 +763,7 @@ def test_resolve_calendars_for_tasks_falls_through_when_role_calendar_has_no_wor
         )
         session.commit()
 
-    with session_factory() as session:
-        resolved = resolve_calendars_for_tasks(session, project_id, {1})
+    with session_factory() as session, pytest.raises(NoUsableCalendarError) as exc_info:
+        resolve_calendars_for_tasks(session, project_id, {1})
 
-    assert resolved[1].source == "wall_clock_fallback"
-    assert resolved[1].calendar_id is None
-    assert all(hours == Decimal(24) for hours in resolved[1].weekday_hours.values())
+    assert exc_info.value.task_uid == 1

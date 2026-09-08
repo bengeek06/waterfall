@@ -606,6 +606,30 @@ paths:
                 $ref: '#/components/schemas/ProjectRead'
         '401':
           $ref: '#/components/responses/Unauthorized'
+  /projects/setup-warnings:
+    get:
+      tags:
+        - projects
+      summary: Verifier le parametrage global avant la creation d'un projet
+      description: |-
+        Verifie les 3 prerequis de parametrage global verifiables independamment
+        de tout projet (issue #109) : un calendrier actif flague par defaut avec
+        au moins un jour travaille, au moins une categorie de cout active, et au
+        moins un role de ressource actif. Purement informatif : ne bloque jamais
+        `POST /projects`, qui reste possible meme si des avertissements sont
+        retournes.
+      operationId: getProjectSetupWarnings
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Liste des prerequis de parametrage manquants (vide si le parametrage est complet)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectSetupWarningsRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /projects/{projectId}:
     get:
       tags:
@@ -1224,7 +1248,7 @@ paths:
         '404':
           $ref: '#/components/responses/ProjectNotFound'
         '409':
-          $ref: '#/components/responses/Conflict'
+          $ref: '#/components/responses/ReopenPlanningStructureConflict'
   /projects/{projectId}/planning-structure/skip:
     post:
       tags:
@@ -2888,6 +2912,7 @@ components:
             - modified
             - removed
             - conflict
+            - calendar_mismatch
         uid:
           type: integer
           minimum: 1
@@ -2901,6 +2926,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ImportLinkChange'
+        calendarMismatch:
+          anyOf:
+            - $ref: '#/components/schemas/ImportCalendarMismatch'
+            - type: 'null'
     ImportLinkChange:
       type: object
       required:
@@ -4848,6 +4877,54 @@ components:
               type: array
               items:
                 $ref: '#/components/schemas/UserAdminRead'
+    ImportCalendarMismatch:
+      type: object
+      required:
+        - taskUid
+        - fileDurationMinutes
+        - expectedDurationMinutes
+      properties:
+        taskUid:
+          type: integer
+          minimum: 1
+        fileDurationMinutes:
+          type: integer
+          minimum: 0
+        expectedDurationMinutes:
+          type: integer
+          minimum: 0
+    ProjectSetupWarningCode:
+      type: string
+      enum:
+        - no_default_calendar
+        - default_calendar_has_no_working_day
+        - no_active_cost_category
+        - no_active_resource_role
+    ProjectSetupWarning:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          $ref: '#/components/schemas/ProjectSetupWarningCode'
+        message:
+          type: string
+          description: |-
+            Texte de diagnostic en anglais, non localise et non destine a un
+            affichage direct. Le frontend doit toujours se baser sur `code` pour
+            choisir son propre message utilisateur (francais) -- meme principe que
+            l'issue #137 pour `HTTPException.detail` -- plutot que d'afficher ce
+            champ tel quel.
+    ProjectSetupWarningsRead:
+      type: object
+      required:
+        - warnings
+      properties:
+        warnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProjectSetupWarning'
     PlanningTaskDeleteConflict:
       type: object
       required:
@@ -5305,6 +5382,12 @@ components:
             $ref: '#/components/schemas/FastAPIErrorResponse'
     RestorePlanningSnapshotConflict:
       description: Le snapshot entre en conflit avec le planning (cycle, parent orphelin, milestone avec enfants), ou `expected_revision` ne correspond plus a la revision persistee (code `PLANNING_REVISION_CONFLICT`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/FastAPIErrorResponse'
+    ReopenPlanningStructureConflict:
+      description: Soit la reference de planning n'est pas validee, elle ne peut donc pas servir de base a la reouverture de la structure (code `PLANNING_STRUCTURE_REOPEN_REQUIRES_VALIDATION`), soit la reouverture entre en conflit avec les donnees existantes lors de l'enregistrement (code `PLANNING_STRUCTURE_REOPEN_INTEGRITY_CONFLICT`).
       content:
         application/json:
           schema:

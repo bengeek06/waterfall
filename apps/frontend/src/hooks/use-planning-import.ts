@@ -11,11 +11,127 @@ import {
   Project,
   runImportBatch,
   SessionExpiredError,
+  type ImportBatchStatus,
   type ImportDiff,
 } from "@/lib/backend";
 import { clearSession, type SessionTokens } from "@/lib/session";
 
 type AppRouter = ReturnType<typeof useRouter>;
+
+// Polls an import batch's status until it reaches a terminal state ("success" or "failed") or the
+// retry budget (20 attempts, 300ms apart) is exhausted, then throws if the batch didn't succeed.
+// Extracted from confirmPlanningImport (E4-19 / #205) -- mechanical move, same iteration count,
+// delay and error message as before.
+export async function pollImportBatchStatus(
+  batchId: number,
+  session: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+): Promise<ImportBatchStatus> {
+  let batchStatus = await getImportBatchStatus(batchId, session, onSessionRefresh);
+  for (let index = 0; index < 20; index += 1) {
+    if (batchStatus.status === "success" || batchStatus.status === "failed") {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    batchStatus = await getImportBatchStatus(batchId, session, onSessionRefresh);
+  }
+  if (batchStatus.status !== "success") {
+    throw new Error(batchStatus.errorMessage ?? "Import en échec.");
+  }
+  return batchStatus;
+}
+
+// Picks the planning to display after a successful import: the project's displayed planning if
+// the project refresh succeeded, otherwise the most recent planning, or `null` if there is none.
+// Extracted from confirmPlanningImport (E4-19 / #205).
+export function pickNextPlanningId(refreshedProject: Project | null, refreshedPlannings: Planning[]): number | null {
+  return refreshedProject?.displayed_planning_id ?? refreshedPlannings.at(-1)?.id ?? null;
+}
+
+// Builds the post-import feedback message: the happy-path message, or a combined "partial
+// failure" message listing what couldn't be refreshed. Extracted from confirmPlanningImport
+// (E4-19 / #205).
+export function buildImportFeedbackMessage(refreshFailures: string[]): string {
+  return refreshFailures.length
+    ? `Import réussi, mais ${refreshFailures.join(" et ")} n'ont pas pu être actualisés. Recharge la page pour voir l'état à jour.`
+    : "Import réussi. Le planning affiché a été actualisé.";
+}
+
+// Classifies a settled promise result from the post-import refresh: applies the success value via
+// `onSuccess`, flags a session expiry so the caller can redirect, or records `failureLabel` for the
+// combined "partial failure" feedback message. Extracted from confirmPlanningImport (E4-19 / #205).
+export function applySettledRefresh<T>(
+  result: PromiseSettledResult<T>,
+  onSuccess: (value: T) => void,
+  failureLabel: string,
+): { sessionExpired: boolean; failureLabel: string | null } {
+  if (result.status === "fulfilled") {
+    onSuccess(result.value);
+    return { sessionExpired: false, failureLabel: null };
+  }
+  if (result.reason instanceof SessionExpiredError || (result.reason instanceof ApiError && result.reason.status === 401)) {
+    return { sessionExpired: true, failureLabel: null };
+  }
+  return { sessionExpired: false, failureLabel };
+}
+
+// Applies both post-import settled refreshes (project + plannings), aggregating failure labels
+// and short-circuiting on a session expiry from either one. Extracted from confirmPlanningImport
+// (E4-19 / #205) to fold the two near-identical `applySettledRefresh` branches into one call.
+export function applyImportRefreshes(
+  projectRefresh: PromiseSettledResult<Project>,
+  planningsRefresh: PromiseSettledResult<Planning[]>,
+  setProject: (project: Project) => void,
+  setPlannings: (plannings: Planning[]) => void,
+): { sessionExpired: boolean; refreshFailures: string[] } {
+  const refreshFailures: string[] = [];
+
+  const projectOutcome = applySettledRefresh(projectRefresh, setProject, "le projet");
+  if (projectOutcome.sessionExpired) {
+    return { sessionExpired: true, refreshFailures };
+  }
+  if (projectOutcome.failureLabel) {
+    refreshFailures.push(projectOutcome.failureLabel);
+  }
+
+  const planningsOutcome = applySettledRefresh(planningsRefresh, setPlannings, "les versions de planning");
+  if (planningsOutcome.sessionExpired) {
+    return { sessionExpired: true, refreshFailures };
+  }
+  if (planningsOutcome.failureLabel) {
+    refreshFailures.push(planningsOutcome.failureLabel);
+  }
+
+  return { sessionExpired: false, refreshFailures };
+}
+
+// Refreshes the planning detail for `nextPlanningId` (or clears it if there is none), pushing a
+// failure label into `refreshFailures` on error. Returns `true` if the session expired, in which
+// case the caller must redirect and stop. Extracted from confirmPlanningImport (E4-19 / #205).
+export async function refreshPlanningDetailAfterImport(
+  projectId: number,
+  nextPlanningId: number | null,
+  activeSession: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+  setPlanningDetail: (detail: PlanningDetail | null) => void,
+  refreshFailures: string[],
+): Promise<boolean> {
+  if (!nextPlanningId) {
+    setPlanningDetail(null);
+    return false;
+  }
+  try {
+    const updatedDetail = await getPlanning(projectId, nextPlanningId, activeSession, onSessionRefresh);
+    setPlanningDetail(updatedDetail);
+    return false;
+  } catch (cause) {
+    if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
+      return true;
+    }
+    refreshFailures.push("le détail du planning");
+    return false;
+  }
+}
 
 interface UsePlanningImportParams {
   session: SessionTokens | null;
@@ -59,11 +175,6 @@ export function usePlanningImport({
   setImportBusy,
   setError,
 }: UsePlanningImportParams) {
-  // Complexity exception (E4-17, #157): batch launch + status-polling loop +
-  // two-way Promise.allSettled refresh aggregation, each branch with its own
-  // session-expiry handling, in one function. Decomposition tracked in #205
-  // (E4-19) rather than bundled into #157's gate-activation scope.
-  // eslint-disable-next-line complexity
   async function confirmPlanningImport() {
     if (!session || !project || !importReview) {
       return;
@@ -73,17 +184,7 @@ export function usePlanningImport({
     setImportFeedback(null);
     try {
       await runImportBatch(importReview.batchId, session, onSessionRefresh, false, true);
-      let batchStatus = await getImportBatchStatus(importReview.batchId, session, onSessionRefresh);
-      for (let index = 0; index < 20; index += 1) {
-        if (batchStatus.status === "success" || batchStatus.status === "failed") {
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 300));
-        batchStatus = await getImportBatchStatus(importReview.batchId, session, onSessionRefresh);
-      }
-      if (batchStatus.status !== "success") {
-        throw new Error(batchStatus.errorMessage ?? "Import en échec.");
-      }
+      await pollImportBatchStatus(importReview.batchId, session, onSessionRefresh);
 
       setImportReview(null);
       setImportFile(null);
@@ -93,55 +194,36 @@ export function usePlanningImport({
         getProject(projectId, session, onSessionRefresh),
         listPlannings(projectId, session, onSessionRefresh),
       ]);
-      const refreshFailures: string[] = [];
-      if (projectRefresh.status === "fulfilled") {
-        setProject(projectRefresh.value);
-      } else {
-        if (projectRefresh.reason instanceof SessionExpiredError) {
-          clearSession();
-          router.push("/login");
-          return;
-        }
-        refreshFailures.push("le projet");
+      const refreshesOutcome = applyImportRefreshes(projectRefresh, planningsRefresh, setProject, setPlannings);
+      if (refreshesOutcome.sessionExpired) {
+        clearSession();
+        router.push("/login");
+        return;
       }
-      if (planningsRefresh.status === "fulfilled") {
-        setPlannings(planningsRefresh.value);
-      } else {
-        if (planningsRefresh.reason instanceof SessionExpiredError) {
-          clearSession();
-          router.push("/login");
-          return;
-        }
-        refreshFailures.push("les versions de planning");
-      }
+      const refreshFailures = refreshesOutcome.refreshFailures;
 
       const refreshedProject = projectRefresh.status === "fulfilled" ? projectRefresh.value : project;
       const refreshedPlannings = planningsRefresh.status === "fulfilled" ? planningsRefresh.value : plannings;
-      const nextPlanningId =
-        refreshedProject?.displayed_planning_id ?? refreshedPlannings.at(-1)?.id ?? null;
-      if (nextPlanningId) {
-        try {
-          const updatedDetail = await getPlanning(projectId, nextPlanningId, session, onSessionRefresh);
-          setPlanningDetail(updatedDetail);
-        } catch (cause) {
-          if (cause instanceof SessionExpiredError) {
-            clearSession();
-            router.push("/login");
-            return;
-          }
-          refreshFailures.push("le détail du planning");
-        }
-      } else {
-        setPlanningDetail(null);
-      }
-      updateSelectedPlanningId(nextPlanningId);
-      setImportFeedback(
-        refreshFailures.length
-          ? `Import réussi, mais ${refreshFailures.join(" et ")} n'ont pas pu être actualisés. Recharge la page pour voir l'état à jour.`
-          : "Import réussi. Le planning affiché a été actualisé.",
+      const nextPlanningId = pickNextPlanningId(refreshedProject, refreshedPlannings);
+
+      const detailSessionExpired = await refreshPlanningDetailAfterImport(
+        projectId,
+        nextPlanningId,
+        session,
+        onSessionRefresh,
+        setPlanningDetail,
+        refreshFailures,
       );
+      if (detailSessionExpired) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+
+      updateSelectedPlanningId(nextPlanningId);
+      setImportFeedback(buildImportFeedbackMessage(refreshFailures));
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
         clearSession();
         router.push("/login");
         return;

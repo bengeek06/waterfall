@@ -62,6 +62,7 @@ export type PlanningTabProps = {
   selectedPlanningHasConflict: boolean;
   onValidatePlanning: () => void;
   onSetReference: () => void;
+  onCreateVersion: () => void;
   onReopenStructure: () => void;
   planningMutationBusy: boolean;
   canUndo: boolean;
@@ -167,6 +168,7 @@ export function PlanningTab({
   selectedPlanningHasConflict,
   onValidatePlanning,
   onSetReference,
+  onCreateVersion,
   onReopenStructure,
   planningMutationBusy,
   canUndo,
@@ -245,6 +247,7 @@ export function PlanningTab({
               onValidate={onValidatePlanning}
               projectPlanningReferenceId={project?.planning_reference_id}
               onSetReference={onSetReference}
+              onCreateVersion={onCreateVersion}
               showReopenStructure={canReopenPlanningStructure(project, isReadOnlyProject)}
               onReopenStructure={onReopenStructure}
               planningMutationBusy={planningMutationBusy}

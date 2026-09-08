@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 from decimal import Decimal
+from enum import StrEnum
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -53,6 +54,39 @@ class ProjectRead(BaseModel):
 
 class ProjectListRead(PaginatedList[ProjectRead]):
     pass
+
+
+class ProjectSetupWarningCode(StrEnum):
+    """Issue #109: a missing global setup prerequisite for project creation.
+
+    Deliberately limited to the 3 prerequisites the issue lists as
+    verifiable at project-creation time (a usable default calendar, at
+    least one active cost category, at least one active resource role).
+    ``CostRate``/``InflationRate`` and ``RoleCapacity`` are explicitly out of
+    scope (see the issue: not meaningfully verifiable before a project has
+    tasks, or not consumed by any cost/scheduling calculation yet).
+    """
+
+    NO_DEFAULT_CALENDAR = "no_default_calendar"
+    DEFAULT_CALENDAR_HAS_NO_WORKING_DAY = "default_calendar_has_no_working_day"
+    NO_ACTIVE_COST_CATEGORY = "no_active_cost_category"
+    NO_ACTIVE_RESOURCE_ROLE = "no_active_resource_role"
+
+
+class ProjectSetupWarning(BaseModel):
+    code: ProjectSetupWarningCode
+    message: str = Field(
+        description=(
+            "English diagnostic text, not localized and not meant for direct display. "
+            "Callers must always branch on `code` to pick their own user-facing "
+            "(French) message -- same principle as issue #137 for "
+            "`HTTPException.detail` -- rather than rendering this field verbatim."
+        )
+    )
+
+
+class ProjectSetupWarningsRead(BaseModel):
+    warnings: list[ProjectSetupWarning]
 
 
 class ProjectCreate(BaseModel):

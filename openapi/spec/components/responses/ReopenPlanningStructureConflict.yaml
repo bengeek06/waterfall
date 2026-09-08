@@ -1,0 +1,10 @@
+description: >-
+  Soit la reference de planning n'est pas validee, elle ne peut donc pas
+  servir de base a la reouverture de la structure (code
+  `PLANNING_STRUCTURE_REOPEN_REQUIRES_VALIDATION`), soit la reouverture entre
+  en conflit avec les donnees existantes lors de l'enregistrement (code
+  `PLANNING_STRUCTURE_REOPEN_INTEGRITY_CONFLICT`).
+content:
+  application/json:
+    schema:
+      $ref: ../schemas/FastAPIErrorResponse.yaml

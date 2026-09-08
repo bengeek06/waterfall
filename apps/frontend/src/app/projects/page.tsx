@@ -33,10 +33,13 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   ApiError,
   Project,
+  ProjectSetupWarning,
   SessionExpiredError,
   createProject,
   deleteProject,
+  describeProjectSetupWarningCode,
   getMe,
+  getProjectSetupWarnings,
   getProjects,
   restoreSession,
 } from "@/lib/backend";
@@ -66,6 +69,17 @@ export default function ProjectsPage() {
   const [createDescription, setCreateDescription] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  // Non-blocking global setup warnings (#109: missing default calendar/working day,
+  // active cost category, or active resource role) -- fetched when the create dialog
+  // opens (at the latest point required by the issue) rather than at page load, since
+  // they're only relevant to the user right before they create a project.
+  const [setupWarnings, setSetupWarnings] = useState<ProjectSetupWarning[]>([]);
+  // Guards `openCreateDialog`'s fetch the same way `projectsGenerationRef` guards the
+  // main list load: the dialog can be closed/reopened (or "Créer projet" double-clicked,
+  // since it isn't disabled while a fetch is in flight) faster than a `getProjectSetupWarnings`
+  // request resolves -- without this, a stale response arriving after a newer one would
+  // silently overwrite the correct, already-displayed warnings.
+  const setupWarningsGenerationRef = useRef(0);
 
   const onSessionRefresh = useMemo(
     () => (next: SessionTokens) => {
@@ -235,6 +249,31 @@ export default function ProjectsPage() {
     setCreateCode("");
     setCreateDescription("");
     setCreateError(null);
+    setSetupWarnings([]);
+  }
+
+  // Loads the non-blocking global setup warnings (#109) when the create dialog opens.
+  // A failure to load them (other than a session expiry) must not prevent project
+  // creation, so it's swallowed and the dialog simply shows no warning rather than an
+  // error -- the warnings themselves are advisory, not a precondition for the form.
+  async function openCreateDialog() {
+    const generation = ++setupWarningsGenerationRef.current;
+    setCreateMode(true);
+    setSetupWarnings([]);
+    if (!session) {
+      router.push("/login");
+      return;
+    }
+    try {
+      const result = await getProjectSetupWarnings(session, onSessionRefresh);
+      if (setupWarningsGenerationRef.current !== generation) return;
+      setSetupWarnings(result.warnings);
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
+        clearSession();
+        router.push("/login");
+      }
+    }
   }
 
   async function onCreateProject() {
@@ -262,6 +301,11 @@ export default function ProjectsPage() {
       resetCreateFlow();
       await reloadProjectsPage();
     } catch (cause) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
       setCreateError(cause instanceof ApiError ? cause.message : "Impossible de créer le projet.");
     } finally {
       setActionBusy(null);
@@ -275,22 +319,31 @@ export default function ProjectsPage() {
 
     const projectIds = [...selectedIds];
     setActionBusy("Suppression des projets sélectionnés...");
+    let sessionExpired = false;
     try {
       for (const projectId of projectIds) {
         await deleteProject(projectId, session, onSessionRefresh);
       }
       toast.success(`${projectIds.length} projet(s) supprimé(s).`);
     } catch (cause) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
+        sessionExpired = true;
+        clearSession();
+        router.push("/login");
+        return;
+      }
       // A failure partway through the loop still leaves the earlier ids deleted
       // server-side -- `selectedIds`/the table's current page must not keep
       // referencing them as if nothing happened. `reloadProjectsPage()` below
-      // (in `finally`, so it always runs) resynchronizes on the real server
-      // state whether the loop fully succeeded, partially succeeded, or failed
-      // on the very first id.
+      // (in `finally`, so it runs on every non-session-expiry outcome) resynchronizes
+      // on the real server state whether the loop fully succeeded, partially
+      // succeeded, or failed on the very first id.
       toast.error(cause instanceof ApiError ? cause.message : "Impossible de supprimer les projets.");
     } finally {
-      setSelectedIds(new Set());
-      await reloadProjectsPage();
+      if (!sessionExpired) {
+        setSelectedIds(new Set());
+        await reloadProjectsPage();
+      }
       setActionBusy(null);
     }
   }
@@ -318,7 +371,7 @@ export default function ProjectsPage() {
         </div>
 
         <div className="mt-4 flex flex-wrap gap-2">
-          <Button type="button" onClick={() => setCreateMode(true)}>
+          <Button type="button" onClick={() => void openCreateDialog()}>
             Créer projet
           </Button>
         </div>
@@ -330,7 +383,7 @@ export default function ProjectsPage() {
         open={createMode}
         onOpenChange={(open) => {
           if (open) {
-            setCreateMode(true);
+            void openCreateDialog();
           } else {
             resetCreateFlow();
           }
@@ -342,6 +395,18 @@ export default function ProjectsPage() {
             <DialogDescription>Créez le référentiel initial du projet.</DialogDescription>
           </DialogHeader>
           {createError ? <Alert variant="destructive"><AlertDescription>{createError}</AlertDescription></Alert> : null}
+          {setupWarnings.length ? (
+            <Alert variant="default">
+              <AlertDescription>
+                <p>Paramétrage global incomplet -- le projet pourra tout de même être créé :</p>
+                <ul className="mt-1 list-disc pl-4">
+                  {setupWarnings.map((warning) => (
+                    <li key={warning.code}>{describeProjectSetupWarningCode(warning.code)}</li>
+                  ))}
+                </ul>
+              </AlertDescription>
+            </Alert>
+          ) : null}
           <div className="grid gap-4">
             <div className="grid gap-2">
               <Label htmlFor="project-name">Nom du projet</Label>

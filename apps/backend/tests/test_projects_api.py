@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any, cast
 from uuid import uuid4
 
@@ -10,6 +11,8 @@ from waterfall.main import app
 from waterfall.models.ms_core import MsProject, MsTask
 from waterfall.models.planning import WfPlanning, WfPlanningTaskSnapshot
 from waterfall.models.resources import (
+    Calendar,
+    CalendarWeekday,
     CostCategory,
     CostType,
     Estimate,
@@ -264,7 +267,7 @@ def test_snapshot_only_task_rejects_legacy_assignment() -> None:
         )
 
         assert response.status_code == 409
-        assert "snapshot-only" in response.json()["detail"].lower()
+        assert response.json()["detail"] == {"code": "GENERIC_ERROR"}
 
 
 def test_delete_planning_task_referenced_by_cost_line_conflicts_without_mutation() -> None:
@@ -869,6 +872,89 @@ def test_creates_first_planning_from_a_hierarchical_legacy_project() -> None:
         assert cloned_tasks[100]["parent_uid"] is None
         assert cloned_tasks[2]["parent_uid"] == 100
         assert cloned_tasks[1]["parent_uid"] == 2
+
+
+def test_creates_first_planning_from_legacy_project_preserves_task_enrichment_notes() -> None:
+    # Regression for #178: create_planning's `else` branch (first clone of a legacy
+    # project's MsTask rows, when neither source_planning_id nor
+    # project.displayed_planning_id is set) built each cloned WfPlanningTaskSnapshot
+    # without carrying over the task's notes, unlike the sibling source_planning_id
+    # branch and reopen_planning_structure. MsTask itself has no `notes` column --
+    # legacy task notes live in WfTaskEnrichment, keyed by (project_id, task_uid), the
+    # same table update_task_description falls back to while no WfPlanning exists yet
+    # (see tasks.py). This covers both a task with an enrichment row (its description
+    # must land in WfPlanningTaskSnapshot.notes) and a task with none (must clone with
+    # notes=None, not raise).
+    with TestClient(app) as client:
+        headers = _auth_headers(client, "projects.legacy-enrichment-clone@example.com")
+        owner_id = _current_user_id(client, headers)
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            project = MsProject(
+                owner_id=owner_id,
+                source_version=2016,
+                save_version_out=16,
+                name="Legacy enrichment clone source",
+                schedule_from_start=True,
+                start_date=datetime(2026, 1, 5, tzinfo=UTC),
+                finish_date=datetime(2026, 1, 20, tzinfo=UTC),
+                minutes_per_day=480,
+                minutes_per_week=2400,
+                days_per_month=20,
+            )
+            session.add(project)
+            session.flush()
+            project_id = project.id
+
+            session.add(
+                MsTask(
+                    project_id=project_id,
+                    uid=1,
+                    id_display=1,
+                    parent_uid=None,
+                    name="Annotated task",
+                    task_type=1,
+                    outline_number="1",
+                    outline_level=1,
+                    is_summary=False,
+                    is_milestone=False,
+                )
+            )
+            session.add(
+                MsTask(
+                    project_id=project_id,
+                    uid=2,
+                    id_display=2,
+                    parent_uid=None,
+                    name="Bare task",
+                    task_type=1,
+                    outline_number="2",
+                    outline_level=1,
+                    is_summary=False,
+                    is_milestone=False,
+                )
+            )
+            now = datetime.now(UTC)
+            session.add(
+                WfTaskEnrichment(
+                    project_id=project_id,
+                    task_uid=1,
+                    description="Legacy notes must survive the first clone",
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+        # No source_planning_id and no displayed_planning_id yet: exercises
+        # create_planning's `else` branch.
+        clone_response = client.post(f"/projects/{project_id}/plannings", json={}, headers=headers)
+
+        assert clone_response.status_code == 201
+        cloned_tasks = {task["uid"]: task for task in clone_response.json()["tasks"]}
+        assert cloned_tasks[1]["description"] == "Legacy notes must survive the first clone"
+        assert cloned_tasks[2]["description"] is None
 
 
 def test_projects_are_isolated_by_owner() -> None:
@@ -1577,7 +1663,7 @@ def test_en_cours_transition_rejects_project_initialised_without_structure_via_s
             headers=headers,
         )
         assert response.status_code == 409
-        assert response.json()["detail"] == "Project requires a planning structure before en_cours"
+        assert response.json()["detail"] == {"code": "GENERIC_ERROR"}
 
 
 def test_en_cours_transition_rejects_structure_in_unrelated_draft_not_referenced() -> None:
@@ -1666,7 +1752,7 @@ def test_en_cours_transition_rejects_structure_in_unrelated_draft_not_referenced
             headers=headers,
         )
         assert response.status_code == 409
-        assert response.json()["detail"] == "Project requires a planning structure before en_cours"
+        assert response.json()["detail"] == {"code": "GENERIC_ERROR"}
 
 
 def test_project_can_initialise_without_a_planning_structure() -> None:
@@ -2032,7 +2118,7 @@ def test_planning_structure_draft_read_returns_409_for_invalid_json() -> None:
 
         read = client.get(f"/projects/{project_id}/planning-structure/draft", headers=headers)
         assert read.status_code == 409
-        assert read.json()["detail"] == "Saved planning structure draft is invalid JSON"
+        assert read.json()["detail"] == {"code": "GENERIC_ERROR"}
 
 
 def test_planning_structure_draft_read_returns_409_for_invalid_schema() -> None:
@@ -2054,7 +2140,7 @@ def test_planning_structure_draft_read_returns_409_for_invalid_schema() -> None:
 
         read = client.get(f"/projects/{project_id}/planning-structure/draft", headers=headers)
         assert read.status_code == 409
-        assert read.json()["detail"] == "Saved planning structure draft has invalid schema"
+        assert read.json()["detail"] == {"code": "GENERIC_ERROR"}
 
 
 def test_delete_project_clears_reference_estimate_before_deleting_estimates() -> None:
@@ -2180,3 +2266,143 @@ def test_planning_tasks_are_returned_depth_first() -> None:
         # A second deliverable of lot 1 precedes lot 2 and the next post subtree.
         assert outlines.index("1.1.2") < outlines.index("1.2")
         assert outlines.index("1.2.1") < outlines.index("2")
+
+
+def _seed_complete_setup() -> None:
+    """Seed every prerequisite GET /projects/setup-warnings checks for: an
+    active default calendar with a working day, an active cost category, and
+    an active resource role."""
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        calendar = Calendar(code="STANDARD", name="Standard", weeks_per_year=47, is_default=True)
+        session.add(calendar)
+        session.flush()
+        session.add_all(
+            CalendarWeekday(
+                calendar_id=calendar.id,
+                day_type=day_type,
+                hours_per_day=Decimal("0.00") if day_type in (1, 7) else Decimal("7.00"),
+            )
+            for day_type in range(1, 8)
+        )
+
+        node = ResourceNode(code="IT", name="Departement informatique")
+        session.add(node)
+        session.flush()
+        cost_type = CostType(code="MO", name="Main d'oeuvre", kind="labor")
+        session.add(cost_type)
+        session.flush()
+        category = CostCategory(
+            cost_type_id=cost_type.id,
+            accounting_code="DEV",
+            category_code="IDEX",
+            name="Developpement",
+        )
+        session.add(category)
+        session.flush()
+        role = ResourceRole(node_id=node.id, cost_category_id=category.id, name="Developpeur")
+        session.add(role)
+        session.commit()
+
+
+class TestProjectSetupWarnings:
+    """GET /projects/setup-warnings (issue #109): non-blocking global
+    setup-prerequisite checks surfaced before project creation."""
+
+    def test_reports_no_warnings_when_setup_is_complete(self) -> None:
+        with TestClient(app) as client:
+            headers = _auth_headers(client)
+            _seed_complete_setup()
+
+            response = client.get("/projects/setup-warnings", headers=headers)
+
+            assert response.status_code == 200
+            assert response.json() == {"warnings": []}
+
+    def test_reports_missing_default_calendar(self) -> None:
+        with TestClient(app) as client:
+            headers = _auth_headers(client)
+            _seed_complete_setup()
+            with get_session_factory()() as session:
+                session.query(Calendar).update({Calendar.is_default: False})
+                session.commit()
+
+            response = client.get("/projects/setup-warnings", headers=headers)
+
+            assert response.status_code == 200
+            codes = [warning["code"] for warning in response.json()["warnings"]]
+            assert codes == ["no_default_calendar"]
+
+    def test_reports_default_calendar_without_working_day(self) -> None:
+        with TestClient(app) as client:
+            headers = _auth_headers(client)
+            _seed_complete_setup()
+            with get_session_factory()() as session:
+                session.query(CalendarWeekday).update(
+                    {CalendarWeekday.hours_per_day: Decimal("0.00")}
+                )
+                session.commit()
+
+            response = client.get("/projects/setup-warnings", headers=headers)
+
+            assert response.status_code == 200
+            codes = [warning["code"] for warning in response.json()["warnings"]]
+            assert codes == ["default_calendar_has_no_working_day"]
+
+    def test_reports_no_active_cost_category(self) -> None:
+        with TestClient(app) as client:
+            headers = _auth_headers(client)
+            _seed_complete_setup()
+            with get_session_factory()() as session:
+                session.query(CostCategory).update({CostCategory.is_active: False})
+                session.commit()
+
+            response = client.get("/projects/setup-warnings", headers=headers)
+
+            assert response.status_code == 200
+            codes = [warning["code"] for warning in response.json()["warnings"]]
+            assert codes == ["no_active_cost_category"]
+
+    def test_reports_no_active_resource_role(self) -> None:
+        with TestClient(app) as client:
+            headers = _auth_headers(client)
+            _seed_complete_setup()
+            with get_session_factory()() as session:
+                session.query(ResourceRole).update({ResourceRole.is_active: False})
+                session.commit()
+
+            response = client.get("/projects/setup-warnings", headers=headers)
+
+            assert response.status_code == 200
+            codes = [warning["code"] for warning in response.json()["warnings"]]
+            assert codes == ["no_active_resource_role"]
+
+    def test_reports_every_missing_prerequisite_together(self) -> None:
+        with TestClient(app) as client:
+            headers = _auth_headers(client)
+            # Nothing seeded at all: every one of the 3 checks should fire.
+
+            response = client.get("/projects/setup-warnings", headers=headers)
+
+            assert response.status_code == 200
+            codes = {warning["code"] for warning in response.json()["warnings"]}
+            assert codes == {
+                "no_default_calendar",
+                "no_active_cost_category",
+                "no_active_resource_role",
+            }
+
+    def test_does_not_block_project_creation(self) -> None:
+        """Issue #109: the setup-warnings check is purely advisory --
+        POST /projects must keep succeeding regardless of what it reports."""
+        with TestClient(app) as client:
+            headers = _auth_headers(client)
+
+            warnings = client.get("/projects/setup-warnings", headers=headers)
+            assert warnings.status_code == 200
+            assert warnings.json()["warnings"]
+
+            created = client.post(
+                "/projects", json={"name": "Created despite warnings"}, headers=headers
+            )
+            assert created.status_code == 201

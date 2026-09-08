@@ -30,6 +30,7 @@ from waterfall.db.session import get_db
 from waterfall.models.ms_core import MsTask, MsTaskLink
 from waterfall.models.planning import WfPlanning, WfPlanningLinkSnapshot, WfPlanningTaskSnapshot
 from waterfall.models.user import User
+from waterfall.models.wf_core import WfTaskEnrichment
 from waterfall.schemas.projects import (
     FastAPIErrorResponse,
     PlanningCreate,
@@ -212,6 +213,17 @@ def create_planning(
         )
     else:
         tasks = db.query(MsTask).filter(MsTask.project_id == project_id).all()
+        # MsTask carries no `notes` column of its own -- legacy task notes live in
+        # WfTaskEnrichment, keyed by (project_id, task_uid), the same table
+        # update_task_description falls back to writing/reading while no WfPlanning
+        # exists yet for the project (see tasks.py). Build a uid -> description lookup
+        # up front so it can be reported onto WfPlanningTaskSnapshot.notes below.
+        enrichments = (
+            db.query(WfTaskEnrichment).filter(WfTaskEnrichment.project_id == project_id).all()
+        )
+        enrichment_by_uid = {
+            enrichment.task_uid: enrichment.description for enrichment in enrichments
+        }
         # Same composite self-reference hazard as the source_planning_id branch above:
         # parent_uid is a self-reference onto (planning_id, uid) within this same batch,
         # and `tasks` carries no hierarchy-aware ordering guarantee. Insert every clone
@@ -227,6 +239,7 @@ def create_planning(
                 parent_uid=None,
                 position=task.position,
                 name=task.name,
+                notes=enrichment_by_uid.get(task.uid),
                 task_type=task.task_type,
                 outline_number=task.outline_number,
                 outline_level=task.outline_level,
@@ -802,7 +815,7 @@ def reopen_planning_structure(
     if source.status != "validated":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Planning reference must be validated",
+            detail={"code": "PLANNING_STRUCTURE_REOPEN_REQUIRES_VALIDATION"},
         )
     version_number = (
         db.query(func.max(WfPlanning.version_number))
@@ -883,7 +896,8 @@ def reopen_planning_structure(
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail="Planning reopen conflict"
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "PLANNING_STRUCTURE_REOPEN_INTEGRITY_CONFLICT"},
         ) from exc
     db.refresh(project)
     return to_project_read(project)

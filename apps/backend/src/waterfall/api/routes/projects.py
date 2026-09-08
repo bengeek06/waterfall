@@ -32,6 +32,7 @@ from waterfall.schemas.projects import (
     ProjectEstimateRead,
     ProjectListRead,
     ProjectRead,
+    ProjectSetupWarningsRead,
     ProjectStatus,
     ProjectStatusUpdate,
     ProjectUpdate,
@@ -42,7 +43,7 @@ from waterfall.schemas.projects import (
     TaskRoleAssignmentRead,
 )
 from waterfall.schemas.resources import CostTypeKind
-from waterfall.services import apply_pagination
+from waterfall.services import apply_pagination, get_project_setup_warnings
 from waterfall.services.project_lifecycle import (
     ensure_project_mutable,
     validate_project_status_transition,
@@ -299,6 +300,24 @@ def create_project(
     db.commit()
     db.refresh(project)
     return to_project_read(project)
+
+
+@router.get("/setup-warnings", response_model=ProjectSetupWarningsRead)
+def get_setup_warnings(
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_active_user),
+) -> ProjectSetupWarningsRead:
+    """Issue #109: non-blocking global setup prerequisites for project creation.
+
+    Registered before ``/{project_id}`` so this literal path is matched
+    first -- otherwise ``project_id: int`` would reject ``"setup-warnings"``
+    with a 422 before this route ever got a chance to run.
+
+    Never blocks ``POST /projects``: the frontend calls this to warn the user
+    before they open the project-creation dialog, but project creation
+    itself remains possible regardless of what this returns.
+    """
+    return ProjectSetupWarningsRead(warnings=get_project_setup_warnings(db))
 
 
 @router.get("/{project_id}", response_model=ProjectRead)

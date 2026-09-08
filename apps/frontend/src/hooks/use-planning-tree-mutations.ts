@@ -3,6 +3,7 @@ import type { useRouter } from "next/navigation";
 
 import {
   ApiError,
+  createPlanning,
   createPlanningTask,
   deletePlanningTasks,
   getPlanning,
@@ -45,6 +46,16 @@ import type { PlanningMoveCommand } from "@/lib/planning-tree";
 import type { PlanningRevisionConflict } from "@/hooks/use-planning-detail";
 
 type AppRouter = ReturnType<typeof useRouter>;
+
+// A refresh can succeed yet the retried request still come back 401 (account disabled/deleted
+// between the two calls, server-side race) -- authFetch then rejects with a plain ApiError, not a
+// SessionExpiredError (see #216). Factored out (rather than inlined at every call site as
+// `cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)`)
+// so this file's several near-the-complexity-limit handlers don't cross the ESLint `complexity`
+// gate (see README.md's "Complexité" section) merely from restating this boolean check.
+function isSessionExpiredCause(cause: unknown): boolean {
+  return cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401);
+}
 
 // Backend link validation errors come back as raw English detail strings (see
 // PlanningLinkError subclasses); translate the ones surfaced by the predecessor
@@ -178,7 +189,7 @@ export function usePlanningTreeMutations({
       updateSelectedPlanningId(planningId);
       setProject(updatedProject);
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (isSessionExpiredCause(cause)) {
         clearSession();
         router.push("/login");
         return;
@@ -205,7 +216,7 @@ export function usePlanningTreeMutations({
       const validated = await validatePlanning(projectId, selectedPlanning.id, session, onSessionRefresh);
       setPlannings((previous) => previous.map((item) => (item.id === validated.id ? validated : item)));
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (isSessionExpiredCause(cause)) {
         clearSession();
         router.push("/login");
         return;
@@ -272,7 +283,7 @@ export function usePlanningTreeMutations({
       }
       recordPlanningCommand(requestedPlanningId, "move", "Déplacement de tâches", planningDetail, updated);
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (isSessionExpiredCause(cause)) {
         clearSession();
         router.push("/login");
         return;
@@ -319,7 +330,7 @@ export function usePlanningTreeMutations({
         setPlanningDetail(detail);
       }
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (isSessionExpiredCause(cause)) {
         clearSession();
         router.push("/login");
         return;
@@ -371,7 +382,7 @@ export function usePlanningTreeMutations({
       recordPlanningCommand(requestedPlanningId, "schedule", "Modification de la planification", planningDetail, updated);
       return true;
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (isSessionExpiredCause(cause)) {
         clearSession();
         router.push("/login");
         return false;
@@ -435,7 +446,7 @@ export function usePlanningTreeMutations({
       }
       recordPlanningCommand(requestedPlanningId, "links", "Modification des prédécesseurs", planningDetail, updated);
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (isSessionExpiredCause(cause)) {
         clearSession();
         router.push("/login");
         throw cause;
@@ -503,7 +514,7 @@ export function usePlanningTreeMutations({
       }
       recordPlanningCommand(requestedPlanningId, "create", "Création d'une tâche", planningDetail, updated);
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (isSessionExpiredCause(cause)) {
         clearSession();
         router.push("/login");
         return;
@@ -586,7 +597,7 @@ export function usePlanningTreeMutations({
       }
       recordPlanningCommand(requestedPlanningId, "delete", "Suppression de tâches", planningDetail, updated);
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (isSessionExpiredCause(cause)) {
         clearSession();
         router.push("/login");
         throw cause;
@@ -636,12 +647,76 @@ export function usePlanningTreeMutations({
       setProject(updatedProject);
       setPlannings(planningMetadata);
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (isSessionExpiredCause(cause)) {
         clearSession();
         router.push("/login");
         return;
       }
       setError(cause instanceof ApiError ? cause.message : "Impossible de définir la référence.");
+    } finally {
+      setPlanningBusy(false);
+    }
+  }
+
+  // #143: creates a fresh draft cloned from the currently displayed validated planning, and
+  // switches the displayed version to it. Deliberately distinct from reopenStructure below: this
+  // never touches the planning-structure wizard, it only clones tasks/links into an editable
+  // draft the user can keep working on in the tree table.
+  //
+  // Each step's state update is applied as soon as that step succeeds, rather than batched behind
+  // the final await: createPlanning/setDisplayedPlanning/listPlannings are three independent
+  // network calls, and if one of the later ones fails after createPlanning already succeeded, the
+  // draft exists server-side (possibly already displayed) but a batched-at-the-end version of this
+  // function would apply none of it -- leaving the new draft invisible, `selectedPlanning` stuck on
+  // the stale validated planning, and a retry cloning yet another orphaned draft from it.
+  async function createPlanningVersionFromSelected() {
+    if (!session || !selectedPlanning || selectedPlanning.status !== "validated" || isReadOnlyProject) {
+      return;
+    }
+    setPlanningBusy(true);
+    setError(null);
+    let createdDetail: PlanningDetail | null = null;
+    try {
+      createdDetail = await createPlanning(
+        projectId,
+        { source_planning_id: selectedPlanning.id },
+        session,
+        onSessionRefresh,
+      );
+      const updatedProject = await setDisplayedPlanning(projectId, createdDetail.id, session, onSessionRefresh);
+      setProject(updatedProject);
+      const planningMetadata = await listPlannings(projectId, session, onSessionRefresh);
+      setPlannings(planningMetadata);
+      updateSelectedPlanningId(createdDetail.id);
+      setPlanningDetail(createdDetail);
+    } catch (cause) {
+      if (isSessionExpiredCause(cause)) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      if (createdDetail) {
+        // The draft was already created server-side (and may even already be the displayed
+        // planning, if only listPlannings below failed) by the time setDisplayedPlanning or
+        // listPlannings failed. Best-effort refresh of the version list so the new draft is at
+        // least visible/selectable there instead of orphaned and invisible; failures here are
+        // swallowed since the banner below already tells the user to pick it manually.
+        try {
+          const planningMetadata = await listPlannings(projectId, session, onSessionRefresh);
+          setPlannings(planningMetadata);
+        } catch (refreshCause) {
+          if (isSessionExpiredCause(refreshCause)) {
+            clearSession();
+            router.push("/login");
+            return;
+          }
+        }
+        setError(
+          "Le brouillon a été créé mais son affichage a échoué : sélectionne-le manuellement dans la liste des versions.",
+        );
+        return;
+      }
+      setError(cause instanceof ApiError ? cause.message : "Impossible de créer une nouvelle version du planning.");
     } finally {
       setPlanningBusy(false);
     }
@@ -683,7 +758,7 @@ export function usePlanningTreeMutations({
       setPlanningDetail(reopenedDetail);
       setStructureOpen(true);
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (isSessionExpiredCause(cause)) {
         clearSession();
         router.push("/login");
         return;
@@ -704,6 +779,7 @@ export function usePlanningTreeMutations({
     createPlanningTaskSelection,
     deletePlanningTasksSelection,
     setSelectedPlanningAsReference,
+    createPlanningVersionFromSelected,
     reopenStructure,
   };
 }

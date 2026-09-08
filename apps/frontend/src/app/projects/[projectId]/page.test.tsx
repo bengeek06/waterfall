@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, type Planning, type PlanningDetail, type Project } from "@/lib/backend";
+import { ApiError, SessionExpiredError, type Planning, type PlanningDetail, type Project } from "@/lib/backend";
 
 const mocks = vi.hoisted(() => ({
   getProject: vi.fn(),
@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   getImportBatchDiff: vi.fn(),
   setDisplayedPlanning: vi.fn(),
   setPlanningReference: vi.fn(),
+  createPlanning: vi.fn(),
   movePlanningTasks: vi.fn(),
   updatePlanningTaskSchedule: vi.fn(),
   replaceTaskPredecessorLinks: vi.fn(),
@@ -55,6 +56,7 @@ vi.mock("@/lib/backend", async () => {
     getImportBatchDiff: mocks.getImportBatchDiff,
     setDisplayedPlanning: mocks.setDisplayedPlanning,
     setPlanningReference: mocks.setPlanningReference,
+    createPlanning: mocks.createPlanning,
     movePlanningTasks: mocks.movePlanningTasks,
     updatePlanningTaskSchedule: mocks.updatePlanningTaskSchedule,
     replaceTaskPredecessorLinks: mocks.replaceTaskPredecessorLinks,
@@ -148,6 +150,7 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     mocks.getImportBatchDiff.mockReset();
     mocks.setDisplayedPlanning.mockReset();
     mocks.setPlanningReference.mockReset();
+    mocks.createPlanning.mockReset();
     mocks.movePlanningTasks.mockReset();
     mocks.updatePlanningTaskSchedule.mockReset();
     mocks.replaceTaskPredecessorLinks.mockReset();
@@ -679,6 +682,104 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Définir comme référence" }));
 
     await waitFor(() => expect(mocks.listPlannings).toHaveBeenCalledTimes(2));
+    expect(screen.getByText("Version 2 - validated")).toBeInTheDocument();
+  });
+
+  // #143: a validated planning has no way to spawn an editable draft other than the
+  // planning-structure wizard ("Rouvrir la structure"), which does not do what its label
+  // suggests. "Créer une nouvelle version" must clone the validated planning into a fresh draft
+  // and switch the displayed/selected version to it, without ever opening the structure wizard.
+  it("creates a new draft from the validated planning and switches to it", async () => {
+    const validated = planning({ id: 2, version_number: 2, status: "validated" });
+    const created = planning({ id: 5, version_number: 3, status: "draft" });
+    const createdDetail = detail(created);
+    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: validated.id }));
+    mocks.listPlannings
+      .mockResolvedValueOnce([validated])
+      .mockResolvedValueOnce([validated, created]);
+    mocks.getPlanning.mockImplementation(async (_projectId, planningId) =>
+      planningId === created.id ? createdDetail : detail(validated),
+    );
+    mocks.createPlanning.mockResolvedValue(createdDetail);
+    mocks.setDisplayedPlanning.mockResolvedValue(
+      project({ status: "initialise", displayed_planning_id: created.id }),
+    );
+
+    render(<ProjectDetailsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Créer une nouvelle version" }));
+
+    await waitFor(() =>
+      expect(mocks.createPlanning).toHaveBeenCalledWith(
+        1,
+        { source_planning_id: validated.id },
+        expect.anything(),
+        expect.anything(),
+      ),
+    );
+    await waitFor(() =>
+      expect(mocks.setDisplayedPlanning).toHaveBeenCalledWith(1, created.id, expect.anything(), expect.anything()),
+    );
+    await waitFor(() => expect(mocks.listPlannings).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText("Version 3 - draft")).toBeInTheDocument();
+    expect(await screen.findByText("Tâche 3")).toBeInTheDocument();
+  });
+
+  it("does not show the create-version action when the displayed planning is not validated", async () => {
+    const draft = planning({ id: 2, version_number: 1, status: "draft" });
+    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draft.id }));
+    mocks.listPlannings.mockResolvedValue([draft]);
+    mocks.getPlanning.mockResolvedValue(detail(draft));
+
+    render(<ProjectDetailsPage />);
+
+    expect(await screen.findByText("Tâche 1")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Créer une nouvelle version" })).not.toBeInTheDocument();
+  });
+
+  it("redirects to login when creating a new planning version reports session expiry", async () => {
+    const validated = planning({ id: 2, version_number: 2, status: "validated" });
+    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: validated.id }));
+    mocks.listPlannings.mockResolvedValue([validated]);
+    mocks.getPlanning.mockResolvedValue(detail(validated));
+    mocks.createPlanning.mockRejectedValue(new SessionExpiredError());
+
+    render(<ProjectDetailsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Créer une nouvelle version" }));
+
+    await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith("/login"));
+    expect(mocks.setDisplayedPlanning).not.toHaveBeenCalled();
+  });
+
+  // Regression coverage for the critical review finding on #143: createPlanning succeeded (the
+  // draft genuinely exists server-side) but the follow-up setDisplayedPlanning call failed. The
+  // new draft must still show up in the version list (via a best-effort listPlannings refresh)
+  // instead of being invisible/orphaned, and the error banner must not claim the creation itself
+  // failed since it did not.
+  it("still lists the newly created draft, and reports a display failure rather than a creation failure, when setDisplayedPlanning fails after createPlanning succeeds", async () => {
+    const validated = planning({ id: 2, version_number: 2, status: "validated" });
+    const created = planning({ id: 5, version_number: 3, status: "draft" });
+    const createdDetail = detail(created);
+    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: validated.id }));
+    mocks.listPlannings
+      .mockResolvedValueOnce([validated])
+      .mockResolvedValueOnce([validated, created]);
+    mocks.getPlanning.mockResolvedValue(detail(validated));
+    mocks.createPlanning.mockResolvedValue(createdDetail);
+    mocks.setDisplayedPlanning.mockRejectedValue(new Error("display failed"));
+
+    render(<ProjectDetailsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Créer une nouvelle version" }));
+
+    await waitFor(() => expect(mocks.listPlannings).toHaveBeenCalledTimes(2));
+    expect(
+      await screen.findByText(
+        "Le brouillon a été créé mais son affichage a échoué : sélectionne-le manuellement dans la liste des versions.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Impossible de créer une nouvelle version du planning.")).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "V3 (draft)" })).toBeInTheDocument();
+    // The draft was not applied as the selected/displayed planning (setDisplayedPlanning failed):
+    // the version still shown is the one the request started from.
     expect(screen.getByText("Version 2 - validated")).toBeInTheDocument();
   });
 

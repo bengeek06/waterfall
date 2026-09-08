@@ -164,7 +164,7 @@ function renderPinnedRow(props: CalendarsTableProps) {
               type="number"
               min="0"
               max="24"
-              step="0.25"
+              step="0.01"
               className="w-16"
               value={value}
               onChange={(event) => props.onWeekdayChange(dayType, event.target.value)}
@@ -277,7 +277,7 @@ export function CalendarsTable(props: CalendarsTableProps) {
           type="number"
           min="0"
           max="24"
-          step="0.25"
+          step="0.01"
           className="w-16"
           required
           initialValue={value}
