@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any, cast
 from uuid import uuid4
 
@@ -10,6 +11,8 @@ from waterfall.main import app
 from waterfall.models.ms_core import MsProject, MsTask
 from waterfall.models.planning import WfPlanning, WfPlanningTaskSnapshot
 from waterfall.models.resources import (
+    Calendar,
+    CalendarWeekday,
     CostCategory,
     CostType,
     Estimate,
@@ -2263,3 +2266,143 @@ def test_planning_tasks_are_returned_depth_first() -> None:
         # A second deliverable of lot 1 precedes lot 2 and the next post subtree.
         assert outlines.index("1.1.2") < outlines.index("1.2")
         assert outlines.index("1.2.1") < outlines.index("2")
+
+
+def _seed_complete_setup() -> None:
+    """Seed every prerequisite GET /projects/setup-warnings checks for: an
+    active default calendar with a working day, an active cost category, and
+    an active resource role."""
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        calendar = Calendar(code="STANDARD", name="Standard", weeks_per_year=47, is_default=True)
+        session.add(calendar)
+        session.flush()
+        session.add_all(
+            CalendarWeekday(
+                calendar_id=calendar.id,
+                day_type=day_type,
+                hours_per_day=Decimal("0.00") if day_type in (1, 7) else Decimal("7.00"),
+            )
+            for day_type in range(1, 8)
+        )
+
+        node = ResourceNode(code="IT", name="Departement informatique")
+        session.add(node)
+        session.flush()
+        cost_type = CostType(code="MO", name="Main d'oeuvre", kind="labor")
+        session.add(cost_type)
+        session.flush()
+        category = CostCategory(
+            cost_type_id=cost_type.id,
+            accounting_code="DEV",
+            category_code="IDEX",
+            name="Developpement",
+        )
+        session.add(category)
+        session.flush()
+        role = ResourceRole(node_id=node.id, cost_category_id=category.id, name="Developpeur")
+        session.add(role)
+        session.commit()
+
+
+class TestProjectSetupWarnings:
+    """GET /projects/setup-warnings (issue #109): non-blocking global
+    setup-prerequisite checks surfaced before project creation."""
+
+    def test_reports_no_warnings_when_setup_is_complete(self) -> None:
+        with TestClient(app) as client:
+            headers = _auth_headers(client)
+            _seed_complete_setup()
+
+            response = client.get("/projects/setup-warnings", headers=headers)
+
+            assert response.status_code == 200
+            assert response.json() == {"warnings": []}
+
+    def test_reports_missing_default_calendar(self) -> None:
+        with TestClient(app) as client:
+            headers = _auth_headers(client)
+            _seed_complete_setup()
+            with get_session_factory()() as session:
+                session.query(Calendar).update({Calendar.is_default: False})
+                session.commit()
+
+            response = client.get("/projects/setup-warnings", headers=headers)
+
+            assert response.status_code == 200
+            codes = [warning["code"] for warning in response.json()["warnings"]]
+            assert codes == ["no_default_calendar"]
+
+    def test_reports_default_calendar_without_working_day(self) -> None:
+        with TestClient(app) as client:
+            headers = _auth_headers(client)
+            _seed_complete_setup()
+            with get_session_factory()() as session:
+                session.query(CalendarWeekday).update(
+                    {CalendarWeekday.hours_per_day: Decimal("0.00")}
+                )
+                session.commit()
+
+            response = client.get("/projects/setup-warnings", headers=headers)
+
+            assert response.status_code == 200
+            codes = [warning["code"] for warning in response.json()["warnings"]]
+            assert codes == ["default_calendar_has_no_working_day"]
+
+    def test_reports_no_active_cost_category(self) -> None:
+        with TestClient(app) as client:
+            headers = _auth_headers(client)
+            _seed_complete_setup()
+            with get_session_factory()() as session:
+                session.query(CostCategory).update({CostCategory.is_active: False})
+                session.commit()
+
+            response = client.get("/projects/setup-warnings", headers=headers)
+
+            assert response.status_code == 200
+            codes = [warning["code"] for warning in response.json()["warnings"]]
+            assert codes == ["no_active_cost_category"]
+
+    def test_reports_no_active_resource_role(self) -> None:
+        with TestClient(app) as client:
+            headers = _auth_headers(client)
+            _seed_complete_setup()
+            with get_session_factory()() as session:
+                session.query(ResourceRole).update({ResourceRole.is_active: False})
+                session.commit()
+
+            response = client.get("/projects/setup-warnings", headers=headers)
+
+            assert response.status_code == 200
+            codes = [warning["code"] for warning in response.json()["warnings"]]
+            assert codes == ["no_active_resource_role"]
+
+    def test_reports_every_missing_prerequisite_together(self) -> None:
+        with TestClient(app) as client:
+            headers = _auth_headers(client)
+            # Nothing seeded at all: every one of the 3 checks should fire.
+
+            response = client.get("/projects/setup-warnings", headers=headers)
+
+            assert response.status_code == 200
+            codes = {warning["code"] for warning in response.json()["warnings"]}
+            assert codes == {
+                "no_default_calendar",
+                "no_active_cost_category",
+                "no_active_resource_role",
+            }
+
+    def test_does_not_block_project_creation(self) -> None:
+        """Issue #109: the setup-warnings check is purely advisory --
+        POST /projects must keep succeeding regardless of what it reports."""
+        with TestClient(app) as client:
+            headers = _auth_headers(client)
+
+            warnings = client.get("/projects/setup-warnings", headers=headers)
+            assert warnings.status_code == 200
+            assert warnings.json()["warnings"]
+
+            created = client.post(
+                "/projects", json={"name": "Created despite warnings"}, headers=headers
+            )
+            assert created.status_code == 201

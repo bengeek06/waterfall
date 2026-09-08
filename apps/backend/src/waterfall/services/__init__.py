@@ -1,6 +1,7 @@
 """Waterfall business logic services."""
 
 from waterfall.services.calendar_schedule import (
+    NoUsableCalendarError,
     ResolvedCalendar,
     compute_finish_at,
     compute_working_minutes_between,
@@ -40,8 +41,10 @@ from waterfall.services.planning_tree import (
     restore_planning_snapshot,
     update_planning_task_schedule,
 )
+from waterfall.services.project_setup import get_project_setup_warnings
 
 __all__ = [
+    "NoUsableCalendarError",
     "ResolvedCalendar",
     "compute_finish_at",
     "compute_working_minutes_between",
@@ -73,4 +76,5 @@ __all__ = [
     "PlanningLinkInvariantError",
     "PlanningLinkNotFoundError",
     "replace_task_predecessor_links",
+    "get_project_setup_warnings",
 ]

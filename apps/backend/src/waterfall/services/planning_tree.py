@@ -19,6 +19,7 @@ from waterfall.schemas.projects import (
     PlanningTaskScheduleUpdate,
 )
 from waterfall.services.calendar_schedule import (
+    NoUsableCalendarError,
     ResolvedCalendar,
     compute_finish_at,
     compute_start_at,
@@ -84,6 +85,39 @@ class PlanningTaskScheduleError(PlanningTreeMoveError):
     is no structural-invariant case analogous to
     :class:`PlanningTreeInvariantError` for a single-task schedule edit.
     """
+
+
+def _schedule_error_from_no_usable_calendar(
+    exc: NoUsableCalendarError,
+) -> PlanningTaskScheduleError:
+    """Convert :class:`NoUsableCalendarError` into an actionable, transport-agnostic error.
+
+    Shared by every ``resolve_calendars_for_tasks`` call site in this module
+    (issue #109): none of them can produce a meaningful duration/date without
+    a usable calendar, so each converts this service-layer exception into a
+    :class:`PlanningTaskScheduleError` naming the affected task, instead of
+    the removed implicit 24h/day wall-clock fallback silently computing one
+    anyway.
+
+    Deliberately returns a :class:`PlanningTaskScheduleError` (a
+    :class:`PlanningTreeMoveError` subclass), not an ``HTTPException``:
+    :mod:`planning_tree` is a service module and every other error case here
+    already follows the convention of raising a typed, FastAPI-agnostic
+    exception and letting the route layer convert it to an ``HTTPException``
+    -- with an explicit ``db.rollback()`` first (see e.g.
+    ``move_planning_tasks_route`` in ``api/routes/plannings.py``). Raising
+    ``HTTPException`` directly from here would skip that rollback and
+    contradict the "FastAPI-agnostic" boundary calendar_schedule.py's own
+    :class:`~waterfall.services.calendar_schedule.NoUsableCalendarError`
+    docstring documents. No route needs a new ``except`` clause for this:
+    every call site already sits inside a request handled by a route that
+    catches ``PlanningTreeMoveError`` (move/create/delete) or
+    ``PlanningTaskScheduleError`` (schedule update).
+    """
+    return PlanningTaskScheduleError(
+        f"Task {exc.task_uid} has no usable working calendar: configure an active "
+        "default calendar with at least one working day on the Resources page"
+    )
 
 
 @overload
@@ -217,15 +251,29 @@ def _depth_first_task_uids(
     return ordered_uids
 
 
-def _recalculate_outline(
-    tasks_by_uid: dict[int, WfPlanningTaskSnapshot],
-    resolved_calendars: dict[int, ResolvedCalendar],
-) -> None:
+def _recalculate_outline(tasks_by_uid: dict[int, WfPlanningTaskSnapshot]) -> set[int]:
+    """Recalculate outline numbering/position and every summary task's
+    start_at/finish_at across the whole tree, deliberately *without*
+    resolving a calendar or touching duration_minutes -- see
+    :func:`_recalculate_summary_dates`.
+
+    Returns the set of uids that ended up an actual summary task with both
+    start_at/finish_at resolved, i.e. the ones that still need
+    duration_minutes computed via :func:`_apply_summary_duration` once the
+    caller has resolved a calendar for exactly this set (issue #109: calendar
+    resolution -- and the :class:`~waterfall.services.calendar_schedule.NoUsableCalendarError`
+    it can raise -- must not be attempted for a summary task whose children
+    carry no dates at all, since its duration_minutes is set to ``None``
+    without ever consulting a calendar; nor for a plain leaf task, whose
+    calendar is never consulted here at all).
+    """
     children_by_parent: dict[int | None, list[WfPlanningTaskSnapshot]] = defaultdict(list)
     for task in tasks_by_uid.values():
         children_by_parent[task.parent_uid].append(task)
     for siblings in children_by_parent.values():
         siblings.sort(key=_task_order)
+
+    needs_calendar: set[int] = set()
 
     def update_children(parent_uid: int | None, prefix: str, level: int) -> None:
         for position, task in enumerate(children_by_parent[parent_uid], start=1):
@@ -233,23 +281,35 @@ def _recalculate_outline(
             task.outline_level = level
             task.outline_number = f"{prefix}.{position}" if prefix else str(position)
             update_children(task.uid, task.outline_number or "", level + 1)
-            _recalculate_summary_fields(task, children_by_parent[task.uid], resolved_calendars)
+            if _recalculate_summary_dates(task, children_by_parent[task.uid]):
+                needs_calendar.add(task.uid)
 
     update_children(None, "", 1)
+    return needs_calendar
 
 
-def _recalculate_summary_fields(
+def _recalculate_summary_dates(
     task: WfPlanningTaskSnapshot,
     children: list[WfPlanningTaskSnapshot],
-    resolved_calendars: dict[int, ResolvedCalendar],
-) -> None:
+) -> bool:
+    """Recalculate ``is_summary``/``start_at``/``finish_at`` for ``task`` from
+    ``children`` alone -- no calendar is resolved or consulted here.
+
+    Returns ``True`` when ``task`` ended up an actual summary task with both
+    ``start_at`` and ``finish_at`` resolved to a real value, meaning its
+    ``duration_minutes`` still needs computing through a resolved calendar
+    (see :func:`_apply_summary_duration`); ``False`` when it is a plain leaf
+    (``duration_minutes`` untouched) or a summary task whose children carry
+    no date at all (``duration_minutes`` already set to ``None`` here, with
+    no calendar involved).
+    """
     if not children:
         if task.is_summary:
             task.start_at = None
             task.finish_at = None
             task.duration_minutes = None
         task.is_summary = False
-        return
+        return False
 
     task.is_summary = True
     # Normalized to naive UTC (see _to_naive_utc) before min()/max(): children
@@ -269,34 +329,89 @@ def _recalculate_summary_fields(
     ]
     task.start_at = min(start_dates) if start_dates else None
     task.finish_at = max(finish_dates) if finish_dates else None
-    start_at = task.start_at
-    finish_at = task.finish_at
-    if start_at is None or finish_at is None:
+    if task.start_at is None or task.finish_at is None:
         task.duration_minutes = None
-    else:
-        # E5-04: the summary duration is calendar-aware. The calendar used is
-        # resolved from the summary task's own assigned resource role,
-        # falling back to the calendar flagged is_default, and -- when
-        # no calendar exists in the system at all -- an implicit 24h/day
-        # calendar (source == "wall_clock_fallback") that is mathematically
-        # equivalent to the raw wall-clock diff (proven by
-        # test_compute_working_minutes_between_matches_wall_clock_diff_under_24h_calendar
-        # and the property test in test_calendar_schedule.py), so a single
-        # code path handles every tier.
-        resolved = resolved_calendars[task.uid]
-        task.duration_minutes = max(
-            0, compute_working_minutes_between(start_at, finish_at, resolved.weekday_hours)
+        return False
+    return True
+
+
+def _apply_summary_duration(task: WfPlanningTaskSnapshot, resolved: ResolvedCalendar) -> None:
+    """Compute a summary task's calendar-aware ``duration_minutes``.
+
+    Must only be called for a ``task`` that :func:`_recalculate_summary_dates`
+    reported as needing one (``start_at``/``finish_at`` both set) -- split out
+    from date aggregation (issue #109) precisely so a calendar is resolved,
+    and :class:`~waterfall.services.calendar_schedule.NoUsableCalendarError`
+    potentially raised, only for uids that truly need one.
+
+    E5-04: the summary duration is calendar-aware. The calendar used is
+    resolved from the summary task's own assigned resource role, falling back
+    to the calendar flagged is_default. Since issue #109, there is no further,
+    always-succeeding fallback tier: resolving a calendar for this uid must
+    have already raised ``NoUsableCalendarError`` instead of returning here
+    with an unusable one.
+
+    Known v1 limitation (not fixed here, see the PR review that flagged it):
+    this is the *only* place duration_minutes gets recalculated for a
+    calendar-aware summary task, and it only runs as a side effect of
+    move_planning_tasks (drag/drop reordering), create_planning_task,
+    delete_planning_tasks, or a schedule edit's ancestor-summary
+    recalculation. If a role's calendar or a task's role assignment changes
+    afterwards on a draft planning, the previously stored duration_minutes is
+    left stale until the next such operation -- there is no invalidation hook
+    today. Full invalidation is deliberately out of scope (draft-only edge
+    case, low value for the size of the change) and is left for E3-03, which
+    will need to revisit this scheduling logic more broadly anyway.
+    """
+    assert task.start_at is not None
+    assert task.finish_at is not None
+    task.duration_minutes = max(
+        0,
+        compute_working_minutes_between(task.start_at, task.finish_at, resolved.weekday_hours),
+    )
+
+
+def _recalculate_outline_and_durations(
+    db: Session,
+    planning: WfPlanning,
+    tasks_by_uid: dict[int, WfPlanningTaskSnapshot],
+) -> None:
+    """Recalculate outline numbering and every summary task's dates for the
+    whole tree, then resolve a calendar and compute duration_minutes only for
+    the uids that :func:`_recalculate_outline` reports as actually needing
+    one.
+
+    Shared by :func:`move_planning_tasks`, :func:`create_planning_task`, and
+    :func:`delete_planning_tasks` (issue #109): all three recompute the
+    entire tree's outline after a structural edit, and none of them may
+    eagerly resolve a calendar for the *whole* tree -- most tasks in a real
+    planning are plain leaves or undated summary groups the edit never
+    touches, and forcing calendar resolution (and a possible
+    :class:`NoUsableCalendarError`) on them regardless would fail requests
+    that have nothing to do with a missing calendar (see the fix that
+    replaced the original, over-eager ``resolve_calendars_for_tasks(db,
+    project_id, set(tasks_by_uid.keys()))`` call here).
+    """
+    needs_calendar_uids = _recalculate_outline(tasks_by_uid)
+    try:
+        resolved_calendars = resolve_calendars_for_tasks(
+            db, planning.project_id, needs_calendar_uids
         )
-        # Known v1 limitation (not fixed here, see the PR review that flagged
-        # it): this is the *only* place duration_minutes gets recalculated
-        # for a calendar-aware summary task, and it only runs as a side
-        # effect of move_planning_tasks (drag/drop reordering). If a role's
-        # calendar or a task's role assignment changes afterwards on a draft
-        # planning, the previously stored duration_minutes is left stale
-        # until the next move -- there is no invalidation hook today. Full
-        # invalidation is deliberately out of scope (draft-only edge case,
-        # low value for the size of the change) and is left for E3-03, which
-        # will need to revisit this scheduling logic more broadly anyway.
+    except NoUsableCalendarError as exc:
+        raise _schedule_error_from_no_usable_calendar(exc) from exc
+    # _apply_summary_duration walks the affected calendar day by day through
+    # compute_working_minutes_between. That walk can raise ValueError (the
+    # iteration ceiling in _guard_max_days_walked) or OverflowError (date
+    # arithmetic pushed past date.max) when a manually-scheduled
+    # start_at/finish_at is unreasonably far in the future -- manual tasks
+    # have no server-side range validation (see _apply_manual_schedule), so
+    # this is a genuinely-invalid-input case rather than an internal error,
+    # and is surfaced as the same 400 as any other PlanningTreeMoveError.
+    try:
+        for uid in needs_calendar_uids:
+            _apply_summary_duration(tasks_by_uid[uid], resolved_calendars[uid])
+    except (ValueError, OverflowError) as exc:
+        raise PlanningTreeMoveError(str(exc)) from exc
 
 
 def _validate_target_parent(
@@ -353,23 +468,7 @@ def move_planning_tasks(
     for siblings in siblings_by_parent.values():
         for position, task in enumerate(siblings, start=1):
             task.position = position
-    resolved_calendars = resolve_calendars_for_tasks(
-        db, planning.project_id, set(tasks_by_uid.keys())
-    )
-    # _recalculate_outline recalculates every summary task's duration via
-    # _recalculate_summary_fields, which walks the affected calendar day by
-    # day through compute_working_minutes_between. That walk can raise
-    # ValueError (the iteration ceiling in _guard_max_days_walked) or
-    # OverflowError (date arithmetic pushed past date.max) when a moved
-    # task's manually-scheduled start_at/finish_at is unreasonably far in
-    # the future -- manual tasks have no server-side range validation (see
-    # _apply_manual_schedule), so this is a genuinely-invalid-input case
-    # rather than an internal error, and is surfaced as the same 400 as any
-    # other PlanningTreeMoveError.
-    try:
-        _recalculate_outline(tasks_by_uid, resolved_calendars)
-    except (ValueError, OverflowError) as exc:
-        raise PlanningTreeMoveError(str(exc)) from exc
+    _recalculate_outline_and_durations(db, planning, tasks_by_uid)
 
 
 def create_planning_task(
@@ -478,18 +577,7 @@ def create_planning_task(
     for position, task in enumerate(siblings, start=1):
         task.position = position
 
-    resolved_calendars = resolve_calendars_for_tasks(
-        db, planning.project_id, set(tasks_by_uid.keys())
-    )
-    # See the equivalent try/except in move_planning_tasks: _recalculate_outline
-    # walks every summary task's affected calendar day by day and can raise
-    # ValueError/OverflowError for an unreasonably far manually-scheduled date
-    # elsewhere in the tree -- a genuinely-invalid-input case, not an internal
-    # error, surfaced as the same 400 as any other PlanningTreeMoveError.
-    try:
-        _recalculate_outline(tasks_by_uid, resolved_calendars)
-    except (ValueError, OverflowError) as exc:
-        raise PlanningTreeMoveError(str(exc)) from exc
+    _recalculate_outline_and_durations(db, planning, tasks_by_uid)
 
 
 def _subtree_uids(
@@ -580,13 +668,7 @@ def delete_planning_tasks(
     remaining_tasks_by_uid = {
         uid: task for uid, task in tasks_by_uid.items() if uid not in to_delete
     }
-    resolved_calendars = resolve_calendars_for_tasks(
-        db, planning.project_id, set(remaining_tasks_by_uid.keys())
-    )
-    try:
-        _recalculate_outline(remaining_tasks_by_uid, resolved_calendars)
-    except (ValueError, OverflowError) as exc:
-        raise PlanningTreeMoveError(str(exc)) from exc
+    _recalculate_outline_and_durations(db, planning, remaining_tasks_by_uid)
 
 
 def restore_planning_snapshot(
@@ -791,7 +873,12 @@ def _apply_automatic_milestone_schedule(
     :func:`_resolve_lag_offset`), hence resolving the task's own calendar
     here.
     """
-    resolved_calendar = resolve_calendars_for_tasks(db, planning.project_id, {task.uid})[task.uid]
+    try:
+        resolved_calendar = resolve_calendars_for_tasks(db, planning.project_id, {task.uid})[
+            task.uid
+        ]
+    except NoUsableCalendarError as exc:
+        raise _schedule_error_from_no_usable_calendar(exc) from exc
     # See the equivalent try/except in _apply_automatic_schedule: a
     # working-time FS/SS/FF/SF lag resolved through _resolve_lag_offset (and,
     # for FF/SF, the subsequent compute_start_at call in
@@ -1047,7 +1134,10 @@ def _apply_automatic_schedule(
     # Resolved before _resolve_predecessor_constraints (rather than only
     # afterwards, as before the E3-03 lag_format fix) because a working-time
     # FS/SS lag now needs the task's own calendar too, not just its duration.
-    resolved_calendars = resolve_calendars_for_tasks(db, planning.project_id, {task.uid})
+    try:
+        resolved_calendars = resolve_calendars_for_tasks(db, planning.project_id, {task.uid})
+    except NoUsableCalendarError as exc:
+        raise _schedule_error_from_no_usable_calendar(exc) from exc
     resolved = resolved_calendars[task.uid]
 
     # _resolve_predecessor_constraints (via _resolve_lag_offset's own
@@ -1397,12 +1487,12 @@ def _recalculate_ancestor_summaries(
 ) -> None:
     """Recalculate every summary ancestor of ``task``, bottom-up.
 
-    Reuses :func:`_recalculate_summary_fields` (the same calendar-aware
-    min/max/duration derivation ``move_planning_tasks`` uses) instead of
-    duplicating it, so a task edited through
-    :func:`update_planning_task_schedule` immediately reflects into its
-    ancestor summaries -- closing the "Known v1 limitation" gap called out
-    in :func:`_recalculate_summary_fields`'s own docstring, where this
+    Reuses :func:`_recalculate_summary_dates`/:func:`_apply_summary_duration`
+    (the same calendar-aware min/max/duration derivation
+    ``move_planning_tasks`` uses) instead of duplicating it, so a task edited
+    through :func:`update_planning_task_schedule` immediately reflects into
+    its ancestor summaries -- closing the "Known v1 limitation" gap called
+    out in :func:`_apply_summary_duration`'s own docstring, where this
     recalculation used to only ever run as a side effect of a tree move.
     """
     children_by_parent: dict[int | None, list[WfPlanningTaskSnapshot]] = defaultdict(list)
@@ -1418,14 +1508,31 @@ def _recalculate_ancestor_summaries(
     if not ancestor_uids:
         return
 
-    resolved_calendars = resolve_calendars_for_tasks(db, planning.project_id, set(ancestor_uids))
     # ancestor_uids is ordered from the immediate parent outward, i.e.
-    # bottom-up -- required so a grandparent's recalculation sees its own
-    # child's (the parent's) already-updated start_at/finish_at.
+    # bottom-up -- required so a grandparent's date recalculation below sees
+    # its own child's (the parent's) already-updated start_at/finish_at.
+    needs_calendar_uids: list[int] = []
     for ancestor_uid in ancestor_uids:
         ancestor = tasks_by_uid[ancestor_uid]
         children = children_by_parent[ancestor_uid]
-        _recalculate_summary_fields(ancestor, children, resolved_calendars)
+        if _recalculate_summary_dates(ancestor, children):
+            needs_calendar_uids.append(ancestor_uid)
+
+    if not needs_calendar_uids:
+        return
+
+    # Calendar resolution (and the NoUsableCalendarError it can raise, issue
+    # #109) is deliberately scoped to just the ancestors that ended up with
+    # both start_at/finish_at resolved -- see _recalculate_outline_and_durations
+    # for the equivalent scoping rationale on the tree-mutation call sites.
+    try:
+        resolved_calendars = resolve_calendars_for_tasks(
+            db, planning.project_id, set(needs_calendar_uids)
+        )
+    except NoUsableCalendarError as exc:
+        raise _schedule_error_from_no_usable_calendar(exc) from exc
+    for ancestor_uid in needs_calendar_uids:
+        _apply_summary_duration(tasks_by_uid[ancestor_uid], resolved_calendars[ancestor_uid])
 
 
 def update_planning_task_schedule(
@@ -1518,7 +1625,7 @@ def update_planning_task_schedule(
     cascaded_tasks = _cascade_successor_schedules(db, planning, tasks_by_uid, task)
 
     # _recalculate_ancestor_summaries recalculates every summary ancestor's
-    # duration via _recalculate_summary_fields, which walks the affected
+    # duration via _apply_summary_duration, which walks the affected
     # calendar day by day through compute_working_minutes_between. That walk
     # can raise ValueError (the iteration ceiling in _guard_max_days_walked)
     # or OverflowError (date arithmetic pushed past date.max) when a manually

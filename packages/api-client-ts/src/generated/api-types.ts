@@ -352,6 +352,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/setup-warnings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Verifier le parametrage global avant la creation d'un projet
+         * @description Verifie les 3 prerequis de parametrage global verifiables independamment
+         *     de tout projet (issue #109) : un calendrier actif flague par defaut avec
+         *     au moins un jour travaille, au moins une categorie de cout active, et au
+         *     moins un role de ressource actif. Purement informatif : ne bloque jamais
+         *     `POST /projects`, qui reste possible meme si des avertissements sont
+         *     retournes.
+         */
+        get: operations["getProjectSetupWarnings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/projects/{projectId}": {
         parameters: {
             query?: never;
@@ -1952,6 +1977,22 @@ export interface components {
         UserAdminListRead: components["schemas"]["PaginationMeta"] & {
             items: components["schemas"]["UserAdminRead"][];
         };
+        /** @enum {string} */
+        ProjectSetupWarningCode: "no_default_calendar" | "default_calendar_has_no_working_day" | "no_active_cost_category" | "no_active_resource_role";
+        ProjectSetupWarning: {
+            code: components["schemas"]["ProjectSetupWarningCode"];
+            /**
+             * @description Texte de diagnostic en anglais, non localise et non destine a un
+             *     affichage direct. Le frontend doit toujours se baser sur `code` pour
+             *     choisir son propre message utilisateur (francais) -- meme principe que
+             *     l'issue #137 pour `HTTPException.detail` -- plutot que d'afficher ce
+             *     champ tel quel.
+             */
+            message: string;
+        };
+        ProjectSetupWarningsRead: {
+            warnings: components["schemas"]["ProjectSetupWarning"][];
+        };
         PlanningTaskDeleteConflict: {
             detail: {
                 /** @enum {string} */
@@ -2932,6 +2973,27 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    getProjectSetupWarnings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Liste des prerequis de parametrage manquants (vide si le parametrage est complet) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectSetupWarningsRead"];
                 };
             };
             401: components["responses"]["Unauthorized"];

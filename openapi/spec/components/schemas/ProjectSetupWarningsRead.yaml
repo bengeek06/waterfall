@@ -1,0 +1,8 @@
+type: object
+required:
+- warnings
+properties:
+  warnings:
+    type: array
+    items:
+      $ref: ProjectSetupWarning.yaml

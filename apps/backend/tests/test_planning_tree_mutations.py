@@ -25,6 +25,42 @@ from waterfall.models.resources import (
 )
 
 
+@pytest.fixture(autouse=True)
+def default_calendar_fixture() -> None:
+    """Issue #109: ``resolve_calendars_for_tasks`` no longer falls back to an
+    implicit 24h/7d wall-clock calendar when no usable calendar exists --
+    it raises ``NoUsableCalendarError`` instead. Several tests in this module
+    seed a summary group whose leaf children already carry real
+    start_at/finish_at (so a duration genuinely has to be computed), without
+    otherwise caring about calendar semantics. A real, always-active default
+    calendar with 24h/day capacity on every weekday reproduces the exact
+    numeric behaviour the old implicit fallback used to provide (every day is
+    "working"), without depending on the removed fallback itself."""
+    with get_session_factory()() as session:
+        calendar = Calendar(
+            code="DEFAULT-24H", name="Default (24h/day)", weeks_per_year=52, is_default=True
+        )
+        session.add(calendar)
+        session.flush()
+        session.add_all(
+            CalendarWeekday(calendar_id=calendar.id, day_type=day_type, hours_per_day=Decimal(24))
+            for day_type in range(1, 8)
+        )
+        session.commit()
+
+
+def _delete_default_calendar() -> None:
+    """Remove the autouse ``default_calendar_fixture``'s calendar entirely
+    (issue #109 regression test): with no calendar left in the system at
+    all, ``resolve_calendars_for_tasks`` has no usable calendar to fall back
+    to and must raise ``NoUsableCalendarError`` instead of the removed
+    implicit wall-clock fallback."""
+    with get_session_factory()() as session:
+        session.query(CalendarWeekday).delete()
+        session.query(Calendar).delete()
+        session.commit()
+
+
 def _auth_headers(client: TestClient) -> dict[str, str]:
     email = f"planning.tree.{uuid4().hex}@example.com"
     password = "SuperSecret123!"
@@ -266,6 +302,32 @@ def test_move_leaf_targets_explicit_planning_and_recalculates_tree() -> None:
         assert tasks[5]["outline_number"] == "2.2"
         first = client.get(f"/projects/{project_id}/plannings/{first_planning_id}", headers=headers)
         assert _tasks_by_uid(cast(dict[str, Any], first.json()))[3]["parent_uid"] == 1
+
+
+def test_move_returns_400_when_no_usable_calendar_for_summary_recalculation() -> None:
+    """Issue #109: ``move_planning_tasks`` (via the shared
+    ``_recalculate_outline_and_durations`` helper) must fail explicitly (400)
+    when recalculating a summary group's duration needs a calendar and none
+    is usable, instead of falling back to an implicit wall-clock calendar.
+    Group A/Group B's leaf children already carry real start_at/finish_at
+    (see ``_seed_plannings``), so moving Leaf B under Group B forces a
+    duration recalculation on both groups."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        _, planning_id = _seed_plannings(project_id)
+        _delete_default_calendar()
+
+        response = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/tasks/move",
+            json={"task_uids": [3], "target_parent_uid": 4, "position": 1, "expected_revision": 0},
+            headers=headers,
+        )
+
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert isinstance(detail, str)
+        assert "no usable working calendar" in detail
 
 
 def test_move_group_normalizes_selected_descendant_and_preserves_subtree_order() -> None:

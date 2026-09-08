@@ -57,6 +57,30 @@
               $ref: ../components/schemas/ProjectRead.yaml
       '401':
         $ref: ../components/responses/Unauthorized.yaml
+/projects/setup-warnings:
+  get:
+    tags:
+    - projects
+    summary: Verifier le parametrage global avant la creation d'un projet
+    description: |-
+      Verifie les 3 prerequis de parametrage global verifiables independamment
+      de tout projet (issue #109) : un calendrier actif flague par defaut avec
+      au moins un jour travaille, au moins une categorie de cout active, et au
+      moins un role de ressource actif. Purement informatif : ne bloque jamais
+      `POST /projects`, qui reste possible meme si des avertissements sont
+      retournes.
+    operationId: getProjectSetupWarnings
+    security:
+    - bearerAuth: []
+    responses:
+      '200':
+        description: Liste des prerequis de parametrage manquants (vide si le parametrage est complet)
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ProjectSetupWarningsRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
 /projects/{projectId}:
   get:
     tags:
