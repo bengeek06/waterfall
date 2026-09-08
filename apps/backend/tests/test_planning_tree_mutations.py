@@ -304,6 +304,57 @@ def test_move_leaf_targets_explicit_planning_and_recalculates_tree() -> None:
         assert _tasks_by_uid(cast(dict[str, Any], first.json()))[3]["parent_uid"] == 1
 
 
+def test_move_updates_row_number_only_for_tasks_whose_rank_changed() -> None:
+    """E9-02 (#147) acceptance test: after a move, `row_number` changes exactly for the
+    tasks whose display rank actually moved, `uid` never changes for any task, and a
+    second read without an intervening mutation returns identical `row_number` values
+    (determinism)."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        _first_planning_id, planning_id = _seed_plannings(project_id)
+
+        def read_tasks() -> dict[int, dict[str, Any]]:
+            response = client.get(
+                f"/projects/{project_id}/tasks",
+                params={"planning_id": planning_id},
+                headers=headers,
+            )
+            assert response.status_code == 200
+            return {task["uid"]: task for task in response.json()["items"]}
+
+        # Depth-first order before the move: Group A(1), Leaf A(2), Leaf B(3),
+        # Group B(4), Leaf C(5), Root leaf(6) -- see _seed_plannings.
+        before = read_tasks()
+        assert [before[uid]["row_number"] for uid in (1, 2, 3, 4, 5, 6)] == [1, 2, 3, 4, 5, 6]
+
+        move_response = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/tasks/move",
+            json={"task_uids": [3], "target_parent_uid": 4, "position": 1, "expected_revision": 0},
+            headers=headers,
+        )
+        assert move_response.status_code == 200
+
+        # New depth-first order: Group A(1), Leaf A(2), Group B(4), Leaf B(3, now its
+        # first child), Leaf C(5), Root leaf(6).
+        after = read_tasks()
+        assert after.keys() == before.keys()
+        for uid in (1, 2, 3, 4, 5, 6):
+            assert after[uid]["uid"] == before[uid]["uid"] == uid
+
+        unchanged_uids = {1, 2, 5, 6}
+        changed_uids = {3, 4}
+        for uid in unchanged_uids:
+            assert after[uid]["row_number"] == before[uid]["row_number"]
+        for uid in changed_uids:
+            assert after[uid]["row_number"] != before[uid]["row_number"]
+        assert [after[uid]["row_number"] for uid in (1, 2, 4, 3, 5, 6)] == [1, 2, 3, 4, 5, 6]
+
+        # Determinism: reading again without any further mutation is identical.
+        again = read_tasks()
+        assert again == after
+
+
 def test_move_returns_400_when_no_usable_calendar_for_summary_recalculation() -> None:
     """Issue #109: ``move_planning_tasks`` (via the shared
     ``_recalculate_outline_and_durations`` helper) must fail explicitly (400)
