@@ -14,6 +14,7 @@ export type PlanningVersionControlsProps = {
   onValidate: () => void;
   projectPlanningReferenceId: number | null | undefined;
   onSetReference: () => void;
+  onCreateVersion: () => void;
   showReopenStructure: boolean;
   onReopenStructure: () => void;
   planningMutationBusy: boolean;
@@ -67,6 +68,7 @@ export function PlanningVersionControls({
   onValidate,
   projectPlanningReferenceId,
   onSetReference,
+  onCreateVersion,
   showReopenStructure,
   onReopenStructure,
   planningMutationBusy,
@@ -113,6 +115,16 @@ export function PlanningVersionControls({
           onClick={onSetReference}
         >
           Définir comme référence
+        </Button>
+      ) : null}
+      {selectedPlanning?.status === "validated" ? (
+        <Button
+          variant="outline"
+          type="button"
+          disabled={isReferenceOrReopenDisabled(planningBusy, isReadOnlyProject)}
+          onClick={onCreateVersion}
+        >
+          Créer une nouvelle version
         </Button>
       ) : null}
       {showReopenStructure ? (

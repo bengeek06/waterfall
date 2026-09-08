@@ -23,6 +23,7 @@ export type PlanningStructureRead = components["schemas"]["PlanningStructureRead
 export type PlanningStructureDraftRead = components["schemas"]["PlanningStructureDraftRead"];
 export type Planning = components["schemas"]["PlanningRead"];
 export type PlanningDetail = components["schemas"]["PlanningDetailRead"];
+export type PlanningCreate = components["schemas"]["PlanningCreate"];
 export type PlanningTaskMove = components["schemas"]["PlanningTaskMove"];
 export type PlanningTaskCreate = components["schemas"]["PlanningTaskCreate"];
 export type PlanningTaskDelete = components["schemas"]["PlanningTaskDelete"];
@@ -1296,6 +1297,27 @@ export function getPlanning(
   onSessionRefresh: (next: SessionTokens) => void,
 ) {
   return getCompletePlanning(projectId, planningId, tokens, onSessionRefresh);
+}
+
+// Creates a brand new planning version, optionally cloning `source_planning_id`'s tasks/links
+// into a fresh draft (see #143: this is what lets the UI offer an explicit "new version from a
+// validated planning" action, distinct from the planning-structure wizard).
+export function createPlanning(
+  projectId: number,
+  payload: PlanningCreate,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<PlanningDetail>(
+    `/projects/${projectId}/plannings`,
+    tokens,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    onSessionRefresh,
+  );
 }
 
 const PLANNING_PAGE_SIZE = 200;

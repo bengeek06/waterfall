@@ -3,6 +3,7 @@ import type { useRouter } from "next/navigation";
 
 import {
   ApiError,
+  createPlanning,
   createPlanningTask,
   deletePlanningTasks,
   getPlanning,
@@ -647,6 +648,70 @@ export function usePlanningTreeMutations({
     }
   }
 
+  // #143: creates a fresh draft cloned from the currently displayed validated planning, and
+  // switches the displayed version to it. Deliberately distinct from reopenStructure below: this
+  // never touches the planning-structure wizard, it only clones tasks/links into an editable
+  // draft the user can keep working on in the tree table.
+  //
+  // Each step's state update is applied as soon as that step succeeds, rather than batched behind
+  // the final await: createPlanning/setDisplayedPlanning/listPlannings are three independent
+  // network calls, and if one of the later ones fails after createPlanning already succeeded, the
+  // draft exists server-side (possibly already displayed) but a batched-at-the-end version of this
+  // function would apply none of it -- leaving the new draft invisible, `selectedPlanning` stuck on
+  // the stale validated planning, and a retry cloning yet another orphaned draft from it.
+  async function createPlanningVersionFromSelected() {
+    if (!session || !selectedPlanning || selectedPlanning.status !== "validated" || isReadOnlyProject) {
+      return;
+    }
+    setPlanningBusy(true);
+    setError(null);
+    let createdDetail: PlanningDetail | null = null;
+    try {
+      createdDetail = await createPlanning(
+        projectId,
+        { source_planning_id: selectedPlanning.id },
+        session,
+        onSessionRefresh,
+      );
+      const updatedProject = await setDisplayedPlanning(projectId, createdDetail.id, session, onSessionRefresh);
+      setProject(updatedProject);
+      const planningMetadata = await listPlannings(projectId, session, onSessionRefresh);
+      setPlannings(planningMetadata);
+      updateSelectedPlanningId(createdDetail.id);
+      setPlanningDetail(createdDetail);
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      if (createdDetail) {
+        // The draft was already created server-side (and may even already be the displayed
+        // planning, if only listPlannings below failed) by the time setDisplayedPlanning or
+        // listPlannings failed. Best-effort refresh of the version list so the new draft is at
+        // least visible/selectable there instead of orphaned and invisible; failures here are
+        // swallowed since the banner below already tells the user to pick it manually.
+        try {
+          const planningMetadata = await listPlannings(projectId, session, onSessionRefresh);
+          setPlannings(planningMetadata);
+        } catch (refreshCause) {
+          if (refreshCause instanceof SessionExpiredError) {
+            clearSession();
+            router.push("/login");
+            return;
+          }
+        }
+        setError(
+          "Le brouillon a été créé mais son affichage a échoué : sélectionne-le manuellement dans la liste des versions.",
+        );
+        return;
+      }
+      setError(cause instanceof ApiError ? cause.message : "Impossible de créer une nouvelle version du planning.");
+    } finally {
+      setPlanningBusy(false);
+    }
+  }
+
   async function reopenStructure() {
     if (!session || isReadOnlyProject) {
       return;
@@ -704,6 +769,7 @@ export function usePlanningTreeMutations({
     createPlanningTaskSelection,
     deletePlanningTasksSelection,
     setSelectedPlanningAsReference,
+    createPlanningVersionFromSelected,
     reopenStructure,
   };
 }
