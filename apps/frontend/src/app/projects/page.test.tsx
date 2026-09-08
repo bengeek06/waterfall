@@ -3,11 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SessionExpiredError, type Project } from "@/lib/backend";
 
-const { getProjects, createProject, deleteProject, router, clearSession } = vi.hoisted(() => {
+const { getProjects, createProject, deleteProject, getProjectSetupWarnings, router, clearSession } = vi.hoisted(() => {
   return {
     getProjects: vi.fn(),
     createProject: vi.fn(),
     deleteProject: vi.fn(),
+    getProjectSetupWarnings: vi.fn(),
     router: { push: vi.fn() },
     clearSession: vi.fn(),
   };
@@ -25,6 +26,7 @@ vi.mock("@/lib/backend", async () => {
     getProjects,
     createProject,
     deleteProject,
+    getProjectSetupWarnings,
     restoreSession: vi.fn(),
   };
 });
@@ -62,6 +64,7 @@ describe("ProjectsPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getProjects.mockResolvedValue(page([project({})]));
+    getProjectSetupWarnings.mockResolvedValue({ warnings: [] });
   });
 
   afterEach(() => {
@@ -213,6 +216,150 @@ describe("ProjectsPage", () => {
 
     await waitFor(() => expect(createProject).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(getProjects).toHaveBeenCalledTimes(2));
+  });
+
+  // #109: a complete global setup (no default calendar/working-day, cost category,
+  // or resource role missing) must not surface any warning in the create dialog.
+  it("shows no setup warning when the global setup is complete", async () => {
+    render(<ProjectsPage />);
+    await waitFor(() => expect(getProjects).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "Créer projet" }));
+
+    await waitFor(() => expect(getProjectSetupWarnings).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(/Paramétrage global incomplet/)).not.toBeInTheDocument();
+  });
+
+  // #109: the create dialog can be closed and reopened (or "Créer projet" double-clicked,
+  // since it isn't disabled while setup warnings are loading) faster than a
+  // `getProjectSetupWarnings` request resolves, firing a second call while the first is
+  // still in flight. A late-arriving first response must not silently overwrite the
+  // second, more recent (and already-displayed) result.
+  it("ignores a stale getProjectSetupWarnings response when the dialog is reopened before it resolves", async () => {
+    const deferred: Array<{ resolve: (result: { warnings: unknown[] }) => void }> = [];
+    getProjectSetupWarnings.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          deferred.push({ resolve });
+        }),
+    );
+
+    render(<ProjectsPage />);
+    await waitFor(() => expect(getProjects).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "Créer projet" }));
+    fireEvent.click(screen.getByRole("button", { name: "Annuler" }));
+    fireEvent.click(screen.getByRole("button", { name: "Créer projet" }));
+    await waitFor(() => expect(getProjectSetupWarnings).toHaveBeenCalledTimes(2));
+
+    // The second (most recent) request resolves first, with the correct current state.
+    deferred[1].resolve({ warnings: [{ code: "no_default_calendar", message: "no default calendar" }] });
+    await waitFor(() =>
+      expect(screen.getByText(/calendrier par défaut actif n'est défini/)).toBeInTheDocument(),
+    );
+
+    // The first (stale) request resolves late, with a different warning -- it must not
+    // clobber the already-displayed, more recent result. `waitFor` here also flushes any
+    // pending state update from the stale response's resolution before asserting on it.
+    deferred[0].resolve({ warnings: [{ code: "no_active_cost_category", message: "no active cost category" }] });
+    await waitFor(() =>
+      expect(screen.getByText(/calendrier par défaut actif n'est défini/)).toBeInTheDocument(),
+    );
+    expect(screen.queryByText(/Aucune catégorie de coût active/)).not.toBeInTheDocument();
+  });
+
+  // #109: each missing prerequisite must be reported with its own precise, French
+  // message naming the /resources tab where it can be fixed -- never the backend's raw
+  // English diagnostic `message` string.
+  it.each([
+    ["no_default_calendar", /calendrier par défaut actif n'est défini/],
+    ["default_calendar_has_no_working_day", /n'a aucun jour travaillé/],
+    ["no_active_cost_category", /Aucune catégorie de coût active/],
+    ["no_active_resource_role", /Aucun rôle actif n'est défini/],
+  ] as const)("shows the French message for the %s setup warning", async (code, expectedMessage) => {
+    getProjectSetupWarnings.mockResolvedValue({ warnings: [{ code, message: "english diagnostic, never shown" }] });
+
+    render(<ProjectsPage />);
+    await waitFor(() => expect(getProjects).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "Créer projet" }));
+
+    await waitFor(() => expect(screen.getByText(expectedMessage)).toBeInTheDocument());
+    expect(screen.queryByText("english diagnostic, never shown")).not.toBeInTheDocument();
+  });
+
+  // An unknown code (e.g. added server-side before this mapping is updated) must fall
+  // back to a generic message instead of crashing or rendering nothing.
+  it("falls back to a generic message for an unrecognized setup warning code", async () => {
+    getProjectSetupWarnings.mockResolvedValue({
+      warnings: [{ code: "some_future_code", message: "future diagnostic" }],
+    });
+
+    render(<ProjectsPage />);
+    await waitFor(() => expect(getProjects).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "Créer projet" }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/Le paramétrage global comporte un point à vérifier/)).toBeInTheDocument(),
+    );
+  });
+
+  it("lists every missing prerequisite when several setup warnings are combined", async () => {
+    getProjectSetupWarnings.mockResolvedValue({
+      warnings: [
+        { code: "no_default_calendar", message: "no default calendar" },
+        { code: "no_active_resource_role", message: "no active role" },
+      ],
+    });
+
+    render(<ProjectsPage />);
+    await waitFor(() => expect(getProjects).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "Créer projet" }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/calendrier par défaut actif n'est défini/)).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/Aucun rôle actif n'est défini/)).toBeInTheDocument();
+  });
+
+  // The setup warnings are advisory only -- creation must still succeed while one is
+  // displayed, and the "Créer" button must never become disabled because of it.
+  it("still allows creating a project while a setup warning is displayed", async () => {
+    getProjectSetupWarnings.mockResolvedValue({
+      warnings: [{ code: "no_active_cost_category", message: "no active cost category" }],
+    });
+    createProject.mockResolvedValue(project({ id: 2, name: "Nouveau projet" }));
+
+    render(<ProjectsPage />);
+    await waitFor(() => expect(getProjects).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "Créer projet" }));
+    await waitFor(() => expect(screen.getByText(/Aucune catégorie de coût active/)).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Créer" })).toBeEnabled();
+
+    fireEvent.change(screen.getByLabelText("Nom du projet"), { target: { value: "Nouveau projet" } });
+    fireEvent.change(screen.getByLabelText("Code projet"), { target: { value: "NP-1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Créer" }));
+
+    await waitFor(() => expect(createProject).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(getProjects).toHaveBeenCalledTimes(2));
+  });
+
+  // #109: loading the setup warnings is subject to the same session-expiry handling
+  // as every other load on this page -- a stale/expired session must clear it and
+  // redirect to login rather than leaving the dialog stuck or showing a raw error.
+  it("clears the session and redirects to login when loading setup warnings reports session expiry", async () => {
+    getProjectSetupWarnings.mockRejectedValue(new SessionExpiredError());
+
+    render(<ProjectsPage />);
+    await waitFor(() => expect(getProjects).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "Créer projet" }));
+
+    await waitFor(() => expect(clearSession).toHaveBeenCalled());
+    await waitFor(() => expect(router.push).toHaveBeenCalledWith("/login"));
   });
 
   // Regression test for #195: a mutation handler must clear the session and
