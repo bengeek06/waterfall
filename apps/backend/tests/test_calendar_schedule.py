@@ -93,6 +93,23 @@ def test_compute_finish_at_hours_that_previously_truncated_to_zero_no_longer_han
     assert compute_working_minutes_between(start, finish, all_days_barely_positive_hours) == 5
 
 
+def test_compute_working_minutes_between_handles_a_centihour_workday() -> None:
+    """Documents issue #108's acceptance criterion: hours_per_day is a
+    Numeric(4, 2) column, so a value like Decimal("7.40") (a 37h/5-day week)
+    is a legal, ordinary input, not an edge case -- unlike the barely-above-
+    zero Decimal("0.01") values exercised above. 7.4 * 60 = 444.0 exactly,
+    so this is a clean case with no rounding ambiguity: it only needs to
+    keep working once the frontend's step="0.25" restriction (which used to
+    make 7.4 unreachable through the UI) is lifted to step="0.01"."""
+    start = datetime(2026, 1, 5, 8, 0, tzinfo=UTC)
+    all_days_centihour = {day_type: Decimal("7.40") for day_type in range(1, 8)}
+
+    finish = compute_finish_at(start, 444, all_days_centihour)
+
+    assert finish == datetime(2026, 1, 5, 15, 24, tzinfo=UTC)
+    assert compute_working_minutes_between(start, finish, all_days_centihour) == 444
+
+
 def test_compute_finish_at_still_rejects_a_calendar_whose_capacity_rounds_to_zero() -> None:
     """Defense-in-depth companion to the above: an hours_per_day value below
     what the DB's 2-decimal-place ``Numeric(4, 2)`` column can ever legally
