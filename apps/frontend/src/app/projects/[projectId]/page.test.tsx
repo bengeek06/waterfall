@@ -211,6 +211,36 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     expect(mocks.getPlanning).not.toHaveBeenCalled();
   });
 
+  // Regression test for #227: the initial load effect's catch guards on `cancelled`
+  // (set by the effect's cleanup, e.g. when the user navigates away before the
+  // request resolves) *before* checking for session expiry. Per issue #227, a
+  // request that became obsolete and failed precisely because the session expired
+  // must still force a logout -- otherwise the session would never get invalidated
+  // once the user has moved on. Unmounting before the pending request settles is
+  // the way this effect's `cancelled` flag becomes true (see the `useEffect`
+  // cleanup in page.tsx), simulating "the user navigated elsewhere".
+  it("still logs out when the initial load's now-cancelled request fails with a post-refresh 401", async () => {
+    let rejectLoad!: (cause: unknown) => void;
+    mocks.getProject.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectLoad = reject;
+        }),
+    );
+    mocks.listProjectEstimates.mockResolvedValue([]);
+    mocks.listPlannings.mockResolvedValue([]);
+
+    const { unmount } = render(<ProjectDetailsPage />);
+    await waitFor(() => expect(mocks.getProject).toHaveBeenCalledTimes(1));
+
+    // Simulates the user navigating away before the request resolves: the
+    // effect's cleanup runs, setting `cancelled = true`.
+    unmount();
+
+    rejectLoad(new ApiError(401, "Unauthorized"));
+    await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith("/login"));
+  });
+
   it("saves the structure draft without closing the form or generating a planning", async () => {
     mocks.getProject.mockResolvedValue(project());
     mocks.listPlannings.mockResolvedValue([]);
