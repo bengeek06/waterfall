@@ -1004,7 +1004,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Lister les roles actifs */
+        /**
+         * Lister les roles actifs
+         * @description Le parametre `q` recherche sur `name`, le code du noeud du role et l'`id` du role.
+         */
         get: operations["listResourceRoles"];
         put?: never;
         /** Creer un role */

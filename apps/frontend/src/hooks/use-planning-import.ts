@@ -59,6 +59,11 @@ export function usePlanningImport({
   setImportBusy,
   setError,
 }: UsePlanningImportParams) {
+  // Complexity exception (E4-17, #157): batch launch + status-polling loop +
+  // two-way Promise.allSettled refresh aggregation, each branch with its own
+  // session-expiry handling, in one function. Decomposition tracked in #205
+  // (E4-19) rather than bundled into #157's gate-activation scope.
+  // eslint-disable-next-line complexity
   async function confirmPlanningImport() {
     if (!session || !project || !importReview) {
       return;

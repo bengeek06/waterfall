@@ -825,20 +825,20 @@ export function setUserRole(
   );
 }
 
-export interface ProjectPage {
-  items: Project[];
-  total: number;
-}
-
+// `listParams` mirrors `getCostTypes`'s own EPIC E8 DataTable extension (#128, the
+// last of the 9 migrations): `sort` is constrained server-side to `name`/`status`/
+// `id` (and their `-` descending forms) only -- see `openapi/spec/paths/
+// projects.yaml`'s `sort` enum -- so `projects-table.tsx` only ever sends one of
+// those, never e.g. "code" (that column has no server-sortable equivalent).
 export async function getProjects(
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
-  limit = 50,
-  offset = 0,
   includeArchived = false,
-): Promise<ProjectPage> {
+  listParams: ListQueryParams = {},
+): Promise<ListPage<Project>> {
+  const query = buildListQuery(listParams, includeArchived ? { include_archived: "true" } : undefined);
   const page = await authRequest<components["schemas"]["ProjectListRead"]>(
-    `/projects?limit=${limit}&offset=${offset}&include_archived=${includeArchived}`,
+    `/projects${query}`,
     tokens,
     { method: "GET" },
     onSessionRefresh,

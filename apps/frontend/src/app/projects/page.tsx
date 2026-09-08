@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
@@ -42,17 +42,22 @@ import {
 } from "@/lib/backend";
 import { clearSession, getSession, setSession, type SessionTokens } from "@/lib/session";
 
-const PROJECT_PAGE_SIZE = 50;
-
 export default function ProjectsPage() {
   const router = useRouter();
   const [session, setSessionState] = useState<SessionTokens | null>(() => getSession());
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [projectTotal, setProjectTotal] = useState(0);
-  const [projectOffset, setProjectOffset] = useState(0);
+  // The table's own server-paginated/sorted/searched view (EPIC E8's DataTable
+  // migration, #128, the last of the 9 tables). Unlike the multi-table
+  // `resources/page.tsx`, this page has a single data source, so there is no
+  // separate unfiltered "reference" list to keep alongside it -- `projectsPage`
+  // is the only representation of the project list.
+  const [projectsPage, setProjectsPage] = useState<{ items: Project[]; total: number }>({ items: [], total: 0 });
+  const [projectsLoading, setProjectsLoading] = useState(true);
+  const [projectsOffset, setProjectsOffset] = useState(0);
+  const [projectsLimit] = useState(20);
+  const [projectsSort, setProjectsSort] = useState<string | null>(null);
+  const [projectsQuery, setProjectsQuery] = useState("");
   const [includeArchived, setIncludeArchived] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
-  const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState<string | null>(null);
   const [createMode, setCreateMode] = useState(false);
@@ -70,45 +75,62 @@ export default function ProjectsPage() {
     [],
   );
 
+  // Guards a reload triggered by a mutation (see `reloadProjectsPage` below)
+  // against racing an in-flight pagination/sort/search/filter fetch from the
+  // effect below, and vice versa -- whichever request resolves last for this
+  // generation wins, matching `reloadCostTypesPage`'s own rationale in
+  // `resources/page.tsx`.
+  const projectsGenerationRef = useRef(0);
+  // Mirrors `projectsOffset`/`projectsSort`/`projectsQuery`/`includeArchived`
+  // synchronously (updated at every write site below, not via a `useEffect`) so
+  // `reloadProjectsPage` -- called from `onCreateProject`/`onDeleteSelected`
+  // after an `await` -- reads the *live* pagination/sort/search/filter state
+  // instead of the value closed over when the mutation started. Otherwise: a
+  // create/delete's own request is still in flight (the confirmation dialog
+  // closes immediately, well before the mutation's own request resolves) while
+  // the user pages/sorts/searches/toggles "Inclure les projets...", the
+  // mutation then resolves, and the reload it triggers would silently refetch
+  // and display stale data under the new controls' label -- even though, by
+  // generation-counter order, that reload's response is the most recent one to
+  // arrive. Same bug class and fix as `reloadUsersPage` in `resources/page.tsx`.
+  const projectsOffsetRef = useRef(projectsOffset);
+  const projectsSortRef = useRef(projectsSort);
+  const projectsQueryRef = useRef(projectsQuery);
+  const includeArchivedRef = useRef(includeArchived);
+
   useEffect(() => {
-    let cancelled = false;
+    const generation = ++projectsGenerationRef.current;
+    const isCurrentGeneration = () => projectsGenerationRef.current === generation;
 
     async function load() {
       if (!session) {
         try {
           const restoredSession = await restoreSession();
-          if (cancelled) {
-            return;
-          }
+          if (!isCurrentGeneration()) return;
           setSession(restoredSession);
           setSessionState(restoredSession);
         } catch {
+          if (!isCurrentGeneration()) return;
           clearSession();
           router.push("/login");
         }
         return;
       }
-      setBusy(true);
+      setProjectsLoading(true);
       setError(null);
       try {
         await getMe(session, onSessionRefresh);
-        const projectsPage = await getProjects(
-          session,
-          onSessionRefresh,
-          PROJECT_PAGE_SIZE,
-          projectOffset,
-          includeArchived,
-        );
-        if (cancelled) {
-          return;
-        }
-        setProjects(projectsPage.items);
-        setProjectTotal(projectsPage.total);
+        const page = await getProjects(session, onSessionRefresh, includeArchived, {
+          limit: projectsLimit,
+          offset: projectsOffset,
+          sort: projectsSort,
+          q: projectsQuery || undefined,
+        });
+        if (!isCurrentGeneration()) return;
+        setProjectsPage(page);
         setSelectedIds(new Set());
       } catch (cause) {
-        if (cancelled) {
-          return;
-        }
+        if (!isCurrentGeneration()) return;
         if (cause instanceof SessionExpiredError) {
           clearSession();
           router.push("/login");
@@ -125,21 +147,85 @@ export default function ProjectsPage() {
           setError("Erreur inattendue lors du chargement des projets");
         }
       } finally {
-        if (!cancelled) {
-          setBusy(false);
-        }
+        if (isCurrentGeneration()) setProjectsLoading(false);
       }
     }
 
     void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [includeArchived, onSessionRefresh, projectOffset, router, session]);
+  }, [session, onSessionRefresh, router, includeArchived, projectsLimit, projectsOffset, projectsSort, projectsQuery]);
+
+  // Reloads the table's current page in place after a create/delete mutation,
+  // rather than patching `projectsPage.items` locally: server-side sort/search/
+  // pagination mean the mutated row's position (or continued presence on this
+  // page at all) can't be derived client-side. Mirrors `reloadCostTypesPage` in
+  // `resources/page.tsx`.
+  async function reloadProjectsPage() {
+    if (!session) return;
+    const generation = ++projectsGenerationRef.current;
+    setProjectsLoading(true);
+    try {
+      const page = await getProjects(session, onSessionRefresh, includeArchivedRef.current, {
+        limit: projectsLimit,
+        offset: projectsOffsetRef.current,
+        sort: projectsSortRef.current,
+        q: projectsQueryRef.current || undefined,
+      });
+      if (projectsGenerationRef.current !== generation) return;
+      // A delete can leave the current offset past the end of the list -- e.g.
+      // deleting the last project on page 2 drops the total to 20 while still
+      // viewing offset 20. Clamp to the last valid page and refetch once more
+      // instead of rendering an empty "Aucune donnée" table while data still
+      // exists on an earlier page. Mirrors `reloadUsersPage` in
+      // `resources/page.tsx`.
+      if (projectsOffsetRef.current > 0 && page.total <= projectsOffsetRef.current) {
+        const clampedOffset = Math.max(0, Math.floor((page.total - 1) / projectsLimit) * projectsLimit);
+        projectsOffsetRef.current = clampedOffset;
+        setProjectsOffset(clampedOffset);
+        await reloadProjectsPage();
+        return;
+      }
+      setProjectsPage(page);
+    } catch (cause) {
+      if (projectsGenerationRef.current !== generation) return;
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
+        clearSession();
+        router.push("/login");
+      }
+    } finally {
+      if (projectsGenerationRef.current === generation) setProjectsLoading(false);
+    }
+  }
 
   function toggleIncludeArchived() {
-    setIncludeArchived((current) => !current);
-    setProjectOffset(0);
+    setIncludeArchived((current) => {
+      const next = !current;
+      includeArchivedRef.current = next;
+      return next;
+    });
+    projectsOffsetRef.current = 0;
+    setProjectsOffset(0);
+    setSelectedIds(new Set());
+  }
+
+  function onProjectsSortChange(nextSort: string | null) {
+    projectsSortRef.current = nextSort;
+    setProjectsSort(nextSort);
+    projectsOffsetRef.current = 0;
+    setProjectsOffset(0);
+    setSelectedIds(new Set());
+  }
+
+  function onProjectsSearchChange(nextQuery: string) {
+    projectsQueryRef.current = nextQuery;
+    setProjectsQuery(nextQuery);
+    projectsOffsetRef.current = 0;
+    setProjectsOffset(0);
+    setSelectedIds(new Set());
+  }
+
+  function onProjectsPaginationChange(next: { offset: number; limit: number }) {
+    projectsOffsetRef.current = next.offset;
+    setProjectsOffset(next.offset);
     setSelectedIds(new Set());
   }
 
@@ -164,7 +250,7 @@ export default function ProjectsPage() {
     setCreateError(null);
     setActionBusy("Création du projet en cours...");
     try {
-      const project = await createProject(
+      await createProject(
         {
           name: createName.trim(),
           code: createCode.trim(),
@@ -173,8 +259,8 @@ export default function ProjectsPage() {
         session,
         onSessionRefresh,
       );
-      setProjects((prev) => [...prev, project].sort((left, right) => left.id - right.id));
       resetCreateFlow();
+      await reloadProjectsPage();
     } catch (cause) {
       setCreateError(cause instanceof ApiError ? cause.message : "Impossible de créer le projet.");
     } finally {
@@ -193,15 +279,33 @@ export default function ProjectsPage() {
       for (const projectId of projectIds) {
         await deleteProject(projectId, session, onSessionRefresh);
       }
-      setProjects((prev) => prev.filter((project) => !projectIds.includes(project.id)));
-      setSelectedIds(new Set());
       toast.success(`${projectIds.length} projet(s) supprimé(s).`);
     } catch (cause) {
+      // A failure partway through the loop still leaves the earlier ids deleted
+      // server-side -- `selectedIds`/the table's current page must not keep
+      // referencing them as if nothing happened. `reloadProjectsPage()` below
+      // (in `finally`, so it always runs) resynchronizes on the real server
+      // state whether the loop fully succeeded, partially succeeded, or failed
+      // on the very first id.
       toast.error(cause instanceof ApiError ? cause.message : "Impossible de supprimer les projets.");
     } finally {
+      setSelectedIds(new Set());
+      await reloadProjectsPage();
       setActionBusy(null);
     }
   }
+
+  // The "select all" checkbox in ProjectsTable only ever covers the rows on the
+  // current server page (see that component's own comment) -- when more than one
+  // page exists, "N sélectionné(s)" alone would be ambiguous about whether the
+  // selection covers just this page or the whole filtered dataset. Appending
+  // "sur cette page" whenever a second page exists removes that ambiguity; with
+  // a single page, "sur cette page" and "au total" mean the same thing, so the
+  // plain count is left alone.
+  const hasMultiplePages = projectsPage.total > projectsPage.items.length;
+  const selectionLabel = selectedIds.size
+    ? `${selectedIds.size} sélectionné(s)${hasMultiplePages ? " sur cette page" : ""}`
+    : "";
 
   return (
     <>
@@ -291,63 +395,34 @@ export default function ProjectsPage() {
           Inclure les projets perdus, terminés ou abandonnés
         </label>
 
-        {busy ? <p className="text-sm text-muted-foreground" role="status">Chargement...</p> : null}
         {actionBusy ? <p className="text-sm text-muted-foreground" role="status">{actionBusy}</p> : null}
         {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
 
-        {!busy && !projects.length ? <p className="text-sm text-muted-foreground">Aucun projet importé.</p> : null}
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <span className="text-sm text-muted-foreground">{selectionLabel}</span>
+          <Button
+            variant="destructive"
+            type="button"
+            disabled={!selectedIds.size || Boolean(actionBusy)}
+            onClick={() => setDeleteDialogOpen(true)}
+          >
+            Supprimer la sélection
+          </Button>
+        </div>
 
-        {!busy && projects.length ? (
-          <>
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-              <span className="text-sm text-muted-foreground">
-                {selectedIds.size ? `${selectedIds.size} sélectionné(s)` : ""}
-              </span>
-              <Button
-                variant="destructive"
-                type="button"
-                disabled={!selectedIds.size || Boolean(actionBusy)}
-                onClick={() => setDeleteDialogOpen(true)}
-              >
-                Supprimer la sélection
-              </Button>
-            </div>
-            <ProjectsTable
-              projects={projects}
-              selectedIds={selectedIds}
-              onSelectedIdsChange={setSelectedIds}
-              onProjectOpen={(projectId) => router.push(`/projects/${projectId}`)}
-            />
-          </>
-        ) : null}
-
-        {!busy ? (
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-            <span className="text-sm text-muted-foreground">
-              {projects.length
-                ? `Projets ${projectOffset + 1} à ${projectOffset + projects.length} sur ${projectTotal}`
-                : ""}
-            </span>
-            <div className="flex gap-2">
-              <Button
-                variant="outline"
-                type="button"
-                disabled={projectOffset === 0}
-                onClick={() => setProjectOffset((current) => Math.max(0, current - PROJECT_PAGE_SIZE))}
-              >
-                Précédent
-              </Button>
-              <Button
-                variant="outline"
-                type="button"
-                disabled={projectOffset + projects.length >= projectTotal}
-                onClick={() => setProjectOffset((current) => current + PROJECT_PAGE_SIZE)}
-              >
-                Suivant
-              </Button>
-            </div>
-          </div>
-        ) : null}
+        <ProjectsTable
+          projects={projectsPage.items}
+          pagination={{ total: projectsPage.total, limit: projectsLimit, offset: projectsOffset }}
+          onPaginationChange={onProjectsPaginationChange}
+          sort={projectsSort}
+          onSortChange={onProjectsSortChange}
+          search={projectsQuery}
+          onSearchChange={onProjectsSearchChange}
+          isLoading={projectsLoading}
+          selectedIds={selectedIds}
+          onSelectedIdsChange={setSelectedIds}
+          onProjectOpen={(projectId) => router.push(`/projects/${projectId}`)}
+        />
         </CardContent>
       </Card>
 
@@ -356,7 +431,8 @@ export default function ProjectsPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Supprimer les projets sélectionnés ?</AlertDialogTitle>
             <AlertDialogDescription>
-              {selectedIds.size} projet(s) seront supprimé(s) définitivement. Cette action est irréversible.
+              {selectedIds.size} projet(s){hasMultiplePages ? " (sur cette page)" : ""} seront supprimé(s) définitivement.
+              Cette action est irréversible.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
