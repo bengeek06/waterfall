@@ -1,5 +1,7 @@
 "use client";
 
+import { useRef } from "react";
+
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -39,6 +41,44 @@ export function CostLinesTable({
   onSave,
   onRequestDelete,
 }: CostLinesTableProps) {
+  // Live DOM refs for the two constrained fields (`min`/`step`, `quantity` also
+  // `required` -- see below) of whichever row is currently being edited, so
+  // "Sauver" can run native HTML5 validation on them before calling `onSave`.
+  // Only one row is ever in edit mode at a time here (`editingLineId`, unlike
+  // `capacity-table.tsx` where every row is simultaneously editable), so a
+  // single pair of refs is enough: they're naturally reset as the previous
+  // row's `<Input>`s unmount and the newly-edited row's mount (same reasoning
+  // as `calendars-table.tsx`'s single-editing-row case). `label` is free text
+  // with no HTML5 constraints on it, so it's intentionally excluded.
+  //
+  // `quantity`'s `min="0.01"` (not `"0"`) and `required` both mirror the
+  // backend's actual constraint (`ck_wf_estimate_cost_line_quantity`,
+  // `quantity > 0`, strict) -- same precedent as `weeksPerYear`'s `min="1"` in
+  // `calendars-table.tsx`, an exact bound rather than a looser one. `0` is not
+  // a legitimate quantity (a `min="0"` would let it slip past `checkValidity`
+  // and fail on the backend instead), so it's excluded on both ends: blank
+  // (`required`) and zero (`min="0.01"`). `unitCost` keeps `min="0"`: the
+  // backend allows `unit_cost >= 0` (a free line item is legitimate), so it's
+  // deliberately left without `required` too -- same precedent as
+  // `capacity-table.tsx`'s `personCount`/`availableHours` (#194).
+  const quantityRef = useRef<HTMLInputElement>(null);
+  const unitCostRef = useRef<HTMLInputElement>(null);
+
+  function handleSave(line: EstimateCostLine) {
+    // Before this fix, "Sauver" was a raw `type="button"` that called `onSave`
+    // directly, bypassing the `min`/`step`/`required` constraints declared on
+    // these two fields entirely (see #201).
+    const fields = [quantityRef.current, unitCostRef.current].filter(
+      (field): field is HTMLInputElement => field !== null,
+    );
+    const firstInvalid = fields.find((field) => !field.checkValidity());
+    if (firstInvalid) {
+      firstInvalid.reportValidity();
+      return;
+    }
+    onSave(line);
+  }
+
   return (
     <Table>
       <TableHeader>
@@ -67,9 +107,12 @@ export function CostLinesTable({
               <TableCell>
                 {editing ? (
                   <Input
+                    ref={quantityRef}
+                    aria-label={`Quantité de ${line.label}`}
                     type="number"
-                    min="0"
+                    min="0.01"
                     step="0.01"
+                    required
                     value={editingLineDraft.quantity}
                     onChange={(event) => onEditQuantityChange(event.target.value)}
                   />
@@ -80,6 +123,8 @@ export function CostLinesTable({
               <TableCell>
                 {editing ? (
                   <Input
+                    ref={unitCostRef}
+                    aria-label={`Coût unitaire de ${line.label}`}
                     type="number"
                     min="0"
                     step="0.01"
@@ -95,7 +140,7 @@ export function CostLinesTable({
                 <TableCell>
                   <div className="flex flex-wrap gap-2">
                     {editing ? (
-                      <Button size="sm" type="button" disabled={estimateBusy} onClick={() => onSave(line)}>
+                      <Button size="sm" type="button" disabled={estimateBusy} onClick={() => handleSave(line)}>
                         Sauver
                       </Button>
                     ) : (

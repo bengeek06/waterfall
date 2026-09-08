@@ -1,5 +1,7 @@
 "use client";
 
+import { useRef } from "react";
+
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -32,6 +34,31 @@ export function CostLineForm({
   estimateBusy,
   onAdd,
 }: CostLineFormProps) {
+  // Live DOM refs for the two constrained fields, so "Ajouter la ligne" can
+  // run native HTML5 validation on them before calling `onAdd` -- same fix as
+  // `cost-lines-table.tsx`'s "Sauver" (#201), extended here to this pinned
+  // create row per review (same precedent as #194, which fixed both the
+  // pinned create row and the edit rows of `calendars-table.tsx` together).
+  // `label`/`categoryId` are free text/a `<select>` with no HTML5 numeric
+  // constraints, so they're intentionally excluded. See `cost-lines-table.tsx`
+  // for why `quantity` uses `min="0.01"` + `required` (backend
+  // `quantity > 0`, strict) while `unitCost` keeps `min="0"` without
+  // `required` (backend `unit_cost >= 0`, 0 is a legitimate free line item).
+  const quantityRef = useRef<HTMLInputElement>(null);
+  const unitCostRef = useRef<HTMLInputElement>(null);
+
+  function handleAdd() {
+    const fields = [quantityRef.current, unitCostRef.current].filter(
+      (field): field is HTMLInputElement => field !== null,
+    );
+    const firstInvalid = fields.find((field) => !field.checkValidity());
+    if (firstInvalid) {
+      firstInvalid.reportValidity();
+      return;
+    }
+    onAdd();
+  }
+
   return (
     <Card>
       <CardContent className="grid gap-4 pt-6 md:grid-cols-5">
@@ -62,10 +89,12 @@ export function CostLineForm({
         <div className="grid gap-2">
           <Label htmlFor="cost-line-quantity">Quantité</Label>
           <Input
+            ref={quantityRef}
             id="cost-line-quantity"
             type="number"
-            min="0"
+            min="0.01"
             step="0.01"
+            required
             value={costLineDraft.quantity}
             onChange={(event) => onQuantityChange(event.target.value)}
           />
@@ -73,6 +102,7 @@ export function CostLineForm({
         <div className="grid gap-2">
           <Label htmlFor="cost-line-unit-cost">Coût unitaire</Label>
           <Input
+            ref={unitCostRef}
             id="cost-line-unit-cost"
             type="number"
             min="0"
@@ -82,7 +112,7 @@ export function CostLineForm({
           />
         </div>
         <div className="flex items-end">
-          <Button type="button" disabled={estimateBusy} onClick={onAdd}>
+          <Button type="button" disabled={estimateBusy} onClick={handleAdd}>
             Ajouter la ligne
           </Button>
         </div>
