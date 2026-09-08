@@ -8,6 +8,10 @@ const mocks = vi.hoisted(() => ({
   listProjectEstimates: vi.fn(),
   listPlannings: vi.fn(),
   getPlanning: vi.fn(),
+  exportProjectXml: vi.fn(),
+  listEstimateTaskRows: vi.fn(),
+  listEstimateCostLines: vi.fn(),
+  getEstimateAggregates: vi.fn(),
   createImportBatch: vi.fn(),
   uploadImportSourceXml: vi.fn(),
   runImportBatch: vi.fn(),
@@ -49,6 +53,10 @@ vi.mock("@/lib/backend", async () => {
     listProjectEstimates: mocks.listProjectEstimates,
     listPlannings: mocks.listPlannings,
     getPlanning: mocks.getPlanning,
+    exportProjectXml: mocks.exportProjectXml,
+    listEstimateTaskRows: mocks.listEstimateTaskRows,
+    listEstimateCostLines: mocks.listEstimateCostLines,
+    getEstimateAggregates: mocks.getEstimateAggregates,
     createImportBatch: mocks.createImportBatch,
     uploadImportSourceXml: mocks.uploadImportSourceXml,
     runImportBatch: mocks.runImportBatch,
@@ -143,6 +151,10 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     mocks.listProjectEstimates.mockReset();
     mocks.listPlannings.mockReset();
     mocks.getPlanning.mockReset();
+    mocks.exportProjectXml.mockReset();
+    mocks.listEstimateTaskRows.mockReset();
+    mocks.listEstimateCostLines.mockReset();
+    mocks.getEstimateAggregates.mockReset();
     mocks.createImportBatch.mockReset();
     mocks.uploadImportSourceXml.mockReset();
     mocks.runImportBatch.mockReset();
@@ -239,6 +251,78 @@ describe("ProjectDetailsPage planning lifecycle", () => {
 
     rejectLoad(new ApiError(401, "Unauthorized"));
     await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith("/login"));
+  });
+
+  // Regression test for #230: exportPlanningXml only checked SessionExpiredError, missing the
+  // ApiError(401) authFetch throws when a token refresh succeeds but the replayed request still
+  // 401s (same bug family as #216).
+  it("logs out when exporting the planning fails with a post-refresh 401", async () => {
+    mocks.getProject.mockResolvedValue(project({ status: "initialise" }));
+    mocks.listPlannings.mockResolvedValue([]);
+    mocks.exportProjectXml.mockRejectedValue(new ApiError(401, "Unauthorized"));
+
+    render(<ProjectDetailsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Export XML" }));
+
+    await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith("/login"));
+    // The fallback branch (`setError(cause instanceof ApiError ? cause.message : ...)`) would
+    // render the raw backend message, not the generic French string, for an ApiError -- assert
+    // against the string that could actually leak, not one this branch could never produce.
+    expect(screen.queryByText("Unauthorized")).not.toBeInTheDocument();
+  });
+
+  // Regression test for the Haute finding on #230's own review: two sibling effects in this
+  // file (loadEstimateDetails, loadAggregates) had the exact same missing-ApiError-401 defect
+  // as exportPlanningXml/preparePlanningImport, discovered only in review because the initial
+  // scoping of #230 didn't audit every catch block in this file.
+  it("logs out when loading the estimate details fails with a post-refresh 401", async () => {
+    mocks.getProject.mockResolvedValue(project({ status: "initialise" }));
+    mocks.listPlannings.mockResolvedValue([]);
+    mocks.listProjectEstimates.mockResolvedValue([
+      {
+        id: 1,
+        project_id: 1,
+        planning_id: null,
+        version_number: 1,
+        kind: "initial",
+        status: "draft",
+        currency_code: "EUR",
+        created_at: "2026-01-01T00:00:00Z",
+      },
+    ]);
+    mocks.listEstimateTaskRows.mockRejectedValue(new ApiError(401, "Unauthorized"));
+    mocks.listEstimateCostLines.mockResolvedValue([]);
+
+    render(<ProjectDetailsPage />);
+
+    await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith("/login"));
+    expect(screen.queryByText("Impossible de charger le devis.")).not.toBeInTheDocument();
+  });
+
+  it("logs out when loading the estimate aggregates fails with a post-refresh 401", async () => {
+    mocks.getProject.mockResolvedValue(project({ status: "initialise" }));
+    mocks.listPlannings.mockResolvedValue([]);
+    mocks.listProjectEstimates.mockResolvedValue([
+      {
+        id: 1,
+        project_id: 1,
+        planning_id: null,
+        version_number: 1,
+        kind: "initial",
+        status: "draft",
+        currency_code: "EUR",
+        created_at: "2026-01-01T00:00:00Z",
+      },
+    ]);
+    mocks.listEstimateTaskRows.mockResolvedValue([]);
+    mocks.listEstimateCostLines.mockResolvedValue([]);
+    mocks.getEstimateAggregates.mockRejectedValue(new ApiError(401, "Unauthorized"));
+
+    render(<ProjectDetailsPage />);
+    fireEvent.click(await screen.findByRole("tab", { name: "Analytique" }));
+
+    await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith("/login"));
+    expect(screen.queryByText("Impossible de charger les agrégats.")).not.toBeInTheDocument();
   });
 
   it("saves the structure draft without closing the form or generating a planning", async () => {
@@ -1018,6 +1102,29 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     expect(screen.queryByText("Impossible d'importer le planning.")).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Remplacement à confirmer" })).not.toBeInTheDocument();
     expect(screen.getByText("Fichier sélectionné : b.xml")).toBeInTheDocument();
+  });
+
+  // Regression test for #230: preparePlanningImport only checked SessionExpiredError, missing
+  // the ApiError(401) authFetch throws when a token refresh succeeds but the replayed request
+  // still 401s (same bug family as #216).
+  it("logs out when previewing the import fails with a post-refresh 401", async () => {
+    const current = planning({ id: 2, version_number: 2, status: "validated" });
+    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: current.id }));
+    mocks.listPlannings.mockResolvedValue([current]);
+    mocks.getPlanning.mockResolvedValue(detail(current));
+    mocks.createImportBatch.mockRejectedValue(new ApiError(401, "Unauthorized"));
+
+    render(<ProjectDetailsPage />);
+    const file = new File(["<Project />"], "a.xml", { type: "application/xml" });
+    fireEvent.change(await screen.findByLabelText("Importer un planning MS Project (.xml)"), {
+      target: { files: [file] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Prévisualiser l'import" }));
+
+    await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith("/login"));
+    // Same reasoning as the export test above: the fallback branch would render the raw
+    // ApiError message, never the generic French string, so assert against what could leak.
+    expect(screen.queryByText("Unauthorized")).not.toBeInTheDocument();
   });
 
   it("imports a dropped file the same way as a manually selected file", async () => {

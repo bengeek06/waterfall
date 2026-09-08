@@ -291,7 +291,7 @@ export default function ProjectDetailsPage() {
           setCostLines(lines);
         }
       } catch (cause) {
-        if (cause instanceof SessionExpiredError) {
+        if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
           clearSession();
           router.push("/login");
           return;
@@ -344,7 +344,7 @@ export default function ProjectDetailsPage() {
           setAggregates(data);
         }
       } catch (cause) {
-        if (cause instanceof SessionExpiredError) {
+        if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
           clearSession();
           router.push("/login");
           return;
@@ -457,7 +457,7 @@ export default function ProjectDetailsPage() {
       anchor.remove();
       window.URL.revokeObjectURL(objectUrl);
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
         clearSession();
         router.push("/login");
         return;
@@ -489,7 +489,7 @@ export default function ProjectDetailsPage() {
       }
       setImportReview({ batchId: batch.id, diff });
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
         clearSession();
         router.push("/login");
         return;
