@@ -1024,6 +1024,34 @@ export function exportEstimateExcel(
 
 export type ProjectCreateInput = components["schemas"]["ProjectCreate"];
 export type ProjectUpdateInput = components["schemas"]["ProjectUpdate"];
+export type ProjectSetupWarningCode = components["schemas"]["ProjectSetupWarningCode"];
+export type ProjectSetupWarning = components["schemas"]["ProjectSetupWarning"];
+export type ProjectSetupWarningsRead = components["schemas"]["ProjectSetupWarningsRead"];
+
+// French messages for each `ProjectSetupWarning.code`, naming the /resources tab where
+// the missing global prerequisite can be fixed (#109). `ProjectSetupWarning.message`
+// itself is an English diagnostic string never meant for direct display (see the
+// schema's own doc comment) -- callers must always go through this mapping instead of
+// showing it, same principle as `describeStructuredDetailCode` above.
+const projectSetupWarningMessages: Record<ProjectSetupWarningCode, string> = {
+  no_default_calendar:
+    "Aucun calendrier par défaut actif n'est défini. Définissez-en un dans l'onglet Ressources de la page Paramètres (/resources).",
+  default_calendar_has_no_working_day:
+    "Le calendrier par défaut n'a aucun jour travaillé. Ajoutez au moins un jour travaillé dans l'onglet Ressources de la page Paramètres (/resources).",
+  no_active_cost_category:
+    "Aucune catégorie de coût active n'est définie. Activez-en une dans l'onglet Coûts de la page Paramètres (/resources).",
+  no_active_resource_role:
+    "Aucun rôle actif n'est défini. Activez-en un dans l'onglet Ressources de la page Paramètres (/resources).",
+};
+
+// Falls back to a generic message for a code added server-side before this mapping is
+// updated, rather than crashing or rendering nothing.
+export function describeProjectSetupWarningCode(code: string): string {
+  return (
+    projectSetupWarningMessages[code as ProjectSetupWarningCode] ??
+    "Le paramétrage global comporte un point à vérifier avant de créer un projet. Consultez la page Paramètres (/resources)."
+  );
+}
 
 export function createProject(
   payload: ProjectCreateInput,
@@ -1075,6 +1103,18 @@ export function deleteProject(
     {
       method: "DELETE",
     },
+    onSessionRefresh,
+  );
+}
+
+export function getProjectSetupWarnings(
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<ProjectSetupWarningsRead>(
+    "/projects/setup-warnings",
+    tokens,
+    { method: "GET" },
     onSessionRefresh,
   );
 }
