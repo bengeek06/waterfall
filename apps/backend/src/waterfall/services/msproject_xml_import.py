@@ -8,25 +8,22 @@ from sqlalchemy.orm import Session
 
 from waterfall.models.ms_core import MsProject
 from waterfall.models.planning import WfPlanning, WfPlanningLinkSnapshot, WfPlanningTaskSnapshot
-from waterfall.services.msproject_xml import ParsedProject, parse_msproject_xml
+from waterfall.services.msproject_xml import ParsedProject, outline_parent_uids, parse_msproject_xml
 from waterfall.services.project_lifecycle import ensure_project_mutable
 
 
 def _populate_parent_metadata(tasks: list[WfPlanningTaskSnapshot]) -> None:
-    by_outline = {
-        task.outline_number: task
-        for task in tasks
-        if task.outline_number and all(part.isdigit() for part in task.outline_number.split("."))
-    }
+    # outline_parent_uids (issue #176) is shared with the calendar-mismatch
+    # import diagnostic in services/import_diff.py, which needs the exact same
+    # outline-number-to-parent derivation over a raw ParsedTask list instead
+    # of an already-persisted WfPlanningTaskSnapshot.
+    parent_uids = outline_parent_uids((task.uid, task.outline_number) for task in tasks)
     for task in tasks:
-        if not task.outline_number or not all(
-            part.isdigit() for part in task.outline_number.split(".")
-        ):
+        if task.uid not in parent_uids:
             continue
-        parts = task.outline_number.split(".")
-        task.position = int(parts[-1])
-        parent = by_outline.get(".".join(parts[:-1]))
-        task.parent_uid = parent.uid if parent is not None else None
+        assert task.outline_number is not None  # guaranteed by outline_parent_uids
+        task.position = int(task.outline_number.split(".")[-1])
+        task.parent_uid = parent_uids[task.uid]
 
 
 def _apply_project_metadata(project: MsProject, parsed: ParsedProject) -> None:

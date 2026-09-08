@@ -12,6 +12,7 @@ properties:
     - modified
     - removed
     - conflict
+    - calendar_mismatch
   uid:
     type: integer
     minimum: 1
@@ -25,3 +26,7 @@ properties:
     type: array
     items:
       $ref: ImportLinkChange.yaml
+  calendarMismatch:
+    anyOf:
+    - $ref: ImportCalendarMismatch.yaml
+    - type: "null"

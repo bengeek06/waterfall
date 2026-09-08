@@ -37,11 +37,22 @@ class ImportRunRequest(BaseModel):
 
 
 class ImportDiffItem(BaseModel):
-    kind: Literal["added", "modified", "removed", "conflict"]
+    # populate_by_name is required for build_import_diff (services/import_diff.py)
+    # to actually populate link_changes/calendar_mismatch: it builds plain
+    # dicts keyed by the Python field name (e.g. "link_changes"), not the
+    # camelCase alias, and without this a Pydantic v2 model with an aliased
+    # field silently ignores an unaliased key instead of raising, so the
+    # field was previously constructed as an always-empty default.
+    model_config = ConfigDict(populate_by_name=True)
+
+    kind: Literal["added", "modified", "removed", "conflict", "calendar_mismatch"]
     uid: int
     message: str
     fields: list[str] = Field(default_factory=list)
     link_changes: list["ImportLinkChange"] = Field(default_factory=list, alias="linkChanges")
+    calendar_mismatch: "ImportCalendarMismatch | None" = Field(
+        default=None, alias="calendarMismatch"
+    )
 
 
 class ImportLinkChange(BaseModel):
@@ -51,6 +62,18 @@ class ImportLinkChange(BaseModel):
     link_type: int = Field(alias="linkType")
     lag_tenth_minute: int | None = Field(default=None, alias="lagTenthMinute")
     lag_format: int | None = Field(default=None, alias="lagFormat")
+
+
+class ImportCalendarMismatch(BaseModel):
+    """Structured payload for a ``calendar_mismatch`` diff item (issue #176):
+    the duration recorded in the imported file versus the duration
+    Waterfall's own calendar engine would compute for the same task."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    task_uid: int = Field(alias="taskUid", ge=1)
+    file_duration_minutes: int = Field(alias="fileDurationMinutes", ge=0)
+    expected_duration_minutes: int = Field(alias="expectedDurationMinutes", ge=0)
 
 
 class ImportDiffResponse(BaseModel):

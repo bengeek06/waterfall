@@ -1,0 +1,15 @@
+type: object
+required:
+- taskUid
+- fileDurationMinutes
+- expectedDurationMinutes
+properties:
+  taskUid:
+    type: integer
+    minimum: 1
+  fileDurationMinutes:
+    type: integer
+    minimum: 0
+  expectedDurationMinutes:
+    type: integer
+    minimum: 0
