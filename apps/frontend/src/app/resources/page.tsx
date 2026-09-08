@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -329,11 +329,50 @@ export default function ResourcesPage() {
     [],
   );
 
-  // Guards against out-of-order reloads: a token refresh (see `onSessionRefresh`
-  // above) changes `session`, which re-runs this effect. If an older reload is
-  // still in flight when a newer one starts (or finishes) and later resolves,
-  // its now-stale results must not overwrite state a more recent reload (or a
+  // True only while a session exists, deliberately not the `session` object
+  // itself: every data-loading effect below depends on this instead of on
+  // `session` directly. `session`'s *identity* changes on every token
+  // rotation (see `onSessionRefresh` above), which used to re-run every one of
+  // these effects -- including the full `Promise.all` initial load -- on a
+  // plain background token refresh. That full reload could then race and
+  // overwrite state a local optimistic mutation (e.g. `setDefaultCalendar`)
+  // had just applied, before that mutation's own response was handled (issue
+  // #138). `hasSession` only flips on a genuine presence transition -- login,
+  // a restored session, or logout -- which is exactly when these effects must
+  // still reload.
+  const hasSession = session !== null;
+
+  // Mirrors `session` synchronously so the effects below can read the *live*
+  // token via `sessionRef.current` (instead of `session` itself) without
+  // needing `session` in their dependency array -- see `hasSession` above for
+  // why depending on `session` directly is exactly what must be avoided here.
+  // Synced in a `useLayoutEffect` with no dependency array (runs after every
+  // render) rather than the render body itself (writing to a ref during
+  // render is disallowed), and `useLayoutEffect` rather than `useEffect` so it
+  // is guaranteed to run after this render commits but strictly before any of
+  // this same commit's passive effects (the ones below) execute -- same
+  // pattern as `propsRef` in `capacity-table.tsx`/`role-calendars-table.tsx`.
+  const sessionRef = useRef(session);
+  useLayoutEffect(() => {
+    sessionRef.current = session;
+  });
+
+  // Guards against out-of-order reloads: a genuine session presence transition
+  // (see `hasSession` above) re-runs this effect. If an older reload is still
+  // in flight when a newer one starts (or finishes) and later resolves, its
+  // now-stale results must not overwrite state a more recent reload (or a
   // local optimistic update racing against it) has already committed.
+  //
+  // In practice, for this specific effect, `hasSession` can only flip
+  // `false -> true` once per mounted instance (`onSessionRefresh` is stable
+  // and nothing on this page ever sets `session` back to `null` post-mount --
+  // a real logout always navigates away instead), so a genuine overlap
+  // between two invocations of *this* effect is now hard to trigger. This
+  // guard is kept as defense in depth (e.g. React StrictMode's double-invoke,
+  // or a future `hasSession` transition this file doesn't have today) rather
+  // than as an actively-exercised path for this effect -- unlike the sibling
+  // per-table effects below, whose own generation refs are still routinely
+  // exercised by rapid pagination/sort/search changes.
   const loadGenerationRef = useRef(0);
 
   useEffect(() => {
@@ -341,7 +380,7 @@ export default function ResourcesPage() {
     const isCurrentGeneration = () => loadGenerationRef.current === generation;
 
     async function load() {
-      if (!session) {
+      if (!hasSession) {
         try {
           const restoredSession = await restoreSession();
           if (!isCurrentGeneration()) return;
@@ -354,6 +393,13 @@ export default function ResourcesPage() {
         }
         return;
       }
+      // Read through the ref, not `session` directly -- see `sessionRef`'s
+      // comment above. `hasSession` being true at this point guarantees
+      // `sessionRef.current` was already synced to a non-null session by this
+      // same commit's `useLayoutEffect`, well before this effect runs; the
+      // null check below is only for TypeScript's benefit.
+      const currentSession = sessionRef.current;
+      if (!currentSession) return;
       setBusy(true);
       try {
         const [
@@ -367,15 +413,15 @@ export default function ResourcesPage() {
           inflationData,
           capacityData,
         ] = await Promise.all([
-          getMe(session, onSessionRefresh),
-          getResourceNodes(session, onSessionRefresh),
-          getResourceRoles(session, onSessionRefresh).then((page) => page.items),
-          getCalendars(session, onSessionRefresh, true).then((page) => page.items),
-          getCostTypes(session, onSessionRefresh, true).then((page) => page.items),
-          getCostCategories(session, onSessionRefresh, true).then((page) => page.items),
-          getCostRates(session, onSessionRefresh),
-          getInflationRates(session, onSessionRefresh),
-          getRoleCapacities(session, onSessionRefresh),
+          getMe(currentSession, onSessionRefresh),
+          getResourceNodes(currentSession, onSessionRefresh),
+          getResourceRoles(currentSession, onSessionRefresh).then((page) => page.items),
+          getCalendars(currentSession, onSessionRefresh, true).then((page) => page.items),
+          getCostTypes(currentSession, onSessionRefresh, true).then((page) => page.items),
+          getCostCategories(currentSession, onSessionRefresh, true).then((page) => page.items),
+          getCostRates(currentSession, onSessionRefresh),
+          getInflationRates(currentSession, onSessionRefresh),
+          getRoleCapacities(currentSession, onSessionRefresh),
         ]);
         if (!isCurrentGeneration()) return;
         setCurrentUserId(meData.id);
@@ -423,7 +469,7 @@ export default function ResourcesPage() {
     }
 
     void load();
-  }, [onSessionRefresh, router, session]);
+  }, [onSessionRefresh, router, hasSession]);
 
   // The calendars table's own paginated view: independent of the full `calendars`
   // list above, refetched whenever pagination, sort, or search change, and again
@@ -439,10 +485,14 @@ export default function ResourcesPage() {
     const isCurrentGeneration = () => calendarsGenerationRef.current === generation;
 
     async function load() {
-      if (!session) return;
+      if (!hasSession) return;
+      // Read through the ref, not `session` directly -- see `sessionRef`'s
+      // comment above.
+      const currentSession = sessionRef.current;
+      if (!currentSession) return;
       setCalendarsLoading(true);
       try {
-        const page = await getCalendars(session, onSessionRefresh, true, {
+        const page = await getCalendars(currentSession, onSessionRefresh, true, {
           limit: calendarsLimit,
           offset: calendarsOffset,
           sort: calendarsSort,
@@ -472,7 +522,7 @@ export default function ResourcesPage() {
     }
 
     void load();
-  }, [session, onSessionRefresh, router, calendarsLimit, calendarsOffset, calendarsSort, calendarsQuery]);
+  }, [hasSession, onSessionRefresh, router, calendarsLimit, calendarsOffset, calendarsSort, calendarsQuery]);
 
   // Deliberately swallows its own non-session errors rather than letting them
   // propagate: this is called as the last step of `addCalendar`/`saveCalendar`/
@@ -535,10 +585,14 @@ export default function ResourcesPage() {
     const isCurrentGeneration = () => costTypesGenerationRef.current === generation;
 
     async function load() {
-      if (!session) return;
+      if (!hasSession) return;
+      // Read through the ref, not `session` directly -- see `sessionRef`'s
+      // comment above.
+      const currentSession = sessionRef.current;
+      if (!currentSession) return;
       setCostTypesLoading(true);
       try {
-        const page = await getCostTypes(session, onSessionRefresh, true, {
+        const page = await getCostTypes(currentSession, onSessionRefresh, true, {
           limit: costTypesLimit,
           offset: costTypesOffset,
           sort: costTypesSort,
@@ -568,7 +622,7 @@ export default function ResourcesPage() {
     }
 
     void load();
-  }, [session, onSessionRefresh, router, costTypesLimit, costTypesOffset, costTypesSort, costTypesQuery]);
+  }, [hasSession, onSessionRefresh, router, costTypesLimit, costTypesOffset, costTypesSort, costTypesQuery]);
 
   // Deliberately swallows its own non-session errors rather than letting them
   // propagate: this is called as the last step of `addCostType`/`saveCostType`/
@@ -639,10 +693,14 @@ export default function ResourcesPage() {
     const isCurrentGeneration = () => usersGenerationRef.current === generation;
 
     async function load() {
-      if (!session) return;
+      if (!hasSession) return;
+      // Read through the ref, not `session` directly -- see `sessionRef`'s
+      // comment above.
+      const currentSession = sessionRef.current;
+      if (!currentSession) return;
       setUsersLoading(true);
       try {
-        const page = await getUsers(session, onSessionRefresh, {
+        const page = await getUsers(currentSession, onSessionRefresh, {
           limit: usersLimit,
           offset: usersOffset,
           sort: usersSort,
@@ -670,7 +728,7 @@ export default function ResourcesPage() {
     }
 
     void load();
-  }, [session, onSessionRefresh, router, usersLimit, usersOffset, usersSort, usersQuery]);
+  }, [hasSession, onSessionRefresh, router, usersLimit, usersOffset, usersSort, usersQuery]);
 
   // Refreshes the users tab's own page after a create/status/role/delete mutation
   // succeeds, since (unlike cost types) there is no local list to patch in place --
@@ -745,10 +803,14 @@ export default function ResourcesPage() {
     const isCurrentGeneration = () => roleCalendarsGenerationRef.current === generation;
 
     async function load() {
-      if (!session) return;
+      if (!hasSession) return;
+      // Read through the ref, not `session` directly -- see `sessionRef`'s
+      // comment above.
+      const currentSession = sessionRef.current;
+      if (!currentSession) return;
       setRoleCalendarsLoading(true);
       try {
-        const page = await getResourceRoles(session, onSessionRefresh, undefined, undefined, {
+        const page = await getResourceRoles(currentSession, onSessionRefresh, undefined, undefined, {
           limit: roleCalendarsLimit,
           offset: roleCalendarsOffset,
           sort: roleCalendarsSort,
@@ -778,7 +840,7 @@ export default function ResourcesPage() {
     }
 
     void load();
-  }, [session, onSessionRefresh, router, roleCalendarsLimit, roleCalendarsOffset, roleCalendarsSort, roleCalendarsQuery]);
+  }, [hasSession, onSessionRefresh, router, roleCalendarsLimit, roleCalendarsOffset, roleCalendarsSort, roleCalendarsQuery]);
 
   // Deliberately swallows its own non-session errors, like `reloadCostTypesPage`
   // above, for the same reason: called from `saveRoleCalendar`, itself wrapped in
@@ -867,7 +929,7 @@ export default function ResourcesPage() {
       rolesPanelQueryRef.current === capturedQuery;
 
     async function load() {
-      if (!session || selectedNodeId === null) {
+      if (!hasSession || selectedNodeId === null) {
         setRolesPanelPage({ items: [], total: 0 });
         // Also clears any loading state a still-in-flight, now-obsolete fetch left
         // behind (e.g. the selected node was deleted, or the session was cleared,
@@ -877,6 +939,10 @@ export default function ResourcesPage() {
         setRolesPanelLoading(false);
         return;
       }
+      // Read through the ref, not `session` directly -- see `sessionRef`'s
+      // comment above.
+      const currentSession = sessionRef.current;
+      if (!currentSession) return;
       setRolesPanelLoading(true);
       // Cleared unconditionally, not just on the no-selection branch above: if
       // this request fails (e.g. right after switching to a different node),
@@ -884,7 +950,7 @@ export default function ResourcesPage() {
       // newly selected node's heading once the loading skeleton disappears.
       setRolesPanelPage({ items: [], total: 0 });
       try {
-        const page = await getResourceRoles(session, onSessionRefresh, selectedNodeId, false, {
+        const page = await getResourceRoles(currentSession, onSessionRefresh, selectedNodeId, false, {
           limit: rolesPanelLimit,
           offset: rolesPanelOffset,
           sort: rolesPanelSort,
@@ -914,7 +980,7 @@ export default function ResourcesPage() {
     }
 
     void load();
-  }, [session, onSessionRefresh, router, selectedNodeId, rolesPanelLimit, rolesPanelOffset, rolesPanelSort, rolesPanelQuery]);
+  }, [hasSession, onSessionRefresh, router, selectedNodeId, rolesPanelLimit, rolesPanelOffset, rolesPanelSort, rolesPanelQuery]);
 
   // Mirrors `reloadCostTypesPage`: deliberately swallows its own non-session
   // errors (see that function's comment for the full rationale) and sets
@@ -977,10 +1043,14 @@ export default function ResourcesPage() {
     const isCurrentGeneration = () => rolesPageGenerationRef.current === generation;
 
     async function load() {
-      if (!session) return;
+      if (!hasSession) return;
+      // Read through the ref, not `session` directly -- see `sessionRef`'s
+      // comment above.
+      const currentSession = sessionRef.current;
+      if (!currentSession) return;
       setRolesPageLoading(true);
       try {
-        const page = await getResourceRoles(session, onSessionRefresh, undefined, false, {
+        const page = await getResourceRoles(currentSession, onSessionRefresh, undefined, false, {
           limit: rolesLimit,
           offset: rolesOffset,
           sort: rolesSort,
@@ -1010,7 +1080,7 @@ export default function ResourcesPage() {
     }
 
     void load();
-  }, [session, onSessionRefresh, router, rolesLimit, rolesOffset, rolesSort, rolesQuery]);
+  }, [hasSession, onSessionRefresh, router, rolesLimit, rolesOffset, rolesSort, rolesQuery]);
 
   // Called as the last step of `addRole` (wrapped in `submitAction`, which sets its
   // own success notice right after `action()` returns): swallows its own non-session
@@ -1054,10 +1124,14 @@ export default function ResourcesPage() {
     const isCurrentGeneration = () => categoriesGenerationRef.current === generation;
 
     async function load() {
-      if (!session) return;
+      if (!hasSession) return;
+      // Read through the ref, not `session` directly -- see `sessionRef`'s
+      // comment above.
+      const currentSession = sessionRef.current;
+      if (!currentSession) return;
       setCategoriesLoading(true);
       try {
-        const page = await getCostCategories(session, onSessionRefresh, true, {
+        const page = await getCostCategories(currentSession, onSessionRefresh, true, {
           limit: categoriesLimit,
           offset: categoriesOffset,
           sort: categoriesSort,
@@ -1087,7 +1161,7 @@ export default function ResourcesPage() {
     }
 
     void load();
-  }, [session, onSessionRefresh, router, categoriesLimit, categoriesOffset, categoriesSort, categoriesQuery]);
+  }, [hasSession, onSessionRefresh, router, categoriesLimit, categoriesOffset, categoriesSort, categoriesQuery]);
 
   // Deliberately swallows its own non-session errors rather than letting them
   // propagate: this is called as the last step of `addCategory`/`saveCategory`/
