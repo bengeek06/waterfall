@@ -144,18 +144,18 @@ export default function ProjectsPage() {
         setProjectsPage(page);
         setSelectedIds(new Set());
       } catch (cause) {
-        if (!isCurrentGeneration()) return;
         if (cause instanceof SessionExpiredError) {
           clearSession();
           router.push("/login");
           return;
         }
+        if (cause instanceof ApiError && cause.status === 401) {
+          clearSession();
+          router.push("/login");
+          return;
+        }
+        if (!isCurrentGeneration()) return;
         if (cause instanceof ApiError) {
-          if (cause.status === 401) {
-            clearSession();
-            router.push("/login");
-            return;
-          }
           setError(cause.message);
         } else {
           setError("Erreur inattendue lors du chargement des projets");
@@ -200,11 +200,11 @@ export default function ProjectsPage() {
       }
       setProjectsPage(page);
     } catch (cause) {
-      if (projectsGenerationRef.current !== generation) return;
       if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
         clearSession();
         router.push("/login");
       }
+      if (projectsGenerationRef.current !== generation) return;
     } finally {
       if (projectsGenerationRef.current === generation) setProjectsLoading(false);
     }

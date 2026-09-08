@@ -248,4 +248,64 @@ describe("usePlanningDetailEffect", () => {
     expect(router.push).toHaveBeenCalledWith("/login");
     expect(setError).not.toHaveBeenCalledWith("Impossible de charger le planning.");
   });
+
+  // Regression test for #227: the catch block guards on `isPlanningLoadStillActive`
+  // (cancelled by the effect's cleanup, or superseded by a newer `loadGeneration`,
+  // whenever the selection changes before the request resolves). Per issue #227,
+  // that guard must run *after* the session-expiry check: an obsolete request that
+  // fails precisely because the session expired must still force a logout, or the
+  // session would never get invalidated once the user has stopped interacting.
+  it("clears the session and redirects to login even when the request became stale (selection changed) before it rejected with a post-refresh 401", async () => {
+    let rejectLoad!: (cause: unknown) => void;
+    let callCount = 0;
+    mocks.getPlanning.mockImplementation(() => {
+      callCount += 1;
+      if (callCount === 1) {
+        return new Promise((_resolve, reject) => {
+          rejectLoad = reject;
+        });
+      }
+      // The fresher request started by the selection change below: left pending,
+      // its outcome doesn't matter for this test.
+      return new Promise(() => {});
+    });
+    const router = { push: vi.fn() };
+    const setError = vi.fn();
+    const planningLoadGenerationRef = { current: 0 };
+
+    const { rerender } = renderHook(
+      ({ selectedPlanningId }: { selectedPlanningId: number }) =>
+        usePlanningDetailEffect({
+          session: { accessToken: "test-token" },
+          selectedPlanningId,
+          projectId: 1,
+          onSessionRefresh: vi.fn(),
+          router: router as never,
+          planningLoadGenerationRef,
+          selectedPlanningIdRef: { current: selectedPlanningId },
+          historyByPlanningIdRef: { current: {} },
+          setPlanningDetail: vi.fn(),
+          setPlanningDetailBusy: vi.fn(),
+          setPlanningConflictByPlanningId: vi.fn(),
+          setStructureDraft: vi.fn(),
+          setError,
+        }),
+      { initialProps: { selectedPlanningId: 1 } },
+    );
+
+    await waitFor(() => expect(mocks.getPlanning).toHaveBeenCalledTimes(1));
+
+    // The user selects a different planning before the first request resolves:
+    // this runs the effect's cleanup (`cancelled = true`) and starts a fresher
+    // generation for the new selection.
+    rerender({ selectedPlanningId: 2 });
+    await waitFor(() => expect(mocks.getPlanning).toHaveBeenCalledTimes(2));
+
+    // The now-stale first request fails afterward -- it must still force a
+    // logout instead of being silently discarded.
+    rejectLoad(new ApiError(401, "Unauthorized"));
+    await waitFor(() => expect(mocks.clearSession).toHaveBeenCalled());
+    expect(router.push).toHaveBeenCalledWith("/login");
+    expect(setError).not.toHaveBeenCalledWith("Impossible de charger le planning.");
+  });
 });

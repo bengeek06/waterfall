@@ -215,24 +215,20 @@ export default function ProjectDetailsPage() {
         );
         setSelectedEstimateId((current) => current ?? estimatesData.at(-1)?.id ?? null);
       } catch (cause) {
-        if (cancelled) {
-          return;
-        }
         if (cause instanceof SessionExpiredError) {
           clearSession();
           router.push("/login");
           return;
         }
-        if (cause instanceof ApiError) {
-          if (cause.status === 401) {
-            clearSession();
-            router.push("/login");
-            return;
-          }
-          setError(describeInitialProjectLoadError(cause));
-        } else {
-          setError(describeInitialProjectLoadError(cause));
+        if (cause instanceof ApiError && cause.status === 401) {
+          clearSession();
+          router.push("/login");
+          return;
         }
+        if (cancelled) {
+          return;
+        }
+        setError(describeInitialProjectLoadError(cause));
       } finally {
         if (!cancelled) {
           setBusy(false);
@@ -295,12 +291,12 @@ export default function ProjectDetailsPage() {
           setCostLines(lines);
         }
       } catch (cause) {
-        if (cancelled) {
-          return;
-        }
         if (cause instanceof SessionExpiredError) {
           clearSession();
           router.push("/login");
+          return;
+        }
+        if (cancelled) {
           return;
         }
         setError(cause instanceof ApiError ? cause.message : "Impossible de charger le devis.");
@@ -348,12 +344,12 @@ export default function ProjectDetailsPage() {
           setAggregates(data);
         }
       } catch (cause) {
-        if (cancelled) {
-          return;
-        }
         if (cause instanceof SessionExpiredError) {
           clearSession();
           router.push("/login");
+          return;
+        }
+        if (cancelled) {
           return;
         }
         setError(cause instanceof ApiError ? cause.message : "Impossible de charger les agrégats.");

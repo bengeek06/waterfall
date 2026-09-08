@@ -445,8 +445,6 @@ export default function ResourcesPage() {
         setCapacityDrafts(Object.fromEntries(capacityData.map((capacity) => [capacity.role_id, { personCount: String(capacity.person_count), availableHours: String(capacity.available_hours) }])))
         setLoadSucceeded(true);
       } catch (cause) {
-        if (!isCurrentGeneration()) return;
-        setLoadSucceeded(false);
         if (cause instanceof SessionExpiredError) {
           clearSession();
           router.push("/login");
@@ -457,6 +455,8 @@ export default function ResourcesPage() {
           router.push("/login");
           return;
         }
+        if (!isCurrentGeneration()) return;
+        setLoadSucceeded(false);
         setNotice({
           kind: "error",
           message: cause instanceof ApiError ? cause.message : "Chargement impossible",
@@ -501,7 +501,6 @@ export default function ResourcesPage() {
         if (!isCurrentGeneration()) return;
         setCalendarsPage(page);
       } catch (cause) {
-        if (!isCurrentGeneration()) return;
         if (cause instanceof SessionExpiredError) {
           clearSession();
           router.push("/login");
@@ -512,6 +511,7 @@ export default function ResourcesPage() {
           router.push("/login");
           return;
         }
+        if (!isCurrentGeneration()) return;
         setNotice({
           kind: "error",
           message: cause instanceof ApiError ? cause.message : "Chargement des calendriers impossible",
@@ -601,7 +601,6 @@ export default function ResourcesPage() {
         if (!isCurrentGeneration()) return;
         setCostTypesPage(page);
       } catch (cause) {
-        if (!isCurrentGeneration()) return;
         if (cause instanceof SessionExpiredError) {
           clearSession();
           router.push("/login");
@@ -612,6 +611,7 @@ export default function ResourcesPage() {
           router.push("/login");
           return;
         }
+        if (!isCurrentGeneration()) return;
         setNotice({
           kind: "error",
           message: cause instanceof ApiError ? cause.message : "Chargement des types de coût impossible",
@@ -710,7 +710,6 @@ export default function ResourcesPage() {
         setUsersPage(page);
         setUsersError(null);
       } catch (cause) {
-        if (!isCurrentGeneration()) return;
         if (cause instanceof SessionExpiredError) {
           clearSession();
           router.push("/login");
@@ -721,6 +720,7 @@ export default function ResourcesPage() {
           router.push("/login");
           return;
         }
+        if (!isCurrentGeneration()) return;
         setUsersError(cause instanceof ApiError ? cause.message : "Chargement des utilisateurs impossible");
       } finally {
         if (isCurrentGeneration()) setUsersLoading(false);
@@ -767,12 +767,12 @@ export default function ResourcesPage() {
       setUsersPage(page);
       setUsersError(null);
     } catch (cause) {
-      if (usersGenerationRef.current !== generation) return;
       if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
         clearSession();
         router.push("/login");
         return;
       }
+      if (usersGenerationRef.current !== generation) return;
       setUsersError("L'action a réussi, mais l'actualisation de la liste a échoué. Rechargez la page pour la voir à jour.");
     } finally {
       if (usersGenerationRef.current === generation) setUsersLoading(false);
@@ -819,7 +819,6 @@ export default function ResourcesPage() {
         if (!isCurrentGeneration()) return;
         setRoleCalendarsPage(page);
       } catch (cause) {
-        if (!isCurrentGeneration()) return;
         if (cause instanceof SessionExpiredError) {
           clearSession();
           router.push("/login");
@@ -830,6 +829,7 @@ export default function ResourcesPage() {
           router.push("/login");
           return;
         }
+        if (!isCurrentGeneration()) return;
         setNotice({
           kind: "error",
           message: cause instanceof ApiError ? cause.message : "Chargement des calendriers de rôles impossible",
@@ -959,7 +959,6 @@ export default function ResourcesPage() {
         if (!isStillCurrent()) return;
         setRolesPanelPage(page);
       } catch (cause) {
-        if (!isStillCurrent()) return;
         if (cause instanceof SessionExpiredError) {
           clearSession();
           router.push("/login");
@@ -970,6 +969,7 @@ export default function ResourcesPage() {
           router.push("/login");
           return;
         }
+        if (!isStillCurrent()) return;
         setNotice({
           kind: "error",
           message: cause instanceof ApiError ? cause.message : "Chargement des rôles impossible",
@@ -1059,7 +1059,6 @@ export default function ResourcesPage() {
         if (!isCurrentGeneration()) return;
         setRolesPage(page);
       } catch (cause) {
-        if (!isCurrentGeneration()) return;
         if (cause instanceof SessionExpiredError) {
           clearSession();
           router.push("/login");
@@ -1070,6 +1069,7 @@ export default function ResourcesPage() {
           router.push("/login");
           return;
         }
+        if (!isCurrentGeneration()) return;
         setNotice({
           kind: "error",
           message: cause instanceof ApiError ? cause.message : "Chargement des rôles impossible",
@@ -1140,7 +1140,6 @@ export default function ResourcesPage() {
         if (!isCurrentGeneration()) return;
         setCategoriesPage(page);
       } catch (cause) {
-        if (!isCurrentGeneration()) return;
         if (cause instanceof SessionExpiredError) {
           clearSession();
           router.push("/login");
@@ -1151,6 +1150,7 @@ export default function ResourcesPage() {
           router.push("/login");
           return;
         }
+        if (!isCurrentGeneration()) return;
         setNotice({
           kind: "error",
           message: cause instanceof ApiError ? cause.message : "Chargement des catégories de coût impossible",
