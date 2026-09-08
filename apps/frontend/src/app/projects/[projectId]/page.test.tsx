@@ -1732,21 +1732,25 @@ describe("ProjectDetailsPage planning lifecycle", () => {
 
   it("sends a predecessor links replace and replaces the planning detail with the full server response", async () => {
     const draft = planning({ id: 2, status: "draft" });
+    // uid and row_number are deliberately kept distinct (uid 10 -> row_number 5) so the
+    // "5 (FS)" assertion below cannot pass by accident if the predecessor label were still built
+    // from the raw predecessor_uid instead of its row_number (E9-04).
     const siblingsDetail: PlanningDetail = {
       ...draft,
       tasks: [
-        { ...detail(draft).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 11, name: "Second", position: 2, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 10, row_number: 5, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, row_number: 6, name: "Second", position: 2, parent_uid: null },
       ],
       links: [],
     };
     const updatedDetail: PlanningDetail = {
       ...draft,
       tasks: [
-        { ...detail(draft).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 10, row_number: 5, name: "Premier", position: 1, parent_uid: null },
         {
           ...detail(draft).tasks[0],
           uid: 11,
+          row_number: 6,
           name: "Second",
           position: 2,
           parent_uid: null,
@@ -1782,7 +1786,7 @@ describe("ProjectDetailsPage planning lifecycle", () => {
       ),
     );
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    expect(screen.getByText("10 (FS)")).toBeInTheDocument();
+    expect(screen.getByText("5 (FS)")).toBeInTheDocument();
   });
 
   it("ignores a schedule update response for a planning that is no longer selected", async () => {

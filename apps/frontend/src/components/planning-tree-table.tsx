@@ -36,7 +36,7 @@ import {
 import { cn } from "@/lib/utils";
 
 const COLUMN_HEADERS: ReadonlyArray<{ key: PlanningColumnKey; label: string }> = [
-  { key: "uid", label: "UID" },
+  { key: "uid", label: "ID" },
   { key: "name", label: "Nom" },
   { key: "type", label: "Type" },
   { key: "start", label: "Début" },
@@ -254,6 +254,16 @@ export function PlanningTreeTable({
   // predecessor referenced by a collapsed/off-screen task must still resolve correctly.
   const tasksByUid = useMemo(() => new Map(tasks.map((task) => [task.uid, task])), [tasks]);
 
+  // uid -> row_number lookup for predecessorsLabel: a predecessor link only carries the
+  // predecessor's stable uid, not its (display-order-derived) row_number, so this table lets the
+  // "Prédécesseurs" column show the same positional identifier as the ID column instead of the
+  // technical uid. Built once from the full task list (not just currently-visible rows, mirroring
+  // tasksByUid above), so it isn't recomputed on every row render.
+  const rowNumberByUid = useMemo(
+    () => new Map(tasks.map((task) => [task.uid, task.row_number])),
+    [tasks],
+  );
+
   const columnWidths = usePlanningColumnWidths();
   // Table renders `w-full`, which under table-fixed layout redistributes any surplus between the
   // container and this sum across the columns -- making rendered widths drift from the persisted
@@ -388,7 +398,7 @@ export function PlanningTreeTable({
                     onFocus={() => selection.setFocusedUid(row.uid)}
                     onKeyDown={(event) => selection.onRowKeyDown(event, row)}
                   >
-                    <TableCell>{row.uid}</TableCell>
+                    <TableCell>{row.row_number}</TableCell>
                     <TableCell className="overflow-hidden">
                       <div
                         className="flex min-w-0 items-center gap-1"
@@ -441,7 +451,7 @@ export function PlanningTreeTable({
                     />
                     <TableCell className="whitespace-normal break-words align-top">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="min-w-0">{predecessorsLabel(row, calendar)}</span>
+                        <span className="min-w-0">{predecessorsLabel(row, calendar, rowNumberByUid)}</span>
                         {!readOnly && onEditLinks ? (
                           <Button
                             type="button"

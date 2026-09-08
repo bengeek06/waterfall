@@ -32,7 +32,7 @@ function describeCascadeDescendants(descendantUids: number[], tasksByUid: Map<nu
   }
   const names = descendantUids.map((uid) => {
     const descendant = tasksByUid.get(uid);
-    return descendant ? `${descendant.uid} - ${descendant.name}` : String(uid);
+    return descendant ? `${descendant.row_number} - ${descendant.name}` : String(uid);
   });
   return `Cette suppression entraînera aussi celle de ${descendantUids.length} tâche(s) enfant(s) : ${names.join(", ")}.`;
 }

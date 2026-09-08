@@ -54,7 +54,17 @@ export function createLinkRowDraft(link?: {
   };
 }
 
-export function predecessorsLabel(task: Task, calendar: ProjectCalendar): string {
+// `rowNumberByUid` resolves each link's technical `predecessor_uid` (a stable identifier, never
+// shown to the user) to the predecessor task's current positional `row_number` (E9): the only
+// identifier the "Prédécesseurs" column may display. Built once by the caller (see
+// planning-tree-table.tsx) from the full task list, not recomputed per link/row. A missing entry
+// should never happen in practice (every predecessor_uid should reference a task in the same
+// planning), but falls back to "?" rather than showing the technical uid or throwing.
+export function predecessorsLabel(
+  task: Task,
+  calendar: ProjectCalendar,
+  rowNumberByUid: Map<number, number>,
+): string {
   if (!task.predecessor_links?.length) {
     return "-";
   }
@@ -67,7 +77,8 @@ export function predecessorsLabel(task: Task, calendar: ProjectCalendar): string
       // non-negative duration (see its own doc comment).
       const lagSign = lagMinutes > 0 ? "+" : lagMinutes < 0 ? "-" : "";
       const lag = lagMinutes ? ` ${lagSign}${formatCalendarDuration(Math.abs(lagMinutes), calendar)}` : "";
-      return `${link.predecessor_uid} (${type}${lag})`;
+      const rowNumber = rowNumberByUid.get(link.predecessor_uid) ?? "?";
+      return `${rowNumber} (${type}${lag})`;
     })
     .join(", ");
 }
