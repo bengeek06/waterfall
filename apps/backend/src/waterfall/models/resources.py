@@ -118,6 +118,49 @@ class ResourceNode(Base):
     )
 
 
+class ProjectCostCode(Base):
+    """A project-scoped tree of user-defined cost-imputation codes (issue #62 / E6-01).
+
+    Structurally identical to `ResourceNode` (self-referencing `parent_id`, `code` +
+    `name` + `is_active`), but the uniqueness of `code` is scoped to `project_id`
+    rather than global: two different projects may freely reuse the same code, so the
+    unique constraint below is `(project_id, code)`, not a bare `code` unique index.
+    Exactly one root row (`parent_id IS NULL`) is allowed per project -- enforced by
+    the partial unique index below, the same pattern as
+    `uq_wf_calendar_is_default_true` (issue #51) -- and is created automatically when
+    the project itself is created (see `create_project` in api/routes/projects.py).
+    """
+
+    __tablename__ = "wf_project_cost_code"
+    __table_args__ = (
+        UniqueConstraint("project_id", "code", name="uq_wf_project_cost_code_project_code"),
+        Index("idx_wf_project_cost_code_project", "project_id"),
+        Index("idx_wf_project_cost_code_parent", "parent_id"),
+        Index(
+            "uq_wf_project_cost_code_single_root",
+            "project_id",
+            unique=True,
+            postgresql_where=text("parent_id IS NULL"),
+            sqlite_where=text("parent_id IS NULL"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("ms_project.id"), nullable=False)
+    parent_id: Mapped[int | None] = mapped_column(
+        ForeignKey("wf_project_cost_code.id"), nullable=True
+    )
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+
 class ResourceRole(Base):
     __tablename__ = "wf_resource_role"
     __table_args__ = (

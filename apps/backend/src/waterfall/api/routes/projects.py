@@ -20,6 +20,7 @@ from waterfall.models.resources import (
     EstimateCostLine,
     EstimateLine,
     EstimateTaskRow,
+    ProjectCostCode,
     ResourceRole,
     TaskRoleAssignment,
 )
@@ -299,6 +300,25 @@ def create_project(
         status=cast(ProjectStatus, "cree"),
     )
     db.add(project)
+    # Flush (not commit) to obtain project.id without ending the transaction: the root cost
+    # code below must be created atomically with the project itself, never as a second,
+    # separately-committed write -- a failure creating it must roll back the whole project
+    # creation instead of leaving a durable MsProject row with no root cost code (#62/E6-01
+    # review finding: E6-02 depends on every project always having one).
+    db.flush()
+
+    # Issue #62 (E6-01): every project gets a single automatically-created root cost
+    # code, named after the project's own code -- or the deterministic PRJ-{id}
+    # fallback when the project has none, since `MsProject.code` is nullable. The
+    # user may rename this root afterward like any other cost code; only its
+    # creation is automatic.
+    root_cost_code = ProjectCostCode(
+        project_id=project.id,
+        parent_id=None,
+        code=project.code or f"PRJ-{project.id}",
+        name=project.name,
+    )
+    db.add(root_cost_code)
     db.commit()
     db.refresh(project)
     return to_project_read(project)
@@ -462,6 +482,15 @@ def delete_project(
         synchronize_session=False
     )
     db.query(MsTask).filter(MsTask.project_id == project_id).delete(synchronize_session=False)
+    # Issue #62 (E6-01): a single bulk DELETE removing every ProjectCostCode row for
+    # this project -- root and every descendant -- in one SQL statement. PostgreSQL's
+    # default (immediate, not-deferrable) FK constraint check for the self-referencing
+    # parent_id column is evaluated at the end of the statement, not per row, so this
+    # works regardless of tree order without needing a leaf-first delete or ON DELETE
+    # CASCADE.
+    db.query(ProjectCostCode).filter(ProjectCostCode.project_id == project_id).delete(
+        synchronize_session=False
+    )
     db.delete(project)
     db.commit()
 
