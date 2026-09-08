@@ -352,7 +352,12 @@ def test_create_task_schema_validation_returns_bad_request() -> None:
             assert response.status_code == 400
             error_payload = cast(dict[str, Any], response.json())
             assert set(error_payload) == {"detail"}
-            assert isinstance(error_payload["detail"], list)
+            # The response body is now the generic, translatable error shape
+            # (issue #137): the underlying `RequestValidationError` list
+            # (raw Pydantic error dicts) is still what
+            # `_PlanningTaskBodyValidationRoute` catches, just no longer
+            # surfaced verbatim over HTTP.
+            assert error_payload["detail"] == {"code": "GENERIC_ERROR"}
 
 
 def test_create_task_rejects_unknown_insert_after_uid() -> None:
@@ -388,11 +393,13 @@ def test_create_task_returns_400_when_no_usable_calendar_for_summary_recalculati
             headers=headers,
         )
 
+        # The response body is now the generic, translatable error shape
+        # (issue #137): the underlying `PlanningTaskScheduleError` message --
+        # which does identify "Task 1" and "no usable working calendar" -- is
+        # still raised unchanged by the service layer, just no longer
+        # surfaced verbatim over HTTP.
         assert response.status_code == 400
-        detail = response.json()["detail"]
-        assert isinstance(detail, str)
-        assert "Task 1" in detail
-        assert "no usable working calendar" in detail
+        assert response.json()["detail"] == {"code": "GENERIC_ERROR"}
 
 
 # ---------------------------------------------------------------------------
@@ -436,11 +443,11 @@ def test_delete_returns_400_when_no_usable_calendar_for_summary_recalculation() 
             headers=headers,
         )
 
+        # See the comment in the create-task counterpart above: the message
+        # is still attributed correctly at the service layer, just not
+        # surfaced verbatim over HTTP anymore.
         assert response.status_code == 400
-        detail = response.json()["detail"]
-        assert isinstance(detail, str)
-        assert "Task 1" in detail
-        assert "no usable working calendar" in detail
+        assert response.json()["detail"] == {"code": "GENERIC_ERROR"}
 
 
 def test_delete_task_with_children_without_confirm_cascade_is_refused_without_mutation() -> None:
@@ -538,7 +545,12 @@ def test_delete_task_schema_validation_returns_bad_request() -> None:
             assert response.status_code == 400
             error_payload = cast(dict[str, Any], response.json())
             assert set(error_payload) == {"detail"}
-            assert isinstance(error_payload["detail"], list)
+            # The response body is now the generic, translatable error shape
+            # (issue #137): the underlying `RequestValidationError` list
+            # (raw Pydantic error dicts) is still what
+            # `_PlanningTaskBodyValidationRoute` catches, just no longer
+            # surfaced verbatim over HTTP.
+            assert error_payload["detail"] == {"code": "GENERIC_ERROR"}
 
 
 # ---------------------------------------------------------------------------

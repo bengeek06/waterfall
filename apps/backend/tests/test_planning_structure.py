@@ -6,11 +6,14 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from httpx import Response
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from waterfall.api.routes import planning_support, plannings, tasks
 from waterfall.db.session import get_session_factory
 from waterfall.main import app
 from waterfall.models.ms_core import MsProject
+from waterfall.models.planning import WfPlanning
 
 
 def _auth_headers(client: TestClient) -> dict[str, str]:
@@ -478,6 +481,10 @@ def test_reopen_after_validating_sole_draft_without_setting_reference() -> None:
         assert new_planning.status_code == 200
         assert new_planning.json()["tasks"] == []
 
+        # The original, sole draft is left as-is by reopen: it was already
+        # validated (never touched, never made the reference), and still
+        # carries the full 8-task hierarchy generated at the top of this
+        # test -- reopen only ever created a brand-new empty draft above.
         original_planning = client.get(
             f"/projects/{project_id}/plannings/{planning_id}", headers=headers
         )
@@ -485,6 +492,120 @@ def test_reopen_after_validating_sole_draft_without_setting_reference() -> None:
         original_payload = cast(dict[str, Any], original_planning.json())
         assert original_payload["status"] == "validated"
         assert len(cast(list[dict[str, Any]], original_payload["tasks"])) == 8
+
+
+def test_reopen_rejects_reference_that_is_no_longer_validated() -> None:
+    """Defensive guard: the only way to set ``planning_reference_id`` is via
+    ``/reference``, which itself requires the target planning to already be
+    ``validated``. Nothing in the normal flow un-validates a planning that
+    is still the current reference, so this simulates that stale-state edge
+    case directly through the database, mirroring the pattern used by the
+    other read-only/status-guard tests in this module (e.g.
+    ``test_skip_planning_structure_rejects_read_only_project``).
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+
+        generated = client.post(
+            f"/projects/{project_id}/planning-structure", json=_payload(), headers=headers
+        )
+        assert generated.status_code == 201
+        project = client.get(f"/projects/{project_id}", headers=headers).json()
+        planning_id = cast(int, project["displayed_planning_id"])
+        assert planning_id is not None
+
+        validate_response = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/validate",
+            headers=headers,
+        )
+        assert validate_response.status_code == 200
+
+        reference_response = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/reference",
+            headers=headers,
+        )
+        assert reference_response.status_code == 200
+        assert reference_response.json()["planning_reference_id"] == planning_id
+
+        # Flipped to "superseded" rather than "draft": the latest-draft lookup
+        # `reopen_planning_structure` runs first would otherwise pick this
+        # planning back up as `existing_draft` and never reach the reference
+        # validation check below.
+        with get_session_factory()() as session:
+            planning = session.get(WfPlanning, planning_id)
+            assert planning is not None
+            planning.status = "superseded"
+            session.commit()
+
+        response = client.post(f"/projects/{project_id}/planning-structure/reopen", headers=headers)
+
+        assert response.status_code == 409
+        assert response.json()["detail"] == {
+            "code": "PLANNING_STRUCTURE_REOPEN_REQUIRES_VALIDATION"
+        }
+
+        # The rejected reopen must not have mutated the reference planning.
+        original_planning = client.get(
+            f"/projects/{project_id}/plannings/{planning_id}", headers=headers
+        )
+        assert original_planning.status_code == 200
+        assert original_planning.json()["status"] == "superseded"
+
+
+def test_reopen_integrity_conflict_gets_its_own_structured_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Moyenne finding on the #137 review: the same reopen endpoint can also
+    hit ``except IntegrityError`` (cloning the validated reference into a
+    brand-new draft can conflict with existing planning data on commit) --
+    a second, distinct 409 cause from the "reference not validated" one
+    above, which deserves its own dedicated code
+    (``PLANNING_STRUCTURE_REOPEN_INTEGRITY_CONFLICT``) rather than falling
+    back to the generic error.
+
+    Forcing a genuine unique-constraint violation deterministically (a real
+    concurrent writer racing the version_number computation) would require
+    actual thread-level concurrency; monkeypatching ``Session.commit`` to
+    raise for the duration of this one request is the standard, narrower way
+    to exercise this specific ``except`` branch.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+
+        generated = client.post(
+            f"/projects/{project_id}/planning-structure", json=_payload(), headers=headers
+        )
+        assert generated.status_code == 201
+        project = client.get(f"/projects/{project_id}", headers=headers).json()
+        planning_id = cast(int, project["displayed_planning_id"])
+
+        validate_response = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/validate",
+            headers=headers,
+        )
+        assert validate_response.status_code == 200
+
+        reference_response = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/reference",
+            headers=headers,
+        )
+        assert reference_response.status_code == 200
+
+        # No draft is left (the sole planning is now validated and the
+        # reference), so `reopen_planning_structure` takes the "clone from
+        # validated reference" branch, which ends in the `db.commit()` this
+        # patches.
+        def _raise_integrity_error(_self: Session) -> None:
+            raise IntegrityError("INSERT INTO wf_planning ...", {}, Exception("conflict"))
+
+        monkeypatch.setattr(Session, "commit", _raise_integrity_error)
+        response = client.post(f"/projects/{project_id}/planning-structure/reopen", headers=headers)
+        monkeypatch.undo()
+
+        assert response.status_code == 409
+        assert response.json()["detail"] == {"code": "PLANNING_STRUCTURE_REOPEN_INTEGRITY_CONFLICT"}
 
 
 def test_create_planning_structure_generates_hierarchy_and_links() -> None:

@@ -697,7 +697,7 @@
       '404':
         $ref: ../components/responses/ProjectNotFound.yaml
       '409':
-        $ref: ../components/responses/Conflict.yaml
+        $ref: ../components/responses/ReopenPlanningStructureConflict.yaml
 /projects/{projectId}/planning-structure/skip:
   post:
     tags:

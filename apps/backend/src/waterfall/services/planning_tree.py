@@ -84,7 +84,22 @@ class PlanningTaskScheduleError(PlanningTreeMoveError):
     a 400 (invalid combination of mode/dates/duration), never a 409 -- there
     is no structural-invariant case analogous to
     :class:`PlanningTreeInvariantError` for a single-task schedule edit.
+
+    ``task_uid`` optionally identifies the task the failure is actually
+    attributed to, mirroring :class:`~waterfall.services.calendar_schedule.NoUsableCalendarError`'s
+    own ``task_uid`` attribute. It matters most for a cascade
+    (:func:`_cascade_successor_schedules`): the edited task's own uid is
+    always known from the request, but a candidate successor's *own*
+    degenerate stored data can fail independently, and callers/tests need a
+    structured way to assert the failure is attributed to that successor
+    (e.g. uid=8), not the caller's edited task (e.g. uid=6), without relying
+    on parsing the human-readable message -- see issue #137, which stopped
+    that message from being surfaced verbatim over HTTP.
     """
+
+    def __init__(self, message: str, *, task_uid: int | None = None) -> None:
+        self.task_uid = task_uid
+        super().__init__(message)
 
 
 def _schedule_error_from_no_usable_calendar(
@@ -116,7 +131,8 @@ def _schedule_error_from_no_usable_calendar(
     """
     return PlanningTaskScheduleError(
         f"Task {exc.task_uid} has no usable working calendar: configure an active "
-        "default calendar with at least one working day on the Resources page"
+        "default calendar with at least one working day on the Resources page",
+        task_uid=exc.task_uid,
     )
 
 
@@ -1446,7 +1462,8 @@ def _cascade_successor_schedules(
         except ValidationError as exc:
             raise PlanningTaskScheduleError(
                 f"Successor task {candidate_uid} has an out-of-range stored "
-                "duration_minutes and cannot be automatically rescheduled"
+                "duration_minutes and cannot be automatically rescheduled",
+                task_uid=candidate_uid,
             ) from exc
         # Mirrors the ValidationError handling immediately above: a
         # candidate's own stored data can independently violate
@@ -1473,7 +1490,8 @@ def _cascade_successor_schedules(
                 )
         except PlanningTaskScheduleError as exc:
             raise PlanningTaskScheduleError(
-                f"Successor task {candidate_uid} cannot be automatically rescheduled: {exc}"
+                f"Successor task {candidate_uid} cannot be automatically rescheduled: {exc}",
+                task_uid=candidate_uid,
             ) from exc
         touched.append(candidate)
     return touched

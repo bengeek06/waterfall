@@ -267,7 +267,7 @@ def test_snapshot_only_task_rejects_legacy_assignment() -> None:
         )
 
         assert response.status_code == 409
-        assert "snapshot-only" in response.json()["detail"].lower()
+        assert response.json()["detail"] == {"code": "GENERIC_ERROR"}
 
 
 def test_delete_planning_task_referenced_by_cost_line_conflicts_without_mutation() -> None:
@@ -1663,7 +1663,7 @@ def test_en_cours_transition_rejects_project_initialised_without_structure_via_s
             headers=headers,
         )
         assert response.status_code == 409
-        assert response.json()["detail"] == "Project requires a planning structure before en_cours"
+        assert response.json()["detail"] == {"code": "GENERIC_ERROR"}
 
 
 def test_en_cours_transition_rejects_structure_in_unrelated_draft_not_referenced() -> None:
@@ -1752,7 +1752,7 @@ def test_en_cours_transition_rejects_structure_in_unrelated_draft_not_referenced
             headers=headers,
         )
         assert response.status_code == 409
-        assert response.json()["detail"] == "Project requires a planning structure before en_cours"
+        assert response.json()["detail"] == {"code": "GENERIC_ERROR"}
 
 
 def test_project_can_initialise_without_a_planning_structure() -> None:
@@ -2118,7 +2118,7 @@ def test_planning_structure_draft_read_returns_409_for_invalid_json() -> None:
 
         read = client.get(f"/projects/{project_id}/planning-structure/draft", headers=headers)
         assert read.status_code == 409
-        assert read.json()["detail"] == "Saved planning structure draft is invalid JSON"
+        assert read.json()["detail"] == {"code": "GENERIC_ERROR"}
 
 
 def test_planning_structure_draft_read_returns_409_for_invalid_schema() -> None:
@@ -2140,7 +2140,7 @@ def test_planning_structure_draft_read_returns_409_for_invalid_schema() -> None:
 
         read = client.get(f"/projects/{project_id}/planning-structure/draft", headers=headers)
         assert read.status_code == 409
-        assert read.json()["detail"] == "Saved planning structure draft has invalid schema"
+        assert read.json()["detail"] == {"code": "GENERIC_ERROR"}
 
 
 def test_delete_project_clears_reference_estimate_before_deleting_estimates() -> None:
