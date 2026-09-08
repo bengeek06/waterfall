@@ -27,6 +27,64 @@ from waterfall.services.planning_tree import (
 )
 
 
+@pytest.fixture(autouse=True)
+def default_calendar_fixture() -> None:
+    """Issue #109: ``resolve_calendars_for_tasks`` no longer falls back to an
+    implicit 24h/7d wall-clock calendar when no usable calendar exists -- it
+    raises ``NoUsableCalendarError`` instead. Almost every test in this
+    module drives an automatic-mode schedule edit or a summary ancestor
+    recalculation, both of which now require a real, resolvable calendar. A
+    24h/day default calendar reproduces the exact numeric behaviour the old
+    implicit fallback used to provide (every day is "working"), without
+    depending on the removed fallback itself.
+
+    A handful of tests need a specific, non-24h calendar pattern instead
+    (see ``_create_standard_calendar`` and
+    ``test_automatic_task_sparse_calendar_duration_rejected_without_hanging``):
+    they overwrite this same default calendar's own weekday hours in place
+    via ``_set_default_calendar_hours`` rather than inserting a second
+    ``is_default`` calendar, which the DB's partial unique index
+    (``uq_wf_calendar_is_default_true``) would reject.
+    """
+    with get_session_factory()() as session:
+        calendar = Calendar(
+            code="DEFAULT-24H", name="Default (24h/day)", weeks_per_year=52, is_default=True
+        )
+        session.add(calendar)
+        session.flush()
+        session.add_all(
+            CalendarWeekday(calendar_id=calendar.id, day_type=day_type, hours_per_day=Decimal(24))
+            for day_type in range(1, 8)
+        )
+        session.commit()
+
+
+def _set_default_calendar_hours(weekday_hours: dict[int, Decimal]) -> None:
+    """Overwrite the autouse default calendar's own weekday hours in place,
+    rather than inserting a second ``is_default`` calendar."""
+    with get_session_factory()() as session:
+        calendar = session.query(Calendar).filter(Calendar.is_default.is_(True)).one()
+        session.query(CalendarWeekday).filter(CalendarWeekday.calendar_id == calendar.id).delete()
+        session.add_all(
+            CalendarWeekday(calendar_id=calendar.id, day_type=day_type, hours_per_day=hours)
+            for day_type, hours in weekday_hours.items()
+        )
+        session.commit()
+
+
+def _delete_default_calendar() -> None:
+    """Remove the autouse ``default_calendar_fixture``'s calendar entirely
+    (issue #109 regression tests): with no calendar left in the system at
+    all and no role assignment on the edited task, ``resolve_calendars_for_tasks``
+    has no usable calendar to fall back to and must raise
+    ``NoUsableCalendarError`` instead of the removed implicit wall-clock
+    fallback."""
+    with get_session_factory()() as session:
+        session.query(CalendarWeekday).delete()
+        session.query(Calendar).delete()
+        session.commit()
+
+
 def _auth_headers(client: TestClient) -> dict[str, str]:
     email = f"planning.schedule.{uuid4().hex}@example.com"
     password = "SuperSecret123!"
@@ -164,22 +222,16 @@ def _add_link(
 
 
 def _create_standard_calendar() -> None:
-    """A Mon-Fri 7h/day calendar, matching STANDARD_HOURS in
-    test_calendar_schedule.py, used by the lag_format regression tests below
-    to demonstrate a working-time lag skipping a weekend."""
-    with get_session_factory()() as session:
-        calendar = Calendar(code="STANDARD", name="Standard", weeks_per_year=47, is_default=True)
-        session.add(calendar)
-        session.flush()
-        session.add_all(
-            CalendarWeekday(
-                calendar_id=calendar.id,
-                day_type=day_type,
-                hours_per_day=Decimal("0.00") if day_type in (1, 7) else Decimal("7.00"),
-            )
+    """Switch the autouse default calendar to a Mon-Fri 7h/day pattern,
+    matching STANDARD_HOURS in test_calendar_schedule.py, used by the
+    lag_format regression tests below to demonstrate a working-time lag
+    skipping a weekend."""
+    _set_default_calendar_hours(
+        {
+            day_type: Decimal("0.00") if day_type in (1, 7) else Decimal("7.00")
             for day_type in range(1, 8)
-        )
-        session.commit()
+        }
+    )
 
 
 def _schedule_path(project_id: int, planning_id: int, task_uid: int) -> str:
@@ -2086,11 +2138,10 @@ def test_automatic_task_start_at_near_datetime_max_returns_400_not_500() -> None
         headers = _auth_headers(client)
         project_id = _create_project(client, headers)
         planning_id = _seed_hierarchy(project_id)
-        # No Calendar rows exist in this test's fresh schema, so the
-        # wall-clock fallback calendar applies: every day has a 1440
-        # min/day (24h) capacity. A duration exceeding a single day's
-        # capacity forces the forward walk to step past 9999-12-31
-        # (date.max), which raises OverflowError.
+        # The autouse default_calendar_fixture provides a 24h/day default
+        # calendar (every day has a 1440 min/day capacity). A duration
+        # exceeding a single day's capacity forces the forward walk to step
+        # past 9999-12-31 (date.max), which raises OverflowError.
         response = client.patch(
             _schedule_path(project_id, planning_id, 3),
             json={
@@ -2123,21 +2174,14 @@ def test_automatic_task_sparse_calendar_duration_rejected_without_hanging() -> N
         headers = _auth_headers(client)
         project_id = _create_project(client, headers)
         planning_id = _seed_hierarchy(project_id)
-        with get_session_factory()() as session:
-            calendar = Calendar(code="STANDARD", name="Standard", weeks_per_year=1, is_default=True)
-            session.add(calendar)
-            session.flush()
-            # Every day has 0 capacity except Monday, which has the DB's
-            # minimum legal non-zero capacity (0.01h = 1 min once rounded).
-            session.add_all(
-                CalendarWeekday(
-                    calendar_id=calendar.id,
-                    day_type=day_type,
-                    hours_per_day=Decimal("0.01") if day_type == 2 else Decimal("0.00"),
-                )
+        # Every day has 0 capacity except Monday, which has the DB's minimum
+        # legal non-zero capacity (0.01h = 1 min once rounded).
+        _set_default_calendar_hours(
+            {
+                day_type: Decimal("0.01") if day_type == 2 else Decimal("0.00")
                 for day_type in range(1, 8)
-            )
-            session.commit()
+            }
+        )
 
         response = client.patch(
             _schedule_path(project_id, planning_id, 3),
@@ -2342,3 +2386,93 @@ def test_schedule_update_revision_conflict_returns_structured_409_without_mutati
         detail = client.get(f"/projects/{project_id}/plannings/{planning_id}", headers=headers)
         assert detail.json()["revision"] == 0
         assert _tasks_by_uid(cast(dict[str, Any], detail.json()))[3]["start_at"] is None
+
+
+def test_automatic_task_returns_400_when_no_usable_calendar() -> None:
+    """Issue #109: with the implicit 24h/7d wall-clock fallback removed,
+    ``_apply_automatic_schedule`` must fail explicitly (400) -- not compute a
+    duration on a fictitious calendar -- when no usable calendar exists for
+    the task being scheduled."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_hierarchy(project_id)
+        _delete_default_calendar()
+
+        response = client.patch(
+            _schedule_path(project_id, planning_id, 3),
+            json={
+                "is_manual": False,
+                "start_at": "2026-01-05T08:00:00Z",
+                "duration_minutes": 480,
+                "expected_revision": 0,
+            },
+            headers=headers,
+        )
+
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert isinstance(detail, str)
+        assert "Task 3" in detail
+        assert "no usable working calendar" in detail
+
+
+def test_automatic_milestone_returns_400_when_no_usable_calendar() -> None:
+    """Issue #109 counterpart for ``_apply_automatic_milestone_schedule``:
+    resolving the milestone's own calendar (needed for a working-time
+    predecessor lag, even though its own duration is always 0) must fail
+    explicitly when no usable calendar exists."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_hierarchy(project_id)
+        _delete_default_calendar()
+
+        response = client.patch(
+            _schedule_path(project_id, planning_id, 5),
+            json={
+                "is_manual": False,
+                "start_at": "2026-01-05T08:00:00Z",
+                "expected_revision": 0,
+            },
+            headers=headers,
+        )
+
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert isinstance(detail, str)
+        assert "Task 5" in detail
+        assert "no usable working calendar" in detail
+
+
+def test_manual_task_returns_400_when_ancestor_summary_has_no_usable_calendar() -> None:
+    """Issue #109 counterpart for ``_recalculate_ancestor_summaries``: a
+    manually scheduled task needs no calendar for itself, but editing it
+    still triggers its summary ancestors' duration recalculation (uid=2 Mid,
+    uid=1 Root), which does -- since uid=4's sibling already carries real
+    dates, Mid's own start_at/finish_at resolve to real values regardless of
+    which calendar tier fed uid=3's edit. That recalculation must fail
+    explicitly (400) rather than fall back to an implicit wall-clock
+    calendar."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_hierarchy(project_id)
+        _delete_default_calendar()
+
+        response = client.patch(
+            _schedule_path(project_id, planning_id, 3),
+            json={
+                "is_manual": True,
+                "start_at": "2026-01-09T08:00:00Z",
+                "finish_at": "2026-01-11T08:00:00Z",
+                "duration_minutes": 500,
+                "expected_revision": 0,
+            },
+            headers=headers,
+        )
+
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert isinstance(detail, str)
+        assert "no usable working calendar" in detail

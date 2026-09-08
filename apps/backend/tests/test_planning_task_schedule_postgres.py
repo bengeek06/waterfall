@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from datetime import UTC, datetime
+from decimal import Decimal
 
 import pytest
 from sqlalchemy import create_engine
@@ -68,6 +69,24 @@ def _seed_planning_with_summary_sibling(session: Session) -> tuple[int, int]:
     """
     from waterfall.models.ms_core import MsProject
     from waterfall.models.planning import WfPlanning, WfPlanningTaskSnapshot
+    from waterfall.models.resources import Calendar, CalendarWeekday
+
+    # Issue #109: resolve_calendars_for_tasks raises NoUsableCalendarError
+    # instead of silently falling back to an implicit 24h/day wall-clock
+    # calendar when no usable calendar exists. _recalculate_ancestor_summaries
+    # (exercised below via update_planning_task_schedule) needs a real,
+    # resolvable calendar for uid=1's duration recalculation; a 24h/day
+    # default calendar reproduces the exact numeric behaviour the removed
+    # fallback used to provide.
+    calendar = Calendar(
+        code="DEFAULT-24H", name="Default (24h/day)", weeks_per_year=52, is_default=True
+    )
+    session.add(calendar)
+    session.flush()
+    session.add_all(
+        CalendarWeekday(calendar_id=calendar.id, day_type=day_type, hours_per_day=Decimal(24))
+        for day_type in range(1, 8)
+    )
 
     project = MsProject(
         source_version=2016,

@@ -606,6 +606,30 @@ paths:
                 $ref: '#/components/schemas/ProjectRead'
         '401':
           $ref: '#/components/responses/Unauthorized'
+  /projects/setup-warnings:
+    get:
+      tags:
+        - projects
+      summary: Verifier le parametrage global avant la creation d'un projet
+      description: |-
+        Verifie les 3 prerequis de parametrage global verifiables independamment
+        de tout projet (issue #109) : un calendrier actif flague par defaut avec
+        au moins un jour travaille, au moins une categorie de cout active, et au
+        moins un role de ressource actif. Purement informatif : ne bloque jamais
+        `POST /projects`, qui reste possible meme si des avertissements sont
+        retournes.
+      operationId: getProjectSetupWarnings
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Liste des prerequis de parametrage manquants (vide si le parametrage est complet)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectSetupWarningsRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /projects/{projectId}:
     get:
       tags:
@@ -4848,6 +4872,38 @@ components:
               type: array
               items:
                 $ref: '#/components/schemas/UserAdminRead'
+    ProjectSetupWarningCode:
+      type: string
+      enum:
+        - no_default_calendar
+        - default_calendar_has_no_working_day
+        - no_active_cost_category
+        - no_active_resource_role
+    ProjectSetupWarning:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          $ref: '#/components/schemas/ProjectSetupWarningCode'
+        message:
+          type: string
+          description: |-
+            Texte de diagnostic en anglais, non localise et non destine a un
+            affichage direct. Le frontend doit toujours se baser sur `code` pour
+            choisir son propre message utilisateur (francais) -- meme principe que
+            l'issue #137 pour `HTTPException.detail` -- plutot que d'afficher ce
+            champ tel quel.
+    ProjectSetupWarningsRead:
+      type: object
+      required:
+        - warnings
+      properties:
+        warnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProjectSetupWarning'
     PlanningTaskDeleteConflict:
       type: object
       required:

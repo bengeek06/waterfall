@@ -9,6 +9,7 @@ docstring below).
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, cast
 from uuid import uuid4
@@ -110,6 +111,55 @@ def _seed_planning(project_id: int) -> int:
                     uid=6,
                     name="Root leaf",
                     position=3,
+                    is_summary=False,
+                    is_milestone=False,
+                ),
+            ]
+        )
+        session.commit()
+        return planning.id
+
+
+def _seed_planning_with_dated_group(project_id: int) -> int:
+    """Seed a single draft planning: Group(1) -> Leaf(2, real dates already
+    set); Root leaf(3, no dates, freely deletable).
+
+    Used by the issue #109 ``NoUsableCalendarError`` regression tests below:
+    Group(1) already needs a resolvable calendar to recompute its duration
+    (its child carries real start_at/finish_at), regardless of where in the
+    tree a create/delete mutation actually happens.
+    """
+    with get_session_factory()() as session:
+        planning = WfPlanning(project_id=project_id, version_number=1, status="draft")
+        session.add(planning)
+        session.flush()
+        session.add_all(
+            [
+                WfPlanningTaskSnapshot(
+                    planning_id=planning.id,
+                    uid=1,
+                    name="Group",
+                    position=1,
+                    is_summary=True,
+                    is_milestone=False,
+                ),
+                WfPlanningTaskSnapshot(
+                    planning_id=planning.id,
+                    uid=2,
+                    name="Leaf",
+                    parent_uid=1,
+                    position=1,
+                    start_at=datetime(2026, 1, 5, 8, 0, tzinfo=UTC),
+                    finish_at=datetime(2026, 1, 7, 8, 0, tzinfo=UTC),
+                    duration_minutes=2880,
+                    is_summary=False,
+                    is_milestone=False,
+                ),
+                WfPlanningTaskSnapshot(
+                    planning_id=planning.id,
+                    uid=3,
+                    name="Root leaf",
+                    position=2,
                     is_summary=False,
                     is_milestone=False,
                 ),
@@ -320,6 +370,31 @@ def test_create_task_rejects_unknown_insert_after_uid() -> None:
         assert response.status_code == 404
 
 
+def test_create_task_returns_400_when_no_usable_calendar_for_summary_recalculation() -> None:
+    """Issue #109: ``create_planning_task`` (via the shared
+    ``_recalculate_outline_and_durations`` helper) must fail explicitly (400)
+    when recalculating an existing summary group's duration needs a calendar
+    and none is usable -- even though the new task itself is a plain,
+    undated root leaf unrelated to that group."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_planning_with_dated_group(project_id)
+        # No Calendar row exists at all in this test's fresh schema.
+
+        response = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/tasks",
+            json={"name": "Unrelated new root", "expected_revision": 0},
+            headers=headers,
+        )
+
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert isinstance(detail, str)
+        assert "Task 1" in detail
+        assert "no usable working calendar" in detail
+
+
 # ---------------------------------------------------------------------------
 # Delete: simple selection, cascade confirmation, normalized selection
 # ---------------------------------------------------------------------------
@@ -342,6 +417,30 @@ def test_delete_selection_without_children_renumbers_tree() -> None:
         assert 6 not in tasks
         assert tasks[1]["outline_number"] == "1"
         assert tasks[4]["outline_number"] == "2"
+
+
+def test_delete_returns_400_when_no_usable_calendar_for_summary_recalculation() -> None:
+    """Issue #109 counterpart for ``delete_planning_tasks``: deleting an
+    unrelated root leaf still triggers a full outline/duration recalculation
+    of the remaining tree, which fails explicitly (400) when the surviving
+    summary group's duration needs a calendar and none is usable."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_planning_with_dated_group(project_id)
+        # No Calendar row exists at all in this test's fresh schema.
+
+        response = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/tasks/delete",
+            json={"task_uids": [3], "expected_revision": 0},
+            headers=headers,
+        )
+
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert isinstance(detail, str)
+        assert "Task 1" in detail
+        assert "no usable working calendar" in detail
 
 
 def test_delete_task_with_children_without_confirm_cascade_is_refused_without_mutation() -> None:
