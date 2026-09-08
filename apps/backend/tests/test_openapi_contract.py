@@ -390,6 +390,37 @@ def test_move_planning_tasks_documents_all_not_found_resources() -> None:
     ]
 
 
+def test_generic_error_responses_document_fastapi_error_shape() -> None:
+    """Issue #223: these shared/generic response components are used by routes that all
+    raise `HTTPException`, which always serializes through `_generic_http_exception_handler`
+    into `{"detail": ...}` (see test_error_handler.py) -- never the unrelated `{error,
+    message}` shape of `ErrorResponse`. Guards against a future edit silently repointing one
+    of these back to `ErrorResponse` (e.g. by copy-pasting one of the 5 still-legitimate
+    `ErrorResponse` usages left in imports.yaml/auth.yaml, tracked separately on #232)."""
+    raw_document: object = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
+    static_document = cast(dict[str, Any], raw_document)
+    static_responses = cast(dict[str, Any], static_document["components"])["responses"]
+
+    for response_name in (
+        "BadRequest",
+        "Conflict",
+        "Unauthorized",
+        "Forbidden",
+        "BatchNotFound",
+        "EstimateNotFound",
+        "PlanningNotFound",
+        "ProjectNotFound",
+        "ProjectPlanningTaskNotFound",
+        "ResourceNotFound",
+        "TaskNotFound",
+        "UserNotFound",
+    ):
+        schema_ref = static_responses[response_name]["content"]["application/json"]["schema"][
+            "$ref"
+        ]
+        assert schema_ref == "#/components/schemas/FastAPIErrorResponse", response_name
+
+
 def test_generated_client_contains_every_static_operation() -> None:
     raw_document: object = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
     static_document = cast(dict[str, Any], raw_document)

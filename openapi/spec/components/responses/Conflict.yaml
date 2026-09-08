@@ -2,4 +2,4 @@ description: Conflit avec une valeur existante
 content:
   application/json:
     schema:
-      $ref: ../schemas/ErrorResponse.yaml
+      $ref: ../schemas/FastAPIErrorResponse.yaml
