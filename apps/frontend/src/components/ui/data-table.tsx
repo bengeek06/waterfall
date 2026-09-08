@@ -6,6 +6,7 @@ import {
   getCoreRowModel,
   useReactTable,
   type ColumnDef,
+  type Row,
   type RowData,
 } from "@tanstack/react-table";
 import { ArrowDown, ArrowDownUp, ArrowUp } from "lucide-react";
@@ -221,12 +222,167 @@ function noop() {
   // hook can still be called unconditionally on every render.
 }
 
-// Complexity exception (E4-17, #157): grown across the EPIC E8 migrations (manual
-// pagination/sorting/filtering, debounced search, pinned row, isEditing/editingReason
-// freeze, empty/no-results/loading states, sortable headers, onRowClick) into the
-// single component every table in this app now renders through. Decomposition tracked
-// in #204 (E4-18) rather than bundled into #157's gate-activation scope.
-// eslint-disable-next-line complexity
+type PaginationDisplayStateInput = {
+  isEditing: boolean;
+  isLoading: boolean;
+  pagination: DataTablePaginationState;
+  dataLength: number;
+};
+
+// While isLoading, `data`/`pagination` may still describe the page being replaced (a
+// caller keeping the previous page mounted during a background refetch, to avoid a
+// flash of empty content) rather than the page about to be shown. Freezing the
+// position label and pagination controls here, once, avoids each of the 8 upcoming
+// table migrations independently guessing at (and likely disagreeing on) what to
+// display in that gap.
+function getPaginationDisplayState({
+  isEditing,
+  isLoading,
+  pagination,
+  dataLength,
+}: PaginationDisplayStateInput) {
+  const canGoPrevious = !isEditing && !isLoading && pagination.offset > 0;
+  const canGoNext = !isEditing && !isLoading && pagination.offset + dataLength < pagination.total;
+  const positionLabel =
+    !isLoading && dataLength
+      ? `${pagination.offset + 1} à ${pagination.offset + dataLength} sur ${pagination.total}`
+      : "";
+
+  return { canGoPrevious, canGoNext, positionLabel };
+}
+
+type DataTableSearchInputProps = {
+  search: NonNullable<DataTableProps<never>["search"]>;
+  value: string;
+  onChange: (next: string) => void;
+  isEditing: boolean;
+};
+
+function DataTableSearchInput({ search, value, onChange, isEditing }: DataTableSearchInputProps) {
+  return (
+    <Input
+      type="search"
+      aria-label={search.placeholder ?? "Rechercher"}
+      placeholder={search.placeholder}
+      value={value}
+      disabled={isEditing}
+      onChange={(event) => onChange(event.target.value)}
+      onKeyDown={(event) => {
+        // A caller commonly wraps the whole DataTable (search input included) in a
+        // <form> for the pinned create-row's own submit button. Per the HTML implicit-
+        // submission algorithm, Enter in any single-line text input inside that form --
+        // including this one -- submits it. Search is already debounced on every
+        // keystroke, so Enter isn't needed to trigger it, and swallowing it here avoids
+        // an unrelated Enter-to-search keystroke accidentally submitting a filled-in
+        // create-row.
+        if (event.key === "Enter") {
+          event.preventDefault();
+        }
+      }}
+      className="max-w-xs"
+    />
+  );
+}
+
+type DataTableBodyProps<TData> = {
+  rows: Row<TData>[];
+  leafColumnCount: number;
+  isLoading: boolean;
+  hasActiveSearch: boolean;
+  emptyState?: ReactNode;
+  noResultsState?: ReactNode;
+  getRowClassName?: (row: TData) => string | undefined;
+  onRowClick?: (row: TData) => void;
+};
+
+function DataTableBody<TData>({
+  rows,
+  leafColumnCount,
+  isLoading,
+  hasActiveSearch,
+  emptyState,
+  noResultsState,
+  getRowClassName,
+  onRowClick,
+}: DataTableBodyProps<TData>) {
+  if (isLoading) {
+    return (
+      <TableRow>
+        <TableCell colSpan={leafColumnCount}>
+          <div role="status" aria-label="Chargement des données" className="flex flex-col gap-2 py-2">
+            {Array.from({ length: LOADING_SKELETON_ROWS }).map((_, index) => (
+              <Skeleton key={index} className="h-6 w-full" />
+            ))}
+          </div>
+        </TableCell>
+      </TableRow>
+    );
+  }
+
+  if (rows.length === 0) {
+    return (
+      <TableRow>
+        <TableCell colSpan={leafColumnCount} className="h-24 text-center text-muted-foreground">
+          {hasActiveSearch
+            ? (noResultsState ?? "Aucun résultat pour cette recherche.")
+            : (emptyState ?? "Aucune donnée.")}
+        </TableCell>
+      </TableRow>
+    );
+  }
+
+  return (
+    <>
+      {rows.map((row) => (
+        <TableRow
+          key={row.id}
+          className={cn(getRowClassName?.(row.original), onRowClick ? "cursor-pointer" : undefined)}
+          onClick={onRowClick ? () => onRowClick(row.original) : undefined}
+        >
+          {row.getVisibleCells().map((cell) => {
+            const sticky = cell.column.columnDef.meta?.sticky;
+            return (
+              <TableCell key={cell.id} className={sticky === "right" ? STICKY_RIGHT_CELL_CLASSNAME : undefined}>
+                {flexRender(cell.column.columnDef.cell, cell.getContext())}
+              </TableCell>
+            );
+          })}
+        </TableRow>
+      ))}
+    </>
+  );
+}
+
+type DataTablePaginationControlsProps = {
+  positionLabel: string;
+  canGoPrevious: boolean;
+  canGoNext: boolean;
+  onPrevious: () => void;
+  onNext: () => void;
+};
+
+function DataTablePaginationControls({
+  positionLabel,
+  canGoPrevious,
+  canGoNext,
+  onPrevious,
+  onNext,
+}: DataTablePaginationControlsProps) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <span className="text-sm text-muted-foreground">{positionLabel}</span>
+      <div className="flex gap-2">
+        <Button variant="outline" type="button" disabled={!canGoPrevious} onClick={onPrevious}>
+          Précédent
+        </Button>
+        <Button variant="outline" type="button" disabled={!canGoNext} onClick={onNext}>
+          Suivant
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export function DataTable<TData>({
   columns,
   data,
@@ -271,42 +427,21 @@ export function DataTable<TData>({
   const rows = table.getRowModel().rows;
   const leafColumnCount = table.getVisibleLeafColumns().length;
   const hasActiveSearch = Boolean(search?.value);
-  // While isLoading, `data`/`pagination` may still describe the page being replaced
-  // (a caller keeping the previous page mounted during a background refetch, to
-  // avoid a flash of empty content) rather than the page about to be shown. Freezing
-  // the position label and pagination controls here, once, avoids each of the 8
-  // upcoming table migrations independently guessing at (and likely disagreeing on)
-  // what to display in that gap.
-  const canGoPrevious = !isEditing && !isLoading && pagination.offset > 0;
-  const canGoNext = !isEditing && !isLoading && pagination.offset + data.length < pagination.total;
-  const positionLabel =
-    !isLoading && data.length
-      ? `${pagination.offset + 1} à ${pagination.offset + data.length} sur ${pagination.total}`
-      : "";
+  const { canGoPrevious, canGoNext, positionLabel } = getPaginationDisplayState({
+    isEditing,
+    isLoading,
+    pagination,
+    dataLength: data.length,
+  });
 
   return (
     <div className="space-y-3">
       {search ? (
-        <Input
-          type="search"
-          aria-label={search.placeholder ?? "Rechercher"}
-          placeholder={search.placeholder}
+        <DataTableSearchInput
+          search={search}
           value={searchValue}
-          disabled={isEditing}
-          onChange={(event) => setSearchValue(event.target.value)}
-          onKeyDown={(event) => {
-            // A caller commonly wraps the whole DataTable (search input included) in
-            // a <form> for the pinned create-row's own submit button. Per the HTML
-            // implicit-submission algorithm, Enter in any single-line text input
-            // inside that form -- including this one -- submits it. Search is
-            // already debounced on every keystroke, so Enter isn't needed to trigger
-            // it, and swallowing it here avoids an unrelated Enter-to-search
-            // keystroke accidentally submitting a filled-in create-row.
-            if (event.key === "Enter") {
-              event.preventDefault();
-            }
-          }}
-          className="max-w-xs"
+          onChange={setSearchValue}
+          isEditing={isEditing}
         />
       ) : null}
       <p aria-live="polite" className="text-sm text-muted-foreground">
@@ -355,75 +490,35 @@ export function DataTable<TData>({
         </TableHeader>
         <TableBody>
           {pinnedRow}
-          {isLoading ? (
-            <TableRow>
-              <TableCell colSpan={leafColumnCount}>
-                <div role="status" aria-label="Chargement des données" className="flex flex-col gap-2 py-2">
-                  {Array.from({ length: LOADING_SKELETON_ROWS }).map((_, index) => (
-                    <Skeleton key={index} className="h-6 w-full" />
-                  ))}
-                </div>
-              </TableCell>
-            </TableRow>
-          ) : rows.length === 0 ? (
-            <TableRow>
-              <TableCell colSpan={leafColumnCount} className="h-24 text-center text-muted-foreground">
-                {hasActiveSearch
-                  ? (noResultsState ?? "Aucun résultat pour cette recherche.")
-                  : (emptyState ?? "Aucune donnée.")}
-              </TableCell>
-            </TableRow>
-          ) : (
-            rows.map((row) => (
-              <TableRow
-                key={row.id}
-                className={cn(getRowClassName?.(row.original), onRowClick ? "cursor-pointer" : undefined)}
-                onClick={onRowClick ? () => onRowClick(row.original) : undefined}
-              >
-                {row.getVisibleCells().map((cell) => {
-                  const sticky = cell.column.columnDef.meta?.sticky;
-                  return (
-                    <TableCell key={cell.id} className={sticky === "right" ? STICKY_RIGHT_CELL_CLASSNAME : undefined}>
-                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                    </TableCell>
-                  );
-                })}
-              </TableRow>
-            ))
-          )}
+          <DataTableBody
+            rows={rows}
+            leafColumnCount={leafColumnCount}
+            isLoading={isLoading}
+            hasActiveSearch={hasActiveSearch}
+            emptyState={emptyState}
+            noResultsState={noResultsState}
+            getRowClassName={getRowClassName}
+            onRowClick={onRowClick}
+          />
         </TableBody>
       </Table>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <span className="text-sm text-muted-foreground">{positionLabel}</span>
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            type="button"
-            disabled={!canGoPrevious}
-            onClick={() =>
-              onPaginationChange({
-                offset: Math.max(0, pagination.offset - pagination.limit),
-                limit: pagination.limit,
-              })
-            }
-          >
-            Précédent
-          </Button>
-          <Button
-            variant="outline"
-            type="button"
-            disabled={!canGoNext}
-            onClick={() =>
-              onPaginationChange({
-                offset: pagination.offset + pagination.limit,
-                limit: pagination.limit,
-              })
-            }
-          >
-            Suivant
-          </Button>
-        </div>
-      </div>
+      <DataTablePaginationControls
+        positionLabel={positionLabel}
+        canGoPrevious={canGoPrevious}
+        canGoNext={canGoNext}
+        onPrevious={() =>
+          onPaginationChange({
+            offset: Math.max(0, pagination.offset - pagination.limit),
+            limit: pagination.limit,
+          })
+        }
+        onNext={() =>
+          onPaginationChange({
+            offset: pagination.offset + pagination.limit,
+            limit: pagination.limit,
+          })
+        }
+      />
     </div>
   );
 }
