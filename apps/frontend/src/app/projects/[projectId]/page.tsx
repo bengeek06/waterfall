@@ -650,6 +650,7 @@ export default function ProjectDetailsPage() {
           selectedPlanningHasConflict={selectedPlanningHasConflict}
           onValidatePlanning={() => void planningMutations.validateSelectedPlanning()}
           onSetReference={() => void planningMutations.setSelectedPlanningAsReference()}
+          onCreateVersion={() => void planningMutations.createPlanningVersionFromSelected()}
           onReopenStructure={() => void planningMutations.reopenStructure()}
           planningMutationBusy={planningMutationBusy}
           canUndo={canUndoSelectedPlanning(historyByPlanningId, selectedPlanning)}
