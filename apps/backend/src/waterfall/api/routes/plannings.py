@@ -15,6 +15,7 @@ from waterfall.api.routes.planning_support import (
     _to_planning_read,
     _to_task_reads,
     get_mutable_project_with_latest_draft_lock,
+    order_snapshots_depth_first,
     to_project_read,
     to_snapshot_task_read,
 )
@@ -913,12 +914,9 @@ def get_planning_tree(
         detail = _planning_detail(db, get_planning_or_404(db, project_id, selected_id))
         tasks = detail.tasks
     else:
-        stored_tasks = (
-            db.query(MsTask)
-            .filter(MsTask.project_id == project_id)
-            .order_by(MsTask.outline_number.asc().nulls_last(), MsTask.id.asc())
-            .all()
-        )
+        # Ordering is applied inside _to_task_reads (depth-first, same sibling sort as
+        # row_number -- E9-02/#147), so the query itself need not order the rows.
+        stored_tasks = db.query(MsTask).filter(MsTask.project_id == project_id).all()
         tasks = _to_task_reads(db, project_id, stored_tasks)
     tree_by_uid = {task.uid: PlanningTaskTreeRead(**task.model_dump()) for task in tasks}
     roots: list[PlanningTaskTreeRead] = []
@@ -985,8 +983,15 @@ def create_planning_structure(
             detail="Planning structure conflicts with existing project data",
         ) from exc
 
+    # Reorder depth-first before numbering rather than trusting generation order (E9-02,
+    # #147): consistent with every other row_number call site, even though a freshly
+    # generated structure is already expected to come out in that order.
+    ordered_snapshots = order_snapshots_depth_first(snapshots)
     return PlanningStructureRead(
-        tasks=[to_snapshot_task_read(snapshot, [], project_id) for snapshot in snapshots]
+        tasks=[
+            to_snapshot_task_read(snapshot, [], project_id, row_number=position)
+            for position, snapshot in enumerate(ordered_snapshots, start=1)
+        ]
     )
 
 

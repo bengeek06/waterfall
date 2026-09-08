@@ -187,10 +187,13 @@ def test_get_projects_and_project_tasks() -> None:
         assert len(tasks_payload) == expected_tasks
         assert tasks_payload[0]["project_id"] == project_id
         assert all("description" in task for task in tasks_payload)
-        # E9-01 (#146): id_display is gone, replaced by a read-only row_number placeholder.
-        # Real computation lands in E9-02 (#147) -- until then every task reads back 0.
+        # E9-01 (#146): id_display is gone, replaced by a read-only row_number.
+        # E9-02 (#147): row_number is now computed from the depth-first display order
+        # (both seeded tasks are roots with no explicit position, so ties break on id,
+        # i.e. creation order).
         assert "id_display" not in tasks_payload[0]
-        assert all(task["row_number"] == 0 for task in tasks_payload)
+        row_number_by_uid = {task["uid"]: task["row_number"] for task in tasks_payload}
+        assert row_number_by_uid == {1001: 1, 1002: 2}
 
 
 def test_patch_task_description_and_read_back() -> None:
@@ -218,6 +221,80 @@ def test_patch_task_description_and_read_back() -> None:
         task_by_uid = {task["uid"]: task for task in tasks_payload}
         assert task_by_uid[1001]["description"] == "Description enrichie depuis Waterfall"
         assert task_by_uid[1002]["description"] is None
+
+
+def _seed_ms_task_group_with_eleven_children(owner_id: int) -> int:
+    """Root summary task (uid 100) with 11 children (uid 101..111), each carrying a
+    numeric ``position``/``outline_number`` pair that a plain lexicographic string sort
+    on ``outline_number`` would mis-order (e.g. "1.10"/"1.11" sort before "1.2") --
+    E9-02 (#147) regression: row_number must reflect the numeric depth-first order, not
+    the ``outline_number`` string.
+    """
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        project = MsProject(
+            owner_id=owner_id,
+            external_uid=None,
+            source_version=2016,
+            save_version_out=16,
+            name="Eleven siblings",
+            schedule_from_start=True,
+            start_date=datetime(2026, 1, 5, 8, 0, tzinfo=UTC),
+            finish_date=datetime(2026, 1, 20, 18, 0, tzinfo=UTC),
+            calendar_uid=1,
+            minutes_per_day=480,
+            minutes_per_week=2400,
+            days_per_month=20,
+            currency_code="EUR",
+        )
+        session.add(project)
+        session.flush()
+
+        session.add(
+            MsTask(
+                project_id=project.id,
+                uid=100,
+                name="Group",
+                task_type=0,
+                outline_number="1",
+                outline_level=1,
+                is_summary=True,
+                is_milestone=False,
+            )
+        )
+        session.add_all(
+            MsTask(
+                project_id=project.id,
+                uid=100 + child_position,
+                name=f"Child {child_position}",
+                task_type=0,
+                parent_uid=100,
+                position=child_position,
+                outline_number=f"1.{child_position}",
+                outline_level=2,
+                is_summary=False,
+                is_milestone=False,
+            )
+            for child_position in range(1, 12)
+        )
+        session.commit()
+        return project.id
+
+
+def test_project_tasks_row_number_ignores_lexicographic_outline_number_order() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _seed_ms_task_group_with_eleven_children(_current_user_id(client, headers))
+
+        tasks_response: Response = client.get(
+            f"/projects/{project_id}/tasks",
+            headers=headers,
+        )
+        assert tasks_response.status_code == 200
+        tasks_payload = cast(list[dict[str, Any]], tasks_response.json()["items"])
+
+        assert [task["uid"] for task in tasks_payload] == list(range(100, 112))
+        assert [task["row_number"] for task in tasks_payload] == list(range(1, 13))
 
 
 def test_patch_task_description_not_found() -> None:

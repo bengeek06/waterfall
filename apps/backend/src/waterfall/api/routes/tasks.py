@@ -10,6 +10,8 @@ from waterfall.api.routes.planning_support import (
     _planning_detail,  # pyright: ignore[reportPrivateUsage]
     _to_task_reads,  # pyright: ignore[reportPrivateUsage]
     get_mutable_project_with_displayed_planning_lock,
+    order_ms_tasks_depth_first,
+    order_snapshots_depth_first,
     to_snapshot_task_read,
 )
 from waterfall.api.routes.project_access import (
@@ -44,6 +46,11 @@ from waterfall.services.project_lifecycle import ensure_project_mutable
 router = APIRouter(prefix="/projects", tags=["projects"])
 
 
+def _row_number_of(ordered_tasks: list[WfPlanningTaskSnapshot] | list[MsTask], uid: int) -> int:
+    """1-based rank of `uid` within an already depth-first-ordered task list."""
+    return next(position for position, task in enumerate(ordered_tasks, start=1) if task.uid == uid)
+
+
 @router.get("/{project_id}/tasks", response_model=TaskListRead)
 def list_project_tasks(
     project_id: int,
@@ -61,12 +68,9 @@ def list_project_tasks(
         planning = get_planning_or_404(db, project_id, selected_id)
         items = _planning_detail(db, planning).tasks
     else:
-        tasks = (
-            db.query(MsTask)
-            .filter(MsTask.project_id == project_id)
-            .order_by(MsTask.outline_number.asc().nulls_last(), MsTask.id.asc())
-            .all()
-        )
+        # Ordering is applied inside _to_task_reads (depth-first, same sibling sort as
+        # row_number -- E9-02/#147), so the query itself need not order the rows.
+        tasks = db.query(MsTask).filter(MsTask.project_id == project_id).all()
         items = _to_task_reads(db, project_id, tasks)
     return TaskListRead(items=items, total=len(items), limit=None, offset=0)
 
@@ -92,8 +96,18 @@ def update_task_description(
         if snapshot is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
         snapshot.notes = payload.description
+        # Capture the response while the project/planning row locks are still held (autoflush
+        # sees this transaction's own pending `notes` change) so a concurrent writer cannot make
+        # us return a later transaction's state -- same convention as `_planning_detail`'s callers.
+        ordered_snapshots = order_snapshots_depth_first(
+            db.query(WfPlanningTaskSnapshot)
+            .filter(WfPlanningTaskSnapshot.planning_id == displayed_planning.id)
+            .all()
+        )
+        row_number = _row_number_of(ordered_snapshots, task_uid)
+        response = to_snapshot_task_read(snapshot, [], project_id, row_number=row_number)
         db.commit()
-        return to_snapshot_task_read(snapshot, [], project_id)
+        return response
 
     task = get_task_or_404(db, project_id, task_uid)
     enrichment = (
@@ -116,8 +130,15 @@ def update_task_description(
     else:
         enrichment.description = payload.description
         enrichment.updated_at = now
+    # Same rationale as the planning-snapshot branch above: compute the response while the
+    # project lock is still held, before releasing it via commit.
+    ordered_tasks = order_ms_tasks_depth_first(
+        db.query(MsTask).filter(MsTask.project_id == project_id).all()
+    )
+    row_number = _row_number_of(ordered_tasks, task_uid)
+    response = to_task_read(task, description=payload.description, row_number=row_number)
     db.commit()
-    return to_task_read(task, description=payload.description)
+    return response
 
 
 @router.get(
