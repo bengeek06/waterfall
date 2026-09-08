@@ -47,6 +47,16 @@ import type { PlanningRevisionConflict } from "@/hooks/use-planning-detail";
 
 type AppRouter = ReturnType<typeof useRouter>;
 
+// A refresh can succeed yet the retried request still come back 401 (account disabled/deleted
+// between the two calls, server-side race) -- authFetch then rejects with a plain ApiError, not a
+// SessionExpiredError (see #216). Factored out (rather than inlined at every call site as
+// `cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)`)
+// so this file's several near-the-complexity-limit handlers don't cross the ESLint `complexity`
+// gate (see README.md's "Complexité" section) merely from restating this boolean check.
+function isSessionExpiredCause(cause: unknown): boolean {
+  return cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401);
+}
+
 // Backend link validation errors come back as raw English detail strings (see
 // PlanningLinkError subclasses); translate the ones surfaced by the predecessor
 // links dialog into actionable French copy instead of leaking backend internals.
@@ -179,7 +189,7 @@ export function usePlanningTreeMutations({
       updateSelectedPlanningId(planningId);
       setProject(updatedProject);
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (isSessionExpiredCause(cause)) {
         clearSession();
         router.push("/login");
         return;
@@ -206,7 +216,7 @@ export function usePlanningTreeMutations({
       const validated = await validatePlanning(projectId, selectedPlanning.id, session, onSessionRefresh);
       setPlannings((previous) => previous.map((item) => (item.id === validated.id ? validated : item)));
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (isSessionExpiredCause(cause)) {
         clearSession();
         router.push("/login");
         return;
@@ -273,7 +283,7 @@ export function usePlanningTreeMutations({
       }
       recordPlanningCommand(requestedPlanningId, "move", "Déplacement de tâches", planningDetail, updated);
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (isSessionExpiredCause(cause)) {
         clearSession();
         router.push("/login");
         return;
@@ -320,7 +330,7 @@ export function usePlanningTreeMutations({
         setPlanningDetail(detail);
       }
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (isSessionExpiredCause(cause)) {
         clearSession();
         router.push("/login");
         return;
@@ -372,7 +382,7 @@ export function usePlanningTreeMutations({
       recordPlanningCommand(requestedPlanningId, "schedule", "Modification de la planification", planningDetail, updated);
       return true;
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (isSessionExpiredCause(cause)) {
         clearSession();
         router.push("/login");
         return false;
@@ -436,7 +446,7 @@ export function usePlanningTreeMutations({
       }
       recordPlanningCommand(requestedPlanningId, "links", "Modification des prédécesseurs", planningDetail, updated);
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (isSessionExpiredCause(cause)) {
         clearSession();
         router.push("/login");
         throw cause;
@@ -504,7 +514,7 @@ export function usePlanningTreeMutations({
       }
       recordPlanningCommand(requestedPlanningId, "create", "Création d'une tâche", planningDetail, updated);
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (isSessionExpiredCause(cause)) {
         clearSession();
         router.push("/login");
         return;
@@ -587,7 +597,7 @@ export function usePlanningTreeMutations({
       }
       recordPlanningCommand(requestedPlanningId, "delete", "Suppression de tâches", planningDetail, updated);
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (isSessionExpiredCause(cause)) {
         clearSession();
         router.push("/login");
         throw cause;
@@ -637,7 +647,7 @@ export function usePlanningTreeMutations({
       setProject(updatedProject);
       setPlannings(planningMetadata);
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (isSessionExpiredCause(cause)) {
         clearSession();
         router.push("/login");
         return;
@@ -680,7 +690,7 @@ export function usePlanningTreeMutations({
       updateSelectedPlanningId(createdDetail.id);
       setPlanningDetail(createdDetail);
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (isSessionExpiredCause(cause)) {
         clearSession();
         router.push("/login");
         return;
@@ -695,7 +705,7 @@ export function usePlanningTreeMutations({
           const planningMetadata = await listPlannings(projectId, session, onSessionRefresh);
           setPlannings(planningMetadata);
         } catch (refreshCause) {
-          if (refreshCause instanceof SessionExpiredError) {
+          if (isSessionExpiredCause(refreshCause)) {
             clearSession();
             router.push("/login");
             return;
@@ -748,7 +758,7 @@ export function usePlanningTreeMutations({
       setPlanningDetail(reopenedDetail);
       setStructureOpen(true);
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (isSessionExpiredCause(cause)) {
         clearSession();
         router.push("/login");
         return;

@@ -3764,4 +3764,72 @@ describe("ResourcesPage users table (E8-09)", () => {
     expect(within(otherRow).getByRole("button", { name: "Promouvoir admin" })).toBeEnabled();
     expect(within(otherRow).getByRole("button", { name: "Supprimer" })).toBeEnabled();
   });
+
+  // Regression tests for #216: a refresh can succeed yet the retried request still
+  // come back 401 (account disabled/deleted between the two calls, server-side
+  // race) -- authFetch then rejects with a plain ApiError, not a
+  // SessionExpiredError. Every user-management mutation handler on this page must
+  // still detect that as a session expiry (clearSession + redirect), not surface
+  // it as a generic business error.
+  it("clears the session and redirects to login when creating a user reports a post-refresh 401, not a generic error", async () => {
+    mocks.getUsers.mockResolvedValue({ items: [], total: 0 });
+    mocks.createUser.mockRejectedValue(new ApiError(401, "Unauthorized"));
+
+    await openUsersTab();
+    fireEvent.click(screen.getByRole("button", { name: "Ajouter un utilisateur" }));
+    fireEvent.change(screen.getByLabelText("Email"), { target: { value: "new@example.com" } });
+    fireEvent.change(screen.getByLabelText("Mot de passe"), { target: { value: "password123" } });
+    fireEvent.click(screen.getByRole("button", { name: "Créer" }));
+
+    await waitFor(() => expect(mocks.clearSession).toHaveBeenCalled());
+    expect(mocks.router.push).toHaveBeenCalledWith("/login");
+    expect(screen.queryByText("Impossible de créer l'utilisateur")).not.toBeInTheDocument();
+  });
+
+  it("clears the session and redirects to login when deleting a user reports a post-refresh 401, not a generic error", async () => {
+    const userA = userFixture({ id: 1, email: "alice@example.com" });
+    mocks.getUsers.mockResolvedValue({ items: [userA], total: 1 });
+    mocks.deleteUser.mockRejectedValue(new ApiError(401, "Unauthorized"));
+
+    await openUsersTab();
+    await waitFor(() => expect(screen.getByText("alice@example.com")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Supprimer" }));
+    const alertDialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(alertDialog).getByRole("button", { name: "Supprimer" }));
+
+    await waitFor(() => expect(mocks.clearSession).toHaveBeenCalled());
+    expect(mocks.router.push).toHaveBeenCalledWith("/login");
+  });
+
+  it("clears the session and redirects to login when toggling a user's status reports a post-refresh 401, not a generic error", async () => {
+    const userA = userFixture({ id: 1, email: "alice@example.com", is_active: true });
+    mocks.getUsers.mockResolvedValue({ items: [userA], total: 1 });
+    mocks.setUserStatus.mockRejectedValue(new ApiError(401, "Unauthorized"));
+
+    await openUsersTab();
+    await waitFor(() => expect(screen.getByText("alice@example.com")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Désactiver" }));
+    const alertDialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(alertDialog).getByRole("button", { name: "Désactiver" }));
+
+    await waitFor(() => expect(mocks.clearSession).toHaveBeenCalled());
+    expect(mocks.router.push).toHaveBeenCalledWith("/login");
+    expect(screen.queryByText("Impossible de modifier le statut")).not.toBeInTheDocument();
+  });
+
+  it("clears the session and redirects to login when toggling a user's admin role reports a post-refresh 401, not a generic error", async () => {
+    const userA = userFixture({ id: 1, email: "alice@example.com", is_admin: false });
+    mocks.getUsers.mockResolvedValue({ items: [userA], total: 1 });
+    mocks.setUserRole.mockRejectedValue(new ApiError(401, "Unauthorized"));
+
+    await openUsersTab();
+    await waitFor(() => expect(screen.getByText("alice@example.com")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Promouvoir admin" }));
+    const alertDialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(alertDialog).getByRole("button", { name: "Promouvoir administrateur" }));
+
+    await waitFor(() => expect(mocks.clearSession).toHaveBeenCalled());
+    expect(mocks.router.push).toHaveBeenCalledWith("/login");
+    expect(screen.queryByText("Impossible de modifier le role")).not.toBeInTheDocument();
+  });
 });

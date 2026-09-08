@@ -23,6 +23,16 @@ import type { PlanningStructureGroup } from "@/components/planning-structure-edi
 
 type AppRouter = ReturnType<typeof useRouter>;
 
+// A refresh can succeed yet the retried request still come back 401 (account disabled/deleted
+// between the two calls, server-side race) -- authFetch then rejects with a plain ApiError, not a
+// SessionExpiredError (see #216). Factored out (rather than inlined at every call site as
+// `cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)`)
+// so `skipStructure`'s nested try/catch doesn't cross the ESLint `complexity` gate (see README.md's
+// "Complexité" section) merely from restating this boolean check twice in the same function.
+function isSessionExpiredCause(cause: unknown): boolean {
+  return cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401);
+}
+
 let nextStructureRowId = 2;
 
 interface UsePlanningStructureEditorParams {
@@ -169,7 +179,7 @@ export function usePlanningStructureEditor({
     try {
       await savePlanningStructureDraft(projectId, payload, session, onSessionRefresh);
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
         clearSession();
         router.push("/login");
         return;
@@ -204,7 +214,7 @@ export function usePlanningStructureEditor({
       setPlanningDetail(detail);
       setStructureOpen(false);
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
         clearSession();
         router.push("/login");
         return;
@@ -235,7 +245,7 @@ export function usePlanningStructureEditor({
         updateSelectedPlanningId(nextPlanningId);
         setPlanningDetail(nextDetail);
       } catch (refreshCause) {
-        if (refreshCause instanceof SessionExpiredError) {
+        if (isSessionExpiredCause(refreshCause)) {
           clearSession();
           router.push("/login");
           return;
@@ -243,7 +253,7 @@ export function usePlanningStructureEditor({
         setError("Passage effectué, mais impossible de recharger le planning. Recharge la page.");
       }
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (isSessionExpiredCause(cause)) {
         clearSession();
         router.push("/login");
         return;

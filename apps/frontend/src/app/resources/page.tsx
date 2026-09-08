@@ -1562,7 +1562,7 @@ export default function ResourcesPage() {
       await setUserStatus(user.id, nextStatus, session, onSessionRefresh);
       await reloadUsersPage();
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
         clearSession();
         router.push("/login");
         return;
@@ -1583,7 +1583,7 @@ export default function ResourcesPage() {
       await setUserRole(user.id, nextAdmin, session, onSessionRefresh);
       await reloadUsersPage();
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
         clearSession();
         router.push("/login");
         return;
@@ -1610,7 +1610,7 @@ export default function ResourcesPage() {
       setCreateUserMode(false);
       await reloadUsersPage();
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
         clearSession();
         router.push("/login");
         return;
@@ -1632,7 +1632,7 @@ export default function ResourcesPage() {
       await deleteUser(user.id, session, onSessionRefresh);
       await reloadUsersPage();
     } catch (cause) {
-      if (cause instanceof SessionExpiredError) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
         clearSession();
         router.push("/login");
         return;
