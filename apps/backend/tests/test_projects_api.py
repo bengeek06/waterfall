@@ -74,7 +74,6 @@ def _seed_projects_and_tasks(owner_id: int) -> tuple[int, int]:
         task1 = MsTask(
             project_id=project.id,
             uid=1001,
-            id_display=1,
             name="Task One",
             task_type=0,
             outline_number="1",
@@ -93,7 +92,6 @@ def _seed_projects_and_tasks(owner_id: int) -> tuple[int, int]:
         task2 = MsTask(
             project_id=project.id,
             uid=1002,
-            id_display=2,
             name="Task Two",
             task_type=0,
             outline_number="2",
@@ -189,6 +187,10 @@ def test_get_projects_and_project_tasks() -> None:
         assert len(tasks_payload) == expected_tasks
         assert tasks_payload[0]["project_id"] == project_id
         assert all("description" in task for task in tasks_payload)
+        # E9-01 (#146): id_display is gone, replaced by a read-only row_number placeholder.
+        # Real computation lands in E9-02 (#147) -- until then every task reads back 0.
+        assert "id_display" not in tasks_payload[0]
+        assert all(task["row_number"] == 0 for task in tasks_payload)
 
 
 def test_patch_task_description_and_read_back() -> None:
@@ -823,7 +825,6 @@ def test_creates_first_planning_from_a_hierarchical_legacy_project() -> None:
                 MsTask(
                     project_id=project_id,
                     uid=100,
-                    id_display=1,
                     parent_uid=None,
                     name="Root",
                     task_type=1,
@@ -837,7 +838,6 @@ def test_creates_first_planning_from_a_hierarchical_legacy_project() -> None:
                 MsTask(
                     project_id=project_id,
                     uid=2,
-                    id_display=2,
                     parent_uid=100,
                     name="Child",
                     task_type=0,
@@ -851,7 +851,6 @@ def test_creates_first_planning_from_a_hierarchical_legacy_project() -> None:
                 MsTask(
                     project_id=project_id,
                     uid=1,
-                    id_display=3,
                     parent_uid=2,
                     name="Grandchild",
                     task_type=0,
@@ -911,7 +910,6 @@ def test_creates_first_planning_from_legacy_project_preserves_task_enrichment_no
                 MsTask(
                     project_id=project_id,
                     uid=1,
-                    id_display=1,
                     parent_uid=None,
                     name="Annotated task",
                     task_type=1,
@@ -925,7 +923,6 @@ def test_creates_first_planning_from_legacy_project_preserves_task_enrichment_no
                 MsTask(
                     project_id=project_id,
                     uid=2,
-                    id_display=2,
                     parent_uid=None,
                     name="Bare task",
                     task_type=1,

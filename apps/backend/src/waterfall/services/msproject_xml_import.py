@@ -44,7 +44,6 @@ def _task_kwargs(task: Any, planning_id: int) -> dict[str, object]:
     return {
         "planning_id": planning_id,
         "uid": task.uid,
-        "id_display": task.id_display,
         "name": task.name,
         "notes": task.notes,
         "task_type": task.task_type,

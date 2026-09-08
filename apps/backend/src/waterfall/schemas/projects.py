@@ -122,7 +122,15 @@ class TaskRead(BaseModel):
     id: int
     project_id: int
     uid: int
-    id_display: int | None
+    row_number: int = Field(
+        description=(
+            "Rank of the task in the planning's current display order (flattened "
+            "depth-first walk, siblings sorted the same way as `outline_number`). "
+            "Recomputed on every read, never stored -- it changes whenever the task "
+            "is moved, reparented, or another task is created/deleted ahead of it. "
+            "Read-only: this field cannot be set by clients."
+        )
+    )
     structure_key: str | None
     structure_kind: StructureKind | None
     parent_uid: int | None
@@ -303,11 +311,13 @@ class PlanningTaskSnapshotWrite(BaseModel):
     via ``TaskRead`` (plus the raw ``notes``, not exposed as ``description`` on
     reads for no particular reason other than naming): values are restored
     verbatim, never recalculated, since they were already valid when the
-    server originally computed and returned them.
+    server originally computed and returned them. Deliberately excludes
+    ``TaskRead.row_number``: it is never stored on ``WfPlanningTaskSnapshot`` and
+    is always recomputed at read time (see #147/E9-02), so there is nothing to
+    restore verbatim here.
     """
 
     uid: int = Field(ge=1)
-    id_display: int | None
     structure_key: str | None = Field(max_length=128)
     structure_kind: StructureKind | None
     parent_uid: int | None = Field(gt=0)

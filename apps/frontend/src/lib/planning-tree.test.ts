@@ -14,7 +14,7 @@ function task(overrides: Partial<Task>): Task {
     id: overrides.uid ?? 1,
     project_id: 1,
     uid: 1,
-    id_display: null,
+    row_number: 0,
     structure_key: null,
     structure_kind: null,
     parent_uid: null,

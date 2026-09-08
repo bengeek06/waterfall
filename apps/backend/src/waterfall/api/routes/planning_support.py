@@ -147,7 +147,10 @@ def to_snapshot_task_read(
         id=task.id,
         project_id=project_id,
         uid=task.uid,
-        id_display=task.id_display,
+        # Placeholder: real row_number computation lands in #147/E9-02. Any
+        # value satisfies the schema here since this issue (#146/E9-01) only
+        # introduces the field into the API contract.
+        row_number=0,
         structure_key=task.structure_key,
         structure_kind=cast(StructureKind | None, task.structure_kind),
         parent_uid=task.parent_uid,
@@ -189,7 +192,10 @@ def to_task_read(
         id=task.id,
         project_id=task.project_id,
         uid=task.uid,
-        id_display=task.id_display,
+        # Placeholder: real row_number computation lands in #147/E9-02. Any
+        # value satisfies the schema here since this issue (#146/E9-01) only
+        # introduces the field into the API contract.
+        row_number=0,
         structure_key=task.structure_key,
         structure_kind=cast(StructureKind | None, task.structure_kind),
         parent_uid=task.parent_uid,

@@ -96,7 +96,6 @@ class WfPlanningTaskSnapshot(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     planning_id: Mapped[int] = mapped_column(ForeignKey("wf_planning.id"), nullable=False)
     uid: Mapped[int] = mapped_column(Integer, nullable=False)
-    id_display: Mapped[int | None] = mapped_column(Integer, nullable=True)
     structure_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
     structure_kind: Mapped[str | None] = mapped_column(String(16), nullable=True)
     parent_uid: Mapped[int | None] = mapped_column(Integer, nullable=True)

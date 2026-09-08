@@ -3340,7 +3340,6 @@ components:
       type: object
       required:
         - uid
-        - id_display
         - structure_key
         - structure_kind
         - parent_uid
@@ -3365,10 +3364,6 @@ components:
         uid:
           type: integer
           minimum: 1
-        id_display:
-          type:
-            - integer
-            - 'null'
         structure_key:
           type:
             - string
@@ -3533,6 +3528,7 @@ components:
         - id
         - project_id
         - uid
+        - row_number
         - name
         - is_summary
         - is_milestone
@@ -3546,10 +3542,10 @@ components:
         uid:
           type: integer
           minimum: 1
-        id_display:
-          type:
-            - integer
-            - 'null'
+        row_number:
+          type: integer
+          readOnly: true
+          description: 'Rank of the task in the planning''s current display order (flattened depth-first walk, siblings sorted the same way as `outline_number`). Recomputed on every read, never stored -- it changes whenever the task is moved, reparented, or another task is created/deleted ahead of it. Read-only: this field cannot be set by clients.'
         structure_key:
           type:
             - string

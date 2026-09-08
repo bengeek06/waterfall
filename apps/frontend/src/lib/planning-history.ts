@@ -14,7 +14,6 @@ function taskIdentityFields(
 ): Pick<
   PlanningTaskSnapshotWrite,
   | "uid"
-  | "id_display"
   | "structure_key"
   | "structure_kind"
   | "parent_uid"
@@ -26,7 +25,6 @@ function taskIdentityFields(
 > {
   return {
     uid: task.uid,
-    id_display: task.id_display ?? null,
     structure_key: task.structure_key ?? null,
     structure_kind: task.structure_kind ?? null,
     parent_uid: task.parent_uid ?? null,

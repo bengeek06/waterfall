@@ -209,8 +209,11 @@ def _append_task(
 ) -> None:
     task_node = ET.SubElement(tasks_node, f"{{{MSP_NS}}}Task")
     ET.SubElement(task_node, f"{{{MSP_NS}}}UID").text = str(task.uid)
-    if task.id_display is not None:
-        ET.SubElement(task_node, f"{{{MSP_NS}}}ID").text = str(task.id_display)
+    # <ID> is deliberately omitted here: it used to be filled from the
+    # now-removed id_display column (#146/E9-01). The MSPDI <ID> element will
+    # instead be populated from the computed row_number once that lands
+    # (#148/E9-03) -- until then, omitting it is valid since the export XSD
+    # marks <ID> as optional (minOccurs="0").
     ET.SubElement(task_node, f"{{{MSP_NS}}}Name").text = task.name
     if task.task_type is not None:
         ET.SubElement(task_node, f"{{{MSP_NS}}}Type").text = str(task.task_type)
