@@ -6,6 +6,10 @@ import { BulkCostCodeAssignmentBar } from "@/components/bulk-cost-code-assignmen
 import { CostLineForm, type CostLineDraft } from "@/components/cost-line-form";
 import { CostLinesTable, type EditingLineDraft } from "@/components/cost-lines-table";
 import { EstimateCreateTaskDialog } from "@/components/estimate-create-task-dialog";
+import {
+  EstimateMilestoneTemplateDialog,
+  type MilestoneTemplateValue,
+} from "@/components/estimate-milestone-template-dialog";
 import { EstimateVersionControls } from "@/components/estimate-version-controls";
 import type {
   CostCategory,
@@ -72,6 +76,22 @@ export type EstimateTabProps = {
   onTaskDraftParentUidChange: (value: string) => void;
   onSubmitCreateTask: () => void;
   onReopenStructure: () => void;
+  // E6-07/#68: "apply a milestone template" dialog, launched from a single cost line row.
+  milestoneDialogOpen: boolean;
+  milestoneLineId: number | null;
+  milestoneTemplate: MilestoneTemplateValue;
+  milestoneIntermediateCount: string;
+  milestoneLagMinutes: string;
+  milestoneBusy: boolean;
+  milestoneError: string | null;
+  milestoneRequiresPlanningDraft: boolean;
+  onOpenMilestoneDialog: (line: EstimateCostLine) => void;
+  onCloseMilestoneDialog: () => void;
+  onMilestoneTemplateChange: (value: MilestoneTemplateValue) => void;
+  onMilestoneIntermediateCountChange: (value: string) => void;
+  onMilestoneLagMinutesChange: (value: string) => void;
+  onSubmitMilestoneTemplate: () => void;
+  onReopenStructureForMilestone: () => void;
 };
 
 // Extracted from ProjectDetailsPage (E4-11 / #151): composes the whole "Devis" tab (version
@@ -133,10 +153,40 @@ export function EstimateTab({
   onTaskDraftParentUidChange,
   onSubmitCreateTask,
   onReopenStructure,
+  milestoneDialogOpen,
+  milestoneLineId,
+  milestoneTemplate,
+  milestoneIntermediateCount,
+  milestoneLagMinutes,
+  milestoneBusy,
+  milestoneError,
+  milestoneRequiresPlanningDraft,
+  onOpenMilestoneDialog,
+  onCloseMilestoneDialog,
+  onMilestoneTemplateChange,
+  onMilestoneIntermediateCountChange,
+  onMilestoneLagMinutesChange,
+  onSubmitMilestoneTemplate,
+  onReopenStructureForMilestone,
 }: EstimateTabProps) {
   if (!active) {
     return null;
   }
+
+  // Resolved here (rather than threaded as its own prop) since costLines is already available
+  // and is the single source of truth for a cost line's current label -- avoids the dialog ever
+  // showing a stale label if the line was edited after the dialog was opened.
+  const milestoneCostLine = costLines.find((line) => line.id === milestoneLineId) ?? null;
+
+  // Haute review finding on #68: a cost line whose `task_id` points at a milestone task can never
+  // accept the milestone-template action -- `create_planning_task` unconditionally rejects
+  // attaching children to a milestone with a 409 (see cost-lines-table.tsx's milestoneTaskIds
+  // prop doc comment) -- so it's resolved here from the same `parentTaskOptions` (`Task[]`,
+  // `planningDetail.tasks`) this tab already threads to EstimateCreateTaskDialog, mirroring that
+  // dialog's own `.filter((task) => !task.is_milestone)` parent-task guard.
+  const milestoneTaskIds = new Set(
+    parentTaskOptions.filter((task) => task.is_milestone).map((task) => task.id),
+  );
 
   return (
     <div className="grid gap-4">
@@ -244,6 +294,8 @@ export function EstimateTab({
             selectedCostLineIds={selectedCostLineIds}
             onSelectedCostLineIdsChange={onSelectedCostLineIdsChange}
             bulkAssignBusy={bulkAssignBusy}
+            onOpenMilestoneDialog={onOpenMilestoneDialog}
+            milestoneTaskIds={milestoneTaskIds}
           />
         </div>
       ) : null}
@@ -263,6 +315,23 @@ export function EstimateTab({
         onClose={onCloseCreateTaskDialog}
         onSubmit={onSubmitCreateTask}
         onReopenStructure={onReopenStructure}
+      />
+
+      <EstimateMilestoneTemplateDialog
+        open={milestoneDialogOpen}
+        costLineLabel={milestoneCostLine?.label ?? ""}
+        template={milestoneTemplate}
+        intermediateMilestonesCount={milestoneIntermediateCount}
+        lagMinutes={milestoneLagMinutes}
+        busy={milestoneBusy}
+        error={milestoneError}
+        requiresPlanningDraft={milestoneRequiresPlanningDraft}
+        onTemplateChange={onMilestoneTemplateChange}
+        onIntermediateMilestonesCountChange={onMilestoneIntermediateCountChange}
+        onLagMinutesChange={onMilestoneLagMinutesChange}
+        onClose={onCloseMilestoneDialog}
+        onSubmit={onSubmitMilestoneTemplate}
+        onReopenStructure={onReopenStructureForMilestone}
       />
     </div>
   );

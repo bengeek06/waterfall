@@ -29,6 +29,8 @@ function renderTable(overrides: Partial<CostLinesTableProps> = {}) {
     selectedCostLineIds: new Set(),
     onSelectedCostLineIdsChange: vi.fn(),
     bulkAssignBusy: false,
+    onOpenMilestoneDialog: vi.fn(),
+    milestoneTaskIds: new Set(),
     ...overrides,
   };
   return render(<CostLinesTable {...props} />);
@@ -224,6 +226,85 @@ describe("CostLinesTable", () => {
       renderTable({ costLines: [lineWithDate], editingLineId: null });
 
       expect(screen.getByText("01/10/2026")).toBeInTheDocument();
+    });
+  });
+
+  // E6-07/#68: "apply a milestone template" action, one per row. The backend alone decides
+  // whether a line's *cost type* is eligible (non-labor) -- see cost-lines-table.tsx's own doc
+  // comment on onOpenMilestoneDialog -- so this table never disables/hides the button on that
+  // axis. It does, however, disable the button (Haute review finding on #68) when the line's
+  // `task_id` points at a milestone task: that case is a structural invariant the backend
+  // rejects unconditionally, and is knowable client-side from `milestoneTaskIds`.
+  describe("milestone template action (E6-07)", () => {
+    it("opens the milestone dialog for the clicked line", () => {
+      const onOpenMilestoneDialog = vi.fn();
+      renderTable({ onOpenMilestoneDialog });
+
+      fireEvent.click(screen.getByRole("button", { name: "Gabarit de jalons" }));
+
+      expect(onOpenMilestoneDialog).toHaveBeenCalledWith(line);
+    });
+
+    it("hides the action entirely when the estimate is not editable", () => {
+      renderTable({ canEditEstimate: false });
+
+      expect(screen.queryByRole("button", { name: "Gabarit de jalons" })).not.toBeInTheDocument();
+    });
+
+    // Haute review finding on #68: a cost line attached to a milestone task can never accept the
+    // milestone-template action -- `create_planning_task` unconditionally rejects attaching
+    // children to a milestone (409) -- so the button is disabled client-side and never sends a
+    // request doomed to fail.
+    it("disables the action and does not open the dialog for a line attached to a milestone task", () => {
+      const milestoneLine = {
+        id: 2,
+        accounting_code: "6011",
+        label: "Livraison lot 3",
+        quantity: "1.00",
+        unit_cost: "0.00",
+        purchase_cost: "0.00",
+        task_id: 42,
+      } as never;
+      const onOpenMilestoneDialog = vi.fn();
+      renderTable({
+        costLines: [milestoneLine],
+        milestoneTaskIds: new Set([42]),
+        onOpenMilestoneDialog,
+      });
+
+      const button = screen.getByRole("button", { name: "Gabarit de jalons" });
+      expect(button).toBeDisabled();
+      expect(button).toHaveAttribute(
+        "title",
+        "Cette ligne est rattachée à une tâche-jalon, qui ne peut pas recevoir de sous-tâches.",
+      );
+
+      fireEvent.click(button);
+
+      expect(onOpenMilestoneDialog).not.toHaveBeenCalled();
+    });
+
+    it("keeps the action enabled for a line whose task_id is not in milestoneTaskIds", () => {
+      const nonMilestoneLine = {
+        id: 3,
+        accounting_code: "6011",
+        label: "Fourniture lot 2",
+        quantity: "1.00",
+        unit_cost: "0.00",
+        purchase_cost: "0.00",
+        task_id: 7,
+      } as never;
+      renderTable({ costLines: [nonMilestoneLine], milestoneTaskIds: new Set([42]) });
+
+      const button = screen.getByRole("button", { name: "Gabarit de jalons" });
+      expect(button).not.toBeDisabled();
+      expect(button).not.toHaveAttribute("title");
+    });
+
+    it("keeps the action enabled for a line with no task_id at all", () => {
+      renderTable({ milestoneTaskIds: new Set([42]) });
+
+      expect(screen.getByRole("button", { name: "Gabarit de jalons" })).not.toBeDisabled();
     });
   });
 

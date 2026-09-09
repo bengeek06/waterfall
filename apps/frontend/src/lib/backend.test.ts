@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   ApiError,
+  applyEstimateCostLineMilestoneTemplate,
   createEstimateTask,
   deletePlanningTasks,
   getCalendars,
@@ -671,5 +672,103 @@ describe("createEstimateTask", () => {
     expect(isEstimateTaskCreateRequiresPlanningDraft(new ApiError(404, "Not found"))).toBe(false);
     expect(isEstimateTaskCreateRequiresPlanningDraft(new ApiError(409, "Conflict"))).toBe(false);
     expect(isEstimateTaskCreateRequiresPlanningDraft(new Error("boom"))).toBe(false);
+  });
+});
+
+// E6-07/#68: applies a chained-milestone template to a cost line.
+describe("applyEstimateCostLineMilestoneTemplate", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("posts the payload to the cost line's milestones endpoint and returns the created rows", async () => {
+    const createdRows = [
+      { id: 1, estimate_id: 7, task_id: 42, task_name: "Commande", is_milestone: true },
+      { id: 2, estimate_id: 7, task_id: 43, task_name: "Réception", is_milestone: true },
+    ];
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+      async () =>
+        new Response(JSON.stringify({ items: createdRows, total: 2, limit: null, offset: 0 }), {
+          status: 201,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await applyEstimateCostLineMilestoneTemplate(
+      1,
+      7,
+      3,
+      { template: "fourniture", intermediate_milestones_count: 0, lag_minutes: 0 },
+      { accessToken: "token" },
+      vi.fn(),
+    );
+
+    expect(result).toEqual(createdRows);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/projects/1/estimates/7/cost-lines/3/milestones");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({
+      template: "fourniture",
+      intermediate_milestones_count: 0,
+      lag_minutes: 0,
+    });
+  });
+
+  it("turns an ESTIMATE_TASK_CREATE_REQUIRES_PLANNING_DRAFT conflict into a readable message that isEstimateTaskCreateRequiresPlanningDraft recognizes, same code as createEstimateTask", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ detail: { code: "ESTIMATE_TASK_CREATE_REQUIRES_PLANNING_DRAFT" } }), {
+        status: 409,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    let thrown: unknown;
+    try {
+      await applyEstimateCostLineMilestoneTemplate(
+        1,
+        7,
+        3,
+        { template: "sous_traitance", intermediate_milestones_count: 2, lag_minutes: 60 },
+        { accessToken: "token" },
+        vi.fn(),
+      );
+    } catch (cause) {
+      thrown = cause;
+    }
+
+    expect(thrown).toBeInstanceOf(ApiError);
+    expect((thrown as ApiError).message).toBe(
+      "Le planning affiché n'est plus un brouillon : rouvre sa structure depuis l'onglet Planning avant d'ajouter une tâche depuis le devis.",
+    );
+    expect(isEstimateTaskCreateRequiresPlanningDraft(thrown)).toBe(true);
+  });
+
+  it("surfaces a 400 (e.g. a labor cost line) as a plain ApiError the caller can key its own copy off of", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ detail: "Milestone templates are only available for a non-labor cost line" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    let thrown: unknown;
+    try {
+      await applyEstimateCostLineMilestoneTemplate(
+        1,
+        7,
+        3,
+        { template: "fourniture", intermediate_milestones_count: 0, lag_minutes: 0 },
+        { accessToken: "token" },
+        vi.fn(),
+      );
+    } catch (cause) {
+      thrown = cause;
+    }
+
+    expect(thrown).toBeInstanceOf(ApiError);
+    expect((thrown as ApiError).status).toBe(400);
   });
 });

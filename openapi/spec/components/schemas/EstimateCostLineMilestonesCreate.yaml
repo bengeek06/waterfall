@@ -1,0 +1,16 @@
+type: object
+required:
+- template
+properties:
+  template:
+    $ref: MilestoneTemplate.yaml
+  intermediate_milestones_count:
+    type: integer
+    minimum: 0
+    maximum: 50
+    default: 0
+  lag_minutes:
+    type: integer
+    minimum: 0
+    maximum: 7884000
+    default: 0

@@ -903,6 +903,26 @@ export interface paths {
         patch: operations["updateEstimateCostLine"];
         trace?: never;
     };
+    "/projects/{projectId}/estimates/{estimateId}/cost-lines/{costLineId}/milestones": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Appliquer un gabarit de jalons chaînés à une ligne de coût
+         * @description Genere N+2 taches-jalons (`fourniture`: 2 ; `sous_traitance`: 2 + `intermediate_milestones_count`) dans le brouillon de planning affiche -- chacune avec sa ligne `MsTask` jumelle et sa ligne `EstimateTaskRow`, comme `POST .../estimates/{estimateId}/tasks` -- puis les chaine par N+1 liens Fin-a-Debut (`link_type=1`) portant tous le meme `lag_minutes`. Le premier jalon devient l'enfant de la tache de la ligne de coût (`task_id`) si elle en a une, sinon les jalons sont des taches racines ; dans les deux cas ils sont ajoutes en fin de liste des taches existantes, jamais en tete. Refuse une ligne de coût de main-d'oeuvre (`cost_type.kind = 'labor'`), un devis non-brouillon, ou un planning affiche non-brouillon (code `ESTIMATE_TASK_CREATE_REQUIRES_PLANNING_DRAFT`, a resoudre via `POST /{projectId}/planning-structure/reopen`).
+         */
+        post: operations["createEstimateCostLineMilestones"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/projects/{projectId}/estimates/{estimateId}/validate": {
         parameters: {
             query?: never;
@@ -2106,6 +2126,15 @@ export interface components {
             is_milestone: boolean;
             target_parent_uid?: number | null;
             insert_after_uid?: number | null;
+        };
+        /** @enum {string} */
+        MilestoneTemplate: "fourniture" | "sous_traitance";
+        EstimateCostLineMilestonesCreate: {
+            template: components["schemas"]["MilestoneTemplate"];
+            /** @default 0 */
+            intermediate_milestones_count: number;
+            /** @default 0 */
+            lag_minutes: number;
         };
         /**
          * @description Issue #65 (E6-04) : une tache "reelle" du planning (ni recapitulative ni
@@ -4287,6 +4316,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EstimateCostLineRead"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    createEstimateCostLineMilestones: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de devis */
+                estimateId: components["parameters"]["EstimateId"];
+                /** @description Identifiant technique de la ligne de coût du devis */
+                costLineId: components["parameters"]["CostLineId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EstimateCostLineMilestonesCreate"];
+            };
+        };
+        responses: {
+            /** @description Jalons crees et liens Fin-a-Debut chaines correspondants */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EstimateTaskRowListRead"];
                 };
             };
             400: components["responses"]["BadRequest"];

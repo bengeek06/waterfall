@@ -1181,6 +1181,53 @@
         $ref: ../components/responses/ProjectNotFound.yaml
       '409':
         $ref: ../components/responses/Conflict.yaml
+/projects/{projectId}/estimates/{estimateId}/cost-lines/{costLineId}/milestones:
+  post:
+    tags:
+    - projects
+    summary: Appliquer un gabarit de jalons chaînés à une ligne de coût
+    description: >-
+      Genere N+2 taches-jalons (`fourniture`: 2 ; `sous_traitance`: 2 +
+      `intermediate_milestones_count`) dans le brouillon de planning affiche
+      -- chacune avec sa ligne `MsTask` jumelle et sa ligne `EstimateTaskRow`,
+      comme `POST .../estimates/{estimateId}/tasks` -- puis les chaine par
+      N+1 liens Fin-a-Debut (`link_type=1`) portant tous le meme
+      `lag_minutes`. Le premier jalon devient l'enfant de la tache de la
+      ligne de coût (`task_id`) si elle en a une, sinon les jalons sont des
+      taches racines ; dans les deux cas ils sont ajoutes en fin de liste des
+      taches existantes, jamais en tete. Refuse une ligne de coût de
+      main-d'oeuvre (`cost_type.kind = 'labor'`), un devis non-brouillon, ou
+      un planning affiche non-brouillon (code
+      `ESTIMATE_TASK_CREATE_REQUIRES_PLANNING_DRAFT`, a resoudre via
+      `POST /{projectId}/planning-structure/reopen`).
+    operationId: createEstimateCostLineMilestones
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/EstimateId.yaml
+    - $ref: ../components/parameters/CostLineId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/EstimateCostLineMilestonesCreate.yaml
+    responses:
+      '201':
+        description: Jalons crees et liens Fin-a-Debut chaines correspondants
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/EstimateTaskRowListRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
 /projects/{projectId}/estimates/{estimateId}/validate:
   post:
     tags:
