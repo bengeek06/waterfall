@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { EstimateCostLine } from "@/lib/backend";
 
-export type EditingLineDraft = { label: string; quantity: string; unitCost: string };
+export type EditingLineDraft = { label: string; quantity: string; unitCost: string; plannedDate: string };
 
 export type CostLinesTableProps = {
   costLines: EstimateCostLine[];
@@ -18,6 +18,7 @@ export type CostLinesTableProps = {
   onEditLabelChange: (value: string) => void;
   onEditQuantityChange: (value: string) => void;
   onEditUnitCostChange: (value: string) => void;
+  onEditPlannedDateChange: (value: string) => void;
   estimateBusy: boolean;
   onStartEdit: (line: EstimateCostLine) => void;
   onSave: (line: EstimateCostLine) => void;
@@ -26,6 +27,23 @@ export type CostLinesTableProps = {
   onSelectedCostLineIdsChange: (next: Set<number>) => void;
   bulkAssignBusy: boolean;
 };
+
+// `planned_date` (#66 / E6-05) is returned by the backend as a full ISO datetime (the column is
+// `DateTime(timezone=True)`, always carrying an explicit offset, e.g. "2026-10-01T00:00:00+00:00"
+// -- unlike the naive-UTC planning schedule fields in lib/planning-schedule.ts, which need the
+// "append Z if missing" workaround documented there). Read-only display only ever needs the
+// calendar date, so it's formatted the same way as that file's own `formatDate` (`fr-FR`, forced
+// to the UTC calendar day so it never disagrees with the editable `<input type="date">` below).
+function formatPlannedDate(value: string | null | undefined): string {
+  if (!value) {
+    return "-";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "-";
+  }
+  return date.toLocaleDateString("fr-FR", { timeZone: "UTC" });
+}
 
 // Extracted from ProjectDetailsPage (E4-11 / #151): the cost lines table with inline editing.
 // The row-rendering `.map` callback below is already its own function scope (and was already
@@ -40,6 +58,7 @@ export function CostLinesTable({
   onEditLabelChange,
   onEditQuantityChange,
   onEditUnitCostChange,
+  onEditPlannedDateChange,
   estimateBusy,
   onStartEdit,
   onSave,
@@ -131,6 +150,7 @@ export function CostLinesTable({
           <TableHead>Libellé</TableHead>
           <TableHead>Quantité</TableHead>
           <TableHead>Coût unitaire</TableHead>
+          <TableHead>Date prévisionnelle</TableHead>
           <TableHead>Montant</TableHead>
           {canEditEstimate ? <TableHead>Action</TableHead> : null}
         </TableRow>
@@ -189,6 +209,18 @@ export function CostLinesTable({
                   line.unit_cost
                 )}
               </TableCell>
+              <TableCell>
+                {editing ? (
+                  <Input
+                    aria-label={`Date prévisionnelle de ${line.label}`}
+                    type="date"
+                    value={editingLineDraft.plannedDate}
+                    onChange={(event) => onEditPlannedDateChange(event.target.value)}
+                  />
+                ) : (
+                  formatPlannedDate(line.planned_date)
+                )}
+              </TableCell>
               <TableCell>{line.purchase_cost}</TableCell>
               {canEditEstimate ? (
                 <TableCell>
@@ -219,7 +251,7 @@ export function CostLinesTable({
         })}
         {!costLines.length ? (
           <TableRow>
-            <TableCell colSpan={canEditEstimate ? 7 : 5} className="text-muted-foreground">
+            <TableCell colSpan={canEditEstimate ? 8 : 6} className="text-muted-foreground">
               Aucune ligne de coût.
             </TableCell>
           </TableRow>

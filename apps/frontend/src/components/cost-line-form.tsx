@@ -8,7 +8,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { CostCategory } from "@/lib/backend";
 
-export type CostLineDraft = { categoryId: string; label: string; quantity: string; unitCost: string };
+export type CostLineDraft = {
+  categoryId: string;
+  label: string;
+  quantity: string;
+  unitCost: string;
+  plannedDate: string;
+};
 
 export type CostLineFormProps = {
   costCategories: CostCategory[];
@@ -17,6 +23,7 @@ export type CostLineFormProps = {
   onLabelChange: (value: string) => void;
   onQuantityChange: (value: string) => void;
   onUnitCostChange: (value: string) => void;
+  onPlannedDateChange: (value: string) => void;
   estimateBusy: boolean;
   onAdd: () => void;
 };
@@ -31,6 +38,7 @@ export function CostLineForm({
   onLabelChange,
   onQuantityChange,
   onUnitCostChange,
+  onPlannedDateChange,
   estimateBusy,
   onAdd,
 }: CostLineFormProps) {
@@ -61,7 +69,7 @@ export function CostLineForm({
 
   return (
     <Card>
-      <CardContent className="grid gap-4 pt-6 md:grid-cols-5">
+      <CardContent className="grid gap-4 pt-6 md:grid-cols-6">
         <div className="grid gap-2">
           <Label htmlFor="cost-line-category">Catégorie</Label>
           <select
@@ -109,6 +117,15 @@ export function CostLineForm({
             step="0.01"
             value={costLineDraft.unitCost}
             onChange={(event) => onUnitCostChange(event.target.value)}
+          />
+        </div>
+        <div className="grid gap-2">
+          <Label htmlFor="cost-line-planned-date">Date prévisionnelle</Label>
+          <Input
+            id="cost-line-planned-date"
+            type="date"
+            value={costLineDraft.plannedDate}
+            onChange={(event) => onPlannedDateChange(event.target.value)}
           />
         </div>
         <div className="flex items-end">

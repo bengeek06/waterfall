@@ -640,6 +640,9 @@ class EstimateCostLineCreate(BaseModel):
     quantity: Decimal = Field(gt=0, max_digits=14, decimal_places=2)
     unit_cost: Decimal = Field(ge=0, max_digits=16, decimal_places=2)
     supply_status: SupplyStatus | None = None
+    # Issue #66 (E6-05): forecast date for future cashflow curves, independent
+    # from task_id -- either, both, or neither may be set.
+    planned_date: datetime | None = None
 
     @field_validator("supply_status", mode="before")
     @classmethod
@@ -662,6 +665,7 @@ class EstimateCostLineUpdate(BaseModel):
     quantity: Decimal | None = Field(default=None, gt=0, max_digits=14, decimal_places=2)
     unit_cost: Decimal | None = Field(default=None, ge=0, max_digits=16, decimal_places=2)
     supply_status: SupplyStatus | None = None
+    planned_date: datetime | None = None
 
     @field_validator("supply_status", mode="before")
     @classmethod
@@ -693,6 +697,7 @@ class EstimateCostLineRead(BaseModel):
     unit_cost: Decimal
     purchase_cost: Decimal
     supply_status: SupplyStatus | None
+    planned_date: datetime | None
 
 
 class EstimateCostLineListRead(PaginatedList[EstimateCostLineRead]):

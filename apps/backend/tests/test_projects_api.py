@@ -2431,6 +2431,169 @@ def test_estimate_cost_line_rejects_a_deactivated_cost_code() -> None:
         assert rejected_create_response.status_code == 400
 
 
+def test_estimate_cost_line_planned_date_is_independent_from_task_id() -> None:
+    """Issue #66 (E6-05): `planned_date` and `task_id` are entirely independent --
+    either, both, or neither may be set on a given cost line."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        _, supply_role_id = _seed_roles()
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            supply_category_id = (
+                session.query(ResourceRole)
+                .filter(ResourceRole.id == supply_role_id)
+                .one()
+                .cost_category_id
+            )
+
+        estimate_id = cast(
+            int,
+            client.post(
+                f"/projects/{project_id}/estimates",
+                json={"kind": "initial", "currency_code": "EUR"},
+                headers=headers,
+            ).json()["id"],
+        )
+
+        # planned_date without task_id.
+        date_only_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "cost_category_id": supply_category_id,
+                "label": "Câble avec date",
+                "quantity": "1",
+                "unit_cost": "1",
+                "planned_date": "2026-10-01T00:00:00Z",
+            },
+            headers=headers,
+        )
+        assert date_only_response.status_code == 201
+        assert date_only_response.json()["task_id"] is None
+        assert date_only_response.json()["planned_date"].startswith("2026-10-01T00:00:00")
+
+        # task_id without planned_date.
+        task_only_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "task_id": 1,
+                "cost_category_id": supply_category_id,
+                "label": "Câble avec tâche",
+                "quantity": "1",
+                "unit_cost": "1",
+            },
+            headers=headers,
+        )
+        assert task_only_response.status_code == 201
+        assert task_only_response.json()["task_id"] == 1
+        assert task_only_response.json()["planned_date"] is None
+
+        # Neither set.
+        neither_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "cost_category_id": supply_category_id,
+                "label": "Câble sans date ni tâche",
+                "quantity": "1",
+                "unit_cost": "1",
+            },
+            headers=headers,
+        )
+        assert neither_response.status_code == 201
+        assert neither_response.json()["task_id"] is None
+        assert neither_response.json()["planned_date"] is None
+
+        # Both set.
+        both_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "task_id": 1,
+                "cost_category_id": supply_category_id,
+                "label": "Câble avec date et tâche",
+                "quantity": "1",
+                "unit_cost": "1",
+                "planned_date": "2026-11-15T08:30:00Z",
+            },
+            headers=headers,
+        )
+        assert both_response.status_code == 201
+        assert both_response.json()["task_id"] == 1
+        assert both_response.json()["planned_date"].startswith("2026-11-15T08:30:00")
+
+
+def test_estimate_cost_line_planned_date_is_editable_independently_of_task_id() -> None:
+    """Issue #66 (E6-05): `planned_date` is editable via PATCH independently of
+    `task_id`, and an explicit `null` clears it -- consistent with how `task_id`
+    already accepts an explicit `null` to detach a line from its task."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        _, supply_role_id = _seed_roles()
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            supply_category_id = (
+                session.query(ResourceRole)
+                .filter(ResourceRole.id == supply_role_id)
+                .one()
+                .cost_category_id
+            )
+
+        estimate_id = cast(
+            int,
+            client.post(
+                f"/projects/{project_id}/estimates",
+                json={"kind": "initial", "currency_code": "EUR"},
+                headers=headers,
+            ).json()["id"],
+        )
+
+        create_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "task_id": 1,
+                "cost_category_id": supply_category_id,
+                "label": "Câble",
+                "quantity": "1",
+                "unit_cost": "1",
+            },
+            headers=headers,
+        )
+        assert create_response.status_code == 201
+        cost_line_id = cast(int, create_response.json()["id"])
+        assert create_response.json()["planned_date"] is None
+
+        # Set planned_date without touching task_id.
+        set_date_response = client.patch(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines/{cost_line_id}",
+            json={"planned_date": "2026-12-01T00:00:00Z"},
+            headers=headers,
+        )
+        assert set_date_response.status_code == 200
+        assert set_date_response.json()["task_id"] == 1
+        assert set_date_response.json()["planned_date"].startswith("2026-12-01T00:00:00")
+
+        # Clear task_id without touching planned_date.
+        clear_task_response = client.patch(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines/{cost_line_id}",
+            json={"task_id": None},
+            headers=headers,
+        )
+        assert clear_task_response.status_code == 200
+        assert clear_task_response.json()["task_id"] is None
+        assert clear_task_response.json()["planned_date"].startswith("2026-12-01T00:00:00")
+
+        # Explicit null clears planned_date.
+        clear_date_response = client.patch(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines/{cost_line_id}",
+            json={"planned_date": None},
+            headers=headers,
+        )
+        assert clear_date_response.status_code == 200
+        assert clear_date_response.json()["planned_date"] is None
+
+
 def test_estimate_line_snapshot_carries_source_cost_code_id() -> None:
     """Issue #63 (E6-02): calculate_estimate_lines copies `cost_code_id` from its
     source (TaskRoleAssignment for labor, EstimateCostLine for non-labor) onto the

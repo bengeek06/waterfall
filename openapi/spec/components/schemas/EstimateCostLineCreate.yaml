@@ -28,3 +28,6 @@ properties:
     anyOf:
     - $ref: SupplyStatus.yaml
     - type: "null"
+  planned_date:
+    type: [string, "null"]
+    format: date-time

@@ -133,6 +133,7 @@ def to_estimate_cost_line_read(line: EstimateCostLine) -> EstimateCostLineRead:
         unit_cost=line.unit_cost,
         purchase_cost=line.purchase_cost,
         supply_status=cast(SupplyStatus | None, line.supply_status),
+        planned_date=line.planned_date,
     )
 
 

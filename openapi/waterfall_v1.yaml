@@ -4183,6 +4183,11 @@ components:
           anyOf:
             - $ref: '#/components/schemas/SupplyStatus'
             - type: 'null'
+        planned_date:
+          type:
+            - string
+            - 'null'
+          format: date-time
     EstimateCostLineUpdate:
       type: object
       properties:
@@ -4213,6 +4218,11 @@ components:
           anyOf:
             - $ref: '#/components/schemas/SupplyStatus'
             - type: 'null'
+        planned_date:
+          type:
+            - string
+            - 'null'
+          format: date-time
     EstimateCostLineRead:
       type: object
       required:
@@ -4269,6 +4279,11 @@ components:
           anyOf:
             - $ref: '#/components/schemas/SupplyStatus'
             - type: 'null'
+        planned_date:
+          type:
+            - string
+            - 'null'
+          format: date-time
     EstimateAggregatesRead:
       type: object
       required:

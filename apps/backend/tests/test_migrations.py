@@ -204,7 +204,7 @@ def test_migration_upgrade_creates_expected_schema() -> None:
 
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260909_0010"
+                == "20260909_0011"
             )
 
 
@@ -476,7 +476,7 @@ def test_calendar_default_flag_migration_backfills_standard_and_enforces_uniquen
 
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260909_0010"
+                == "20260909_0011"
             )
 
         # STANDARD is already backfilled to is_default=1 above, so a second row
@@ -959,7 +959,7 @@ def _assert_create_all_schema_can_be_stamped_by_migrate_up(database_url: str) ->
     _run_alembic(database_url, "head")
 
     with _disposable_engine(database_url) as engine, engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260909_0010"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260909_0011"
         standard = connection.execute(
             text("SELECT id, is_active, is_default FROM wf_calendar WHERE code = 'STANDARD'")
         ).one()
@@ -1079,7 +1079,7 @@ def test_legacy_prepare_reuses_empty_alembic_version_table() -> None:
         with _disposable_engine(database_url) as engine, engine.connect() as connection:
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260909_0010"
+                == "20260909_0011"
             )
 
 
@@ -1107,7 +1107,7 @@ def test_create_all_schema_before_planning_revision_is_repaired_then_migrated() 
         with _disposable_engine(database_url) as engine, engine.connect() as connection:
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260909_0010"
+                == "20260909_0011"
             )
             planning_columns = {
                 column["name"] for column in inspect(connection).get_columns("wf_planning")
@@ -1214,7 +1214,7 @@ def test_schema_revision_check_rejects_database_behind_head() -> None:
             assert_database_schema_current(engine)
 
     assert error.value.current_revision == "20260901_0005"
-    assert error.value.expected_revision == "20260909_0010"
+    assert error.value.expected_revision == "20260909_0011"
     assert "Run `make migrate-up`" in str(error.value)
 
 
@@ -1260,7 +1260,7 @@ def test_postgres_migration_upgrade_head_succeeds(postgres_database_url: str) ->
             "wf_estimate",
             "wf_estimate_task_row",
         }.issubset(table_names)
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260909_0010"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260909_0011"
 
 
 def test_postgres_project_external_uid_accepts_canonical_guid(
@@ -1397,7 +1397,7 @@ def test_project_cost_code_migration_backfills_root_from_code_and_prj_fallback()
 
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260909_0010"
+                == "20260909_0011"
             )
 
 
@@ -1820,3 +1820,93 @@ def test_postgres_cost_line_cost_code_migration_backfill_and_downgrade(
         for table_name in ("wf_task_role_assignment", "wf_estimate_cost_line", "wf_estimate_line"):
             columns = {column["name"] for column in inspector.get_columns(table_name)}
             assert "cost_code_id" in columns
+
+
+def test_estimate_cost_line_planned_date_migration_adds_nullable_column() -> None:
+    """Issue #66 (E6-05): the 20260909_0011 migration adds a nullable
+    `planned_date` column to `wf_estimate_cost_line` -- no backfill is possible
+    or required, a pre-existing row simply keeps `NULL`."""
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "migration.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        ids = _seed_project_root_and_cost_lines_at_revision(
+            database_url, "20260909_0010", project_name="Projet Date Prévisionnelle"
+        )
+
+        _run_alembic(database_url, "head")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            inspector = inspect(connection)
+            columns = {column["name"] for column in inspector.get_columns("wf_estimate_cost_line")}
+            assert "planned_date" in columns
+            assert (
+                connection.scalar(
+                    text("SELECT planned_date FROM wf_estimate_cost_line WHERE id = :id"),
+                    {"id": ids["cost_line_id"]},
+                )
+                is None
+            )
+
+
+def test_estimate_cost_line_planned_date_migration_is_reversible() -> None:
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "migration.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        _seed_project_root_and_cost_lines_at_revision(
+            database_url, "20260909_0010", project_name="Projet Date Réversible"
+        )
+        _run_alembic(database_url, "head")
+        _downgrade_alembic(database_url, "20260909_0010")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            inspector = inspect(connection)
+            columns = {column["name"] for column in inspector.get_columns("wf_estimate_cost_line")}
+            assert "planned_date" not in columns
+            assert (
+                connection.scalar(text("SELECT version_num FROM alembic_version"))
+                == "20260909_0010"
+            )
+
+        _run_alembic(database_url, "head")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            inspector = inspect(connection)
+            columns = {column["name"] for column in inspector.get_columns("wf_estimate_cost_line")}
+            assert "planned_date" in columns
+
+
+def test_postgres_estimate_cost_line_planned_date_migration_backfill_and_downgrade(
+    postgres_database_url: str,
+) -> None:
+    """PostgreSQL variant of the planned_date migration round trip."""
+    ids = _seed_project_root_and_cost_lines_at_revision(
+        postgres_database_url, "20260909_0010", project_name="Projet PG Date Prévisionnelle"
+    )
+
+    _run_alembic(postgres_database_url, "head")
+
+    with _disposable_engine(postgres_database_url) as engine, engine.connect() as connection:
+        inspector = inspect(connection)
+        columns = {column["name"] for column in inspector.get_columns("wf_estimate_cost_line")}
+        assert "planned_date" in columns
+        assert (
+            connection.scalar(
+                text("SELECT planned_date FROM wf_estimate_cost_line WHERE id = :id"),
+                {"id": ids["cost_line_id"]},
+            )
+            is None
+        )
+
+    _downgrade_alembic(postgres_database_url, "20260909_0010")
+
+    with _disposable_engine(postgres_database_url) as engine, engine.connect() as connection:
+        inspector = inspect(connection)
+        columns = {column["name"] for column in inspector.get_columns("wf_estimate_cost_line")}
+        assert "planned_date" not in columns
+
+    _run_alembic(postgres_database_url, "head")
+
+    with _disposable_engine(postgres_database_url) as engine, engine.connect() as connection:
+        inspector = inspect(connection)
+        columns = {column["name"] for column in inspector.get_columns("wf_estimate_cost_line")}
+        assert "planned_date" in columns
