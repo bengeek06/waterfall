@@ -5,25 +5,31 @@ from decimal import Decimal
 from typing import Any, cast
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 from httpx import Response
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from waterfall.db.session import get_session_factory
 from waterfall.main import app
 from waterfall.models.ms_core import MsProject, MsTask
 from waterfall.models.resources import (
+    Calendar,
+    CalendarWeekday,
     CostCategory,
     CostRate,
     CostType,
     Estimate,
     EstimateLine,
+    EstimateRoleAssignment,
     InflationRate,
     ProjectCostCode,
     ResourceNode,
     ResourceRole,
     TaskRoleAssignment,
 )
+from waterfall.services.calendar_schedule import resolve_task_calendar_ids
 from waterfall.services.estimate_calculation import (
     UNASSIGNED_COST_CODE_LABEL,
     calculate_estimate_aggregates,
@@ -136,15 +142,25 @@ def _seed_resources_with_rates() -> tuple[int, dict[int, dict[int, Decimal]]]:
 
 
 def _seed_task_role_assignment(
-    project_id: int, task_uid: int, role_id: int, quantity: str, hours: str
+    project_id: int,
+    task_uid: int,
+    role_id: int,
+    quantity: str,
+    hours: str,
+    *,
+    cost_code_id: int | None = None,
+    comment: str | None = None,
 ) -> int:
-    """Insert a `TaskRoleAssignment` directly via the ORM.
+    """Insert a legacy, project-wide `TaskRoleAssignment` directly via the ORM.
 
     E12-01 (#273) removed the `/tasks/{uid}/role-assignments` HTTP route this
-    module used to create these fixtures through; `TaskRoleAssignment` (and
-    `calculate_estimate_lines`'s own reading of it, unaffected by that issue) is
-    untouched, so this reaches directly into the DB instead of going through a
-    route that no longer exists.
+    module used to create these fixtures through. `calculate_estimate_lines`
+    no longer reads `TaskRoleAssignment` at all (E12-02/#274 moved it onto the
+    devis-scoped `EstimateRoleAssignment`, see `_seed_estimate_role_assignment`
+    below) -- this helper survives only to seed a pre-existing `TaskRoleAssignment`
+    a devis validation's project-wide resync
+    (`sync_task_role_assignments_from_estimate`) is expected to replace/remove/
+    update in place.
     """
     session_factory = get_session_factory()
     with session_factory() as session:
@@ -158,6 +174,45 @@ def _seed_task_role_assignment(
             role_id=role_id,
             quantity=Decimal(quantity),
             hours=Decimal(hours),
+            cost_code_id=cost_code_id,
+            comment=comment,
+        )
+        session.add(assignment)
+        session.commit()
+        return assignment.id
+
+
+def _seed_estimate_role_assignment(
+    project_id: int,
+    estimate_id: int,
+    task_uid: int,
+    role_id: int,
+    quantity: str,
+    hours: str,
+    *,
+    cost_code_id: int | None = None,
+    comment: str | None = None,
+) -> int:
+    """Insert an `EstimateRoleAssignment` directly via the ORM, scoped to `estimate_id`.
+
+    Mirrors `_seed_task_role_assignment` above, but on the devis-scoped table
+    `calculate_estimate_lines` reads from since E12-02/#274.
+    """
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        task = (
+            session.query(MsTask)
+            .filter(MsTask.project_id == project_id, MsTask.uid == task_uid)
+            .one()
+        )
+        assignment = EstimateRoleAssignment(
+            estimate_id=estimate_id,
+            task_id=task.id,
+            role_id=role_id,
+            quantity=Decimal(quantity),
+            hours=Decimal(hours),
+            cost_code_id=cost_code_id,
+            comment=comment,
         )
         session.add(assignment)
         session.commit()
@@ -217,7 +272,7 @@ def test_validation_rejects_assignments_outside_estimate_planning_snapshot() -> 
         assert estimate.status_code == 201
         estimate_payload = cast(dict[str, Any], estimate.json())
         estimate_id = cast(int, estimate_payload["id"])
-        _seed_task_role_assignment(project_id, 9999, labor_role_id, "1", "10")
+        _seed_estimate_role_assignment(project_id, estimate_id, 9999, labor_role_id, "1", "10")
 
         validation = client.post(
             f"/projects/{project_id}/estimates/{estimate_id}/validate",
@@ -293,7 +348,9 @@ def test_calculate_labor_lines_spanning_years() -> None:
         estimate_id = cast(int, estimate["id"])
 
         # Add task role assignment
-        _seed_task_role_assignment(project_id, task_uid, labor_role_id, "1", "1000")
+        _seed_estimate_role_assignment(
+            project_id, estimate_id, task_uid, labor_role_id, "1", "1000"
+        )
 
         # Validate and trigger calculation
         validate_response = client.post(
@@ -393,7 +450,9 @@ def test_calculate_labor_lines_across_two_years() -> None:
         estimate_id = cast(int, estimate["id"])
 
         # Add task role assignment with 1000 total hours
-        _seed_task_role_assignment(project_id, task_uid, labor_role_id, "1", "1000")
+        _seed_estimate_role_assignment(
+            project_id, estimate_id, task_uid, labor_role_id, "1", "1000"
+        )
 
         # Validate
         validate_response = client.post(
@@ -678,7 +737,7 @@ def test_validate_estimate_rejects_missing_cost_rate_and_persists_no_lines() -> 
         estimate = cast(dict[str, Any], create_response.json())
         estimate_id = cast(int, estimate["id"])
 
-        _seed_task_role_assignment(project_id, task_uid, labor_role_id, "1", "100")
+        _seed_estimate_role_assignment(project_id, estimate_id, task_uid, labor_role_id, "1", "100")
 
         with session_factory() as session:
             scheduled_task = (
@@ -810,15 +869,6 @@ def test_calculate_estimate_lines_lists_every_missing_rate_combination() -> None
             session.add(task)
             session.flush()
 
-            assignment = TaskRoleAssignment(
-                task_id=task.id,
-                role_id=labor_role.id,
-                cost_code_id=None,
-                quantity=Decimal("1"),
-                hours=Decimal("2000"),
-            )
-            session.add(assignment)
-
             estimate = Estimate(
                 project_id=project.id,
                 version_number=1,
@@ -827,6 +877,17 @@ def test_calculate_estimate_lines_lists_every_missing_rate_combination() -> None
                 currency_code="EUR",
             )
             session.add(estimate)
+            session.flush()
+
+            assignment = EstimateRoleAssignment(
+                estimate_id=estimate.id,
+                task_id=task.id,
+                role_id=labor_role.id,
+                cost_code_id=None,
+                quantity=Decimal("1"),
+                hours=Decimal("2000"),
+            )
+            session.add(assignment)
             session.commit()
             project_id = project.id
             estimate_id = estimate.id
@@ -940,3 +1001,542 @@ def test_non_labor_lines_validate_without_any_rate_coverage() -> None:
             assert len(lines) == 1
             assert lines[0].budget_cost == Decimal("125.00")
             assert lines[0].role_id is None
+
+
+def test_validating_one_draft_estimate_ignores_another_drafts_role_assignments() -> None:
+    """E12-02 (#274): two draft estimates of the same project may each carry their
+    own `EstimateRoleAssignment` for the very same task/role pair (E12-01/#273) --
+    validating one must never pull in lines calculated from the other's
+    assignments, even when both reference the exact same task and role.
+
+    Also covers the review finding that `get_estimate_validation_warnings` must
+    stay isolated the same way: an `EstimateRoleAssignment` on a *different*
+    task, carried by another draft estimate of the same project, must never be
+    mistaken for coverage of that task in the estimate being validated -- it
+    must still be reported as an uncovered-task warning."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        owner_id = _current_user_id(client, headers)
+        labor_role_id, _ = _seed_resources_with_rates()
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            project = MsProject(
+                owner_id=owner_id,
+                external_uid=None,
+                source_version=2016,
+                save_version_out=16,
+                name="Two drafts isolation",
+                schedule_from_start=True,
+                start_date=datetime(2026, 1, 1, 8, 0, tzinfo=UTC),
+                finish_date=datetime(2026, 12, 31, 18, 0, tzinfo=UTC),
+                calendar_uid=1,
+                minutes_per_day=480,
+                minutes_per_week=2400,
+                days_per_month=20,
+                currency_code="EUR",
+            )
+            session.add(project)
+            session.flush()
+
+            task = MsTask(
+                project_id=project.id,
+                uid=9301,
+                name="Shared task",
+                task_type=0,
+                outline_number="1",
+                outline_level=1,
+                wbs="1",
+                start_at=datetime(2026, 1, 1, 8, 0, tzinfo=UTC),
+                finish_at=datetime(2026, 1, 2, 18, 0, tzinfo=UTC),
+                is_summary=False,
+                is_milestone=False,
+                calendar_uid=1,
+            )
+            other_task = MsTask(
+                project_id=project.id,
+                uid=9302,
+                name="Other draft's task",
+                task_type=0,
+                outline_number="2",
+                outline_level=1,
+                wbs="2",
+                is_summary=False,
+                is_milestone=False,
+                calendar_uid=1,
+            )
+            session.add_all([task, other_task])
+            session.commit()
+            project_id = project.id
+            project_name = project.name
+            task_uid = task.uid
+            other_task_uid = other_task.uid
+
+        _seed_root_cost_code(session_factory, project_id, project_name)
+
+        create_v1 = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert create_v1.status_code == 201
+        estimate_v1_id = cast(int, create_v1.json()["id"])
+
+        create_v2 = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert create_v2.status_code == 201
+        estimate_v2_id = cast(int, create_v2.json()["id"])
+
+        _seed_estimate_role_assignment(
+            project_id, estimate_v1_id, task_uid, labor_role_id, "1", "100"
+        )
+        _seed_estimate_role_assignment(
+            project_id, estimate_v2_id, task_uid, labor_role_id, "1", "9999"
+        )
+        # v2-only assignment on a task v1 never references: must not falsely
+        # "cover" that task for v1's own uncovered-task warning below.
+        _seed_estimate_role_assignment(
+            project_id, estimate_v2_id, other_task_uid, labor_role_id, "1", "10"
+        )
+
+        validate_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_v1_id}/validate",
+            headers=headers,
+        )
+        assert validate_response.status_code == 200
+        # v1 has no assignment/cost line of its own for other_task -- v2's
+        # EstimateRoleAssignment on it must not mask this warning.
+        assert validate_response.json()["warnings"] == [
+            {"task_uid": other_task_uid, "task_name": "Other draft's task"}
+        ]
+
+        with session_factory() as session:
+            v1_lines = (
+                session.query(EstimateLine).filter(EstimateLine.estimate_id == estimate_v1_id).all()
+            )
+            assert len(v1_lines) == 1
+            # Reflects v1's own 100 hours, never v2's differing 9999.
+            assert v1_lines[0].hours == Decimal("100")
+
+            v2_lines = (
+                session.query(EstimateLine).filter(EstimateLine.estimate_id == estimate_v2_id).all()
+            )
+            assert v2_lines == []
+
+
+def test_validate_syncs_project_wide_task_role_assignments_from_this_estimate() -> None:
+    """E12-02 (#274): validating a devis makes the project's legacy, project-wide
+    `TaskRoleAssignment` reflect this estimate's own `EstimateRoleAssignment` rows
+    exactly -- a complete replacement, not an additive merge. A pre-existing
+    `TaskRoleAssignment` whose (task_id, role_id) pair is absent from this
+    estimate's assignments must be deleted outright, a pair present in the
+    estimate but with no `TaskRoleAssignment` counterpart yet must be created,
+    and a pair present in both must be updated in place -- same row `id`, new
+    `quantity`/`hours`/`cost_code_id`/`comment` (review finding: this branch of
+    `sync_task_role_assignments_from_estimate` was previously untested)."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        owner_id = _current_user_id(client, headers)
+        labor_role_id, _ = _seed_resources_with_rates()
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            project = MsProject(
+                owner_id=owner_id,
+                external_uid=None,
+                source_version=2016,
+                save_version_out=16,
+                name="Sync replacement",
+                schedule_from_start=True,
+                start_date=datetime(2026, 1, 1, 8, 0, tzinfo=UTC),
+                finish_date=datetime(2026, 12, 31, 18, 0, tzinfo=UTC),
+                calendar_uid=1,
+                minutes_per_day=480,
+                minutes_per_week=2400,
+                days_per_month=20,
+                currency_code="EUR",
+            )
+            session.add(project)
+            session.flush()
+
+            stale_task = MsTask(
+                project_id=project.id,
+                uid=9401,
+                name="Stale task",
+                task_type=0,
+                outline_number="1",
+                outline_level=1,
+                wbs="1",
+                start_at=datetime(2026, 1, 1, 8, 0, tzinfo=UTC),
+                finish_at=datetime(2026, 1, 2, 18, 0, tzinfo=UTC),
+                is_summary=False,
+                is_milestone=False,
+                calendar_uid=1,
+            )
+            new_task = MsTask(
+                project_id=project.id,
+                uid=9402,
+                name="New task",
+                task_type=0,
+                outline_number="2",
+                outline_level=1,
+                wbs="2",
+                start_at=datetime(2026, 1, 1, 8, 0, tzinfo=UTC),
+                finish_at=datetime(2026, 1, 2, 18, 0, tzinfo=UTC),
+                is_summary=False,
+                is_milestone=False,
+                calendar_uid=1,
+            )
+            updated_task = MsTask(
+                project_id=project.id,
+                uid=9403,
+                name="Updated task",
+                task_type=0,
+                outline_number="3",
+                outline_level=1,
+                wbs="3",
+                start_at=datetime(2026, 1, 1, 8, 0, tzinfo=UTC),
+                finish_at=datetime(2026, 1, 2, 18, 0, tzinfo=UTC),
+                is_summary=False,
+                is_milestone=False,
+                calendar_uid=1,
+            )
+            session.add_all([stale_task, new_task, updated_task])
+            session.commit()
+
+            project_id = project.id
+            project_name = project.name
+            new_task_id = new_task.id
+            new_task_uid = new_task.uid
+            stale_task_id = stale_task.id
+            stale_task_uid = stale_task.uid
+            updated_task_id = updated_task.id
+            updated_task_uid = updated_task.uid
+
+        _seed_root_cost_code(session_factory, project_id, project_name)
+
+        with session_factory() as session:
+            root_cost_code = (
+                session.query(ProjectCostCode)
+                .filter(
+                    ProjectCostCode.project_id == project_id,
+                    ProjectCostCode.parent_id.is_(None),
+                )
+                .one()
+            )
+            other_cost_code = ProjectCostCode(
+                project_id=project_id,
+                parent_id=root_cost_code.id,
+                code="SYNC-B",
+                name="Other cost code",
+            )
+            session.add(other_cost_code)
+            session.commit()
+            root_cost_code_id = root_cost_code.id
+            other_cost_code_id = other_cost_code.id
+
+        # Pre-existing project-wide assignment, e.g. from a backfill or an
+        # earlier devis validation -- absent from the devis validated below.
+        _seed_task_role_assignment(project_id, stale_task_uid, labor_role_id, "1", "50")
+
+        # Pre-existing project-wide assignment on the SAME (task, role) pair as
+        # an assignment carried by the devis validated below -- exercises the
+        # "update in place" branch of sync_task_role_assignments_from_estimate,
+        # as opposed to stale_task (deleted) and new_task (created).
+        updated_assignment_id = _seed_task_role_assignment(
+            project_id,
+            updated_task_uid,
+            labor_role_id,
+            "1",
+            "10",
+            cost_code_id=root_cost_code_id,
+        )
+
+        create_response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert create_response.status_code == 201
+        estimate_id = cast(int, create_response.json()["id"])
+
+        _seed_estimate_role_assignment(
+            project_id, estimate_id, new_task_uid, labor_role_id, "2", "80"
+        )
+        _seed_estimate_role_assignment(
+            project_id,
+            estimate_id,
+            updated_task_uid,
+            labor_role_id,
+            "5",
+            "99",
+            cost_code_id=other_cost_code_id,
+            comment="x",
+        )
+
+        validate_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/validate",
+            headers=headers,
+        )
+        assert validate_response.status_code == 200
+
+        with session_factory() as session:
+            remaining = (
+                session.query(TaskRoleAssignment)
+                .join(MsTask, TaskRoleAssignment.task_id == MsTask.id)
+                .filter(MsTask.project_id == project_id)
+                .all()
+            )
+            remaining_pairs = {(row.task_id, row.role_id) for row in remaining}
+            # The stale (task, role) pair is gone; only the validated devis'
+            # own pairs remain.
+            assert remaining_pairs == {
+                (new_task_id, labor_role_id),
+                (updated_task_id, labor_role_id),
+            }
+            assert all(row.task_id != stale_task_id for row in remaining)
+
+            synced = next(row for row in remaining if row.task_id == new_task_id)
+            assert synced.quantity == Decimal("2")
+            assert synced.hours == Decimal("80")
+
+            updated = next(row for row in remaining if row.task_id == updated_task_id)
+            # Same row id: updated in place, never deleted and recreated.
+            assert updated.id == updated_assignment_id
+            assert updated.quantity == Decimal("5")
+            assert updated.hours == Decimal("99")
+            assert updated.cost_code_id == other_cost_code_id
+            assert updated.comment == "x"
+
+
+def test_validate_reports_409_when_task_role_assignment_sync_conflicts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review finding (Basse, #274): `validate_project_estimate` must guard its
+    call to `sync_task_role_assignments_from_estimate` with the same
+    `except IntegrityError` -> 409 pattern every sibling `EstimateRoleAssignment`
+    write in this module already follows
+    (`create_estimate_role_assignment`/`update_estimate_role_assignment`),
+    rather than letting an `IntegrityError` from the resync escape as an
+    uncaught 500.
+
+    A genuine unique/FK-constraint violation from the resync itself would
+    require a real concurrent writer racing it; monkeypatching the sync
+    function to raise for the duration of this one request is the narrower,
+    deterministic way to exercise this specific `except` branch (same
+    approach as `test_reopen_integrity_conflict_gets_its_own_structured_code`
+    in `test_planning_structure.py`)."""
+    import waterfall.api.routes.estimates as estimates_route
+
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        owner_id = _current_user_id(client, headers)
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            project = MsProject(
+                owner_id=owner_id,
+                external_uid=None,
+                source_version=2016,
+                save_version_out=16,
+                name="Sync conflict",
+                schedule_from_start=True,
+                start_date=datetime(2026, 1, 1, 8, 0, tzinfo=UTC),
+                finish_date=datetime(2026, 12, 31, 18, 0, tzinfo=UTC),
+                calendar_uid=1,
+                minutes_per_day=480,
+                minutes_per_week=2400,
+                days_per_month=20,
+                currency_code="EUR",
+            )
+            session.add(project)
+            session.commit()
+            project_id = project.id
+            project_name = project.name
+
+        _seed_root_cost_code(session_factory, project_id, project_name)
+
+        create_response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert create_response.status_code == 201
+        estimate_id = cast(int, create_response.json()["id"])
+
+        def _raise_integrity_error(*_args: object, **_kwargs: object) -> None:
+            raise IntegrityError(
+                "INSERT INTO wf_task_role_assignment ...", {}, Exception("conflict")
+            )
+
+        monkeypatch.setattr(
+            estimates_route, "sync_task_role_assignments_from_estimate", _raise_integrity_error
+        )
+        response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/validate",
+            headers=headers,
+        )
+        monkeypatch.undo()
+
+        assert response.status_code == 409
+        # A plain-string `detail` is rewritten into this opaque placeholder by
+        # `_generic_http_exception_handler` before it reaches an HTTP client
+        # (same rationale as `format_missing_rate_message`'s docstring) -- the
+        # actionable message only ever appears in application logs.
+        assert response.json()["detail"] == {"code": "GENERIC_ERROR"}
+
+        with session_factory() as session:
+            estimate = session.query(Estimate).filter(Estimate.id == estimate_id).one()
+            # The whole transaction rolled back: the estimate must remain a draft.
+            assert estimate.status == "draft"
+
+
+def test_validate_syncs_task_role_assignments_reflecting_this_estimates_calendars() -> None:
+    """E12-02 (#274) end-to-end: after validating a devis, `resolve_task_calendar_ids`
+    (`services/calendar_schedule.py`, unchanged and still reading exclusively from
+    `TaskRoleAssignment`) resolves each task's calendar from the newly
+    synchronized, project-wide `TaskRoleAssignment` rows -- which now mirror this
+    devis's own `EstimateRoleAssignment`, keeping planning calendar resolution
+    representative of the last officially validated devis."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        owner_id = _current_user_id(client, headers)
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            project = MsProject(
+                owner_id=owner_id,
+                external_uid=None,
+                source_version=2016,
+                save_version_out=16,
+                name="Calendar sync",
+                schedule_from_start=True,
+                start_date=datetime(2026, 1, 1, 8, 0, tzinfo=UTC),
+                finish_date=datetime(2026, 12, 31, 18, 0, tzinfo=UTC),
+                calendar_uid=1,
+                minutes_per_day=480,
+                minutes_per_week=2400,
+                days_per_month=20,
+                currency_code="EUR",
+            )
+            session.add(project)
+            session.flush()
+
+            calendar_a = Calendar(code="CAL-A", name="Calendar A", weeks_per_year=47)
+            calendar_b = Calendar(code="CAL-B", name="Calendar B", weeks_per_year=47)
+            session.add_all([calendar_a, calendar_b])
+            session.flush()
+            session.add_all(
+                CalendarWeekday(
+                    calendar_id=calendar.id, day_type=day_type, hours_per_day=Decimal("7.00")
+                )
+                for calendar in (calendar_a, calendar_b)
+                for day_type in range(1, 8)
+            )
+
+            root = ResourceNode(code="DIRECTION-CAL", name="Direction")
+            session.add(root)
+            session.flush()
+            labor_type = CostType(code="MO-CAL", name="Main d'oeuvre", kind="labor")
+            session.add(labor_type)
+            session.flush()
+            labor_category = CostCategory(
+                cost_type_id=labor_type.id,
+                accounting_code="MO-DEV-CAL",
+                category_code="IDEX",
+                name="Développement",
+            )
+            session.add(labor_category)
+            session.flush()
+            role_a = ResourceRole(
+                node_id=root.id,
+                cost_category_id=labor_category.id,
+                calendar_id=calendar_a.id,
+                name="Role A",
+            )
+            role_b = ResourceRole(
+                node_id=root.id,
+                cost_category_id=labor_category.id,
+                calendar_id=calendar_b.id,
+                name="Role B",
+            )
+            session.add_all([role_a, role_b])
+            session.flush()
+
+            session.add(
+                CostRate(
+                    cost_category_id=labor_category.id,
+                    year=2026,
+                    hourly_rate=Decimal("100.00"),
+                    currency_code="EUR",
+                )
+            )
+            session.add(InflationRate(year=2026, coefficient=Decimal("1.0")))
+
+            task_a = MsTask(
+                project_id=project.id,
+                uid=9501,
+                name="Task A",
+                task_type=0,
+                outline_number="1",
+                outline_level=1,
+                wbs="1",
+                start_at=datetime(2026, 1, 1, 8, 0, tzinfo=UTC),
+                finish_at=datetime(2026, 1, 2, 18, 0, tzinfo=UTC),
+                is_summary=False,
+                is_milestone=False,
+                calendar_uid=1,
+            )
+            task_b = MsTask(
+                project_id=project.id,
+                uid=9502,
+                name="Task B",
+                task_type=0,
+                outline_number="2",
+                outline_level=1,
+                wbs="2",
+                start_at=datetime(2026, 1, 1, 8, 0, tzinfo=UTC),
+                finish_at=datetime(2026, 1, 2, 18, 0, tzinfo=UTC),
+                is_summary=False,
+                is_milestone=False,
+                calendar_uid=1,
+            )
+            session.add_all([task_a, task_b])
+            session.commit()
+
+            project_id = project.id
+            project_name = project.name
+            task_a_uid = task_a.uid
+            task_b_uid = task_b.uid
+            role_a_id = role_a.id
+            role_b_id = role_b.id
+            calendar_a_id = calendar_a.id
+            calendar_b_id = calendar_b.id
+
+        _seed_root_cost_code(session_factory, project_id, project_name)
+
+        create_response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert create_response.status_code == 201
+        estimate_id = cast(int, create_response.json()["id"])
+
+        _seed_estimate_role_assignment(project_id, estimate_id, task_a_uid, role_a_id, "1", "10")
+        _seed_estimate_role_assignment(project_id, estimate_id, task_b_uid, role_b_id, "1", "10")
+
+        validate_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/validate",
+            headers=headers,
+        )
+        assert validate_response.status_code == 200
+
+        with session_factory() as session:
+            resolved = resolve_task_calendar_ids(session, project_id, {task_a_uid, task_b_uid})
+
+        assert resolved[task_a_uid] == calendar_a_id
+        assert resolved[task_b_uid] == calendar_b_id

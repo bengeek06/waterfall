@@ -6,7 +6,7 @@ from typing import TypedDict
 
 from sqlalchemy.orm import Session
 
-from waterfall.models.ms_core import MsProject, MsTask
+from waterfall.models.ms_core import MsTask
 from waterfall.models.planning import WfPlanningTaskSnapshot
 from waterfall.models.resources import (
     CostCategory,
@@ -14,6 +14,7 @@ from waterfall.models.resources import (
     CostType,
     EstimateCostLine,
     EstimateLine,
+    EstimateRoleAssignment,
     InflationRate,
     ProjectCostCode,
     ResourceRole,
@@ -188,17 +189,18 @@ def calculate_estimate_lines(db: Session, estimate_id: int) -> list[EstimateLine
     from waterfall.models.resources import Estimate
 
     estimate = db.query(Estimate).filter(Estimate.id == estimate_id).one()
-    project = db.query(MsProject).filter(MsProject.id == estimate.project_id).one()
 
     lines: list[EstimateLine] = []
 
-    # 1. Process labor (MO) lines from task role assignments
+    # 1. Process labor (MO) lines from this estimate's own role assignments
+    # (E12-02/#274: EstimateRoleAssignment is devis-version-scoped, unlike the
+    # legacy project-wide TaskRoleAssignment it replaces here).
     assignments = (
-        db.query(TaskRoleAssignment, MsTask, ResourceRole, CostCategory)
-        .join(MsTask, TaskRoleAssignment.task_id == MsTask.id)
-        .join(ResourceRole, TaskRoleAssignment.role_id == ResourceRole.id)
+        db.query(EstimateRoleAssignment, MsTask, ResourceRole, CostCategory)
+        .join(MsTask, EstimateRoleAssignment.task_id == MsTask.id)
+        .join(ResourceRole, EstimateRoleAssignment.role_id == ResourceRole.id)
         .join(CostCategory, ResourceRole.cost_category_id == CostCategory.id)
-        .filter(MsTask.project_id == project.id)
+        .filter(EstimateRoleAssignment.estimate_id == estimate_id)
         .all()
     )
 
@@ -282,7 +284,7 @@ def calculate_estimate_lines(db: Session, estimate_id: int) -> list[EstimateLine
 def _generate_labor_lines(
     db: Session,
     estimate_id: int,
-    assignment: TaskRoleAssignment,
+    assignment: EstimateRoleAssignment,
     task: MsTask,
     role: ResourceRole,
     category: CostCategory,
@@ -341,7 +343,7 @@ def _generate_labor_lines(
             role_code=role.name,
             role_name=role.name,
             accounting_code=category.accounting_code,
-            # Issue #63 (E6-02): snapshot the source TaskRoleAssignment's
+            # Issue #63 (E6-02): snapshot the source EstimateRoleAssignment's
             # cost-imputation code at validation time, independently of
             # accounting_code above.
             cost_code_id=assignment.cost_code_id,
@@ -355,6 +357,78 @@ def _generate_labor_lines(
         lines.append(line)
 
     return lines
+
+
+def sync_task_role_assignments_from_estimate(
+    db: Session, project_id: int, estimate_id: int
+) -> None:
+    """Resynchronize the legacy, project-wide ``TaskRoleAssignment`` from the
+    devis-version-scoped ``EstimateRoleAssignment`` rows of the estimate that
+    just got validated (E12-02/#274).
+
+    Called by ``validate_project_estimate`` (``api/routes/estimates.py``) right
+    after ``calculate_estimate_lines`` succeeds, in the same transaction: a
+    validated devis is the project's new officially staffed plan, and
+    ``TaskRoleAssignment`` must end up reflecting it *exactly* -- this is a
+    full replacement, not an additive merge, since it is also the table
+    ``services/calendar_schedule.py::resolve_task_calendar_ids`` reads from to
+    resolve a task's working calendar for planning/export purposes.
+
+    For every ``(task_id, role_id)`` pair carried by this estimate's
+    ``EstimateRoleAssignment`` rows: updates the matching ``TaskRoleAssignment``
+    row's ``quantity``/``hours``/``cost_code_id``/``comment`` if one already
+    exists (``TaskRoleAssignment`` is unique on ``(task_id, role_id)``,
+    project-wide, never scoped by estimate), or creates one. Any
+    ``TaskRoleAssignment`` of the project whose ``(task_id, role_id)`` pair is
+    *not* among them is deleted outright -- a deliberate, project-wide side
+    effect of validating a devis (see the E12 epic scoping), not a
+    per-assignment operation.
+    """
+    assignments = (
+        db.query(EstimateRoleAssignment)
+        .filter(EstimateRoleAssignment.estimate_id == estimate_id)
+        .all()
+    )
+    assignment_by_pair = {
+        (assignment.task_id, assignment.role_id): assignment for assignment in assignments
+    }
+
+    existing_assignments = (
+        db.query(TaskRoleAssignment)
+        .join(MsTask, TaskRoleAssignment.task_id == MsTask.id)
+        .filter(MsTask.project_id == project_id)
+        .all()
+    )
+    existing_by_pair = {
+        (existing.task_id, existing.role_id): existing for existing in existing_assignments
+    }
+
+    for pair, assignment in assignment_by_pair.items():
+        existing = existing_by_pair.get(pair)
+        if existing is not None:
+            existing.quantity = assignment.quantity
+            existing.hours = assignment.hours
+            existing.cost_code_id = assignment.cost_code_id
+            existing.comment = assignment.comment
+            db.add(existing)
+        else:
+            task_id, role_id = pair
+            db.add(
+                TaskRoleAssignment(
+                    task_id=task_id,
+                    role_id=role_id,
+                    cost_code_id=assignment.cost_code_id,
+                    quantity=assignment.quantity,
+                    hours=assignment.hours,
+                    comment=assignment.comment,
+                )
+            )
+
+    for pair, existing in existing_by_pair.items():
+        if pair not in assignment_by_pair:
+            db.delete(existing)
+
+    db.flush()
 
 
 class EstimateAggregates(TypedDict):
@@ -436,16 +510,18 @@ def get_estimate_validation_warnings(
     """
     Issue #65 (E6-04): flag every "real" planning task (excludes summaries and
     milestones, per `MsTask.is_summary`/`MsTask.is_milestone`) that has
-    neither a `TaskRoleAssignment` nor an `EstimateCostLine.task_id` of this
-    estimate referencing it -- i.e. a task the pricing exercise likely forgot.
+    neither an `EstimateRoleAssignment` nor an `EstimateCostLine.task_id` of
+    this estimate referencing it -- i.e. a task the pricing exercise likely
+    forgot.
 
     Purely advisory: this never blocks `POST .../validate`, it only backs a
     non-blocking warning surfaced to the user after validation succeeds.
 
-    Role assignments are looked up project-wide (a `TaskRoleAssignment` isn't
-    scoped to a single estimate version), while cost lines are scoped to
-    `estimate_id` -- matching exactly what `calculate_estimate_lines` itself
-    reads from for this same estimate.
+    Role assignments and cost lines are now both scoped to `estimate_id`
+    (E12-02/#274: `EstimateRoleAssignment` is devis-version-scoped, unlike the
+    legacy project-wide `TaskRoleAssignment` this used to read from) --
+    matching exactly what `calculate_estimate_lines` itself reads from for
+    this same estimate.
     """
     tasks = (
         db.query(MsTask)
@@ -459,8 +535,9 @@ def get_estimate_validation_warnings(
 
     assigned_task_ids = {
         task_id
-        for (task_id,) in db.query(TaskRoleAssignment.task_id)
-        .join(MsTask, TaskRoleAssignment.task_id == MsTask.id)
+        for (task_id,) in db.query(EstimateRoleAssignment.task_id)
+        .join(MsTask, EstimateRoleAssignment.task_id == MsTask.id)
+        .filter(EstimateRoleAssignment.estimate_id == estimate_id)
         .filter(MsTask.project_id == project_id)
         .all()
     }

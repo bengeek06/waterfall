@@ -111,6 +111,7 @@ from waterfall.services import (
     missing_rate_coverage_detail,
     parse_estimate_reconciliation_workbook,
     replace_task_predecessor_links,
+    sync_task_role_assignments_from_estimate,
 )
 from waterfall.services.estimate_reconciliation_export import _scoped_task_role_assignments
 from waterfall.services.project_lifecycle import ensure_project_mutable
@@ -295,15 +296,32 @@ def validate_project_estimate(
     warnings = get_estimate_validation_warnings(db, project_id, estimate_id)
     db.add_all(estimate_lines)
     db.flush()
+    # E12-02/#274: resynchronize the legacy, project-wide TaskRoleAssignment from
+    # this estimate's own EstimateRoleAssignment rows -- in the same transaction
+    # as the calculation above, so a later failure in this function never commits
+    # a status change without the matching resync, or vice versa.
+    try:
+        sync_task_role_assignments_from_estimate(db, project_id, estimate_id)
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Role assignment synchronization conflicts with existing data",
+        ) from exc
     estimate.status = "validated"
     estimate.validated_at = datetime.now(UTC)
     db.add(estimate)
-    db.commit()
-    db.refresh(estimate)
-    return EstimateValidationRead(
+    # Issue #262: build the full response while the row locks are still held,
+    # commit last -- never the commit-then-refresh pattern this function used
+    # to follow. Every field to_project_estimate_read needs is already in
+    # memory from the status/validated_at assignments above.
+    db.flush()
+    response = EstimateValidationRead(
         **to_project_estimate_read(estimate).model_dump(),
         warnings=warnings,
     )
+    db.commit()
+    return response
 
 
 @router.post("/{project_id}/estimates/{estimate_id}/reference", response_model=ProjectRead)

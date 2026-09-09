@@ -155,8 +155,10 @@ def _write_headers(sheet: Worksheet, headers: list[str]) -> None:
 def _scoped_task_role_assignments(
     db: Session, project: MsProject, estimate: Estimate
 ) -> list[_LaborAssignmentRow]:
-    """Same task/planning scoping as `calculate_estimate_lines`'s labor step (#69),
-    without its cost calculation -- only the identification of relevant MO lines.
+    """Reads the legacy, project-wide `TaskRoleAssignment` (#69) -- not yet the
+    devis-scoped `EstimateRoleAssignment` introduced by E12-01/#273 and read by
+    `calculate_estimate_lines` since E12-02/#274. Migrating this export (and the
+    reconciliation import) to the new model is E12-03/#275's scope.
 
     Unlike `calculate_estimate_lines`, an assignment whose task uid falls outside
     the estimate's source planning snapshot is never excluded here: this export is
