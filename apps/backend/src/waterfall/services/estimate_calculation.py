@@ -18,6 +18,7 @@ from waterfall.models.resources import (
     ResourceRole,
     TaskRoleAssignment,
 )
+from waterfall.schemas.projects import EstimateValidationWarning
 from waterfall.schemas.resources import CostTypeKind
 
 
@@ -225,3 +226,53 @@ def calculate_estimate_aggregates(db: Session, estimate_id: int) -> EstimateAggr
         "total_unburdened_cost": total_unburdened_cost,
         "by_category": by_category,
     }
+
+
+def get_estimate_validation_warnings(
+    db: Session, project_id: int, estimate_id: int
+) -> list[EstimateValidationWarning]:
+    """
+    Issue #65 (E6-04): flag every "real" planning task (excludes summaries and
+    milestones, per `MsTask.is_summary`/`MsTask.is_milestone`) that has
+    neither a `TaskRoleAssignment` nor an `EstimateCostLine.task_id` of this
+    estimate referencing it -- i.e. a task the pricing exercise likely forgot.
+
+    Purely advisory: this never blocks `POST .../validate`, it only backs a
+    non-blocking warning surfaced to the user after validation succeeds.
+
+    Role assignments are looked up project-wide (a `TaskRoleAssignment` isn't
+    scoped to a single estimate version), while cost lines are scoped to
+    `estimate_id` -- matching exactly what `calculate_estimate_lines` itself
+    reads from for this same estimate.
+    """
+    tasks = (
+        db.query(MsTask)
+        .filter(MsTask.project_id == project_id)
+        .filter(MsTask.is_summary.is_(False))
+        .filter(MsTask.is_milestone.is_(False))
+        .all()
+    )
+    if not tasks:
+        return []
+
+    assigned_task_ids = {
+        task_id
+        for (task_id,) in db.query(TaskRoleAssignment.task_id)
+        .join(MsTask, TaskRoleAssignment.task_id == MsTask.id)
+        .filter(MsTask.project_id == project_id)
+        .all()
+    }
+    costed_task_ids = {
+        task_id
+        for (task_id,) in db.query(EstimateCostLine.task_id)
+        .filter(EstimateCostLine.estimate_id == estimate_id)
+        .filter(EstimateCostLine.task_id.isnot(None))
+        .all()
+    }
+    covered_task_ids = assigned_task_ids | costed_task_ids
+
+    return [
+        EstimateValidationWarning(task_uid=task.uid, task_name=task.name)
+        for task in tasks
+        if task.id not in covered_task_ids
+    ]

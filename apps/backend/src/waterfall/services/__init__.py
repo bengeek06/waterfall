@@ -13,6 +13,7 @@ from waterfall.services.estimate_calculation import (
     EstimateAggregates,
     calculate_estimate_aggregates,
     calculate_estimate_lines,
+    get_estimate_validation_warnings,
 )
 from waterfall.services.estimate_export import build_estimate_workbook
 from waterfall.services.pagination import PaginationResult, apply_pagination
@@ -54,6 +55,7 @@ __all__ = [
     "EstimateAggregates",
     "calculate_estimate_lines",
     "calculate_estimate_aggregates",
+    "get_estimate_validation_warnings",
     "build_estimate_workbook",
     "PaginationResult",
     "apply_pagination",

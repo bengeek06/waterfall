@@ -7,6 +7,7 @@ import {
   createProjectEstimate,
   deleteEstimateCostLine,
   EstimateCostLine,
+  EstimateValidationWarning,
   exportEstimateExcel,
   getProjectCostCodes,
   Project,
@@ -72,6 +73,7 @@ export function useEstimateCostLines({
   const [selectedCostLineIds, setSelectedCostLineIds] = useState<Set<number>>(new Set());
   const [bulkCostCodeId, setBulkCostCodeId] = useState("");
   const [bulkAssignBusy, setBulkAssignBusy] = useState(false);
+  const [validationWarnings, setValidationWarnings] = useState<EstimateValidationWarning[]>([]);
 
   const selectedEstimate = estimates.find((estimate) => estimate.id === selectedEstimateId) ?? null;
 
@@ -103,6 +105,9 @@ export function useEstimateCostLines({
   if (selectedEstimateId !== renderedEstimateId) {
     setRenderedEstimateId(selectedEstimateId);
     setSelectedCostLineIds(new Set());
+    // A validation warning banner on one estimate version has no meaning once the user
+    // switches to another version -- same rationale as the selection reset above.
+    setValidationWarnings([]);
   }
   // Read through this ref (not `selectedEstimateId` directly) after an `await` in
   // `bulkAssignCostCode`: the estimate version can switch while a bulk PATCH batch is
@@ -146,6 +151,9 @@ export function useEstimateCostLines({
   }
   function openEstimateValidation() {
     setEstimateValidationOpen(true);
+  }
+  function dismissValidationWarnings() {
+    setValidationWarnings([]);
   }
 
   function updateBulkCostCodeId(value: string) {
@@ -397,19 +405,31 @@ export function useEstimateCostLines({
     if (!session || selectedEstimateId === null) {
       return;
     }
+    const launchedEstimateId = selectedEstimateId;
 
     setEstimateBusy(true);
     setError(null);
     try {
-      const validated = await validateProjectEstimate(projectId, selectedEstimateId, session, onSessionRefresh);
+      const validated = await validateProjectEstimate(projectId, launchedEstimateId, session, onSessionRefresh);
       setEstimates((previous) => previous.map((item) => (item.id === validated.id ? validated : item)));
+      // The estimate version may have changed while this request was in flight (nothing
+      // disables the version selector while busy, same as bulkAssignCostCode above) -- a
+      // stale response's warning banner must never be attributed to whatever version is
+      // displayed now. Purely informative, never blocks the validation above from
+      // succeeding -- see dismissValidationWarnings for how the banner gets
+      // acknowledged/closed.
+      if (selectedEstimateIdRef.current === launchedEstimateId) {
+        setValidationWarnings(validated.warnings ?? []);
+      }
     } catch (cause) {
       if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
         clearSession();
         router.push("/login");
         return;
       }
-      setError(cause instanceof ApiError ? cause.message : "Impossible de valider le devis.");
+      if (selectedEstimateIdRef.current === launchedEstimateId) {
+        setError(cause instanceof ApiError ? cause.message : "Impossible de valider le devis.");
+      }
     } finally {
       setEstimateBusy(false);
     }
@@ -429,6 +449,8 @@ export function useEstimateCostLines({
     setSelectedCostLineIds,
     bulkCostCodeId,
     bulkAssignBusy,
+    validationWarnings,
+    dismissValidationWarnings,
     updateBulkCostCodeId,
     bulkAssignCostCode,
     updateCostLineDraftCategory,

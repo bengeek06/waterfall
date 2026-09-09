@@ -1152,11 +1152,15 @@
     - $ref: ../components/parameters/EstimateId.yaml
     responses:
       '200':
-        description: Devis validé
+        description: >-
+          Devis validé. `warnings` (issue #65, E6-04) liste les tâches
+          "réelles" du planning (ni récapitulatives ni jalons) sans
+          affectation de rôle ni ligne de coût rattachée -- purement
+          informatif, n'a jamais empêché cette validation d'aboutir.
         content:
           application/json:
             schema:
-              $ref: ../components/schemas/ProjectEstimateRead.yaml
+              $ref: ../components/schemas/EstimateValidationRead.yaml
       '401':
         $ref: ../components/responses/Unauthorized.yaml
       '404':

@@ -1,0 +1,15 @@
+type: object
+required:
+- task_uid
+- task_name
+properties:
+  task_uid:
+    type: integer
+  task_name:
+    type: string
+description: |-
+  Issue #65 (E6-04) : une tache "reelle" du planning (ni recapitulative ni
+  jalon) qui n'a ni affectation de role (`TaskRoleAssignment`) ni ligne de
+  cout de ce devis (`EstimateCostLine.task_id`) la referencant -- c'est-a-dire
+  une tache probablement oubliee lors du chiffrage. Purement informatif :
+  n'empeche jamais la validation d'aboutir.

@@ -1000,13 +1000,19 @@ export function deleteEstimateCostLine(
   );
 }
 
+// #65 (E6-04): `validate` returns `warnings` (unassigned real tasks) on top of the usual
+// `ProjectEstimateRead` fields -- distinct from `ProjectEstimate` since no other estimate
+// endpoint computes/returns this field.
+export type EstimateValidationWarning = components["schemas"]["EstimateValidationWarning"];
+export type EstimateValidationResult = components["schemas"]["EstimateValidationRead"];
+
 export function validateProjectEstimate(
   projectId: number,
   estimateId: number,
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
 ) {
-  return authRequest<ProjectEstimate>(
+  return authRequest<EstimateValidationResult>(
     `/projects/${projectId}/estimates/${estimateId}/validate`,
     tokens,
     { method: "POST" },

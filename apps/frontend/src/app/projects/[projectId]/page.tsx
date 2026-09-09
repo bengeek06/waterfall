@@ -678,6 +678,8 @@ export default function ProjectDetailsPage() {
           canEditEstimate={canEditEstimate}
           estimateBusy={estimateCostLines.estimateBusy}
           onOpenValidation={estimateCostLines.openEstimateValidation}
+          validationWarnings={estimateCostLines.validationWarnings}
+          onDismissValidationWarnings={estimateCostLines.dismissValidationWarnings}
           estimateTaskRowCount={estimateTaskRowCount}
           costLines={costLines}
           costCategories={costCategories}
