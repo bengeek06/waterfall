@@ -784,6 +784,57 @@ class EstimateAggregatesRead(BaseModel):
     by_category: dict[str, Decimal]
 
 
+class ReconciliationIssue(BaseModel):
+    """One structured entry of a `ReconciliationPlanRead` list (E6-09/#70).
+
+    ``sheet``/``row`` let the caller point the user at the exact Excel cell a
+    problem or an ignored change came from (``row`` is the 1-based Excel row
+    number, i.e. counting the header row); both are `None` for an issue that
+    isn't scoped to a single file row (e.g. a precondition on the whole
+    import, or an existing-row deletion, which by definition has no row left
+    in the file to point at).
+    """
+
+    code: str
+    message: str
+    sheet: str | None = None
+    row: int | None = None
+
+
+class ReconciliationPlanRead(BaseModel):
+    """Diagnostic + outcome of an estimate reconciliation import (E6-09/#70).
+
+    Returned by both `POST .../import-reconciliation/preview` (always
+    `applied=False`, nothing written) and `POST .../import-reconciliation/confirm`
+    (`applied=True` once committed) -- the two endpoints run the exact same
+    analysis on the same file, so a preview accurately predicts what a
+    confirm on the same, unmodified file will do. `blocking_issues` non-empty
+    means nothing was, or will be, written: a `confirm` in that state reports
+    `applied=False` and responds with a non-2xx status instead of a
+    misleadingly successful one.
+
+    The `_to_create`/`_to_update`/`_to_delete` fields describe the plan as
+    computed from the file diff, independently of whether every individual
+    change could actually be applied -- an apply-time failure on one specific
+    row (e.g. a task deletion blocked by a cascade or a reference) is
+    reported as its own `blocking_issues` entry rather than by shrinking
+    these counts, since `blocking_issues` non-empty already means none of
+    them were kept.
+    """
+
+    blocking_issues: list[ReconciliationIssue] = Field(default_factory=list)
+    warnings: list[ReconciliationIssue] = Field(default_factory=list)
+    tasks_to_create: int = 0
+    tasks_to_delete: list[Annotated[int, Field(ge=1)]] = Field(default_factory=list)
+    labor_to_create: int = 0
+    labor_to_update: list[Annotated[int, Field(ge=1)]] = Field(default_factory=list)
+    labor_to_delete: list[Annotated[int, Field(ge=1)]] = Field(default_factory=list)
+    non_labor_to_create: int = 0
+    non_labor_to_update: list[Annotated[int, Field(ge=1)]] = Field(default_factory=list)
+    non_labor_to_delete: list[Annotated[int, Field(ge=1)]] = Field(default_factory=list)
+    applied: bool = False
+
+
 class ProjectCostCodeBase(BaseModel):
     code: str = Field(min_length=1, max_length=64)
     name: str = Field(min_length=1, max_length=255)

@@ -19,6 +19,14 @@ from waterfall.services.estimate_export import build_estimate_workbook
 from waterfall.services.estimate_reconciliation_export import (
     build_estimate_reconciliation_workbook,
 )
+from waterfall.services.estimate_reconciliation_import import (
+    CostLineFileRow,
+    EstimateReconciliationFormatError,
+    LaborFileRow,
+    ParsedReconciliationWorkbook,
+    TaskFileRow,
+    parse_estimate_reconciliation_workbook,
+)
 from waterfall.services.pagination import PaginationResult, apply_pagination
 from waterfall.services.planning_links import (
     PlanningLinkError,
@@ -61,6 +69,12 @@ __all__ = [
     "get_estimate_validation_warnings",
     "build_estimate_workbook",
     "build_estimate_reconciliation_workbook",
+    "CostLineFileRow",
+    "EstimateReconciliationFormatError",
+    "LaborFileRow",
+    "ParsedReconciliationWorkbook",
+    "TaskFileRow",
+    "parse_estimate_reconciliation_workbook",
     "PaginationResult",
     "apply_pagination",
     "generate_planning_snapshot",

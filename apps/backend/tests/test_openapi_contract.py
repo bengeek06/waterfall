@@ -1,17 +1,25 @@
 import re
 from collections.abc import Set
+from io import BytesIO
 from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
 
+import pytest
 import yaml
 from fastapi.testclient import TestClient
+from openpyxl import load_workbook
 
+from waterfall.api.routes import estimates
 from waterfall.db.session import get_session_factory
 from waterfall.main import app
 from waterfall.models.ms_core import MsTask
 from waterfall.models.planning import WfPlanning, WfPlanningTaskSnapshot
 from waterfall.models.wf_core import WfChargeLine
+from waterfall.services import (
+    PlanningTreeCascadeConfirmationRequiredError,
+    PlanningTreeTaskReferencedError,
+)
 
 OPENAPI_PATH = Path(__file__).resolve().parents[3] / "openapi" / "waterfall_v1.yaml"
 GENERATED_CLIENT_PATH = (
@@ -225,6 +233,7 @@ def test_static_openapi_matches_runtime_operation_ids_and_components() -> None:
         "PlanningCreate",
         "PlanningTaskMove",
         "PlanningLinkRead",
+        "ReconciliationPlanRead",
     ):
         assert schema_name in runtime_components
         assert schema_name in static_components
@@ -242,6 +251,20 @@ def test_static_openapi_matches_runtime_operation_ids_and_components() -> None:
         static_move["properties"]["task_uids"]["items"]["minimum"]
         == runtime_move["properties"]["task_uids"]["items"]["minimum"]
     )
+
+    static_plan = cast(dict[str, Any], static_components["ReconciliationPlanRead"])
+    runtime_plan = cast(dict[str, Any], runtime_components["ReconciliationPlanRead"])
+    for field_name in (
+        "tasks_to_delete",
+        "labor_to_update",
+        "labor_to_delete",
+        "non_labor_to_update",
+        "non_labor_to_delete",
+    ):
+        assert (
+            static_plan["properties"][field_name]["items"]["minimum"]
+            == runtime_plan["properties"][field_name]["items"]["minimum"]
+        )
 
     static_operation_ids = {
         operation["operationId"]
@@ -681,3 +704,211 @@ def test_delete_planning_tasks_task_referenced_conflict_matches_declared_schema(
     assert isinstance(detail["task_uids"], list)
     assert all(isinstance(uid, int) for uid in detail["task_uids"])
     assert detail["task_uids"] == [2]
+
+
+_RECONCILIATION_XLSX_CONTENT_TYPE = (
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
+
+
+def _generate_structure(client: TestClient, headers: dict[str, str], project_id: int) -> None:
+    """Minimal structure -- just enough to get a draft displayed planning (E6-09)."""
+    response = client.post(
+        f"/projects/{project_id}/planning-structure",
+        json={
+            "posts": [
+                {
+                    "key": "design",
+                    "name": "Design",
+                    "lots": [
+                        {
+                            "key": "specification",
+                            "name": "Specification",
+                            "deliverables": [{"key": "requirements", "name": "Requirements"}],
+                        }
+                    ],
+                }
+            ]
+        },
+        headers=headers,
+    )
+    assert response.status_code == 201
+
+
+def _create_estimate(client: TestClient, headers: dict[str, str], project_id: int) -> int:
+    response = client.post(
+        f"/projects/{project_id}/estimates",
+        json={"kind": "initial", "currency_code": "EUR"},
+        headers=headers,
+    )
+    assert response.status_code == 201
+    return cast(int, response.json()["id"])
+
+
+def _create_standalone_task(
+    client: TestClient, headers: dict[str, str], project_id: int, estimate_id: int, name: str
+) -> None:
+    """A root task with no children and no MO/Non-MO reference (E6-06/#67's own endpoint) --
+    a deletion candidate ``_precheck_task_deletions`` never blocks on, so a reconciliation
+    import removing it always reaches ``_apply_task_deletes``/``delete_planning_tasks``.
+    """
+    response = client.post(
+        f"/projects/{project_id}/estimates/{estimate_id}/tasks",
+        json={"name": name, "is_milestone": False},
+        headers=headers,
+    )
+    assert response.status_code == 201
+
+
+def _export_reconciliation_workbook(
+    client: TestClient, headers: dict[str, str], project_id: int, estimate_id: int
+) -> bytes:
+    response = client.get(
+        f"/projects/{project_id}/estimates/{estimate_id}/export-reconciliation.xlsx",
+        headers=headers,
+    )
+    assert response.status_code == 200
+    return response.content
+
+
+def _delete_task_row_by_name(content: bytes, task_name: str) -> bytes:
+    """Remove one row from the exported ``Tâches`` sheet, staging it for deletion."""
+    workbook = load_workbook(BytesIO(content))
+    sheet = workbook["Tâches"]
+    header_row = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True))
+    name_index = header_row.index("task_name")
+    for row in sheet.iter_rows(min_row=2):
+        if row[name_index].value == task_name:
+            row_number = row[name_index].row
+            assert row_number is not None
+            sheet.delete_rows(row_number, 1)
+            break
+    else:
+        raise AssertionError(f"No task row named {task_name!r}")
+    buffer = BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
+def _confirm_reconciliation_import(
+    client: TestClient, headers: dict[str, str], project_id: int, estimate_id: int, content: bytes
+) -> Any:
+    return client.post(
+        f"/projects/{project_id}/estimates/{estimate_id}/import-reconciliation/confirm",
+        files={"file": ("reconciliation.xlsx", content, _RECONCILIATION_XLSX_CONTENT_TYPE)},
+        headers=headers,
+    )
+
+
+def _seed_reconciliation_task_deletion_fixture(
+    client: TestClient, headers: dict[str, str]
+) -> tuple[int, int, bytes]:
+    """Project + draft devis with one standalone task, exported and staged for deletion --
+    a file ``_run_reconciliation``'s own read-only precheck always finds zero blocking issues
+    for (see ``_create_standalone_task``), so ``confirm``'s locked, real ``apply=True`` pass
+    is always reached and calls ``delete_planning_tasks`` for real.
+    """
+    project_id = _create_project(client, headers)
+    _generate_structure(client, headers, project_id)
+    estimate_id = _create_estimate(client, headers, project_id)
+    _create_standalone_task(client, headers, project_id, estimate_id, "Doomed task")
+    content = _export_reconciliation_workbook(client, headers, project_id, estimate_id)
+    edited = _delete_task_row_by_name(content, "Doomed task")
+    return project_id, estimate_id, edited
+
+
+def test_confirm_estimate_reconciliation_import_conflict_response_declares_dedicated_schema() -> (
+    None
+):
+    """Finding Moyenne #2 (E6-09 round 2 review): confirm's 409 is not always a bare
+    ``ReconciliationPlanRead`` -- a write racing between the unlocked precheck and the
+    locked apply can still let a ``PlanningTreeCascadeConfirmationRequiredError``/
+    ``PlanningTreeTaskReferencedError`` escape (see ``confirm_estimate_reconciliation_import``'s
+    own docstring), surfaced exactly like the direct ``.../tasks/delete`` route already
+    documents it: a ``PlanningTaskDeleteConflict`` body, not the usual devis diagnostic.
+    """
+    raw_document: object = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
+    static_document = cast(dict[str, Any], raw_document)
+    static_components = cast(dict[str, Any], static_document["components"])
+    confirm_operation = static_document["paths"][
+        "/projects/{projectId}/estimates/{estimateId}/import-reconciliation/confirm"
+    ]["post"]
+    conflict_response = static_components["responses"]["EstimateReconciliationConfirmConflict"]
+    conflict_schema_refs = {
+        member["$ref"]
+        for member in conflict_response["content"]["application/json"]["schema"]["oneOf"]
+    }
+    assert conflict_schema_refs == {
+        "#/components/schemas/ReconciliationPlanRead",
+        "#/components/schemas/PlanningTaskDeleteConflict",
+    }
+    assert confirm_operation["responses"]["409"]["$ref"] == (
+        "#/components/responses/EstimateReconciliationConfirmConflict"
+    )
+
+    runtime_operation = cast(dict[str, Any], app.openapi()["paths"])[
+        "/projects/{project_id}/estimates/{estimate_id}/import-reconciliation/confirm"
+    ]["post"]
+    runtime_conflict_schema = runtime_operation["responses"]["409"]["content"]["application/json"][
+        "schema"
+    ]
+    runtime_conflict_refs = {member["$ref"] for member in runtime_conflict_schema["anyOf"]}
+    assert runtime_conflict_refs == conflict_schema_refs
+
+
+def test_confirm_reconciliation_import_cascade_confirmation_conflict_matches_declared_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw_document: object = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
+    static_document = cast(dict[str, Any], raw_document)
+    detail_properties = static_document["components"]["schemas"]["PlanningTaskDeleteConflict"][
+        "properties"
+    ]["detail"]["properties"]
+
+    def _raise_cascade_confirmation_required(*args: Any, **kwargs: Any) -> None:
+        raise PlanningTreeCascadeConfirmationRequiredError([99])
+
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, estimate_id, edited = _seed_reconciliation_task_deletion_fixture(
+            client, headers
+        )
+
+        monkeypatch.setattr(
+            estimates, "delete_planning_tasks", _raise_cascade_confirmation_required
+        )
+        response = _confirm_reconciliation_import(client, headers, project_id, estimate_id, edited)
+
+    assert response.status_code == 409
+    detail = cast(dict[str, Any], response.json())["detail"]
+    assert set(detail) <= set(detail_properties)
+    assert detail["code"] == "CASCADE_CONFIRMATION_REQUIRED"
+    assert detail["descendant_uids"] == [99]
+
+
+def test_confirm_reconciliation_import_task_referenced_conflict_matches_declared_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw_document: object = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
+    static_document = cast(dict[str, Any], raw_document)
+    detail_properties = static_document["components"]["schemas"]["PlanningTaskDeleteConflict"][
+        "properties"
+    ]["detail"]["properties"]
+
+    def _raise_task_referenced(*args: Any, **kwargs: Any) -> None:
+        raise PlanningTreeTaskReferencedError([99])
+
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, estimate_id, edited = _seed_reconciliation_task_deletion_fixture(
+            client, headers
+        )
+
+        monkeypatch.setattr(estimates, "delete_planning_tasks", _raise_task_referenced)
+        response = _confirm_reconciliation_import(client, headers, project_id, estimate_id, edited)
+
+    assert response.status_code == 409
+    detail = cast(dict[str, Any], response.json())["detail"]
+    assert set(detail) <= set(detail_properties)
+    assert detail["code"] == "TASK_REFERENCED"
+    assert detail["task_uids"] == [99]

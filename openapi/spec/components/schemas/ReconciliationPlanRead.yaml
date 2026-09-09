@@ -1,0 +1,77 @@
+type: object
+required:
+- blocking_issues
+- warnings
+- tasks_to_create
+- tasks_to_delete
+- labor_to_create
+- labor_to_update
+- labor_to_delete
+- non_labor_to_create
+- non_labor_to_update
+- non_labor_to_delete
+- applied
+properties:
+  blocking_issues:
+    type: array
+    items:
+      $ref: ReconciliationIssue.yaml
+    description: >-
+      Non vide => rien n'est/ne sera applique, meme pour un confirm (voir
+      `applied`).
+  warnings:
+    type: array
+    items:
+      $ref: ReconciliationIssue.yaml
+    description: >-
+      Changements ignores (ex : renommage d'une tache existante), lignes hors
+      perimetre, etc. -- jamais bloquant.
+  tasks_to_create:
+    type: integer
+    minimum: 0
+  tasks_to_delete:
+    type: array
+    items:
+      type: integer
+      minimum: 1
+    description: Identifiants `EstimateTaskRow.id` proposes a la suppression.
+  labor_to_create:
+    type: integer
+    minimum: 0
+  labor_to_update:
+    type: array
+    items:
+      type: integer
+      minimum: 1
+    description: Identifiants `TaskRoleAssignment.id` a mettre a jour.
+  labor_to_delete:
+    type: array
+    items:
+      type: integer
+      minimum: 1
+    description: Identifiants `TaskRoleAssignment.id` proposes a la suppression.
+  non_labor_to_create:
+    type: integer
+    minimum: 0
+  non_labor_to_update:
+    type: array
+    items:
+      type: integer
+      minimum: 1
+    description: Identifiants `EstimateCostLine.id` a mettre a jour.
+  non_labor_to_delete:
+    type: array
+    items:
+      type: integer
+      minimum: 1
+    description: Identifiants `EstimateCostLine.id` proposes a la suppression.
+  applied:
+    type: boolean
+    description: >-
+      Toujours `false` pour un preview. Pour un confirm, `true` uniquement si
+      `blocking_issues` etait vide et que les changements ont ete appliques.
+description: >-
+  Diagnostic + resultat d'un import de reconciliation de devis (E6-09, #70).
+  `POST .../import-reconciliation/preview` et `POST .../import-reconciliation/confirm`
+  executent exactement la meme analyse sur le meme fichier -- seul `applied`
+  distingue les deux reponses.

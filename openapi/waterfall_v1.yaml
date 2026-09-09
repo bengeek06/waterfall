@@ -1878,6 +1878,98 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/ProjectNotFound'
+  /projects/{projectId}/estimates/{estimateId}/import-reconciliation/preview:
+    post:
+      tags:
+        - projects
+      summary: Prévisualiser une réimportation Excel réconciliable (E6-09)
+      description: Analyse le fichier réexporté par /export-reconciliation.xlsx (E6-08), éventuellement édité, et calcule le diff (créations / mises à jour / suppressions sur les feuilles Tâches, MO, Non-MO) sans rien écrire en base. Le devis doit être à l'état `draft`. Exécute exactement la même analyse que /confirm sur le même fichier, garantissant un diagnostic identique -- seul `applied` (toujours `false` ici) distingue les deux réponses.
+      operationId: previewEstimateReconciliationImport
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/EstimateId'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Classeur Excel réconciliable (voir /export-reconciliation.xlsx)
+      responses:
+        '200':
+          description: Diagnostic de réconciliation (aperçu, rien n'est appliqué)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconciliationPlanRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          description: Classeur de reconciliation trop volumineux
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FastAPIErrorResponse'
+  /projects/{projectId}/estimates/{estimateId}/import-reconciliation/confirm:
+    post:
+      tags:
+        - projects
+      summary: Confirmer une réimportation Excel réconciliable (E6-09)
+      description: 'Rejoue exactement la même analyse que /preview sur le fichier resoumis (aucune session d''import stockée côté serveur) et applique le résultat en une seule transaction si `blocking_issues` est vide. Ordre d''application : suppressions (Non-MO, MO, puis Tâches), créations (Tâches, puis MO/Non-MO), mises à jour (MO, puis Non-MO). Le devis doit être à l''état `draft`. Si des problèmes bloquants sont trouvés, rien n''est écrit et la réponse est un 409 portant le `ReconciliationPlanRead` complet (`applied=false`), jamais un 2xx trompeur. Dans de rares cas, une écriture concurrente entre le precheck (hors verrou) et l''application réelle (sous verrou) peut aussi produire un 409 au format `PlanningTaskDeleteConflict`, identique à celui de la suppression directe de tâches du planning.'
+      operationId: confirmEstimateReconciliationImport
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/EstimateId'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Le même classeur Excel que celui soumis à /preview
+      responses:
+        '200':
+          description: Réconciliation appliquée
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconciliationPlanRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+        '409':
+          $ref: '#/components/responses/EstimateReconciliationConfirmConflict'
+        '413':
+          description: Classeur de reconciliation trop volumineux
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FastAPIErrorResponse'
   /projects/{projectId}/cost-codes:
     get:
       tags:
@@ -5361,6 +5453,94 @@ components:
         `listProjectEstimates`/`createProjectEstimate`/`setEstimateReference`, qui
         ne calculent pas cet avertissement) : ces endpoints ne renvoient donc jamais
         ce champ `warnings` toujours vide/absent dans leur contexte.
+    ReconciliationIssue:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        sheet:
+          type:
+            - string
+            - 'null'
+        row:
+          type:
+            - integer
+            - 'null'
+          description: 'Numero de ligne Excel (1-based, en comptant l''entete). Absent pour un probleme qui ne pointe pas vers une ligne precise du fichier (ex : precondition globale, ou ligne existante proposee a la suppression, qui par definition n''apparait plus dans le fichier).'
+      description: 'Une entree structuree de `ReconciliationPlanRead.blocking_issues` ou `.warnings` (E6-09, #70).'
+    ReconciliationPlanRead:
+      type: object
+      required:
+        - blocking_issues
+        - warnings
+        - tasks_to_create
+        - tasks_to_delete
+        - labor_to_create
+        - labor_to_update
+        - labor_to_delete
+        - non_labor_to_create
+        - non_labor_to_update
+        - non_labor_to_delete
+        - applied
+      properties:
+        blocking_issues:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReconciliationIssue'
+          description: Non vide => rien n'est/ne sera applique, meme pour un confirm (voir `applied`).
+        warnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReconciliationIssue'
+          description: 'Changements ignores (ex : renommage d''une tache existante), lignes hors perimetre, etc. -- jamais bloquant.'
+        tasks_to_create:
+          type: integer
+          minimum: 0
+        tasks_to_delete:
+          type: array
+          items:
+            type: integer
+            minimum: 1
+          description: Identifiants `EstimateTaskRow.id` proposes a la suppression.
+        labor_to_create:
+          type: integer
+          minimum: 0
+        labor_to_update:
+          type: array
+          items:
+            type: integer
+            minimum: 1
+          description: Identifiants `TaskRoleAssignment.id` a mettre a jour.
+        labor_to_delete:
+          type: array
+          items:
+            type: integer
+            minimum: 1
+          description: Identifiants `TaskRoleAssignment.id` proposes a la suppression.
+        non_labor_to_create:
+          type: integer
+          minimum: 0
+        non_labor_to_update:
+          type: array
+          items:
+            type: integer
+            minimum: 1
+          description: Identifiants `EstimateCostLine.id` a mettre a jour.
+        non_labor_to_delete:
+          type: array
+          items:
+            type: integer
+            minimum: 1
+          description: Identifiants `EstimateCostLine.id` proposes a la suppression.
+        applied:
+          type: boolean
+          description: Toujours `false` pour un preview. Pour un confirm, `true` uniquement si `blocking_issues` etait vide et que les changements ont ete appliques.
+      description: 'Diagnostic + resultat d''un import de reconciliation de devis (E6-09, #70). `POST .../import-reconciliation/preview` et `POST .../import-reconciliation/confirm` executent exactement la meme analyse sur le meme fichier -- seul `applied` distingue les deux reponses.'
     ProjectCostCodeCreate:
       type: object
       required:
@@ -5795,3 +5975,11 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/FastAPIErrorResponse'
+    EstimateReconciliationConfirmConflict:
+      description: Soit des problemes bloquants ont ete trouves et rien n'a ete applique -- le corps est alors le `ReconciliationPlanRead` complet (pas l'enveloppe `FastAPIErrorResponse` habituelle), avec `applied=false` ; soit le precheck (execute hors verrou) n'a rien trouve mais une ecriture concurrente a fait echouer la suppression de tache reelle une fois le verrou pris, auquel cas le corps est un `PlanningTaskDeleteConflict` (detail.code=CASCADE_CONFIRMATION_REQUIRED/TASK_REFERENCED), exactement comme la suppression directe de taches du planning (`DeletePlanningTasksConflict`).
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/ReconciliationPlanRead'
+              - $ref: '#/components/schemas/PlanningTaskDeleteConflict'

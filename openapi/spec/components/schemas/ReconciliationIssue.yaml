@@ -1,0 +1,21 @@
+type: object
+required:
+- code
+- message
+properties:
+  code:
+    type: string
+  message:
+    type: string
+  sheet:
+    type: [string, "null"]
+  row:
+    type: [integer, "null"]
+    description: >-
+      Numero de ligne Excel (1-based, en comptant l'entete). Absent pour un
+      probleme qui ne pointe pas vers une ligne precise du fichier (ex :
+      precondition globale, ou ligne existante proposee a la suppression, qui
+      par definition n'apparait plus dans le fichier).
+description: >-
+  Une entree structuree de `ReconciliationPlanRead.blocking_issues` ou
+  `.warnings` (E6-09, #70).
