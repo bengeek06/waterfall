@@ -1,9 +1,10 @@
 "use client";
 
+import { BulkCostCodeAssignmentBar } from "@/components/bulk-cost-code-assignment-bar";
 import { CostLineForm, type CostLineDraft } from "@/components/cost-line-form";
 import { CostLinesTable, type EditingLineDraft } from "@/components/cost-lines-table";
 import { EstimateVersionControls } from "@/components/estimate-version-controls";
-import type { CostCategory, EstimateCostLine, ProjectEstimate } from "@/lib/backend";
+import type { CostCategory, EstimateCostLine, ProjectCostCode, ProjectEstimate } from "@/lib/backend";
 
 export type EstimateTabProps = {
   active: boolean;
@@ -34,6 +35,13 @@ export type EstimateTabProps = {
   onStartEditCostLine: (line: EstimateCostLine) => void;
   onSaveCostLine: (line: EstimateCostLine) => void;
   onRequestDeleteCostLine: (line: EstimateCostLine) => void;
+  selectedCostLineIds: Set<number>;
+  onSelectedCostLineIdsChange: (next: Set<number>) => void;
+  projectCostCodes: ProjectCostCode[];
+  bulkCostCodeId: string;
+  onBulkCostCodeIdChange: (value: string) => void;
+  bulkAssignBusy: boolean;
+  onBulkAssignCostCode: () => void;
 };
 
 // Extracted from ProjectDetailsPage (E4-11 / #151): composes the whole "Devis" tab (version
@@ -69,6 +77,13 @@ export function EstimateTab({
   onStartEditCostLine,
   onSaveCostLine,
   onRequestDeleteCostLine,
+  selectedCostLineIds,
+  onSelectedCostLineIdsChange,
+  projectCostCodes,
+  bulkCostCodeId,
+  onBulkCostCodeIdChange,
+  bulkAssignBusy,
+  onBulkAssignCostCode,
 }: EstimateTabProps) {
   if (!active) {
     return null;
@@ -122,6 +137,17 @@ export function EstimateTab({
             />
           ) : null}
 
+          {canEditEstimate ? (
+            <BulkCostCodeAssignmentBar
+              selectedCount={selectedCostLineIds.size}
+              projectCostCodes={projectCostCodes}
+              bulkCostCodeId={bulkCostCodeId}
+              onBulkCostCodeIdChange={onBulkCostCodeIdChange}
+              bulkAssignBusy={bulkAssignBusy}
+              onAssign={onBulkAssignCostCode}
+            />
+          ) : null}
+
           <CostLinesTable
             costLines={costLines}
             canEditEstimate={canEditEstimate}
@@ -134,6 +160,9 @@ export function EstimateTab({
             onStartEdit={onStartEditCostLine}
             onSave={onSaveCostLine}
             onRequestDelete={onRequestDeleteCostLine}
+            selectedCostLineIds={selectedCostLineIds}
+            onSelectedCostLineIdsChange={onSelectedCostLineIdsChange}
+            bulkAssignBusy={bulkAssignBusy}
           />
         </div>
       ) : null}

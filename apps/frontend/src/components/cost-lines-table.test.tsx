@@ -25,6 +25,9 @@ function renderTable(overrides: Partial<CostLinesTableProps> = {}) {
     onStartEdit: vi.fn(),
     onSave: vi.fn(),
     onRequestDelete: vi.fn(),
+    selectedCostLineIds: new Set(),
+    onSelectedCostLineIdsChange: vi.fn(),
+    bulkAssignBusy: false,
     ...overrides,
   };
   return render(<CostLinesTable {...props} />);
@@ -159,5 +162,70 @@ describe("CostLinesTable", () => {
     expect(screen.getByText("Achat licences")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Sauver" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Modifier" })).toBeInTheDocument();
+  });
+
+  describe("row/select-all selection (E6-03)", () => {
+    it("hides the selection column entirely when the estimate is not editable", () => {
+      renderTable({ canEditEstimate: false });
+
+      expect(screen.queryByRole("checkbox", { name: "Tout sélectionner" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("checkbox", { name: "Sélectionner Achat licences" })).not.toBeInTheDocument();
+    });
+
+    it("toggles a single line's selection on click", () => {
+      const onSelectedCostLineIdsChange = vi.fn();
+      renderTable({ onSelectedCostLineIdsChange });
+
+      fireEvent.click(screen.getByRole("checkbox", { name: "Sélectionner Achat licences" }));
+
+      expect(onSelectedCostLineIdsChange).toHaveBeenCalledWith(new Set([1]));
+    });
+
+    it("reflects an already-selected line as checked", () => {
+      renderTable({ selectedCostLineIds: new Set([1]) });
+
+      expect(screen.getByRole("checkbox", { name: "Sélectionner Achat licences" })).toBeChecked();
+    });
+
+    it("selects every visible line when 'Tout sélectionner' is checked", () => {
+      const secondLine = {
+        id: 2,
+        accounting_code: "6011",
+        label: "Achat matériel",
+        quantity: "1.00",
+        unit_cost: "50.00",
+        purchase_cost: "50.00",
+      } as never;
+      const onSelectedCostLineIdsChange = vi.fn();
+      renderTable({ costLines: [line, secondLine], onSelectedCostLineIdsChange });
+
+      fireEvent.click(screen.getByRole("checkbox", { name: "Tout sélectionner" }));
+
+      expect(onSelectedCostLineIdsChange).toHaveBeenCalledWith(new Set([1, 2]));
+    });
+
+    it("deselects every visible line when 'Tout sélectionner' is unchecked", () => {
+      const secondLine = {
+        id: 2,
+        accounting_code: "6011",
+        label: "Achat matériel",
+        quantity: "1.00",
+        unit_cost: "50.00",
+        purchase_cost: "50.00",
+      } as never;
+      const onSelectedCostLineIdsChange = vi.fn();
+      renderTable({
+        costLines: [line, secondLine],
+        selectedCostLineIds: new Set([1, 2]),
+        onSelectedCostLineIdsChange,
+      });
+
+      const selectAll = screen.getByRole("checkbox", { name: "Tout sélectionner" });
+      expect(selectAll).toBeChecked();
+
+      fireEvent.click(selectAll);
+
+      expect(onSelectedCostLineIdsChange).toHaveBeenCalledWith(new Set());
+    });
   });
 });

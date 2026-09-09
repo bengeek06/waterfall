@@ -17,6 +17,7 @@ export type Project = components["schemas"]["ProjectRead"];
 export type ProjectEstimate = components["schemas"]["ProjectEstimateRead"];
 export type EstimateTaskRow = components["schemas"]["EstimateTaskRowRead"];
 export type EstimateCostLine = components["schemas"]["EstimateCostLineRead"];
+export type ProjectCostCode = components["schemas"]["ProjectCostCodeRead"];
 export type Task = components["schemas"]["TaskRead"];
 export type PlanningStructureCreate = components["schemas"]["PlanningStructureCreate"];
 export type PlanningStructureRead = components["schemas"]["PlanningStructureRead"];
@@ -1011,6 +1012,20 @@ export function validateProjectEstimate(
     { method: "POST" },
     onSessionRefresh,
   );
+}
+
+export async function getProjectCostCodes(
+  projectId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+): Promise<ProjectCostCode[]> {
+  const page = await authRequest<components["schemas"]["ProjectCostCodeListRead"]>(
+    `/projects/${projectId}/cost-codes`,
+    tokens,
+    { method: "GET" },
+    onSessionRefresh,
+  );
+  return page.items;
 }
 
 export type EstimateAggregates = components["schemas"]["EstimateAggregatesRead"];

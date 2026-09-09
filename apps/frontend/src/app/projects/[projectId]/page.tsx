@@ -695,6 +695,13 @@ export default function ProjectDetailsPage() {
           onStartEditCostLine={estimateCostLines.startEditCostLine}
           onSaveCostLine={(line) => void estimateCostLines.saveCostLine(line)}
           onRequestDeleteCostLine={estimateCostLines.requestDeleteCostLine}
+          selectedCostLineIds={estimateCostLines.selectedCostLineIds}
+          onSelectedCostLineIdsChange={estimateCostLines.setSelectedCostLineIds}
+          projectCostCodes={estimateCostLines.projectCostCodes}
+          bulkCostCodeId={estimateCostLines.bulkCostCodeId}
+          onBulkCostCodeIdChange={estimateCostLines.updateBulkCostCodeId}
+          bulkAssignBusy={estimateCostLines.bulkAssignBusy}
+          onBulkAssignCostCode={() => void estimateCostLines.bulkAssignCostCode()}
         />
 
         <CommitmentsTabPlaceholder active={activeTab === "commitments"} />
