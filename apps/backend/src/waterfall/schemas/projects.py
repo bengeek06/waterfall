@@ -544,6 +544,41 @@ class TaskRoleAssignmentListRead(PaginatedList[TaskRoleAssignmentRead]):
     pass
 
 
+class MissingRateCoverageEntry(BaseModel):
+    """One missing (cost category, year) `CostRate` combination, part of
+    `MissingRateCoverageDetail.missing_cost_rates` (E6-11/#175)."""
+
+    category_id: int
+    category_name: str
+    accounting_code: str
+    year: int
+
+
+class MissingRateCoverageDetail(BaseModel):
+    """Structured 400/409 `detail` for `create_task_role_assignment`
+    (``POST .../role-assignments``) and `validate_project_estimate`
+    (``POST .../validate``) when a labor assignment covers a (cost category,
+    year) with no `CostRate`, or a year with no `InflationRate` (E6-11/#175).
+
+    Lists every missing combination found (via
+    ``waterfall.services.estimate_calculation.collect_missing_rate_coverage``),
+    not just the first one, so a real HTTP client actually receives the
+    category/year detail the acceptance criteria calls for -- previously lost
+    because `_generic_http_exception_handler` rewrites any string/list
+    `HTTPException.detail` into a generic `{"code": "GENERIC_ERROR"}` before it
+    reaches the response; only a structured (dict) `detail`, like this one,
+    passes through unchanged.
+    """
+
+    code: Literal["MISSING_RATE_COVERAGE"]
+    missing_cost_rates: list[MissingRateCoverageEntry]
+    missing_inflation_years: list[int]
+
+
+class MissingRateCoverage(BaseModel):
+    detail: MissingRateCoverageDetail
+
+
 class ProjectEstimateCreate(BaseModel):
     kind: str = Field(pattern="^(initial|contract_reference|forecast_remaining)$")
     currency_code: str = Field(min_length=3, max_length=3)

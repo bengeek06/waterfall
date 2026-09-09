@@ -1,0 +1,38 @@
+type: object
+required:
+- detail
+properties:
+  detail:
+    type: object
+    required:
+    - code
+    - missing_cost_rates
+    - missing_inflation_years
+    properties:
+      code:
+        type: string
+        enum:
+        - MISSING_RATE_COVERAGE
+      missing_cost_rates:
+        description: >-
+          Chaque combinaison (categorie de cout, annee) utilisee par une
+          affectation de main-d'oeuvre sans `CostRate` correspondant --
+          dedupliquee et triee par `(accounting_code, year)`. Vide si seule
+          la couverture `InflationRate` manque.
+        type: array
+        items:
+          $ref: MissingRateCoverageEntry.yaml
+      missing_inflation_years:
+        description: >-
+          Chaque annee (dedupliquee, triee) utilisee par une affectation de
+          main-d'oeuvre sans `InflationRate` correspondant, independamment
+          de la categorie. Vide si seule la couverture `CostRate` manque.
+        type: array
+        items:
+          type: integer
+description: >-
+  Corps 400/409 structure pour `POST .../role-assignments` et
+  `POST .../validate` quand une affectation de main-d'oeuvre couvre une
+  (categorie de cout, annee) sans `CostRate`, ou une annee sans
+  `InflationRate` (E6-11, #175). Liste chaque combinaison manquante trouvee,
+  pas seulement la premiere.

@@ -65,6 +65,7 @@ from waterfall.schemas.projects import (
     EstimateValidationRead,
     FastAPIErrorResponse,
     MilestoneTemplate,
+    MissingRateCoverage,
     PlanningTaskCreate,
     PlanningTaskDelete,
     PlanningTaskDeleteConflict,
@@ -81,6 +82,7 @@ from waterfall.services import (
     CostLineFileRow,
     EstimateReconciliationFormatError,
     LaborFileRow,
+    MissingRateCoverageError,
     ParsedReconciliationWorkbook,
     PlanningLinkError,
     PlanningLinkInvariantError,
@@ -99,6 +101,7 @@ from waterfall.services import (
     create_planning_task,
     delete_planning_tasks,
     get_estimate_validation_warnings,
+    missing_rate_coverage_detail,
     parse_estimate_reconciliation_workbook,
     replace_task_predecessor_links,
 )
@@ -240,7 +243,21 @@ def get_project_estimate(
 
 
 @router.post(
-    "/{project_id}/estimates/{estimate_id}/validate", response_model=EstimateValidationRead
+    "/{project_id}/estimates/{estimate_id}/validate",
+    response_model=EstimateValidationRead,
+    responses={
+        status.HTTP_409_CONFLICT: {
+            "model": MissingRateCoverage | FastAPIErrorResponse,
+            "description": (
+                "Devis non brouillon (detail generique), ou au moins une "
+                "(categorie de cout, annee) couverte par une affectation de "
+                "main-d'oeuvre sans CostRate/InflationRate (detail.code="
+                "MISSING_RATE_COVERAGE, E6-11/#175) -- dans ce dernier cas, "
+                "aucune EstimateLine n'est persistee et le devis reste un "
+                "brouillon"
+            ),
+        },
+    },
 )
 def validate_project_estimate(
     project_id: int,
@@ -254,6 +271,14 @@ def validate_project_estimate(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Estimate is not a draft")
     try:
         estimate_lines = calculate_estimate_lines(db, estimate_id)
+    except MissingRateCoverageError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=missing_rate_coverage_detail(
+                exc.missing_cost_rates, exc.missing_inflation_years
+            ),
+        ) from exc
     except ValueError as exc:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc

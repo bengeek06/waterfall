@@ -1,0 +1,12 @@
+description: >-
+  Le devis n'est pas un brouillon (detail generique FastAPIErrorResponse), ou
+  au moins une (categorie de cout, annee) couverte par une affectation de
+  main-d'oeuvre n'a pas de CostRate/InflationRate (detail.code=
+  MISSING_RATE_COVERAGE, E6-11, #175) -- dans ce dernier cas, aucune
+  EstimateLine n'est generee ni persistee et le devis reste un brouillon.
+content:
+  application/json:
+    schema:
+      oneOf:
+      - $ref: ../schemas/MissingRateCoverage.yaml
+      - $ref: ../schemas/FastAPIErrorResponse.yaml

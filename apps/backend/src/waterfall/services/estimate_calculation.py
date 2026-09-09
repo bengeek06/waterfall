@@ -23,6 +23,138 @@ from waterfall.schemas.projects import EstimateValidationWarning
 from waterfall.schemas.resources import CostTypeKind
 
 
+def collect_missing_rate_coverage(
+    db: Session, category_years: list[tuple[CostCategory, int]]
+) -> tuple[list[tuple[CostCategory, int]], list[int]]:
+    """Check a set of (cost category, year) combinations for `CostRate`/`InflationRate`
+    coverage, in a single pair of bulk queries.
+
+    Shared by `create_task_role_assignment` (creation-time guard, `api/routes/tasks.py`)
+    and `calculate_estimate_lines` (validation-time guard) so both report the exact same
+    missing combinations for the exact same input, and so a devis with many affected
+    assignments still gets one query pair, not one per assignment/year (E6-11/#175).
+
+    Returns a `(missing_cost_rates, missing_inflation_years)` pair, both sorted for a
+    deterministic, human-readable message: `missing_cost_rates` is deduplicated and
+    sorted by `(category.accounting_code, year)`, `missing_inflation_years` is the
+    deduplicated, sorted set of years (from `category_years`) with no `InflationRate`,
+    independently of category. Empty lists mean full coverage -- caller behavior is
+    unchanged in that case.
+    """
+    if not category_years:
+        return [], []
+
+    category_ids = {category.id for category, _year in category_years}
+    years = {year for _category, year in category_years}
+
+    existing_rate_pairs = {
+        (cost_category_id, year)
+        for cost_category_id, year in db.query(CostRate.cost_category_id, CostRate.year)
+        .filter(CostRate.cost_category_id.in_(category_ids))
+        .filter(CostRate.year.in_(years))
+        .all()
+    }
+    existing_inflation_years = {
+        year for (year,) in db.query(InflationRate.year).filter(InflationRate.year.in_(years)).all()
+    }
+
+    seen_missing_pairs: set[tuple[int, int]] = set()
+    missing_cost_rates: list[tuple[CostCategory, int]] = []
+    missing_inflation_years: set[int] = set()
+    for category, year in category_years:
+        pair_key = (category.id, year)
+        if pair_key not in existing_rate_pairs and pair_key not in seen_missing_pairs:
+            seen_missing_pairs.add(pair_key)
+            missing_cost_rates.append((category, year))
+        if year not in existing_inflation_years:
+            missing_inflation_years.add(year)
+
+    missing_cost_rates.sort(key=lambda pair: (pair[0].accounting_code, pair[1]))
+    return missing_cost_rates, sorted(missing_inflation_years)
+
+
+def format_missing_rate_message(
+    missing_cost_rates: list[tuple[CostCategory, int]], missing_inflation_years: list[int]
+) -> str:
+    """Render `collect_missing_rate_coverage`'s result as a single actionable message
+    that names every missing (category, year) `CostRate` and every missing
+    `InflationRate` year -- not just the first one found (E6-11/#175).
+
+    Human-readable only: kept for internal logging (``MissingRateCoverageError``'s
+    ``str()``, e.g. in application logs) and as a building block for a future
+    frontend text rendering of ``missing_rate_coverage_detail``'s structured
+    payload -- it must never be passed to ``HTTPException(detail=...)`` directly,
+    since a plain string/list ``detail`` is rewritten into an opaque
+    ``{"code": "GENERIC_ERROR"}`` by ``_generic_http_exception_handler`` before it
+    reaches any real HTTP client (E6-11/#175 review finding).
+    """
+    parts: list[str] = []
+    if missing_cost_rates:
+        pairs = ", ".join(
+            f"{category.name} ({category.accounting_code})/{year}"
+            for category, year in missing_cost_rates
+        )
+        parts.append(f"Missing hourly cost rate for: {pairs}")
+    if missing_inflation_years:
+        years = ", ".join(str(year) for year in missing_inflation_years)
+        parts.append(f"Missing inflation rate for year(s): {years}")
+    return "; ".join(parts)
+
+
+def missing_rate_coverage_detail(
+    missing_cost_rates: list[tuple[CostCategory, int]], missing_inflation_years: list[int]
+) -> dict[str, object]:
+    """Build the structured ``HTTPException.detail`` payload -- ``{"code":
+    "MISSING_RATE_COVERAGE", ...}``, matching
+    ``schemas.projects.MissingRateCoverageDetail`` -- for a missing (cost
+    category, year) ``CostRate``/``InflationRate`` combination.
+
+    Shared by ``create_task_role_assignment`` (``api/routes/tasks.py``, calls
+    ``collect_missing_rate_coverage`` directly) and ``validate_project_estimate``
+    (``api/routes/estimates.py``, via ``MissingRateCoverageError``) so both
+    endpoints report the exact same JSON shape for the exact same input
+    (E6-11/#175 review finding: a plain-string ``detail`` never reaches a real
+    HTTP client, see ``format_missing_rate_message``).
+    """
+    return {
+        "code": "MISSING_RATE_COVERAGE",
+        "missing_cost_rates": [
+            {
+                "category_id": category.id,
+                "category_name": category.name,
+                "accounting_code": category.accounting_code,
+                "year": year,
+            }
+            for category, year in missing_cost_rates
+        ],
+        "missing_inflation_years": missing_inflation_years,
+    }
+
+
+class MissingRateCoverageError(ValueError):
+    """Raised by ``calculate_estimate_lines`` when a labor assignment covers a
+    (cost category, year) with no ``CostRate``, or a year with no
+    ``InflationRate`` (E6-11/#175).
+
+    Carries ``collect_missing_rate_coverage``'s raw result (not just a rendered
+    string) so the caller (``validate_project_estimate``,
+    ``api/routes/estimates.py``) can build a structured, machine-readable
+    ``HTTPException.detail`` via ``missing_rate_coverage_detail`` instead of a
+    human-readable message -- ``_generic_http_exception_handler`` would
+    otherwise rewrite the latter into an opaque ``{"code": "GENERIC_ERROR"}``
+    before it reaches the client (review finding).
+    """
+
+    def __init__(
+        self,
+        missing_cost_rates: list[tuple[CostCategory, int]],
+        missing_inflation_years: list[int],
+    ) -> None:
+        self.missing_cost_rates = missing_cost_rates
+        self.missing_inflation_years = missing_inflation_years
+        super().__init__(format_missing_rate_message(missing_cost_rates, missing_inflation_years))
+
+
 def calculate_estimate_lines(db: Session, estimate_id: int) -> list[EstimateLine]:
     """
     Calculate and snapshot all estimate lines for a validated estimate.
@@ -35,6 +167,20 @@ def calculate_estimate_lines(db: Session, estimate_id: int) -> list[EstimateLine
     - `accounting_code` on labor lines is always derived from
       `role.cost_category.accounting_code` (the single source of truth), never from the
       role itself.
+    - Every (cost category, year) a labor assignment covers must have a `CostRate`, and
+      every such year must have an `InflationRate` -- validation is refused outright
+      (via `MissingRateCoverageError`, see below) rather than silently emitting a
+      zero-rate/neutral-inflation line (E6-11/#175).
+
+    Raises:
+        ValueError: assignments reference a task outside the estimate's planning
+            snapshot.
+        MissingRateCoverageError: at least one (cost category, year) combination
+            used by a labor assignment has no `CostRate`/`InflationRate` --
+            carries every missing combination found, not just the first (see
+            `missing_rate_coverage_detail` for how a caller turns this into an
+            actionable HTTP response). No `EstimateLine` is generated (and
+            therefore nothing is persisted by the caller) when this is raised.
 
     Returns list of EstimateLine records to persist.
     """
@@ -69,6 +215,23 @@ def calculate_estimate_lines(db: Session, estimate_id: int) -> list[EstimateLine
                 "Estimate has role assignments outside its planning snapshot: "
                 + ", ".join(str(uid) for uid in sorted(outside_source))
             )
+
+    # E6-11/#175: collect every (category, year) a dated assignment needs *before*
+    # generating a single EstimateLine, so a gap anywhere blocks the whole
+    # validation -- never a partial devis with some lines silently priced at a
+    # zero rate/neutral inflation.
+    category_years: list[tuple[CostCategory, int]] = []
+    for _assignment, task, _role, category in assignments:
+        schedule_task = source_tasks.get(task.uid) or task
+        if not schedule_task.start_at or not schedule_task.finish_at:
+            continue
+        category_years.extend(
+            (category, year)
+            for year in range(schedule_task.start_at.year, schedule_task.finish_at.year + 1)
+        )
+    missing_cost_rates, missing_inflation_years = collect_missing_rate_coverage(db, category_years)
+    if missing_cost_rates or missing_inflation_years:
+        raise MissingRateCoverageError(missing_cost_rates, missing_inflation_years)
 
     for assignment, task, role, category in assignments:
         labor_lines = _generate_labor_lines(
@@ -137,16 +300,12 @@ def _generate_labor_lines(
         # Skip tasks without dates
         return lines
 
-    start_year = schedule_task.start_at.year
-    end_year = schedule_task.finish_at.year
-    years_spanned = end_year - start_year + 1
+    years = range(schedule_task.start_at.year, schedule_task.finish_at.year + 1)
 
     # Distribute total hours uniformly across years
-    hours_per_year = assignment.hours / Decimal(years_spanned)
+    hours_per_year = assignment.hours / Decimal(len(years))
 
-    for year_offset in range(years_spanned):
-        year = start_year + year_offset
-
+    for year in years:
         # Fetch rate for this category and year
         rate_record = (
             db.query(CostRate)
@@ -154,9 +313,19 @@ def _generate_labor_lines(
             .filter(CostRate.year == year)
             .first()
         )
+        # The `rate_record is None` branch is unreachable in practice: this
+        # function's only caller, `calculate_estimate_lines`, always runs
+        # `collect_missing_rate_coverage` first and raises
+        # `MissingRateCoverageError` before generating any line if a `CostRate`
+        # is missing for this exact (category, year) -- so by the time we get
+        # here, coverage is guaranteed complete (E6-11/#175 invariant, checked
+        # upstream). Kept as defensive-in-depth rather than an assertion since
+        # this is a private, single-caller helper.
         hourly_rate = rate_record.hourly_rate if rate_record else Decimal("0")
 
-        # Fetch inflation coefficient
+        # Fetch inflation coefficient. Same guarantee as above: an `InflationRate`
+        # gap for this year would already have raised `MissingRateCoverageError`
+        # upstream, so `inflation_record is None` is unreachable here too.
         inflation_record = db.query(InflationRate).filter(InflationRate.year == year).first()
         inflation_coefficient = inflation_record.coefficient if inflation_record else Decimal("1")
 

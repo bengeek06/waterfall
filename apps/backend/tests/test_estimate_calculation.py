@@ -22,6 +22,7 @@ from waterfall.models.resources import (
     ProjectCostCode,
     ResourceNode,
     ResourceRole,
+    TaskRoleAssignment,
 )
 from waterfall.services.estimate_calculation import (
     UNASSIGNED_COST_CODE_LABEL,
@@ -595,3 +596,338 @@ def test_calculate_estimate_aggregates_by_cost_code_sums_match_total() -> None:
         sum(aggregates["by_cost_code"].values(), Decimal("0"))
         == aggregates["total_unburdened_cost"]
     )
+
+
+def test_validate_estimate_rejects_missing_cost_rate_and_persists_no_lines() -> None:
+    """Issue #175 (E6-11): a labor assignment whose task ends up covering a
+    (category, year) combination with no `CostRate` must block validation with a
+    409 -- and, crucially, no `EstimateLine` (partial or otherwise) is persisted,
+    and the estimate stays a draft.
+
+    The assignment itself is created while the task is still undated (so the
+    creation-time guard in `create_task_role_assignment` doesn't apply), then the
+    task is scheduled directly at the ORM layer -- a realistic sequence the
+    creation-time guard alone can never fully prevent, since a task can always be
+    (re)scheduled after its role assignments already exist.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        owner_id = _current_user_id(client, headers)
+        labor_role_id, _ = _seed_resources_with_rates()  # covers 2026/2027 only
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            project = MsProject(
+                owner_id=owner_id,
+                external_uid=None,
+                source_version=2016,
+                save_version_out=16,
+                name="Missing rate coverage",
+                schedule_from_start=True,
+                start_date=datetime(2029, 1, 1, 8, 0, tzinfo=UTC),
+                finish_date=datetime(2029, 12, 31, 18, 0, tzinfo=UTC),
+                calendar_uid=1,
+                minutes_per_day=480,
+                minutes_per_week=2400,
+                days_per_month=20,
+                currency_code="EUR",
+            )
+            session.add(project)
+            session.flush()
+
+            task = MsTask(
+                project_id=project.id,
+                uid=3001,
+                name="Uncovered task",
+                task_type=0,
+                outline_number="1",
+                outline_level=1,
+                wbs="1",
+                is_summary=False,
+                is_milestone=False,
+                calendar_uid=1,
+            )
+            session.add(task)
+            session.commit()
+            project_id = project.id
+            task_uid = task.uid
+            project_name = project.name
+
+        _seed_root_cost_code(session_factory, project_id, project_name)
+
+        create_response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert create_response.status_code == 201
+        estimate = cast(dict[str, Any], create_response.json())
+        estimate_id = cast(int, estimate["id"])
+
+        assign_response = client.post(
+            f"/projects/{project_id}/tasks/{task_uid}/role-assignments",
+            json={"role_id": labor_role_id, "quantity": "1", "hours": "100"},
+            headers=headers,
+        )
+        assert assign_response.status_code == 201
+
+        with session_factory() as session:
+            scheduled_task = (
+                session.query(MsTask)
+                .filter(MsTask.project_id == project_id, MsTask.uid == task_uid)
+                .one()
+            )
+            scheduled_task.start_at = datetime(2029, 1, 1, 8, 0, tzinfo=UTC)
+            scheduled_task.finish_at = datetime(2029, 6, 30, 18, 0, tzinfo=UTC)
+            session.commit()
+
+        with session_factory() as session:
+            labor_category_id = (
+                session.query(ResourceRole)
+                .filter(ResourceRole.id == labor_role_id)
+                .one()
+                .cost_category_id
+            )
+
+        validate_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/validate",
+            headers=headers,
+        )
+        assert validate_response.status_code == 409
+        # Review finding (E6-11/#175): assert on the JSON a real HTTP client
+        # actually receives -- previously this only checked the generic
+        # `{"code": "GENERIC_ERROR"}` placeholder that
+        # `_generic_http_exception_handler` produces for a plain-string
+        # `detail`, losing every trace of the missing category/year. The
+        # task's single year (2029) is outside the seeded 2026/2027 coverage,
+        # so both the `CostRate` and the `InflationRate` are missing for it.
+        detail = cast(dict[str, Any], validate_response.json())["detail"]
+        assert detail["code"] == "MISSING_RATE_COVERAGE"
+        assert detail["missing_cost_rates"] == [
+            {
+                "category_id": labor_category_id,
+                "category_name": "Développement",
+                "accounting_code": "MO-DEV",
+                "year": 2029,
+            }
+        ]
+        assert detail["missing_inflation_years"] == [2029]
+
+        with session_factory() as session:
+            assert (
+                session.query(EstimateLine).filter(EstimateLine.estimate_id == estimate_id).all()
+                == []
+            )
+            persisted_estimate = session.query(Estimate).filter(Estimate.id == estimate_id).one()
+            assert persisted_estimate.status == "draft"
+
+
+def test_calculate_estimate_lines_lists_every_missing_rate_combination() -> None:
+    """Issue #175 (E6-11): `POST .../validate`'s structured `MISSING_RATE_COVERAGE`
+    detail lists every missing (category, year) `CostRate` and every missing
+    `InflationRate` year found across all assignments -- not just the first one.
+
+    Asserts on the JSON actually returned to an HTTP client (review finding),
+    not on an in-memory `ValueError` message: the assignment is seeded directly
+    at the ORM layer (a `calculate_estimate_lines` implementation detail --
+    exhaustiveness across *years*, not creation-time behavior, is what this test
+    covers), but the missing-rate-coverage detail itself is read back from
+    `POST .../validate`'s real response.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        owner_id = _current_user_id(client, headers)
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            project = MsProject(
+                owner_id=owner_id,
+                external_uid=None,
+                source_version=2016,
+                save_version_out=16,
+                name="Exhaustive missing rates",
+                schedule_from_start=True,
+                start_date=datetime(2028, 1, 1, 8, 0, tzinfo=UTC),
+                finish_date=datetime(2029, 12, 31, 18, 0, tzinfo=UTC),
+                calendar_uid=1,
+                minutes_per_day=480,
+                minutes_per_week=2400,
+                days_per_month=20,
+                currency_code="EUR",
+            )
+            session.add(project)
+            session.flush()
+
+            root = ResourceNode(code="DIRECTION-MISSING", name="Direction")
+            session.add(root)
+            session.flush()
+            labor_type = CostType(code="MO-MISSING", name="Main d'oeuvre", kind="labor")
+            session.add(labor_type)
+            session.flush()
+            labor_category = CostCategory(
+                cost_type_id=labor_type.id,
+                accounting_code="MO-DEV-MISSING",
+                category_code="IDEX-MISSING",
+                name="Développement",
+            )
+            session.add(labor_category)
+            session.flush()
+            labor_role = ResourceRole(
+                node_id=root.id, cost_category_id=labor_category.id, name="Développeur"
+            )
+            session.add(labor_role)
+            session.flush()
+
+            # A task spanning 2028-2029 -- no CostRate and no InflationRate exist for
+            # either year, so both years must be reported for both kinds of gap.
+            task = MsTask(
+                project_id=project.id,
+                uid=5001,
+                name="Two uncovered years",
+                task_type=0,
+                outline_number="1",
+                outline_level=1,
+                wbs="1",
+                start_at=datetime(2028, 6, 1, 8, 0, tzinfo=UTC),
+                finish_at=datetime(2029, 6, 30, 18, 0, tzinfo=UTC),
+                duration_minutes=None,
+                duration_format=None,
+                work_minutes=None,
+                percent_complete=0,
+                is_summary=False,
+                is_milestone=False,
+                calendar_uid=1,
+            )
+            session.add(task)
+            session.flush()
+
+            assignment = TaskRoleAssignment(
+                task_id=task.id,
+                role_id=labor_role.id,
+                cost_code_id=None,
+                quantity=Decimal("1"),
+                hours=Decimal("2000"),
+            )
+            session.add(assignment)
+
+            estimate = Estimate(
+                project_id=project.id,
+                version_number=1,
+                kind="initial",
+                status="draft",
+                currency_code="EUR",
+            )
+            session.add(estimate)
+            session.commit()
+            project_id = project.id
+            estimate_id = estimate.id
+            labor_category_id = labor_category.id
+
+        validate_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/validate",
+            headers=headers,
+        )
+        assert validate_response.status_code == 409
+        detail = cast(dict[str, Any], validate_response.json())["detail"]
+        assert detail["code"] == "MISSING_RATE_COVERAGE"
+        assert detail["missing_cost_rates"] == [
+            {
+                "category_id": labor_category_id,
+                "category_name": "Développement",
+                "accounting_code": "MO-DEV-MISSING",
+                "year": 2028,
+            },
+            {
+                "category_id": labor_category_id,
+                "category_name": "Développement",
+                "accounting_code": "MO-DEV-MISSING",
+                "year": 2029,
+            },
+        ]
+        assert detail["missing_inflation_years"] == [2028, 2029]
+
+    with session_factory() as session:
+        assert (
+            session.query(EstimateLine).filter(EstimateLine.estimate_id == estimate_id).all() == []
+        )
+
+
+def test_non_labor_lines_validate_without_any_rate_coverage() -> None:
+    """Issue #175 (E6-11): a devis made up only of non-labor (Fourniture/Frais/UO)
+    cost lines must never be blocked by the CostRate/InflationRate coverage rule --
+    it only ever applies to labor (MO) lines. No CostRate/InflationRate is seeded
+    anywhere in this test, on purpose."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        owner_id = _current_user_id(client, headers)
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            project = MsProject(
+                owner_id=owner_id,
+                external_uid=None,
+                source_version=2016,
+                save_version_out=16,
+                name="Non-labor only",
+                schedule_from_start=True,
+                start_date=datetime(2026, 1, 1, 8, 0, tzinfo=UTC),
+                finish_date=datetime(2026, 12, 31, 18, 0, tzinfo=UTC),
+                calendar_uid=1,
+                minutes_per_day=480,
+                minutes_per_week=2400,
+                days_per_month=20,
+                currency_code="EUR",
+            )
+            session.add(project)
+            session.flush()
+
+            supply_type = CostType(code="FOURN-NO-RATE", name="Fourniture", kind="supply")
+            session.add(supply_type)
+            session.flush()
+            supply_category = CostCategory(
+                cost_type_id=supply_type.id,
+                accounting_code="FO-NO-RATE",
+                category_code="ACHAT-NO-RATE",
+                name="Câbles",
+            )
+            session.add(supply_category)
+            session.commit()
+            project_id = project.id
+            project_name = project.name
+            supply_category_id = supply_category.id
+
+        _seed_root_cost_code(session_factory, project_id, project_name)
+
+        create_response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert create_response.status_code == 201
+        estimate_id = cast(int, create_response.json()["id"])
+
+        cost_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "cost_category_id": supply_category_id,
+                "label": "Câbles réseau",
+                "quantity": "5",
+                "unit_cost": "25.00",
+            },
+            headers=headers,
+        )
+        assert cost_response.status_code == 201
+
+        validate_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/validate",
+            headers=headers,
+        )
+        assert validate_response.status_code == 200
+
+        with session_factory() as session:
+            lines = (
+                session.query(EstimateLine).filter(EstimateLine.estimate_id == estimate_id).all()
+            )
+            assert len(lines) == 1
+            assert lines[0].budget_cost == Decimal("125.00")
+            assert lines[0].role_id is None

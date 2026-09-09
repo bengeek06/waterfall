@@ -11,9 +11,13 @@ from waterfall.services.calendar_schedule import (
 )
 from waterfall.services.estimate_calculation import (
     EstimateAggregates,
+    MissingRateCoverageError,
     calculate_estimate_aggregates,
     calculate_estimate_lines,
+    collect_missing_rate_coverage,
+    format_missing_rate_message,
     get_estimate_validation_warnings,
+    missing_rate_coverage_detail,
 )
 from waterfall.services.estimate_export import build_estimate_workbook
 from waterfall.services.estimate_reconciliation_export import (
@@ -64,9 +68,13 @@ __all__ = [
     "resolve_default_calendar_id",
     "resolve_task_calendar_ids",
     "EstimateAggregates",
+    "MissingRateCoverageError",
     "calculate_estimate_lines",
     "calculate_estimate_aggregates",
+    "collect_missing_rate_coverage",
+    "format_missing_rate_message",
     "get_estimate_validation_warnings",
+    "missing_rate_coverage_detail",
     "build_estimate_workbook",
     "build_estimate_reconciliation_workbook",
     "CostLineFileRow",
