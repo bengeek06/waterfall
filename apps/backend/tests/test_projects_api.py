@@ -16,10 +16,12 @@ from waterfall.models.resources import (
     Calendar,
     CalendarWeekday,
     CostCategory,
+    CostRate,
     CostType,
     Estimate,
     EstimateCostLine,
     EstimateTaskRow,
+    InflationRate,
     ProjectCostCode,
     ResourceNode,
     ResourceRole,
@@ -168,6 +170,22 @@ def _seed_roles() -> tuple[int, int]:
             name="Câble",
         )
         session.add_all([labor_role, supply_role])
+        session.flush()
+
+        # Issue #175 (E6-11): every task role assignment created against this
+        # module's dated fixture tasks (all seeded in year 2026, see
+        # `_seed_projects_and_tasks`) now requires full CostRate/InflationRate
+        # coverage for the years it spans -- without this, `create_task_role_assignment`
+        # would refuse every assignment on a dated task with a 400.
+        session.add(
+            CostRate(
+                cost_category_id=labor_category.id,
+                year=2026,
+                hourly_rate=Decimal("100.00"),
+                currency_code="EUR",
+            )
+        )
+        session.add(InflationRate(year=2026, coefficient=Decimal("1.0")))
         session.commit()
         return labor_role.id, supply_role.id
 
@@ -3407,6 +3425,145 @@ def test_task_role_assignment_reports_a_clean_error_if_project_has_no_active_roo
             headers=headers,
         )
         assert response.status_code == 500
+
+
+def test_task_role_assignment_on_dated_task_rejects_missing_cost_rate_coverage() -> None:
+    """Issue #175 (E6-11): a role assigned to an already-dated task (both `start_at`
+    and `finish_at` set) must have a `CostRate` for every year the task spans --
+    refused with a 400 instead of silently pricing that year at a zero rate later,
+    at estimate validation time."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        labor_role_id, _ = _seed_roles()
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            # `_seed_roles` only seeds a CostRate for year 2026; this task spans a
+            # year with no rate for that same labor category at all.
+            uncovered_task = MsTask(
+                project_id=project_id,
+                uid=1006,
+                name="Uncovered rate task",
+                task_type=0,
+                outline_number="6",
+                outline_level=1,
+                start_at=datetime(2029, 3, 1, 8, 0, tzinfo=UTC),
+                finish_at=datetime(2029, 3, 2, 18, 0, tzinfo=UTC),
+                is_summary=False,
+                is_milestone=False,
+            )
+            session.add(uncovered_task)
+            session.commit()
+
+        labor_category_id = _cost_category_id_for_role(labor_role_id)
+
+        response = client.post(
+            f"/projects/{project_id}/tasks/1006/role-assignments",
+            json={"role_id": labor_role_id, "quantity": "1", "hours": "1"},
+            headers=headers,
+        )
+        assert response.status_code == 400
+        # Review finding (E6-11/#175): assert on the JSON a real HTTP client
+        # actually receives -- not on an in-memory `ValueError` message, and
+        # not on the generic `{"code": "GENERIC_ERROR"}` placeholder that
+        # `_generic_http_exception_handler` produces for a plain-string
+        # `detail`. The task's single year (2029) has neither a `CostRate`
+        # nor an `InflationRate`, so both must be reported.
+        detail = cast(dict[str, Any], response.json())["detail"]
+        assert detail["code"] == "MISSING_RATE_COVERAGE"
+        assert detail["missing_cost_rates"] == [
+            {
+                "category_id": labor_category_id,
+                "category_name": "Développement",
+                "accounting_code": "MO-DEV",
+                "year": 2029,
+            }
+        ]
+        assert detail["missing_inflation_years"] == [2029]
+
+
+def test_task_role_assignment_on_dated_task_rejects_missing_inflation_rate_coverage() -> None:
+    """Issue #175 (E6-11): even when the category has a `CostRate` for the task's
+    year, a missing `InflationRate` for that same year must refuse the assignment
+    too -- inflation coverage is checked independently of the cost-rate coverage."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        labor_role_id, _ = _seed_roles()
+        labor_category_id = _cost_category_id_for_role(labor_role_id)
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            # A CostRate exists for 2030, but no InflationRate does.
+            session.add(
+                CostRate(
+                    cost_category_id=labor_category_id,
+                    year=2030,
+                    hourly_rate=Decimal("120.00"),
+                    currency_code="EUR",
+                )
+            )
+            rate_only_task = MsTask(
+                project_id=project_id,
+                uid=1007,
+                name="Rate-only task",
+                task_type=0,
+                outline_number="7",
+                outline_level=1,
+                start_at=datetime(2030, 3, 1, 8, 0, tzinfo=UTC),
+                finish_at=datetime(2030, 3, 2, 18, 0, tzinfo=UTC),
+                is_summary=False,
+                is_milestone=False,
+            )
+            session.add(rate_only_task)
+            session.commit()
+
+        response = client.post(
+            f"/projects/{project_id}/tasks/1007/role-assignments",
+            json={"role_id": labor_role_id, "quantity": "1", "hours": "1"},
+            headers=headers,
+        )
+        assert response.status_code == 400
+        # Review finding (E6-11/#175): assert on the JSON a real HTTP client
+        # actually receives. The `CostRate` for 2030 exists, so only the
+        # `InflationRate` gap is reported.
+        detail = cast(dict[str, Any], response.json())["detail"]
+        assert detail["code"] == "MISSING_RATE_COVERAGE"
+        assert detail["missing_cost_rates"] == []
+        assert detail["missing_inflation_years"] == [2030]
+
+
+def test_task_role_assignment_without_dates_skips_rate_coverage_check() -> None:
+    """Issue #175 (E6-11): a task with no `start_at`/`finish_at` yet has no known
+    years to check coverage for -- the guard must not apply, and assignment creation
+    must succeed exactly as it did before this issue (non-regression)."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        labor_role_id, _ = _seed_roles()
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            undated_task = MsTask(
+                project_id=project_id,
+                uid=1008,
+                name="Undated task",
+                task_type=0,
+                outline_number="8",
+                outline_level=1,
+                is_summary=False,
+                is_milestone=False,
+            )
+            session.add(undated_task)
+            session.commit()
+
+        response = client.post(
+            f"/projects/{project_id}/tasks/1008/role-assignments",
+            json={"role_id": labor_role_id, "quantity": "1", "hours": "1"},
+            headers=headers,
+        )
+        assert response.status_code == 201
 
 
 def test_role_filter_can_include_descendant_nodes() -> None:

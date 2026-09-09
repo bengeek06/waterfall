@@ -32,6 +32,8 @@ from waterfall.models.resources import CostCategory, CostType, ResourceRole, Tas
 from waterfall.models.user import User
 from waterfall.models.wf_core import WfTaskEnrichment
 from waterfall.schemas.projects import (
+    FastAPIErrorResponse,
+    MissingRateCoverage,
     TaskDescriptionUpdate,
     TaskListRead,
     TaskRead,
@@ -41,7 +43,11 @@ from waterfall.schemas.projects import (
     TaskRoleAssignmentUpdate,
 )
 from waterfall.schemas.resources import CostTypeKind
-from waterfall.services import apply_pagination
+from waterfall.services import (
+    apply_pagination,
+    collect_missing_rate_coverage,
+    missing_rate_coverage_detail,
+)
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -187,6 +193,17 @@ def list_task_role_assignments(
     "/{project_id}/tasks/{task_uid}/role-assignments",
     response_model=TaskRoleAssignmentRead,
     status_code=status.HTTP_201_CREATED,
+    responses={
+        status.HTTP_400_BAD_REQUEST: {
+            "model": MissingRateCoverage | FastAPIErrorResponse,
+            "description": (
+                "Requete invalide -- role hors d'une categorie de cout main-"
+                "d'oeuvre active (detail generique), ou tache deja datee "
+                "avec au moins une (categorie de cout, annee) sans CostRate/"
+                "InflationRate (detail.code=MISSING_RATE_COVERAGE, E6-11/#175)"
+            ),
+        },
+    },
 )
 def create_task_role_assignment(
     project_id: int,
@@ -233,6 +250,25 @@ def create_task_role_assignment(
     role, category, _ = row
     payload_data = payload.model_dump(exclude={"cost_code_id"})
     cost_code_id = resolve_cost_code_id(db, project_id, payload.cost_code_id)
+
+    # Issue #175 (E6-11): a task that is already dated (both start_at and finish_at
+    # set) must have full CostRate/InflationRate coverage for every year it spans
+    # before a labor role can be assigned to it -- otherwise the devis would later
+    # silently price that assignment at a zero rate/neutral inflation. An undated
+    # task is unaffected: its years aren't known yet, so there is nothing to check.
+    if task.start_at is not None and task.finish_at is not None:
+        category_years = [
+            (category, year) for year in range(task.start_at.year, task.finish_at.year + 1)
+        ]
+        missing_cost_rates, missing_inflation_years = collect_missing_rate_coverage(
+            db, category_years
+        )
+        if missing_cost_rates or missing_inflation_years:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=missing_rate_coverage_detail(missing_cost_rates, missing_inflation_years),
+            )
+
     assignment = TaskRoleAssignment(task_id=task.id, cost_code_id=cost_code_id, **payload_data)
     db.add(assignment)
     try:

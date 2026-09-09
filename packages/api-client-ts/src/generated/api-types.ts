@@ -2180,6 +2180,24 @@ export interface components {
             links: components["schemas"]["TaskLinkWrite"][];
             expected_revision: number;
         };
+        /** @description Une combinaison (categorie de cout, annee) sans `CostRate`, element de `MissingRateCoverage.detail.missing_cost_rates` (E6-11, #175). */
+        MissingRateCoverageEntry: {
+            category_id: number;
+            category_name: string;
+            accounting_code: string;
+            year: number;
+        };
+        /** @description Corps 400/409 structure pour `POST .../role-assignments` et `POST .../validate` quand une affectation de main-d'oeuvre couvre une (categorie de cout, annee) sans `CostRate`, ou une annee sans `InflationRate` (E6-11, #175). Liste chaque combinaison manquante trouvee, pas seulement la premiere. */
+        MissingRateCoverage: {
+            detail: {
+                /** @enum {string} */
+                code: "MISSING_RATE_COVERAGE";
+                /** @description Chaque combinaison (categorie de cout, annee) utilisee par une affectation de main-d'oeuvre sans `CostRate` correspondant -- dedupliquee et triee par `(accounting_code, year)`. Vide si seule la couverture `InflationRate` manque. */
+                missing_cost_rates: components["schemas"]["MissingRateCoverageEntry"][];
+                /** @description Chaque annee (dedupliquee, triee) utilisee par une affectation de main-d'oeuvre sans `InflationRate` correspondant, independamment de la categorie. Vide si seule la couverture `CostRate` manque. */
+                missing_inflation_years: number[];
+            };
+        };
         EstimateTaskCreate: {
             name: string;
             /** @default false */
@@ -2561,6 +2579,24 @@ export interface components {
             };
             content: {
                 "application/json": components["schemas"]["FastAPIErrorResponse"];
+            };
+        };
+        /** @description Requete invalide -- soit le role ne correspond pas a une categorie de cout main-d'oeuvre active (detail generique FastAPIErrorResponse), soit la tache est deja datee (start_at et finish_at renseignes) et au moins une (categorie de cout, annee) qu'elle couvre n'a pas de CostRate/InflationRate (detail.code=MISSING_RATE_COVERAGE, E6-11, #175). */
+        CreateTaskRoleAssignmentBadRequest: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["MissingRateCoverage"] | components["schemas"]["FastAPIErrorResponse"];
+            };
+        };
+        /** @description Le devis n'est pas un brouillon (detail generique FastAPIErrorResponse), ou au moins une (categorie de cout, annee) couverte par une affectation de main-d'oeuvre n'a pas de CostRate/InflationRate (detail.code= MISSING_RATE_COVERAGE, E6-11, #175) -- dans ce dernier cas, aucune EstimateLine n'est generee ni persistee et le devis reste un brouillon. */
+        ValidateProjectEstimateConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["MissingRateCoverage"] | components["schemas"]["FastAPIErrorResponse"];
             };
         };
         /** @description Soit des problemes bloquants ont ete trouves et rien n'a ete applique -- le corps est alors le `ReconciliationPlanRead` complet (pas l'enveloppe `FastAPIErrorResponse` habituelle), avec `applied=false` ; soit le precheck (execute hors verrou) n'a rien trouve mais une ecriture concurrente a fait echouer la suppression de tache reelle une fois le verrou pris, auquel cas le corps est un `PlanningTaskDeleteConflict` (detail.code=CASCADE_CONFIRMATION_REQUIRED/TASK_REFERENCED), exactement comme la suppression directe de taches du planning (`DeletePlanningTasksConflict`). */
@@ -4064,7 +4100,7 @@ export interface operations {
                     "application/json": components["schemas"]["TaskRoleAssignmentRead"];
                 };
             };
-            400: components["responses"]["BadRequest"];
+            400: components["responses"]["CreateTaskRoleAssignmentBadRequest"];
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["TaskNotFound"];
             409: components["responses"]["Conflict"];
@@ -4483,7 +4519,7 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["ProjectNotFound"];
-            409: components["responses"]["Conflict"];
+            409: components["responses"]["ValidateProjectEstimateConflict"];
         };
     };
     getEstimateAggregates: {

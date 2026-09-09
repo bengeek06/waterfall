@@ -841,7 +841,7 @@
             schema:
               $ref: ../components/schemas/TaskRoleAssignmentRead.yaml
       '400':
-        $ref: ../components/responses/BadRequest.yaml
+        $ref: ../components/responses/CreateTaskRoleAssignmentBadRequest.yaml
       '401':
         $ref: ../components/responses/Unauthorized.yaml
       '404':
@@ -1255,7 +1255,7 @@
       '404':
         $ref: ../components/responses/ProjectNotFound.yaml
       '409':
-        $ref: ../components/responses/Conflict.yaml
+        $ref: ../components/responses/ValidateProjectEstimateConflict.yaml
 /projects/{projectId}/estimates/{estimateId}/aggregates:
   get:
     tags:
