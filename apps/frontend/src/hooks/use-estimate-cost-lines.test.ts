@@ -6,6 +6,7 @@ import { ApiError } from "@/lib/backend";
 
 const mocks = vi.hoisted(() => ({
   createProjectEstimate: vi.fn(),
+  createEstimateCostLine: vi.fn(),
   updateEstimateCostLine: vi.fn(),
   deleteEstimateCostLine: vi.fn(),
   getProjectCostCodes: vi.fn(),
@@ -18,6 +19,7 @@ vi.mock("@/lib/backend", async () => {
   return {
     ...actual,
     createProjectEstimate: mocks.createProjectEstimate,
+    createEstimateCostLine: mocks.createEstimateCostLine,
     updateEstimateCostLine: mocks.updateEstimateCostLine,
     deleteEstimateCostLine: mocks.deleteEstimateCostLine,
     getProjectCostCodes: mocks.getProjectCostCodes,
@@ -230,6 +232,189 @@ describe("useEstimateCostLines bulkAssignCostCode", () => {
     expect(result.current.selectedCostLineIds).toEqual(new Set([5]));
     expect(setError).not.toHaveBeenCalledWith(expect.stringContaining("échec"));
     expect(setError).not.toHaveBeenCalledWith(expect.stringContaining("affectée"));
+  });
+});
+
+// #66 (E6-05): `planned_date` is editable in both the add-cost-line form and the cost-line edit
+// row, entirely independent from `task_id`.
+describe("useEstimateCostLines addCostLine planned date (E6-05)", () => {
+  beforeEach(() => {
+    mocks.createEstimateCostLine.mockReset();
+    mocks.clearSession.mockReset();
+    mocks.getProjectCostCodes.mockReset().mockResolvedValue([]);
+  });
+
+  function fillValidDraft(result: { current: ReturnType<typeof useEstimateCostLines> }) {
+    act(() => {
+      result.current.updateCostLineDraftCategory("3");
+      result.current.updateCostLineDraftLabel("Achat licences");
+      result.current.updateCostLineDraftQuantity("2");
+      result.current.updateCostLineDraftUnitCost("150");
+    });
+  }
+
+  it("sends the chosen planned date in the create payload", async () => {
+    mocks.createEstimateCostLine.mockResolvedValue(makeLine(1));
+    const { result } = setup({ selectedEstimateId: 1 });
+    fillValidDraft(result);
+    act(() => {
+      result.current.updateCostLineDraftPlannedDate("2026-10-01");
+    });
+
+    await act(async () => {
+      await result.current.addCostLine();
+    });
+
+    expect(mocks.createEstimateCostLine).toHaveBeenCalledWith(
+      1,
+      1,
+      expect.objectContaining({ planned_date: "2026-10-01T00:00:00Z" }),
+      session,
+      expect.any(Function),
+    );
+  });
+
+  it("sends a null planned date, and does not block the add, when the field is left blank", async () => {
+    mocks.createEstimateCostLine.mockResolvedValue(makeLine(1));
+    const { result } = setup({ selectedEstimateId: 1 });
+    fillValidDraft(result);
+
+    await act(async () => {
+      await result.current.addCostLine();
+    });
+
+    expect(mocks.createEstimateCostLine).toHaveBeenCalledWith(
+      1,
+      1,
+      expect.objectContaining({ planned_date: null }),
+      session,
+      expect.any(Function),
+    );
+  });
+
+  // Regression test for a review finding on #66: nothing disables the estimate-version
+  // selector while a request is in flight (same gap as bulkAssignCostCode/validateEstimate,
+  // #64/#65), so a late-resolving create must never land on whatever version the user has
+  // since navigated away from.
+  it("does not add the created line if the estimate version changed while the request was in flight", async () => {
+    let resolveCreate!: (line: EstimateCostLine) => void;
+    mocks.createEstimateCostLine.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveCreate = resolve;
+        }),
+    );
+    const { result, rerender, setCostLines, setError } = setup({ selectedEstimateId: 1 });
+    fillValidDraft(result);
+
+    let addPromise!: Promise<void>;
+    act(() => {
+      addPromise = result.current.addCostLine();
+    });
+
+    rerender({ selectedEstimateId: 2 });
+
+    resolveCreate(makeLine(1));
+    await act(async () => {
+      await addPromise;
+    });
+
+    expect(setCostLines).not.toHaveBeenCalled();
+    expect(setError).not.toHaveBeenCalledWith(expect.stringContaining("ajouter"));
+  });
+});
+
+describe("useEstimateCostLines saveCostLine planned date (E6-05)", () => {
+  beforeEach(() => {
+    mocks.updateEstimateCostLine.mockReset();
+    mocks.clearSession.mockReset();
+    mocks.getProjectCostCodes.mockReset().mockResolvedValue([]);
+  });
+
+  it("updates only the planned date while leaving the other fields intact", async () => {
+    mocks.updateEstimateCostLine.mockResolvedValue(makeLine(1));
+    const { result } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.startEditCostLine(makeLine(1, { label: "Achat licences", quantity: 2, unit_cost: 150 } as never));
+      result.current.updateEditingLineDraftPlannedDate("2026-11-15");
+    });
+
+    await act(async () => {
+      await result.current.saveCostLine(makeLine(1));
+    });
+
+    expect(mocks.updateEstimateCostLine).toHaveBeenCalledWith(
+      1,
+      1,
+      1,
+      {
+        label: "Achat licences",
+        quantity: 2,
+        unit_cost: 150,
+        planned_date: "2026-11-15T00:00:00Z",
+      },
+      session,
+      expect.any(Function),
+    );
+  });
+
+  // Regression test for a review finding on #66: same stale-response gap as addCostLine
+  // above.
+  it("does not apply the updated line if the estimate version changed while the request was in flight", async () => {
+    let resolveUpdate!: (line: EstimateCostLine) => void;
+    mocks.updateEstimateCostLine.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveUpdate = resolve;
+        }),
+    );
+    const { result, rerender, setCostLines, setError } = setup({ selectedEstimateId: 1 });
+    act(() => {
+      result.current.startEditCostLine(makeLine(1, { label: "Achat licences", quantity: 2, unit_cost: 150 } as never));
+    });
+
+    let savePromise!: Promise<void>;
+    act(() => {
+      savePromise = result.current.saveCostLine(makeLine(1));
+    });
+
+    rerender({ selectedEstimateId: 2 });
+
+    resolveUpdate(makeLine(1));
+    await act(async () => {
+      await savePromise;
+    });
+
+    expect(setCostLines).not.toHaveBeenCalled();
+    expect(result.current.editingLineId).toBe(1);
+    expect(setError).not.toHaveBeenCalledWith(expect.stringContaining("modifier"));
+  });
+});
+
+describe("useEstimateCostLines startEditCostLine planned date (E6-05)", () => {
+  beforeEach(() => {
+    mocks.getProjectCostCodes.mockReset().mockResolvedValue([]);
+  });
+
+  it("pre-fills the planned date input from the line's existing ISO datetime", () => {
+    const { result } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.startEditCostLine(makeLine(1, { planned_date: "2026-10-01T00:00:00+00:00" } as never));
+    });
+
+    expect(result.current.editingLineDraft.plannedDate).toBe("2026-10-01");
+  });
+
+  it("pre-fills an empty planned date when the line has none", () => {
+    const { result } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.startEditCostLine(makeLine(1, { planned_date: null } as never));
+    });
+
+    expect(result.current.editingLineDraft.plannedDate).toBe("");
   });
 });
 

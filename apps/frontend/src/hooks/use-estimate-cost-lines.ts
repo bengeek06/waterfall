@@ -22,8 +22,45 @@ import type { ProjectTab } from "@/components/project-tabs";
 
 type AppRouter = ReturnType<typeof useRouter>;
 
-export type CostLineDraft = { categoryId: string; label: string; quantity: string; unitCost: string };
-export type EditingLineDraft = { label: string; quantity: string; unitCost: string };
+export type CostLineDraft = {
+  categoryId: string;
+  label: string;
+  quantity: string;
+  unitCost: string;
+  plannedDate: string;
+};
+export type EditingLineDraft = { label: string; quantity: string; unitCost: string; plannedDate: string };
+
+// `planned_date` (#66 / E6-05) round-trips through a plain `<input type="date">`, so the draft
+// state is always a `yyyy-MM-dd` string (or "" for "no date"), converted to/from the backend's
+// payload only at the API call boundary -- same convention as `quantity`/`unitCost` above.
+//
+// Unlike lib/planning-schedule.ts's schedule fields, `planned_date` is a `DateTime(timezone=True)`
+// column: the backend always returns a string carrying an explicit UTC offset/timezone. On write,
+// though, Pydantic parses a bare `yyyy-MM-dd` string as a *naive* datetime (verified against the
+// installed pydantic version -- no tzinfo attached), not as "UTC midnight": whether that ends up
+// stored as UTC midnight depends on the database session's own timezone setting, which nothing in
+// this codebase pins explicitly. Appending an explicit `T00:00:00Z` removes that ambiguity
+// entirely at the client boundary, independently of server-side configuration.
+function plannedDateDraftToPayload(value: string): string | null {
+  return value ? `${value}T00:00:00Z` : null;
+}
+
+// Converts the backend's ISO datetime string (always offset-bearing, see above) back to the
+// `yyyy-MM-dd` shape the `<input type="date">` expects. Reads the UTC calendar-date components
+// directly rather than the local ones, symmetric with the write side treating the plain date
+// string as UTC midnight.
+function plannedDatePayloadToDraft(value: string | null | undefined): string {
+  if (!value) {
+    return "";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;
+}
 
 interface UseEstimateCostLinesParams {
   session: SessionTokens | null;
@@ -62,9 +99,15 @@ export function useEstimateCostLines({
     label: "",
     quantity: "1",
     unitCost: "0",
+    plannedDate: "",
   });
   const [editingLineId, setEditingLineId] = useState<number | null>(null);
-  const [editingLineDraft, setEditingLineDraft] = useState<EditingLineDraft>({ label: "", quantity: "", unitCost: "" });
+  const [editingLineDraft, setEditingLineDraft] = useState<EditingLineDraft>({
+    label: "",
+    quantity: "",
+    unitCost: "",
+    plannedDate: "",
+  });
   const [costLinePendingDelete, setCostLinePendingDelete] = useState<EstimateCostLine | null>(null);
   const [estimateValidationOpen, setEstimateValidationOpen] = useState(false);
   const [estimateBusy, setEstimateBusy] = useState(false);
@@ -133,6 +176,9 @@ export function useEstimateCostLines({
   function updateCostLineDraftUnitCost(value: string) {
     setCostLineDraft((prev) => ({ ...prev, unitCost: value }));
   }
+  function updateCostLineDraftPlannedDate(value: string) {
+    setCostLineDraft((prev) => ({ ...prev, plannedDate: value }));
+  }
   function updateEditingLineDraftLabel(value: string) {
     setEditingLineDraft((prev) => ({ ...prev, label: value }));
   }
@@ -141,6 +187,9 @@ export function useEstimateCostLines({
   }
   function updateEditingLineDraftUnitCost(value: string) {
     setEditingLineDraft((prev) => ({ ...prev, unitCost: value }));
+  }
+  function updateEditingLineDraftPlannedDate(value: string) {
+    setEditingLineDraft((prev) => ({ ...prev, plannedDate: value }));
   }
 
   function requestDeleteCostLine(line: EstimateCostLine) {
@@ -294,30 +343,41 @@ export function useEstimateCostLines({
       return;
     }
 
+    const launchedEstimateId = selectedEstimateId;
+
     setEstimateBusy(true);
     setError(null);
     try {
       const line = await createEstimateCostLine(
         projectId,
-        selectedEstimateId,
+        launchedEstimateId,
         {
           cost_category_id: categoryId,
           label: costLineDraft.label.trim(),
           quantity,
           unit_cost: unitCost,
+          planned_date: plannedDateDraftToPayload(costLineDraft.plannedDate),
         },
         session,
         onSessionRefresh,
       );
-      setCostLines((previous) => [...previous, line]);
-      setCostLineDraft({ categoryId: "", label: "", quantity: "1", unitCost: "0" });
+      // The estimate version may have changed while this request was in flight (nothing
+      // disables the version selector while busy, same as bulkAssignCostCode/
+      // validateEstimate above) -- a stale response must never be applied to whatever
+      // version is displayed now.
+      if (selectedEstimateIdRef.current === launchedEstimateId) {
+        setCostLines((previous) => [...previous, line]);
+        setCostLineDraft({ categoryId: "", label: "", quantity: "1", unitCost: "0", plannedDate: "" });
+      }
     } catch (cause) {
       if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
         clearSession();
         router.push("/login");
         return;
       }
-      setError(cause instanceof ApiError ? cause.message : "Impossible d'ajouter la ligne de coût.");
+      if (selectedEstimateIdRef.current === launchedEstimateId) {
+        setError(cause instanceof ApiError ? cause.message : "Impossible d'ajouter la ligne de coût.");
+      }
     } finally {
       setEstimateBusy(false);
     }
@@ -329,6 +389,7 @@ export function useEstimateCostLines({
       label: line.label,
       quantity: String(line.quantity),
       unitCost: String(line.unit_cost),
+      plannedDate: plannedDatePayloadToDraft(line.planned_date),
     });
   }
 
@@ -343,26 +404,38 @@ export function useEstimateCostLines({
       return;
     }
 
+    const launchedEstimateId = selectedEstimateId;
+
     setEstimateBusy(true);
     setError(null);
     try {
       const updated = await updateEstimateCostLine(
         projectId,
-        selectedEstimateId,
+        launchedEstimateId,
         line.id,
-        { label: editingLineDraft.label.trim(), quantity, unit_cost: unitCost },
+        {
+          label: editingLineDraft.label.trim(),
+          quantity,
+          unit_cost: unitCost,
+          planned_date: plannedDateDraftToPayload(editingLineDraft.plannedDate),
+        },
         session,
         onSessionRefresh,
       );
-      setCostLines((previous) => previous.map((item) => (item.id === updated.id ? updated : item)));
-      setEditingLineId(null);
+      // Same stale-response guard as addCostLine above.
+      if (selectedEstimateIdRef.current === launchedEstimateId) {
+        setCostLines((previous) => previous.map((item) => (item.id === updated.id ? updated : item)));
+        setEditingLineId(null);
+      }
     } catch (cause) {
       if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
         clearSession();
         router.push("/login");
         return;
       }
-      setError(cause instanceof ApiError ? cause.message : "Impossible de modifier la ligne de coût.");
+      if (selectedEstimateIdRef.current === launchedEstimateId) {
+        setError(cause instanceof ApiError ? cause.message : "Impossible de modifier la ligne de coût.");
+      }
     } finally {
       setEstimateBusy(false);
     }
@@ -457,9 +530,11 @@ export function useEstimateCostLines({
     updateCostLineDraftLabel,
     updateCostLineDraftQuantity,
     updateCostLineDraftUnitCost,
+    updateCostLineDraftPlannedDate,
     updateEditingLineDraftLabel,
     updateEditingLineDraftQuantity,
     updateEditingLineDraftUnitCost,
+    updateEditingLineDraftPlannedDate,
     requestDeleteCostLine,
     cancelDeleteCostLine,
     openEstimateValidation,

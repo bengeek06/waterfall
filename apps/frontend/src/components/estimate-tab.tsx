@@ -36,12 +36,14 @@ export type EstimateTabProps = {
   onLabelChange: (value: string) => void;
   onQuantityChange: (value: string) => void;
   onUnitCostChange: (value: string) => void;
+  onPlannedDateChange: (value: string) => void;
   onAddCostLine: () => void;
   editingLineId: number | null;
   editingLineDraft: EditingLineDraft;
   onEditLabelChange: (value: string) => void;
   onEditQuantityChange: (value: string) => void;
   onEditUnitCostChange: (value: string) => void;
+  onEditPlannedDateChange: (value: string) => void;
   onStartEditCostLine: (line: EstimateCostLine) => void;
   onSaveCostLine: (line: EstimateCostLine) => void;
   onRequestDeleteCostLine: (line: EstimateCostLine) => void;
@@ -80,12 +82,14 @@ export function EstimateTab({
   onLabelChange,
   onQuantityChange,
   onUnitCostChange,
+  onPlannedDateChange,
   onAddCostLine,
   editingLineId,
   editingLineDraft,
   onEditLabelChange,
   onEditQuantityChange,
   onEditUnitCostChange,
+  onEditPlannedDateChange,
   onStartEditCostLine,
   onSaveCostLine,
   onRequestDeleteCostLine,
@@ -166,6 +170,7 @@ export function EstimateTab({
               onLabelChange={onLabelChange}
               onQuantityChange={onQuantityChange}
               onUnitCostChange={onUnitCostChange}
+              onPlannedDateChange={onPlannedDateChange}
               estimateBusy={estimateBusy}
               onAdd={onAddCostLine}
             />
@@ -190,6 +195,7 @@ export function EstimateTab({
             onEditLabelChange={onEditLabelChange}
             onEditQuantityChange={onEditQuantityChange}
             onEditUnitCostChange={onEditUnitCostChange}
+            onEditPlannedDateChange={onEditPlannedDateChange}
             estimateBusy={estimateBusy}
             onStartEdit={onStartEditCostLine}
             onSave={onSaveCostLine}

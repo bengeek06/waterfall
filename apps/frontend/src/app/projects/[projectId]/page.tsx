@@ -688,12 +688,14 @@ export default function ProjectDetailsPage() {
           onLabelChange={estimateCostLines.updateCostLineDraftLabel}
           onQuantityChange={estimateCostLines.updateCostLineDraftQuantity}
           onUnitCostChange={estimateCostLines.updateCostLineDraftUnitCost}
+          onPlannedDateChange={estimateCostLines.updateCostLineDraftPlannedDate}
           onAddCostLine={() => void estimateCostLines.addCostLine()}
           editingLineId={estimateCostLines.editingLineId}
           editingLineDraft={estimateCostLines.editingLineDraft}
           onEditLabelChange={estimateCostLines.updateEditingLineDraftLabel}
           onEditQuantityChange={estimateCostLines.updateEditingLineDraftQuantity}
           onEditUnitCostChange={estimateCostLines.updateEditingLineDraftUnitCost}
+          onEditPlannedDateChange={estimateCostLines.updateEditingLineDraftPlannedDate}
           onStartEditCostLine={estimateCostLines.startEditCostLine}
           onSaveCostLine={(line) => void estimateCostLines.saveCostLine(line)}
           onRequestDeleteCostLine={estimateCostLines.requestDeleteCostLine}

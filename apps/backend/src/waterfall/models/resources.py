@@ -477,6 +477,9 @@ class EstimateCostLine(Base):
     unit_cost: Mapped[Decimal] = mapped_column(Numeric(16, 2), nullable=False)
     purchase_cost: Mapped[Decimal] = mapped_column(Numeric(16, 2), nullable=False)
     supply_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # Issue #66 (E6-05): a forecast date for future cashflow curves, entirely
+    # independent from task_id -- either, both, or neither may be set.
+    planned_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
     )

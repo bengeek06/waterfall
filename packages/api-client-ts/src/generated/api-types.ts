@@ -1732,6 +1732,8 @@ export interface components {
             quantity: number;
             unit_cost: number;
             supply_status?: components["schemas"]["SupplyStatus"] | null;
+            /** Format: date-time */
+            planned_date?: string | null;
         };
         EstimateCostLineUpdate: {
             task_id?: number | null;
@@ -1741,6 +1743,8 @@ export interface components {
             quantity?: number;
             unit_cost?: number;
             supply_status?: components["schemas"]["SupplyStatus"] | null;
+            /** Format: date-time */
+            planned_date?: string | null;
         };
         EstimateCostLineRead: {
             id: number;
@@ -1757,6 +1761,8 @@ export interface components {
             unit_cost: number;
             purchase_cost: number;
             supply_status?: components["schemas"]["SupplyStatus"] | null;
+            /** Format: date-time */
+            planned_date?: string | null;
         };
         EstimateAggregatesRead: {
             total_labor_cost: number;

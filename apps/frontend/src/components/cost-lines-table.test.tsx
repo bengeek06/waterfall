@@ -17,10 +17,11 @@ function renderTable(overrides: Partial<CostLinesTableProps> = {}) {
     costLines: [line],
     canEditEstimate: true,
     editingLineId: null,
-    editingLineDraft: { label: "", quantity: "", unitCost: "" },
+    editingLineDraft: { label: "", quantity: "", unitCost: "", plannedDate: "" },
     onEditLabelChange: vi.fn(),
     onEditQuantityChange: vi.fn(),
     onEditUnitCostChange: vi.fn(),
+    onEditPlannedDateChange: vi.fn(),
     estimateBusy: false,
     onStartEdit: vi.fn(),
     onSave: vi.fn(),
@@ -40,7 +41,7 @@ describe("CostLinesTable", () => {
     const onSave = vi.fn();
     renderTable({
       editingLineId: 1,
-      editingLineDraft: { label: "Achat licences", quantity: "3.00", unitCost: "150.00" },
+      editingLineDraft: { label: "Achat licences", quantity: "3.00", unitCost: "150.00", plannedDate: "" },
       onSave,
     });
 
@@ -56,7 +57,7 @@ describe("CostLinesTable", () => {
     const onSave = vi.fn();
     renderTable({
       editingLineId: 1,
-      editingLineDraft: { label: "Achat licences", quantity: "-2", unitCost: "150.00" },
+      editingLineDraft: { label: "Achat licences", quantity: "-2", unitCost: "150.00", plannedDate: "" },
       onSave,
     });
 
@@ -70,7 +71,7 @@ describe("CostLinesTable", () => {
     const onSave = vi.fn();
     renderTable({
       editingLineId: 1,
-      editingLineDraft: { label: "Achat licences", quantity: "2.00", unitCost: "-10" },
+      editingLineDraft: { label: "Achat licences", quantity: "2.00", unitCost: "-10", plannedDate: "" },
       onSave,
     });
 
@@ -88,7 +89,7 @@ describe("CostLinesTable", () => {
     const onSave = vi.fn();
     renderTable({
       editingLineId: 1,
-      editingLineDraft: { label: "Achat licences", quantity: "0", unitCost: "150.00" },
+      editingLineDraft: { label: "Achat licences", quantity: "0", unitCost: "150.00", plannedDate: "" },
       onSave,
     });
 
@@ -101,7 +102,7 @@ describe("CostLinesTable", () => {
     const onSave = vi.fn();
     renderTable({
       editingLineId: 1,
-      editingLineDraft: { label: "Achat licences", quantity: "2.00", unitCost: "0" },
+      editingLineDraft: { label: "Achat licences", quantity: "2.00", unitCost: "0", plannedDate: "" },
       onSave,
     });
 
@@ -119,7 +120,7 @@ describe("CostLinesTable", () => {
     const onSave = vi.fn();
     renderTable({
       editingLineId: 1,
-      editingLineDraft: { label: "Achat licences", quantity: "", unitCost: "150.00" },
+      editingLineDraft: { label: "Achat licences", quantity: "", unitCost: "150.00", plannedDate: "" },
       onSave,
     });
 
@@ -132,7 +133,7 @@ describe("CostLinesTable", () => {
     const onSave = vi.fn();
     renderTable({
       editingLineId: 1,
-      editingLineDraft: { label: "Achat licences", quantity: "2.00", unitCost: "" },
+      editingLineDraft: { label: "Achat licences", quantity: "2.00", unitCost: "", plannedDate: "" },
       onSave,
     });
 
@@ -147,7 +148,7 @@ describe("CostLinesTable", () => {
     const onSave = vi.fn();
     renderTable({
       editingLineId: 1,
-      editingLineDraft: { label: "", quantity: "2.00", unitCost: "150.00" },
+      editingLineDraft: { label: "", quantity: "2.00", unitCost: "150.00", plannedDate: "" },
       onSave,
     });
 
@@ -162,6 +163,68 @@ describe("CostLinesTable", () => {
     expect(screen.getByText("Achat licences")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Sauver" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Modifier" })).toBeInTheDocument();
+  });
+
+  // #66 (E6-05): planned_date is optional, independent from task_id -- an empty value must never
+  // block "Sauver" (unlike quantity, it carries no `required`/HTML5 numeric constraint).
+  describe("planned date (E6-05)", () => {
+    it("still saves when the planned date is left blank, since the field is optional", () => {
+      const onSave = vi.fn();
+      renderTable({
+        editingLineId: 1,
+        editingLineDraft: { label: "Achat licences", quantity: "2.00", unitCost: "150.00", plannedDate: "" },
+        onSave,
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Sauver" }));
+
+      expect(onSave).toHaveBeenCalledWith(line);
+    });
+
+    it("reports a change to the edited line's planned date field", () => {
+      const onEditPlannedDateChange = vi.fn();
+      renderTable({
+        editingLineId: 1,
+        editingLineDraft: { label: "Achat licences", quantity: "2.00", unitCost: "150.00", plannedDate: "" },
+        onEditPlannedDateChange,
+      });
+
+      fireEvent.change(screen.getByLabelText("Date prévisionnelle de Achat licences"), {
+        target: { value: "2026-10-01" },
+      });
+
+      expect(onEditPlannedDateChange).toHaveBeenCalledWith("2026-10-01");
+    });
+
+    it("pre-fills the edited line's planned date input from editingLineDraft", () => {
+      renderTable({
+        editingLineId: 1,
+        editingLineDraft: { label: "Achat licences", quantity: "2.00", unitCost: "150.00", plannedDate: "2026-10-01" },
+      });
+
+      expect(screen.getByLabelText("Date prévisionnelle de Achat licences")).toHaveValue("2026-10-01");
+    });
+
+    it("renders a placeholder for a line with no planned date when not editing", () => {
+      renderTable({ editingLineId: null });
+
+      expect(screen.getAllByText("-").length).toBeGreaterThan(0);
+    });
+
+    it("renders the formatted planned date for a line that has one, when not editing", () => {
+      const lineWithDate = {
+        id: 1,
+        accounting_code: "6011",
+        label: "Achat licences",
+        quantity: "2.00",
+        unit_cost: "100.00",
+        purchase_cost: "200.00",
+        planned_date: "2026-10-01T00:00:00+00:00",
+      } as never;
+      renderTable({ costLines: [lineWithDate], editingLineId: null });
+
+      expect(screen.getByText("01/10/2026")).toBeInTheDocument();
+    });
   });
 
   describe("row/select-all selection (E6-03)", () => {

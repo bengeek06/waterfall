@@ -394,6 +394,7 @@ def create_estimate_cost_line(
         unit_cost=payload.unit_cost,
         purchase_cost=payload.quantity * payload.unit_cost,
         supply_status=supply_status,
+        planned_date=payload.planned_date,
     )
     db.add(line)
     db.commit()
