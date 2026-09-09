@@ -1854,6 +1854,30 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/ProjectNotFound'
+  /projects/{projectId}/estimates/{estimateId}/export-reconciliation.xlsx:
+    get:
+      tags:
+        - projects
+      summary: Exporter le devis au format Excel réconciliable (E6-08)
+      description: 'Export technique distinct de /export.xlsx, destiné à une réimportation fidèle (E6-09) : une feuille par nature de ligne (Tâches, MO, Non-MO), chacune portant l''identifiant interne stable de sa ligne source (EstimateTaskRow.id / TaskRoleAssignment.id / EstimateCostLine.id) en plus des libellés lisibles, permettant de distinguer une mise à jour d''une création à la réimportation.'
+      operationId: exportEstimateReconciliationExcel
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/EstimateId'
+      responses:
+        '200':
+          description: Classeur Excel réconciliable du devis (feuilles Tâches / MO / Non-MO)
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
   /projects/{projectId}/cost-codes:
     get:
       tags:

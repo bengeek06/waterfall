@@ -65,6 +65,7 @@ from waterfall.services import (
     PlanningTreeMoveError,
     PlanningTreeMoveNotFoundError,
     apply_pagination,
+    build_estimate_reconciliation_workbook,
     build_estimate_workbook,
     calculate_estimate_aggregates,
     calculate_estimate_lines,
@@ -503,6 +504,33 @@ def export_estimate_excel(
     estimate = get_estimate_or_404(db, project_id, estimate_id)
     workbook_bytes = build_estimate_workbook(db, project, estimate)
     filename = f"devis-{project.name}-v{estimate.version_number}.xlsx".replace(" ", "-")
+    return Response(
+        content=workbook_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/{project_id}/estimates/{estimate_id}/export-reconciliation.xlsx")
+def export_estimate_reconciliation_excel(
+    project_id: int,
+    estimate_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> Response:
+    """Export the devis for round-trip reimport (E6-08, #69).
+
+    Distinct from ``GET .../export.xlsx`` (a human-readable cost grid): this
+    workbook carries one sheet per line nature (`Tâches`/`MO`/`Non-MO`) with
+    stable internal ids for reconciliation on reimport (E6-09, future #70).
+    See ``estimate_reconciliation_export`` for the exact column layout.
+    """
+    project = get_project_or_404(db, project_id, current_user.id)
+    estimate = get_estimate_or_404(db, project_id, estimate_id)
+    workbook_bytes = build_estimate_reconciliation_workbook(db, project, estimate)
+    filename = f"devis-{project.name}-v{estimate.version_number}-reconciliation.xlsx".replace(
+        " ", "-"
+    )
     return Response(
         content=workbook_bytes,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

@@ -1,10 +1,12 @@
 from datetime import UTC, datetime
 from decimal import Decimal
+from io import BytesIO
 from typing import Any, cast
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
 from httpx import Response
+from openpyxl import load_workbook
 
 from waterfall.db.session import get_session_factory
 from waterfall.main import app
@@ -16,6 +18,7 @@ from waterfall.models.resources import (
     CostCategory,
     CostType,
     Estimate,
+    EstimateCostLine,
     EstimateTaskRow,
     ProjectCostCode,
     ResourceNode,
@@ -592,6 +595,461 @@ def test_estimate_aggregates_and_excel_export_after_validation() -> None:
             == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
         assert excel_response.content[:2] == b"PK"
+
+
+_TASK_SHEET_HEADERS = (
+    "id",
+    "task_id",
+    "task_uid",
+    "parent_task_id",
+    "position",
+    "task_name",
+    "outline_number",
+    "outline_level",
+    "is_milestone",
+)
+_LABOR_SHEET_HEADERS = (
+    "id",
+    "task_id",
+    "task_name",
+    "role_id",
+    "role_name",
+    "cost_category_id",
+    "cost_category_name",
+    "cost_code_id",
+    "quantity",
+    "hours",
+    "comment",
+    "hors_perimetre_planning",
+)
+_NON_LABOR_SHEET_HEADERS = (
+    "id",
+    "task_id",
+    "cost_type_id",
+    "cost_type_code",
+    "cost_category_id",
+    "accounting_code",
+    "category_code",
+    "cost_code_id",
+    "label",
+    "quantity",
+    "unit_cost",
+    "purchase_cost",
+    "supply_status",
+    "planned_date",
+)
+
+
+def _sheet_records(sheet: Any) -> list[dict[str, Any]]:
+    rows = list(sheet.iter_rows(values_only=True))
+    headers = rows[0]
+    return [dict(zip(headers, row, strict=True)) for row in rows[1:]]
+
+
+def _fetch_task_id_by_uid(
+    client: TestClient, headers: dict[str, str], project_id: int
+) -> dict[int, int]:
+    response: Response = client.get(f"/projects/{project_id}/tasks", headers=headers)
+    assert response.status_code == 200
+    return {
+        task["uid"]: task["id"] for task in cast(list[dict[str, Any]], response.json()["items"])
+    }
+
+
+def _seed_reconciliation_fixture(client: TestClient, headers: dict[str, str]) -> dict[str, Any]:
+    """Set up a project with one task-role assignment (MO) and one non-labor cost
+    line, in a devis backed by a source planning -- E6-08 (#69) fixture shared by
+    the reconciliation export tests below.
+    """
+    project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+    planning_response: Response = client.post(
+        f"/projects/{project_id}/plannings", json={}, headers=headers
+    )
+    assert planning_response.status_code == 201
+    planning_id = cast(int, planning_response.json()["id"])
+
+    # create_planning alone never touches displayed_planning_id (only
+    # .../reference and .../display do); an estimate created below picks up
+    # estimate.planning_id from project.displayed_planning_id, so it must be
+    # set explicitly for the estimate to have a source planning at all.
+    display_response: Response = client.post(
+        f"/projects/{project_id}/plannings/{planning_id}/display", headers=headers
+    )
+    assert display_response.status_code == 200
+
+    role_id, supply_role_id = _seed_roles()
+    labor_category_id = _cost_category_id_for_role(role_id)
+    supply_category_id = _cost_category_id_for_role(supply_role_id)
+
+    task_id_by_uid = _fetch_task_id_by_uid(client, headers, project_id)
+
+    assignment_response: Response = client.post(
+        f"/projects/{project_id}/tasks/1001/role-assignments",
+        json={"role_id": role_id, "quantity": 2, "hours": 10, "comment": "Dev senior"},
+        headers=headers,
+    )
+    assert assignment_response.status_code == 201
+    assignment_id = cast(int, assignment_response.json()["id"])
+
+    estimate_response: Response = client.post(
+        f"/projects/{project_id}/estimates",
+        json={"kind": "initial", "currency_code": "EUR"},
+        headers=headers,
+    )
+    assert estimate_response.status_code == 201
+    estimate_id = cast(int, estimate_response.json()["id"])
+    assert estimate_response.json()["planning_id"] == planning_id
+
+    cost_line_response: Response = client.post(
+        f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+        json={
+            "task_id": task_id_by_uid[1002],
+            "cost_category_id": supply_category_id,
+            "label": "Cable reseau",
+            "quantity": 5,
+            "unit_cost": 12.5,
+        },
+        headers=headers,
+    )
+    assert cost_line_response.status_code == 201
+    cost_line_id = cast(int, cost_line_response.json()["id"])
+
+    task_rows_response: Response = client.get(
+        f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
+    )
+    assert task_rows_response.status_code == 200
+    task_row_by_task_id = {
+        row["task_id"]: row["id"]
+        for row in cast(list[dict[str, Any]], task_rows_response.json()["items"])
+    }
+
+    return {
+        "project_id": project_id,
+        "estimate_id": estimate_id,
+        "task1_id": task_id_by_uid[1001],
+        "task2_id": task_id_by_uid[1002],
+        "task_row_id_for_task1": task_row_by_task_id[task_id_by_uid[1001]],
+        "role_id": role_id,
+        "labor_category_id": labor_category_id,
+        "assignment_id": assignment_id,
+        "supply_category_id": supply_category_id,
+        "cost_line_id": cost_line_id,
+    }
+
+
+def test_estimate_reconciliation_export_contains_tasks_labor_and_non_labor_sheets() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        fixture = _seed_reconciliation_fixture(client, headers)
+
+        response: Response = client.get(
+            "/projects/"
+            f"{fixture['project_id']}/estimates/{fixture['estimate_id']}"
+            "/export-reconciliation.xlsx",
+            headers=headers,
+        )
+        assert response.status_code == 200
+        assert (
+            response.headers["content-type"]
+            == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+        assert response.content[:2] == b"PK"
+
+        workbook = load_workbook(BytesIO(cast(bytes, response.content)))
+        assert workbook.sheetnames == ["Tâches", "MO", "Non-MO"]
+
+        tasks_sheet = workbook["Tâches"]
+        assert tuple(next(tasks_sheet.iter_rows(values_only=True))) == _TASK_SHEET_HEADERS
+        task_records = _sheet_records(tasks_sheet)
+        assert len(task_records) == 2
+        task1_record = next(
+            record for record in task_records if record["task_id"] == fixture["task1_id"]
+        )
+        assert task1_record["id"] == fixture["task_row_id_for_task1"]
+        assert task1_record["task_uid"] == 1001
+        assert task1_record["task_name"] == "Task One"
+        assert task1_record["is_milestone"] is False
+
+        labor_sheet = workbook["MO"]
+        assert tuple(next(labor_sheet.iter_rows(values_only=True))) == _LABOR_SHEET_HEADERS
+        labor_records = _sheet_records(labor_sheet)
+        assert len(labor_records) == 1
+        labor_record = labor_records[0]
+        assert labor_record["id"] == fixture["assignment_id"]
+        assert labor_record["task_id"] == fixture["task1_id"]
+        assert labor_record["task_name"] == "Task One"
+        assert labor_record["role_id"] == fixture["role_id"]
+        assert labor_record["role_name"] == "Développeur"
+        assert labor_record["cost_category_id"] == fixture["labor_category_id"]
+        assert labor_record["quantity"] == 2
+        assert labor_record["hours"] == 10
+        assert labor_record["comment"] == "Dev senior"
+        assert labor_record["hors_perimetre_planning"] is False
+
+        non_labor_sheet = workbook["Non-MO"]
+        assert tuple(next(non_labor_sheet.iter_rows(values_only=True))) == _NON_LABOR_SHEET_HEADERS
+        non_labor_records = _sheet_records(non_labor_sheet)
+        assert len(non_labor_records) == 1
+        non_labor_record = non_labor_records[0]
+        assert non_labor_record["id"] == fixture["cost_line_id"]
+        assert non_labor_record["task_id"] == fixture["task2_id"]
+        assert non_labor_record["cost_category_id"] == fixture["supply_category_id"]
+        assert non_labor_record["label"] == "Cable reseau"
+        assert non_labor_record["quantity"] == 5
+        assert non_labor_record["unit_cost"] == 12.5
+        assert non_labor_record["purchase_cost"] == 62.5
+        assert non_labor_record["planned_date"] is None
+
+
+def test_estimate_reconciliation_export_row_ids_are_stable_across_exports() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        fixture = _seed_reconciliation_fixture(client, headers)
+        url = (
+            "/projects/"
+            f"{fixture['project_id']}/estimates/{fixture['estimate_id']}"
+            "/export-reconciliation.xlsx"
+        )
+
+        first_response: Response = client.get(url, headers=headers)
+        second_response: Response = client.get(url, headers=headers)
+        assert first_response.status_code == 200
+        assert second_response.status_code == 200
+
+        first_workbook = load_workbook(BytesIO(cast(bytes, first_response.content)))
+        second_workbook = load_workbook(BytesIO(cast(bytes, second_response.content)))
+        for sheet_name in ("Tâches", "MO", "Non-MO"):
+            first_ids = [record["id"] for record in _sheet_records(first_workbook[sheet_name])]
+            second_ids = [record["id"] for record in _sheet_records(second_workbook[sheet_name])]
+            assert first_ids == second_ids
+            assert first_ids  # each sheet has at least the one seeded row
+
+
+def test_estimate_reconciliation_export_without_source_planning_does_not_crash() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        role_id, _ = _seed_roles()
+
+        assignment_response: Response = client.post(
+            f"/projects/{project_id}/tasks/1001/role-assignments",
+            json={"role_id": role_id, "quantity": 1, "hours": 1},
+            headers=headers,
+        )
+        assert assignment_response.status_code == 201
+
+        estimate_response: Response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate_response.status_code == 201
+        estimate_id = cast(int, estimate_response.json()["id"])
+        assert estimate_response.json()["planning_id"] is None
+
+        response: Response = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/export-reconciliation.xlsx",
+            headers=headers,
+        )
+        assert response.status_code == 200
+
+        workbook = load_workbook(BytesIO(cast(bytes, response.content)))
+        assert len(_sheet_records(workbook["Tâches"])) == 2
+        labor_records = _sheet_records(workbook["MO"])
+        assert len(labor_records) == 1
+        # No source planning at all: nothing can be "outside" a snapshot that doesn't exist.
+        assert labor_records[0]["hors_perimetre_planning"] is False
+
+
+def test_estimate_reconciliation_export_excludes_labor_cost_line_defensively() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        estimate_response: Response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        estimate_id = cast(int, estimate_response.json()["id"])
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            labor_type = CostType(code=f"MO-{uuid4().hex[:8]}", name="Main d'oeuvre", kind="labor")
+            session.add(labor_type)
+            session.flush()
+            labor_category = CostCategory(
+                cost_type_id=labor_type.id,
+                accounting_code=f"MOCAT-{uuid4().hex[:8]}",
+                name="Main d'oeuvre",
+            )
+            session.add(labor_category)
+            session.flush()
+            # Direct ORM insert: the API (get_non_labor_category_or_400) never lets a
+            # labor cost type through create_estimate_cost_line, so this defensive
+            # scenario can only be reproduced by bypassing the route layer.
+            stray_line = EstimateCostLine(
+                estimate_id=estimate_id,
+                task_id=None,
+                cost_code_id=None,
+                cost_type_id=labor_type.id,
+                cost_category_id=labor_category.id,
+                cost_type_code=labor_type.code,
+                accounting_code=labor_category.accounting_code,
+                category_code=None,
+                label="Ligne MO egaree",
+                quantity=Decimal("1"),
+                unit_cost=Decimal("100"),
+                purchase_cost=Decimal("100"),
+                supply_status=None,
+                planned_date=None,
+            )
+            session.add(stray_line)
+            session.commit()
+
+        response: Response = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/export-reconciliation.xlsx",
+            headers=headers,
+        )
+        assert response.status_code == 200
+
+        workbook = load_workbook(BytesIO(cast(bytes, response.content)))
+        non_labor_records = _sheet_records(workbook["Non-MO"])
+        assert all(record["label"] != "Ligne MO egaree" for record in non_labor_records)
+
+
+def test_estimate_reconciliation_export_flags_assignment_outside_planning_snapshot() -> None:
+    """PR review finding Moyenne #1 (#69): a role assignment whose task was added
+    to the project *after* the estimate's source planning was snapshotted (or
+    whose task otherwise never made it into that snapshot) must still appear on
+    the "MO" sheet -- never silently dropped -- flagged via
+    ``hors_perimetre_planning=True`` so a reconciliation user can see it won't be
+    reprised automatically on a future reimport (E6-09)."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        fixture = _seed_reconciliation_fixture(client, headers)
+        project_id = cast(int, fixture["project_id"])
+
+        # Added after the planning (and its snapshot) already exist, so this task's
+        # uid is absent from `WfPlanningTaskSnapshot` for the estimate's source planning.
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            outside_task = MsTask(
+                project_id=project_id,
+                uid=1003,
+                name="Task Outside Snapshot",
+                task_type=0,
+                outline_number="3",
+                outline_level=1,
+                wbs="3",
+                start_at=datetime(2026, 1, 11, 8, 0, tzinfo=UTC),
+                finish_at=datetime(2026, 1, 12, 18, 0, tzinfo=UTC),
+                duration_minutes=None,
+                duration_format=None,
+                work_minutes=None,
+                percent_complete=0,
+                is_summary=False,
+                is_milestone=False,
+                calendar_uid=1,
+            )
+            session.add(outside_task)
+            session.commit()
+
+        outside_assignment_response: Response = client.post(
+            f"/projects/{project_id}/tasks/1003/role-assignments",
+            json={"role_id": fixture["role_id"], "quantity": 1, "hours": 5},
+            headers=headers,
+        )
+        assert outside_assignment_response.status_code == 201
+        outside_assignment_id = cast(int, outside_assignment_response.json()["id"])
+
+        response: Response = client.get(
+            f"/projects/{project_id}/estimates/{fixture['estimate_id']}/export-reconciliation.xlsx",
+            headers=headers,
+        )
+        assert response.status_code == 200
+
+        workbook = load_workbook(BytesIO(cast(bytes, response.content)))
+        labor_records = _sheet_records(workbook["MO"])
+        assert len(labor_records) == 2
+
+        outside_record = next(
+            record for record in labor_records if record["id"] == outside_assignment_id
+        )
+        assert outside_record["task_name"] == "Task Outside Snapshot"
+        assert outside_record["hors_perimetre_planning"] is True
+
+        in_scope_record = next(
+            record for record in labor_records if record["id"] == fixture["assignment_id"]
+        )
+        assert in_scope_record["hors_perimetre_planning"] is False
+
+
+def test_estimate_reconciliation_export_does_not_leak_role_assignments_across_projects() -> None:
+    """Non-regression test for PR review finding Moyenne #2 (#69): TaskRoleAssignment
+    is a project-wide table (not scoped to a single estimate), so a regression in
+    `_scoped_task_role_assignments`'s `MsTask.project_id == project.id` filter
+    could silently pull another project's labor assignments into this one's
+    reconciliation export."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        owner_id = _current_user_id(client, headers)
+        project_a_id, _ = _seed_projects_and_tasks(owner_id)
+        project_b_id, _ = _seed_projects_and_tasks(owner_id)
+        role_id, _ = _seed_roles()
+
+        leaking_assignment_response: Response = client.post(
+            f"/projects/{project_b_id}/tasks/1001/role-assignments",
+            json={
+                "role_id": role_id,
+                "quantity": 1,
+                "hours": 1,
+                "comment": "PROJECT_B_ONLY_MUST_NOT_LEAK",
+            },
+            headers=headers,
+        )
+        assert leaking_assignment_response.status_code == 201
+
+        estimate_response: Response = client.post(
+            f"/projects/{project_a_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate_response.status_code == 201
+        estimate_id = cast(int, estimate_response.json()["id"])
+
+        response: Response = client.get(
+            f"/projects/{project_a_id}/estimates/{estimate_id}/export-reconciliation.xlsx",
+            headers=headers,
+        )
+        assert response.status_code == 200
+
+        workbook = load_workbook(BytesIO(cast(bytes, response.content)))
+        labor_records = _sheet_records(workbook["MO"])
+        assert all(record["comment"] != "PROJECT_B_ONLY_MUST_NOT_LEAK" for record in labor_records)
+        assert labor_records == []
+
+
+def test_estimate_reconciliation_export_project_not_found() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        response: Response = client.get(
+            "/projects/999999/estimates/1/export-reconciliation.xlsx", headers=headers
+        )
+        assert response.status_code == 404
+
+
+def test_estimate_reconciliation_export_estimate_not_found() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        response: Response = client.get(
+            f"/projects/{project_id}/estimates/999999/export-reconciliation.xlsx",
+            headers=headers,
+        )
+        assert response.status_code == 404
 
 
 def test_get_project_not_found() -> None:

@@ -138,6 +138,8 @@ paths:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1aggregates
   /projects/{projectId}/estimates/{estimateId}/export.xlsx:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1export.xlsx
+  /projects/{projectId}/estimates/{estimateId}/export-reconciliation.xlsx:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1export-reconciliation.xlsx
   /projects/{projectId}/cost-codes:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1cost-codes
   /projects/{projectId}/cost-codes/{costCodeId}:
