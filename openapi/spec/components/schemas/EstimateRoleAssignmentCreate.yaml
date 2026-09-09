@@ -1,9 +1,13 @@
 type: object
 required:
+- task_id
 - role_id
 - quantity
 - hours
 properties:
+  task_id:
+    type: integer
+    minimum: 1
   role_id:
     type: integer
     minimum: 1

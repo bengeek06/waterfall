@@ -25,6 +25,7 @@ from waterfall.models.resources import (
     ProjectCostCode,
     ResourceNode,
     ResourceRole,
+    TaskRoleAssignment,
 )
 from waterfall.models.wf_core import WfTaskEnrichment
 
@@ -212,6 +213,50 @@ def _root_cost_code_id(client: TestClient, headers: dict[str, str], project_id: 
     return cast(int, root["id"])
 
 
+def _seed_task_role_assignment(
+    client: TestClient,
+    headers: dict[str, str],
+    project_id: int,
+    task_uid: int,
+    role_id: int,
+    quantity: str | float,
+    hours: str | float,
+    *,
+    comment: str | None = None,
+    cost_code_id: int | None = None,
+) -> int:
+    """Insert a `TaskRoleAssignment` directly via the ORM.
+
+    E12-01 (#273) removed the `/tasks/{uid}/role-assignments` HTTP route this
+    module used to create these fixtures through; `TaskRoleAssignment` itself
+    (still feeding the reconciliation export and `get_estimate_validation_warnings`,
+    both unaffected by that issue) is untouched, so this reaches directly into the
+    DB instead of going through a route that no longer exists. Defaults to the
+    project's root cost code (mirroring the API's own `resolve_cost_code_id`
+    default) unless the caller passes an explicit `cost_code_id`.
+    """
+    if cost_code_id is None:
+        cost_code_id = _root_cost_code_id(client, headers, project_id)
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        task = (
+            session.query(MsTask)
+            .filter(MsTask.project_id == project_id, MsTask.uid == task_uid)
+            .one()
+        )
+        assignment = TaskRoleAssignment(
+            task_id=task.id,
+            role_id=role_id,
+            cost_code_id=cost_code_id,
+            quantity=Decimal(str(quantity)),
+            hours=Decimal(str(hours)),
+            comment=comment,
+        )
+        session.add(assignment)
+        session.commit()
+        return assignment.id
+
+
 def test_get_projects_and_project_tasks() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)
@@ -366,45 +411,6 @@ def test_patch_task_description_not_found() -> None:
             headers=headers,
         )
         assert response.status_code == 404
-
-
-def test_snapshot_only_task_rejects_legacy_assignment() -> None:
-    with TestClient(app) as client:
-        headers = _auth_headers(client, "projects.snapshot-assignment@example.com")
-        project_id = cast(
-            int,
-            client.post(
-                "/projects", json={"name": "Snapshot-only assignment"}, headers=headers
-            ).json()["id"],
-        )
-        with get_session_factory()() as session:
-            planning = WfPlanning(project_id=project_id, version_number=1, status="draft")
-            session.add(planning)
-            session.flush()
-            session.add(
-                WfPlanningTaskSnapshot(
-                    planning_id=planning.id,
-                    uid=9101,
-                    name="Snapshot-only",
-                    position=1,
-                    is_summary=False,
-                    is_milestone=False,
-                )
-            )
-            session.query(MsProject).filter(MsProject.id == project_id).update(
-                {MsProject.displayed_planning_id: planning.id}
-            )
-            session.commit()
-        role_id, _ = _seed_roles()
-
-        response = client.post(
-            f"/projects/{project_id}/tasks/9101/role-assignments",
-            json={"role_id": role_id, "quantity": 1, "hours": 1},
-            headers=headers,
-        )
-
-        assert response.status_code == 409
-        assert response.json()["detail"] == {"code": "GENERIC_ERROR"}
 
 
 def test_delete_planning_task_referenced_by_cost_line_conflicts_without_mutation() -> None:
@@ -702,13 +708,9 @@ def _seed_reconciliation_fixture(client: TestClient, headers: dict[str, str]) ->
 
     task_id_by_uid = _fetch_task_id_by_uid(client, headers, project_id)
 
-    assignment_response: Response = client.post(
-        f"/projects/{project_id}/tasks/1001/role-assignments",
-        json={"role_id": role_id, "quantity": 2, "hours": 10, "comment": "Dev senior"},
-        headers=headers,
+    assignment_id = _seed_task_role_assignment(
+        client, headers, project_id, 1001, role_id, 2, 10, comment="Dev senior"
     )
-    assert assignment_response.status_code == 201
-    assignment_id = cast(int, assignment_response.json()["id"])
 
     estimate_response: Response = client.post(
         f"/projects/{project_id}/estimates",
@@ -849,13 +851,7 @@ def test_estimate_reconciliation_export_without_source_planning_does_not_crash()
         headers = _auth_headers(client)
         project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
         role_id, _ = _seed_roles()
-
-        assignment_response: Response = client.post(
-            f"/projects/{project_id}/tasks/1001/role-assignments",
-            json={"role_id": role_id, "quantity": 1, "hours": 1},
-            headers=headers,
-        )
-        assert assignment_response.status_code == 201
+        _seed_task_role_assignment(client, headers, project_id, 1001, role_id, 1, 1)
 
         estimate_response: Response = client.post(
             f"/projects/{project_id}/estimates",
@@ -974,13 +970,9 @@ def test_estimate_reconciliation_export_flags_assignment_outside_planning_snapsh
             session.add(outside_task)
             session.commit()
 
-        outside_assignment_response: Response = client.post(
-            f"/projects/{project_id}/tasks/1003/role-assignments",
-            json={"role_id": fixture["role_id"], "quantity": 1, "hours": 5},
-            headers=headers,
+        outside_assignment_id = _seed_task_role_assignment(
+            client, headers, project_id, 1003, fixture["role_id"], 1, 5
         )
-        assert outside_assignment_response.status_code == 201
-        outside_assignment_id = cast(int, outside_assignment_response.json()["id"])
 
         response: Response = client.get(
             f"/projects/{project_id}/estimates/{fixture['estimate_id']}/export-reconciliation.xlsx",
@@ -1017,17 +1009,16 @@ def test_estimate_reconciliation_export_does_not_leak_role_assignments_across_pr
         project_b_id, _ = _seed_projects_and_tasks(owner_id)
         role_id, _ = _seed_roles()
 
-        leaking_assignment_response: Response = client.post(
-            f"/projects/{project_b_id}/tasks/1001/role-assignments",
-            json={
-                "role_id": role_id,
-                "quantity": 1,
-                "hours": 1,
-                "comment": "PROJECT_B_ONLY_MUST_NOT_LEAK",
-            },
-            headers=headers,
+        _seed_task_role_assignment(
+            client,
+            headers,
+            project_b_id,
+            1001,
+            role_id,
+            1,
+            1,
+            comment="PROJECT_B_ONLY_MUST_NOT_LEAK",
         )
-        assert leaking_assignment_response.status_code == 201
 
         estimate_response: Response = client.post(
             f"/projects/{project_a_id}/estimates",
@@ -1853,69 +1844,6 @@ def test_list_plannings_pagination_sort_and_validation() -> None:
         assert [item["note"] for item in searched.json()["items"]] == ["Brouillon de reference"]
 
 
-def test_list_task_role_assignments_pagination_sort_and_validation() -> None:
-    with TestClient(app) as client:
-        headers = _auth_headers(client)
-        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
-        labor_role_id, _ = _seed_roles()
-
-        session_factory = get_session_factory()
-        with session_factory() as session:
-            labor_role = session.query(ResourceRole).filter(ResourceRole.id == labor_role_id).one()
-            second_role = ResourceRole(
-                node_id=labor_role.node_id,
-                cost_category_id=labor_role.cost_category_id,
-                name="Analyste",
-            )
-            session.add(second_role)
-            session.commit()
-            second_role_id = second_role.id
-
-        first_assignment = client.post(
-            f"/projects/{project_id}/tasks/1001/role-assignments",
-            json={"role_id": labor_role_id, "quantity": "1", "hours": "1"},
-            headers=headers,
-        )
-        assert first_assignment.status_code == 201
-        second_assignment = client.post(
-            f"/projects/{project_id}/tasks/1001/role-assignments",
-            json={"role_id": second_role_id, "quantity": "1", "hours": "1"},
-            headers=headers,
-        )
-        assert second_assignment.status_code == 201
-
-        listed = client.get(f"/projects/{project_id}/tasks/1001/role-assignments", headers=headers)
-        assert listed.status_code == 200
-        body = cast(dict[str, Any], listed.json())
-        assert body["limit"] is None
-        assert body["total"] == len(body["items"]) == 2
-        # Default sort is role_name ascending: "Analyste" precedes "Développeur".
-        assert [item["role_name"] for item in body["items"]] == ["Analyste", "Développeur"]
-
-        descending = client.get(
-            f"/projects/{project_id}/tasks/1001/role-assignments?sort=-role_name",
-            headers=headers,
-        )
-        assert descending.status_code == 200
-        assert [item["role_name"] for item in descending.json()["items"]] == [
-            "Développeur",
-            "Analyste",
-        ]
-
-        invalid_sort = client.get(
-            f"/projects/{project_id}/tasks/1001/role-assignments?sort=unknown_column",
-            headers=headers,
-        )
-        assert invalid_sort.status_code == 400
-
-        searched = client.get(
-            f"/projects/{project_id}/tasks/1001/role-assignments?q=analyste",
-            headers=headers,
-        )
-        assert searched.status_code == 200
-        assert [item["role_name"] for item in searched.json()["items"]] == ["Analyste"]
-
-
 def test_project_estimate_snapshots_tasks_and_validates() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)
@@ -2011,12 +1939,7 @@ def test_validate_estimate_warns_about_uncovered_tasks_only() -> None:
         estimate_id = cast(int, estimate_response.json()["id"])
 
         # Task 1001 is covered via a TaskRoleAssignment.
-        assignment_response = client.post(
-            f"/projects/{project_id}/tasks/1001/role-assignments",
-            json={"role_id": labor_role_id, "quantity": "1", "hours": "1"},
-            headers=headers,
-        )
-        assert assignment_response.status_code == 201
+        _seed_task_role_assignment(client, headers, project_id, 1001, labor_role_id, 1, 1)
 
         # Task 1002 is covered via an EstimateCostLine.task_id.
         cost_line_response = client.post(
@@ -2076,14 +1999,7 @@ def test_validate_estimate_reports_no_warnings_when_all_tasks_are_covered() -> N
         assert estimate_response.status_code == 201
         estimate_id = cast(int, estimate_response.json()["id"])
 
-        assert (
-            client.post(
-                f"/projects/{project_id}/tasks/1001/role-assignments",
-                json={"role_id": labor_role_id, "quantity": "1", "hours": "1"},
-                headers=headers,
-            ).status_code
-            == 201
-        )
+        _seed_task_role_assignment(client, headers, project_id, 1001, labor_role_id, 1, 1)
         assert (
             client.post(
                 f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
@@ -3113,17 +3029,16 @@ def test_estimate_line_snapshot_carries_source_cost_code_id() -> None:
         )
         estimate_id = cast(int, estimate_response.json()["id"])
 
-        assignment_response = client.post(
-            f"/projects/{project_id}/tasks/1001/role-assignments",
-            json={
-                "role_id": labor_role_id,
-                "quantity": "1",
-                "hours": "1",
-                "cost_code_id": labor_sub_code_id,
-            },
-            headers=headers,
+        _seed_task_role_assignment(
+            client,
+            headers,
+            project_id,
+            1001,
+            labor_role_id,
+            1,
+            1,
+            cost_code_id=labor_sub_code_id,
         )
-        assert assignment_response.status_code == 201
 
         cost_line_response = client.post(
             f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
@@ -3199,371 +3114,6 @@ def test_forecast_estimate_requires_same_project_reference() -> None:
             headers=other_headers,
         )
         assert hidden_response.status_code == 404
-
-
-def test_task_role_assignment_lifecycle_and_labor_validation() -> None:
-    with TestClient(app) as client:
-        headers = _auth_headers(client)
-        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
-        labor_role_id, supply_role_id = _seed_roles()
-
-        rejected_response = client.post(
-            f"/projects/{project_id}/tasks/1001/role-assignments",
-            json={"role_id": supply_role_id, "quantity": "1", "hours": "7.4"},
-            headers=headers,
-        )
-        assert rejected_response.status_code == 400
-
-        create_response = client.post(
-            f"/projects/{project_id}/tasks/1001/role-assignments",
-            json={"role_id": labor_role_id, "quantity": "2", "hours": "7.4"},
-            headers=headers,
-        )
-        assert create_response.status_code == 201
-        assignment = cast(dict[str, Any], create_response.json())
-        assignment_id = cast(int, assignment["id"])
-        assert assignment["role_code"] == "Développeur"
-        assert assignment["accounting_code"] == "MO-DEV"
-
-        list_response = client.get(
-            f"/projects/{project_id}/tasks/1001/role-assignments",
-            headers=headers,
-        )
-        assert list_response.status_code == 200
-        assignments = cast(list[dict[str, Any]], list_response.json()["items"])
-        assert len(assignments) == 1
-
-        update_response = client.patch(
-            f"/projects/{project_id}/tasks/1001/role-assignments/{assignment_id}",
-            json={"hours": "14.8"},
-            headers=headers,
-        )
-        assert update_response.status_code == 200
-        assert update_response.json()["hours"] == "14.80"
-
-        delete_response = client.delete(
-            f"/projects/{project_id}/tasks/1001/role-assignments/{assignment_id}",
-            headers=headers,
-        )
-        assert delete_response.status_code == 204
-
-
-def test_task_role_assignment_defaults_to_project_root_cost_code() -> None:
-    """Issue #63 (E6-02): a role assignment created without an explicit
-    `cost_code_id` is attached to the project's active root cost code by default."""
-    with TestClient(app) as client:
-        headers = _auth_headers(client)
-        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
-        labor_role_id, _ = _seed_roles()
-        root_id = _root_cost_code_id(client, headers, project_id)
-
-        create_response = client.post(
-            f"/projects/{project_id}/tasks/1001/role-assignments",
-            json={"role_id": labor_role_id, "quantity": "1", "hours": "1"},
-            headers=headers,
-        )
-        assert create_response.status_code == 201
-        assert create_response.json()["cost_code_id"] == root_id
-
-
-def test_task_role_assignment_accepts_explicit_sub_cost_code_and_rejects_foreign_one() -> None:
-    with TestClient(app) as client:
-        headers = _auth_headers(client)
-        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
-        labor_role_id, _ = _seed_roles()
-        root_id = _root_cost_code_id(client, headers, project_id)
-
-        sub_code_response = client.post(
-            f"/projects/{project_id}/cost-codes",
-            json={"code": "LOT-MO", "name": "Lot main d'oeuvre", "parent_id": root_id},
-            headers=headers,
-        )
-        assert sub_code_response.status_code == 201
-        sub_code_id = cast(int, sub_code_response.json()["id"])
-
-        create_response = client.post(
-            f"/projects/{project_id}/tasks/1001/role-assignments",
-            json={
-                "role_id": labor_role_id,
-                "quantity": "1",
-                "hours": "1",
-                "cost_code_id": sub_code_id,
-            },
-            headers=headers,
-        )
-        assert create_response.status_code == 201
-        assignment_id = cast(int, create_response.json()["id"])
-        assert create_response.json()["cost_code_id"] == sub_code_id
-
-        other_project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
-        other_root_id = _root_cost_code_id(client, headers, other_project_id)
-
-        rejected_create_response = client.post(
-            f"/projects/{project_id}/tasks/1002/role-assignments",
-            json={
-                "role_id": labor_role_id,
-                "quantity": "1",
-                "hours": "1",
-                "cost_code_id": other_root_id,
-            },
-            headers=headers,
-        )
-        assert rejected_create_response.status_code == 400
-
-        rejected_update_response = client.patch(
-            f"/projects/{project_id}/tasks/1001/role-assignments/{assignment_id}",
-            json={"cost_code_id": other_root_id},
-            headers=headers,
-        )
-        assert rejected_update_response.status_code == 400
-
-        accepted_update_response = client.patch(
-            f"/projects/{project_id}/tasks/1001/role-assignments/{assignment_id}",
-            json={"cost_code_id": root_id},
-            headers=headers,
-        )
-        assert accepted_update_response.status_code == 200
-        assert accepted_update_response.json()["cost_code_id"] == root_id
-
-
-def test_task_role_assignment_explicit_null_cost_code_id_resolves_to_root_not_cleared() -> None:
-    """Review finding on #63: `{"cost_code_id": null}` must resolve back to the
-    project's root, exactly like an omitted field at create time -- never leave the
-    assignment with no attachment at all."""
-    with TestClient(app) as client:
-        headers = _auth_headers(client)
-        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
-        labor_role_id, _ = _seed_roles()
-        root_id = _root_cost_code_id(client, headers, project_id)
-
-        sub_code_response = client.post(
-            f"/projects/{project_id}/cost-codes",
-            json={"code": "LOT-MO-NULL", "name": "Lot", "parent_id": root_id},
-            headers=headers,
-        )
-        sub_code_id = cast(int, sub_code_response.json()["id"])
-
-        create_response = client.post(
-            f"/projects/{project_id}/tasks/1001/role-assignments",
-            json={
-                "role_id": labor_role_id,
-                "quantity": "1",
-                "hours": "1",
-                "cost_code_id": sub_code_id,
-            },
-            headers=headers,
-        )
-        assignment_id = cast(int, create_response.json()["id"])
-        assert create_response.json()["cost_code_id"] == sub_code_id
-
-        null_update_response = client.patch(
-            f"/projects/{project_id}/tasks/1001/role-assignments/{assignment_id}",
-            json={"cost_code_id": None},
-            headers=headers,
-        )
-        assert null_update_response.status_code == 200
-        assert null_update_response.json()["cost_code_id"] == root_id
-
-
-def test_task_role_assignment_rejects_a_deactivated_cost_code() -> None:
-    """Review finding on #63: a deactivated cost code must never accept a new
-    attachment, even though it may still be referenced by pre-existing assignments."""
-    with TestClient(app) as client:
-        headers = _auth_headers(client)
-        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
-        labor_role_id, _ = _seed_roles()
-        root_id = _root_cost_code_id(client, headers, project_id)
-
-        sub_code_response = client.post(
-            f"/projects/{project_id}/cost-codes",
-            json={"code": "LOT-MO-INACTIVE", "name": "Lot", "parent_id": root_id},
-            headers=headers,
-        )
-        sub_code_id = cast(int, sub_code_response.json()["id"])
-
-        deactivate_response = client.delete(
-            f"/projects/{project_id}/cost-codes/{sub_code_id}", headers=headers
-        )
-        assert deactivate_response.status_code == 204
-
-        rejected_create_response = client.post(
-            f"/projects/{project_id}/tasks/1001/role-assignments",
-            json={
-                "role_id": labor_role_id,
-                "quantity": "1",
-                "hours": "1",
-                "cost_code_id": sub_code_id,
-            },
-            headers=headers,
-        )
-        assert rejected_create_response.status_code == 400
-
-
-def test_task_role_assignment_reports_a_clean_error_if_project_has_no_active_root() -> None:
-    """Review finding on #63: the #62/E6-01 invariant (every project always has an
-    active root cost code) is guaranteed by application logic, not a DB constraint --
-    if it were ever violated, resolve_cost_code_id must surface a clean, documented
-    error rather than a bare, unhandled NoResultFound. Deactivating the root directly
-    at the ORM layer (bypassing the API, which always refuses this) is the only way
-    to construct that state for this test."""
-    with TestClient(app) as client:
-        headers = _auth_headers(client)
-        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
-        labor_role_id, _ = _seed_roles()
-        root_id = _root_cost_code_id(client, headers, project_id)
-
-        session_factory = get_session_factory()
-        with session_factory() as session:
-            root = session.query(ProjectCostCode).filter(ProjectCostCode.id == root_id).one()
-            root.is_active = False
-            session.add(root)
-            session.commit()
-
-        response = client.post(
-            f"/projects/{project_id}/tasks/1001/role-assignments",
-            json={"role_id": labor_role_id, "quantity": "1", "hours": "1"},
-            headers=headers,
-        )
-        assert response.status_code == 500
-
-
-def test_task_role_assignment_on_dated_task_rejects_missing_cost_rate_coverage() -> None:
-    """Issue #175 (E6-11): a role assigned to an already-dated task (both `start_at`
-    and `finish_at` set) must have a `CostRate` for every year the task spans --
-    refused with a 400 instead of silently pricing that year at a zero rate later,
-    at estimate validation time."""
-    with TestClient(app) as client:
-        headers = _auth_headers(client)
-        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
-        labor_role_id, _ = _seed_roles()
-
-        session_factory = get_session_factory()
-        with session_factory() as session:
-            # `_seed_roles` only seeds a CostRate for year 2026; this task spans a
-            # year with no rate for that same labor category at all.
-            uncovered_task = MsTask(
-                project_id=project_id,
-                uid=1006,
-                name="Uncovered rate task",
-                task_type=0,
-                outline_number="6",
-                outline_level=1,
-                start_at=datetime(2029, 3, 1, 8, 0, tzinfo=UTC),
-                finish_at=datetime(2029, 3, 2, 18, 0, tzinfo=UTC),
-                is_summary=False,
-                is_milestone=False,
-            )
-            session.add(uncovered_task)
-            session.commit()
-
-        labor_category_id = _cost_category_id_for_role(labor_role_id)
-
-        response = client.post(
-            f"/projects/{project_id}/tasks/1006/role-assignments",
-            json={"role_id": labor_role_id, "quantity": "1", "hours": "1"},
-            headers=headers,
-        )
-        assert response.status_code == 400
-        # Review finding (E6-11/#175): assert on the JSON a real HTTP client
-        # actually receives -- not on an in-memory `ValueError` message, and
-        # not on the generic `{"code": "GENERIC_ERROR"}` placeholder that
-        # `_generic_http_exception_handler` produces for a plain-string
-        # `detail`. The task's single year (2029) has neither a `CostRate`
-        # nor an `InflationRate`, so both must be reported.
-        detail = cast(dict[str, Any], response.json())["detail"]
-        assert detail["code"] == "MISSING_RATE_COVERAGE"
-        assert detail["missing_cost_rates"] == [
-            {
-                "category_id": labor_category_id,
-                "category_name": "Développement",
-                "accounting_code": "MO-DEV",
-                "year": 2029,
-            }
-        ]
-        assert detail["missing_inflation_years"] == [2029]
-
-
-def test_task_role_assignment_on_dated_task_rejects_missing_inflation_rate_coverage() -> None:
-    """Issue #175 (E6-11): even when the category has a `CostRate` for the task's
-    year, a missing `InflationRate` for that same year must refuse the assignment
-    too -- inflation coverage is checked independently of the cost-rate coverage."""
-    with TestClient(app) as client:
-        headers = _auth_headers(client)
-        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
-        labor_role_id, _ = _seed_roles()
-        labor_category_id = _cost_category_id_for_role(labor_role_id)
-
-        session_factory = get_session_factory()
-        with session_factory() as session:
-            # A CostRate exists for 2030, but no InflationRate does.
-            session.add(
-                CostRate(
-                    cost_category_id=labor_category_id,
-                    year=2030,
-                    hourly_rate=Decimal("120.00"),
-                    currency_code="EUR",
-                )
-            )
-            rate_only_task = MsTask(
-                project_id=project_id,
-                uid=1007,
-                name="Rate-only task",
-                task_type=0,
-                outline_number="7",
-                outline_level=1,
-                start_at=datetime(2030, 3, 1, 8, 0, tzinfo=UTC),
-                finish_at=datetime(2030, 3, 2, 18, 0, tzinfo=UTC),
-                is_summary=False,
-                is_milestone=False,
-            )
-            session.add(rate_only_task)
-            session.commit()
-
-        response = client.post(
-            f"/projects/{project_id}/tasks/1007/role-assignments",
-            json={"role_id": labor_role_id, "quantity": "1", "hours": "1"},
-            headers=headers,
-        )
-        assert response.status_code == 400
-        # Review finding (E6-11/#175): assert on the JSON a real HTTP client
-        # actually receives. The `CostRate` for 2030 exists, so only the
-        # `InflationRate` gap is reported.
-        detail = cast(dict[str, Any], response.json())["detail"]
-        assert detail["code"] == "MISSING_RATE_COVERAGE"
-        assert detail["missing_cost_rates"] == []
-        assert detail["missing_inflation_years"] == [2030]
-
-
-def test_task_role_assignment_without_dates_skips_rate_coverage_check() -> None:
-    """Issue #175 (E6-11): a task with no `start_at`/`finish_at` yet has no known
-    years to check coverage for -- the guard must not apply, and assignment creation
-    must succeed exactly as it did before this issue (non-regression)."""
-    with TestClient(app) as client:
-        headers = _auth_headers(client)
-        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
-        labor_role_id, _ = _seed_roles()
-
-        session_factory = get_session_factory()
-        with session_factory() as session:
-            undated_task = MsTask(
-                project_id=project_id,
-                uid=1008,
-                name="Undated task",
-                task_type=0,
-                outline_number="8",
-                outline_level=1,
-                is_summary=False,
-                is_milestone=False,
-            )
-            session.add(undated_task)
-            session.commit()
-
-        response = client.post(
-            f"/projects/{project_id}/tasks/1008/role-assignments",
-            json={"role_id": labor_role_id, "quantity": "1", "hours": "1"},
-            headers=headers,
-        )
-        assert response.status_code == 201
 
 
 def test_role_filter_can_include_descendant_nodes() -> None:

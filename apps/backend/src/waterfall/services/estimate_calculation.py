@@ -29,10 +29,11 @@ def collect_missing_rate_coverage(
     """Check a set of (cost category, year) combinations for `CostRate`/`InflationRate`
     coverage, in a single pair of bulk queries.
 
-    Shared by `create_task_role_assignment` (creation-time guard, `api/routes/tasks.py`)
-    and `calculate_estimate_lines` (validation-time guard) so both report the exact same
-    missing combinations for the exact same input, and so a devis with many affected
-    assignments still gets one query pair, not one per assignment/year (E6-11/#175).
+    Shared by `create_estimate_role_assignment` (creation-time guard,
+    `api/routes/estimates.py`) and `calculate_estimate_lines` (validation-time guard) so both
+    report the exact same missing combinations for the exact same input, and so a devis with
+    many affected assignments still gets one query pair, not one per assignment/year
+    (E6-11/#175).
 
     Returns a `(missing_cost_rates, missing_inflation_years)` pair, both sorted for a
     deterministic, human-readable message: `missing_cost_rates` is deduplicated and
@@ -109,7 +110,7 @@ def missing_rate_coverage_detail(
     ``schemas.projects.MissingRateCoverageDetail`` -- for a missing (cost
     category, year) ``CostRate``/``InflationRate`` combination.
 
-    Shared by ``create_task_role_assignment`` (``api/routes/tasks.py``, calls
+    Shared by ``create_estimate_role_assignment`` (``api/routes/estimates.py``, calls
     ``collect_missing_rate_coverage`` directly) and ``validate_project_estimate``
     (``api/routes/estimates.py``, via ``MissingRateCoverageError``) so both
     endpoints report the exact same JSON shape for the exact same input

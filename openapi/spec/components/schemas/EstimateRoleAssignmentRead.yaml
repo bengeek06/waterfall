@@ -1,6 +1,7 @@
 type: object
 required:
 - id
+- estimate_id
 - task_id
 - role_id
 - role_code
@@ -13,6 +14,9 @@ required:
 - updated_at
 properties:
   id:
+    type: integer
+    minimum: 1
+  estimate_id:
     type: integer
     minimum: 1
   task_id:

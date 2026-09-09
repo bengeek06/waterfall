@@ -10,6 +10,7 @@ from sqlalchemy import func
 from waterfall.db.session import get_session_factory
 from waterfall.main import app
 from waterfall.models.ms_core import MsTask
+from waterfall.models.resources import TaskRoleAssignment
 from waterfall.models.user import User
 from waterfall.services.msproject_xml import parse_msproject_xml
 
@@ -75,6 +76,35 @@ def _create_legacy_task(project_id: int, name: str) -> int:
         session.add(task)
         session.commit()
         return task.uid
+
+
+def _create_role_assignment(
+    project_id: int, task_uid: int, role_id: int, *, quantity: str = "1", hours: str = "10"
+) -> int:
+    """Insert a `TaskRoleAssignment` directly via the ORM.
+
+    E12-01 (#273) removed the `/tasks/{uid}/role-assignments` HTTP route this
+    module used to create these fixtures through; `TaskRoleAssignment` (and the
+    calendar-resolution logic under test here, unaffected by that issue) is
+    untouched, so this reaches directly into the DB the same way `_create_legacy_task`
+    above already does for its own removed route.
+    """
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        task = (
+            session.query(MsTask)
+            .filter(MsTask.project_id == project_id, MsTask.uid == task_uid)
+            .one()
+        )
+        assignment = TaskRoleAssignment(
+            task_id=task.id,
+            role_id=role_id,
+            quantity=Decimal(quantity),
+            hours=Decimal(hours),
+        )
+        session.add(assignment)
+        session.commit()
+        return assignment.id
 
 
 def _create_calendar(
@@ -374,12 +404,7 @@ def test_export_includes_task_calendar_and_reference_minutes() -> None:
             client, headers, suffix="CAL1", calendar_id=calendar_id
         )
 
-        assignment_response: Response = client.post(
-            f"/projects/{project_id}/tasks/{task_uid}/role-assignments",
-            json={"role_id": role_id, "quantity": "1", "hours": "10"},
-            headers=headers,
-        )
-        assert assignment_response.status_code == 201
+        _create_role_assignment(project_id, task_uid, role_id)
 
         export_response: Response = client.get(
             f"/projects/{project_id}/export.xml",
@@ -502,12 +527,7 @@ def test_export_task_calendar_uses_lowest_role_id_among_multiple_assignments() -
         expected_calendar_id = calendar_by_role_id[lower_role_id]
 
         for role_id in (higher_role_id, lower_role_id):
-            assignment_response: Response = client.post(
-                f"/projects/{project_id}/tasks/{task_uid}/role-assignments",
-                json={"role_id": role_id, "quantity": "1", "hours": "10"},
-                headers=headers,
-            )
-            assert assignment_response.status_code == 201
+            _create_role_assignment(project_id, task_uid, role_id)
 
         export_response: Response = client.get(
             f"/projects/{project_id}/export.xml",
@@ -565,12 +585,7 @@ def test_export_falls_back_to_task_calendar_when_standard_has_no_working_day() -
             client, headers, suffix="USABLE", calendar_id=calendar_id
         )
 
-        assignment_response: Response = client.post(
-            f"/projects/{project_id}/tasks/{task_uid}/role-assignments",
-            json={"role_id": role_id, "quantity": "1", "hours": "10"},
-            headers=headers,
-        )
-        assert assignment_response.status_code == 201
+        _create_role_assignment(project_id, task_uid, role_id)
 
         export_response: Response = client.get(
             f"/projects/{project_id}/export.xml",
@@ -877,12 +892,7 @@ def test_export_then_reimport_round_trip_preserves_tasks_and_links() -> None:
             client, headers, code="RT-CAL", weeks_per_year=47, weekday_hours="8.00"
         )
         role_id = _create_role_with_calendar(client, headers, suffix="RT", calendar_id=calendar_id)
-        assignment_response: Response = client.post(
-            f"/projects/{source_project_id}/tasks/{first_task_uid}/role-assignments",
-            json={"role_id": role_id, "quantity": "1", "hours": "10"},
-            headers=headers,
-        )
-        assert assignment_response.status_code == 201
+        _create_role_assignment(source_project_id, first_task_uid, role_id)
 
         export_response: Response = client.get(
             f"/projects/{source_project_id}/export.xml",

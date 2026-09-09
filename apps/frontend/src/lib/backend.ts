@@ -35,7 +35,6 @@ type PlanningTaskDeleteConflictDetail = components["schemas"]["PlanningTaskDelet
 export type PlanningTaskScheduleUpdate = components["schemas"]["PlanningTaskScheduleUpdate"];
 export type TaskLinkWrite = components["schemas"]["TaskLinkWrite"];
 export type TaskLinksReplace = components["schemas"]["TaskLinksReplace"];
-export type TaskRoleAssignment = components["schemas"]["TaskRoleAssignmentRead"];
 export type ImportBatch = components["schemas"]["ImportBatchResponse"];
 export type ImportBatchStatus = components["schemas"]["ImportBatchStatusResponse"];
 export type ImportRunAcceptedResponse = components["schemas"]["ImportRunAcceptedResponse"];
@@ -1672,67 +1671,6 @@ export function updateTaskDescription(
       },
       body: JSON.stringify({ description }),
     },
-    onSessionRefresh,
-  );
-}
-
-export async function getTaskRoleAssignments(
-  projectId: number,
-  taskUid: number,
-  tokens: SessionTokens,
-  onSessionRefresh: (next: SessionTokens) => void,
-): Promise<TaskRoleAssignment[]> {
-  const page = await authRequest<components["schemas"]["TaskRoleAssignmentListRead"]>(
-    `/projects/${projectId}/tasks/${taskUid}/role-assignments`,
-    tokens,
-    { method: "GET" },
-    onSessionRefresh,
-  );
-  return page.items;
-}
-
-export function createTaskRoleAssignment(
-  projectId: number,
-  taskUid: number,
-  payload: { role_id: number; quantity: number; hours: number; comment?: string | null },
-  tokens: SessionTokens,
-  onSessionRefresh: (next: SessionTokens) => void,
-) {
-  return authRequest<TaskRoleAssignment>(
-    `/projects/${projectId}/tasks/${taskUid}/role-assignments`,
-    tokens,
-    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
-    onSessionRefresh,
-  );
-}
-
-export function updateTaskRoleAssignment(
-  projectId: number,
-  taskUid: number,
-  assignmentId: number,
-  payload: { quantity?: number; hours?: number; comment?: string | null },
-  tokens: SessionTokens,
-  onSessionRefresh: (next: SessionTokens) => void,
-) {
-  return authRequest<TaskRoleAssignment>(
-    `/projects/${projectId}/tasks/${taskUid}/role-assignments/${assignmentId}`,
-    tokens,
-    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
-    onSessionRefresh,
-  );
-}
-
-export function deleteTaskRoleAssignment(
-  projectId: number,
-  taskUid: number,
-  assignmentId: number,
-  tokens: SessionTokens,
-  onSessionRefresh: (next: SessionTokens) => void,
-) {
-  return authRequest<void>(
-    `/projects/${projectId}/tasks/${taskUid}/role-assignments/${assignmentId}`,
-    tokens,
-    { method: "DELETE" },
     onSessionRefresh,
   );
 }

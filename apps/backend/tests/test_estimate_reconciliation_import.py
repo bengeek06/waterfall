@@ -12,6 +12,7 @@ like a human editing the exported workbook would.
 from __future__ import annotations
 
 from collections.abc import Callable
+from decimal import Decimal
 from io import BytesIO
 from typing import Any, cast
 from uuid import uuid4
@@ -27,7 +28,13 @@ from waterfall.db.session import get_session_factory
 from waterfall.main import app
 from waterfall.models.ms_core import MsProject, MsTask
 from waterfall.models.planning import WfPlanningLinkSnapshot, WfPlanningTaskSnapshot
-from waterfall.models.resources import CostCategory, CostType, ResourceNode, ResourceRole
+from waterfall.models.resources import (
+    CostCategory,
+    CostType,
+    ResourceNode,
+    ResourceRole,
+    TaskRoleAssignment,
+)
 
 _XLSX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -270,6 +277,54 @@ def _seed_labor_role() -> int:
         return role.id
 
 
+def _create_task_role_assignment(
+    project_id: int,
+    task_uid: int,
+    role_id: int,
+    *,
+    quantity: str = "1.00",
+    hours: str = "1.00",
+    comment: str | None = None,
+    cost_code_id: int | None = None,
+) -> int:
+    """Insert a `TaskRoleAssignment` directly via the ORM.
+
+    E12-01 (#273) removed the `/tasks/{uid}/role-assignments` HTTP route this
+    module used to create/read these fixtures through; `TaskRoleAssignment` (and
+    the reconciliation import/export machinery under test in this module,
+    unaffected by that issue) is untouched, so this reaches directly into the DB
+    the same way this module's other setup helpers (``_seed_labor_role``/
+    ``_remove_task_from_planning_snapshot``) already do.
+    """
+    with get_session_factory()() as session:
+        task = (
+            session.query(MsTask)
+            .filter(MsTask.project_id == project_id, MsTask.uid == task_uid)
+            .one()
+        )
+        assignment = TaskRoleAssignment(
+            task_id=task.id,
+            role_id=role_id,
+            cost_code_id=cost_code_id,
+            quantity=Decimal(quantity),
+            hours=Decimal(hours),
+            comment=comment,
+        )
+        session.add(assignment)
+        session.commit()
+        return assignment.id
+
+
+def _task_role_assignment(assignment_id: int) -> TaskRoleAssignment:
+    """Read a `TaskRoleAssignment` back directly (see `_create_task_role_assignment`
+    for why this no longer goes through the removed GET route)."""
+    with get_session_factory()() as session:
+        assignment = session.get(TaskRoleAssignment, assignment_id)
+        assert assignment is not None
+        session.expunge(assignment)
+        return assignment
+
+
 def _seed_non_labor_category() -> int:
     with get_session_factory()() as session:
         cost_type = CostType(code=f"MAT-{uuid4().hex[:8]}", name="Materiel")
@@ -399,13 +454,9 @@ def _seed_fixture(client: TestClient, headers: dict[str, str]) -> dict[str, Any]
     role_id = _seed_labor_role()
     category_id = _seed_non_labor_category()
 
-    assignment_response = client.post(
-        f"/projects/{project_id}/tasks/{deliverable.uid}/role-assignments",
-        json={"role_id": role_id, "quantity": "2.00", "hours": "10.00", "comment": "Initial"},
-        headers=headers,
+    assignment_id = _create_task_role_assignment(
+        project_id, deliverable.uid, role_id, quantity="2.00", hours="10.00", comment="Initial"
     )
-    assert assignment_response.status_code == 201
-    assignment_id = cast(int, assignment_response.json()["id"])
 
     cost_line_response = client.post(
         f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
@@ -491,16 +542,8 @@ def test_reconciliation_import_updates_only_modified_labor_quantity() -> None:
         assert confirm.status_code == 200
         assert _plan(confirm.json())["applied"] is True
 
-        assignments = _get(
-            client,
-            f"/projects/{fixture['project_id']}/tasks/{fixture['deliverable_uid']}/role-assignments",
-            headers,
-        )
-        assert assignments.status_code == 200
-        updated = next(
-            item for item in _items(assignments.json()) if item["id"] == fixture["assignment_id"]
-        )
-        assert float(updated["quantity"]) == 5.0
+        updated = _task_role_assignment(fixture["assignment_id"])
+        assert updated.quantity == Decimal("5.00")
 
 
 def test_reconciliation_import_updates_only_modified_cost_line_quantity() -> None:
@@ -702,15 +745,8 @@ def test_reconciliation_import_unknown_id_is_blocking_and_nothing_applied() -> N
             for issue in confirmed_plan["blocking_issues"]
         )
 
-        assignments = _get(
-            client,
-            f"/projects/{fixture['project_id']}/tasks/{fixture['deliverable_uid']}/role-assignments",
-            headers,
-        )
-        unchanged = next(
-            item for item in _items(assignments.json()) if item["id"] == fixture["assignment_id"]
-        )
-        assert float(unchanged["quantity"]) == 2.0
+        unchanged = _task_role_assignment(fixture["assignment_id"])
+        assert unchanged.quantity == Decimal("2.00")
 
 
 def test_reconciliation_import_task_name_change_is_warning_not_applied() -> None:
@@ -777,15 +813,8 @@ def test_reconciliation_import_hors_perimetre_row_is_ignored() -> None:
         confirm = _confirm(client, headers, fixture["project_id"], fixture["estimate_id"], edited)
         assert confirm.status_code == 200
 
-        assignments = _get(
-            client,
-            f"/projects/{fixture['project_id']}/tasks/{fixture['deliverable_uid']}/role-assignments",
-            headers,
-        )
-        unchanged = next(
-            item for item in _items(assignments.json()) if item["id"] == fixture["assignment_id"]
-        )
-        assert float(unchanged["quantity"]) == 2.0
+        unchanged = _task_role_assignment(fixture["assignment_id"])
+        assert unchanged.quantity == Decimal("2.00")
 
 
 def test_reconciliation_import_hors_perimetre_row_absent_from_file_is_not_deleted() -> None:
@@ -815,13 +844,8 @@ def test_reconciliation_import_hors_perimetre_row_absent_from_file_is_not_delete
         assert confirm.status_code == 200
         assert _plan(confirm.json())["applied"] is True
 
-        assignments = _get(
-            client,
-            f"/projects/{fixture['project_id']}/tasks/{fixture['deliverable_uid']}/role-assignments",
-            headers,
-        )
-        assert assignments.status_code == 200
-        assert any(item["id"] == fixture["assignment_id"] for item in _items(assignments.json()))
+        # `_task_role_assignment` itself asserts the row still exists.
+        _task_role_assignment(fixture["assignment_id"])
 
 
 def test_reconciliation_import_blank_cost_line_task_id_does_not_clear_it() -> None:
@@ -1303,18 +1327,14 @@ def test_reconciliation_import_blank_labor_cost_code_id_does_not_clear_it() -> N
         role_id = _seed_labor_role()
         sub_cost_code_id = _create_sub_cost_code(client, headers, project_id, "LOT-CRIT-MO")
 
-        assignment_response = client.post(
-            f"/projects/{project_id}/tasks/{deliverable.uid}/role-assignments",
-            json={
-                "role_id": role_id,
-                "cost_code_id": sub_cost_code_id,
-                "quantity": "2.00",
-                "hours": "10.00",
-            },
-            headers=headers,
+        assignment_id = _create_task_role_assignment(
+            project_id,
+            deliverable.uid,
+            role_id,
+            quantity="2.00",
+            hours="10.00",
+            cost_code_id=sub_cost_code_id,
         )
-        assert assignment_response.status_code == 201
-        assignment_id = cast(int, assignment_response.json()["id"])
 
         content = _export_workbook(client, headers, project_id, estimate_id)
         workbook = load_workbook(BytesIO(content))
@@ -1332,12 +1352,9 @@ def test_reconciliation_import_blank_labor_cost_code_id_does_not_clear_it() -> N
         assert confirm.status_code == 200
         assert _plan(confirm.json())["applied"] is True
 
-        assignments = _get(
-            client, f"/projects/{project_id}/tasks/{deliverable.uid}/role-assignments", headers
-        )
-        updated = next(item for item in _items(assignments.json()) if item["id"] == assignment_id)
-        assert updated["cost_code_id"] == sub_cost_code_id
-        assert float(updated["quantity"]) == 5.0
+        updated = _task_role_assignment(assignment_id)
+        assert updated.cost_code_id == sub_cost_code_id
+        assert updated.quantity == Decimal("5.00")
 
 
 def test_reconciliation_import_blank_cost_line_cost_code_id_does_not_clear_it() -> None:

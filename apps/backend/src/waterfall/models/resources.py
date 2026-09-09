@@ -347,6 +347,53 @@ class TaskRoleAssignment(Base):
     )
 
 
+class EstimateRoleAssignment(Base):
+    """A devis-version-scoped labor role assignment (E12-01, issue #273).
+
+    Structurally mirrors `TaskRoleAssignment` (project-wide, one row per
+    task/role pair) but is scoped to a single `Estimate` instead: two draft
+    estimates of the same project may each carry their own, independently
+    editable assignment for the same task/role pair, which `TaskRoleAssignment`
+    -- unique on `(task_id, role_id)` alone -- cannot represent. `TaskRoleAssignment`
+    itself (and its use by `services/calendar_schedule.py`) is untouched by this
+    issue; a later issue (E12-02/#274) resynchronizes it from the validated
+    estimate's own `EstimateRoleAssignment` rows.
+    """
+
+    __tablename__ = "wf_estimate_role_assignment"
+    __table_args__ = (
+        UniqueConstraint(
+            "estimate_id", "task_id", "role_id", name="uq_wf_estimate_role_assignment"
+        ),
+        CheckConstraint("quantity > 0", name="ck_wf_estimate_role_assignment_quantity"),
+        CheckConstraint("hours >= 0", name="ck_wf_estimate_role_assignment_hours"),
+        Index("idx_wf_estimate_role_assignment_estimate", "estimate_id"),
+        Index("idx_wf_estimate_role_assignment_role", "role_id"),
+        Index("idx_wf_estimate_role_assignment_cost_code", "cost_code_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    estimate_id: Mapped[int] = mapped_column(ForeignKey("wf_estimate.id"), nullable=False)
+    task_id: Mapped[int] = mapped_column(ForeignKey("ms_task.id"), nullable=False)
+    role_id: Mapped[int] = mapped_column(ForeignKey("wf_resource_role.id"), nullable=False)
+    # Same rationale as TaskRoleAssignment.cost_code_id/EstimateCostLine.cost_code_id
+    # (issue #63/E6-02): nullable at the column level only to allow a future backfill
+    # with no value to recover; every row created going forward always receives one
+    # via resolve_cost_code_id.
+    cost_code_id: Mapped[int | None] = mapped_column(
+        ForeignKey("wf_project_cost_code.id"), nullable=True
+    )
+    quantity: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    hours: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+
 class Estimate(Base):
     __tablename__ = "wf_estimate"
     __table_args__ = (

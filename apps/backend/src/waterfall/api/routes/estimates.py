@@ -31,6 +31,7 @@ from waterfall.api.routes.projects import (
     get_estimate_or_404,
     get_non_labor_category_or_400,
     to_estimate_cost_line_read,
+    to_estimate_role_assignment_read,
     to_estimate_task_row_read,
     to_project_estimate_read,
     to_project_read,
@@ -45,6 +46,7 @@ from waterfall.models.resources import (
     Estimate,
     EstimateCostLine,
     EstimateLine,
+    EstimateRoleAssignment,
     EstimateTaskRow,
     ProjectCostCode,
     ResourceRole,
@@ -59,6 +61,10 @@ from waterfall.schemas.projects import (
     EstimateCostLineMilestonesCreate,
     EstimateCostLineRead,
     EstimateCostLineUpdate,
+    EstimateRoleAssignmentCreate,
+    EstimateRoleAssignmentListRead,
+    EstimateRoleAssignmentRead,
+    EstimateRoleAssignmentUpdate,
     EstimateTaskCreate,
     EstimateTaskRowListRead,
     EstimateTaskRowRead,
@@ -98,6 +104,7 @@ from waterfall.services import (
     build_estimate_workbook,
     calculate_estimate_aggregates,
     calculate_estimate_lines,
+    collect_missing_rate_coverage,
     create_planning_task,
     delete_planning_tasks,
     get_estimate_validation_warnings,
@@ -2287,7 +2294,7 @@ def delete_estimate_cost_line(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> None:
-    get_project_or_404(db, project_id, current_user.id)
+    get_mutable_project_lock(db, project_id, current_user.id)
     get_draft_estimate_or_409(db, project_id, estimate_id)
     line = (
         db.query(EstimateCostLine)
@@ -2301,6 +2308,234 @@ def delete_estimate_cost_line(
             detail="Estimate cost line not found",
         )
     db.delete(line)
+    db.commit()
+
+
+@router.get(
+    "/{project_id}/estimates/{estimate_id}/role-assignments",
+    response_model=EstimateRoleAssignmentListRead,
+)
+def list_estimate_role_assignments(
+    project_id: int,
+    estimate_id: int,
+    params: ListParams = Depends(list_params),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> EstimateRoleAssignmentListRead:
+    get_project_or_404(db, project_id, current_user.id)
+    get_estimate_or_404(db, project_id, estimate_id)
+    query = (
+        db.query(EstimateRoleAssignment, ResourceRole, CostCategory)
+        .join(ResourceRole, EstimateRoleAssignment.role_id == ResourceRole.id)
+        .join(CostCategory, ResourceRole.cost_category_id == CostCategory.id)
+        .filter(EstimateRoleAssignment.estimate_id == estimate_id)
+    )
+    result = apply_pagination(
+        query,
+        params,
+        sortable={
+            "role_name": ResourceRole.name,
+            "quantity": EstimateRoleAssignment.quantity,
+            "hours": EstimateRoleAssignment.hours,
+        },
+        default_sort=ResourceRole.name,
+        tiebreaker=EstimateRoleAssignment.id,
+        searchable=(ResourceRole.name,),
+    )
+    return EstimateRoleAssignmentListRead(
+        items=[
+            to_estimate_role_assignment_read(assignment, role, category)
+            for assignment, role, category in result.rows
+        ],
+        total=result.total,
+        limit=result.limit,
+        offset=result.offset,
+    )
+
+
+@router.post(
+    "/{project_id}/estimates/{estimate_id}/role-assignments",
+    response_model=EstimateRoleAssignmentRead,
+    status_code=status.HTTP_201_CREATED,
+    responses={
+        status.HTTP_400_BAD_REQUEST: {
+            "model": MissingRateCoverage | FastAPIErrorResponse,
+            "description": (
+                "Requete invalide -- tache hors du projet, role hors d'une "
+                "categorie de cout main-d'oeuvre active (detail generique), "
+                "ou tache deja datee avec au moins une (categorie de cout, "
+                "annee) sans CostRate/InflationRate (detail.code="
+                "MISSING_RATE_COVERAGE, E6-11/#175)"
+            ),
+        },
+    },
+)
+def create_estimate_role_assignment(
+    project_id: int,
+    estimate_id: int,
+    payload: EstimateRoleAssignmentCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> EstimateRoleAssignmentRead:
+    """Create a devis-scoped labor role assignment (E12-01/#273).
+
+    Replaces the removed project-wide ``create_task_role_assignment``
+    (``tasks.py``): ``payload.task_id`` refers directly to ``MsTask.id`` (like
+    ``EstimateCostLineCreate.task_id``), so the "snapshot-only task" 409 guard
+    the removed route needed (to bridge a planning uid to its legacy ``MsTask``
+    twin) no longer applies -- a task with no ``MsTask`` twin simply has no id
+    a caller could reference here at all. Refuses with 409 if ``estimate_id``
+    is not a draft (new in this issue, mirroring ``EstimateCostLine``'s own rule).
+    """
+    get_mutable_project_lock(db, project_id, current_user.id)
+    get_draft_estimate_or_409(db, project_id, estimate_id)
+
+    task = (
+        db.query(MsTask)
+        .filter(MsTask.id == payload.task_id, MsTask.project_id == project_id)
+        .first()
+    )
+    if task is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Task does not belong to project",
+        )
+
+    row = (
+        db.query(ResourceRole, CostCategory, CostType)
+        .join(CostCategory, ResourceRole.cost_category_id == CostCategory.id)
+        .join(CostType, CostCategory.cost_type_id == CostType.id)
+        .filter(ResourceRole.id == payload.role_id)
+        .filter(ResourceRole.is_active.is_(True))
+        .filter(CostCategory.is_active.is_(True))
+        .filter(CostType.kind == CostTypeKind.LABOR)
+        .filter(CostType.is_active.is_(True))
+        .first()
+    )
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Role must belong to an active labor cost category",
+        )
+    role, category, _ = row
+    cost_code_id = resolve_cost_code_id(db, project_id, payload.cost_code_id)
+
+    # Issue #175 (E6-11): same creation-time guard the removed
+    # create_task_role_assignment (tasks.py) applied -- a task that is already
+    # dated (both start_at and finish_at set) must have full CostRate/
+    # InflationRate coverage for every year it spans.
+    if task.start_at is not None and task.finish_at is not None:
+        category_years = [
+            (category, year) for year in range(task.start_at.year, task.finish_at.year + 1)
+        ]
+        missing_cost_rates, missing_inflation_years = collect_missing_rate_coverage(
+            db, category_years
+        )
+        if missing_cost_rates or missing_inflation_years:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=missing_rate_coverage_detail(missing_cost_rates, missing_inflation_years),
+            )
+
+    assignment = EstimateRoleAssignment(
+        estimate_id=estimate_id,
+        task_id=task.id,
+        role_id=payload.role_id,
+        cost_code_id=cost_code_id,
+        quantity=payload.quantity,
+        hours=payload.hours,
+        comment=payload.comment,
+    )
+    db.add(assignment)
+    try:
+        # Flush (not commit) first, so the response can be built while the project
+        # lock is still held -- commit is last, matching create_estimate_task/
+        # create_estimate_cost_line_milestones, never the commit-then-refresh
+        # pattern (tech debt #262) the removed create_task_role_assignment used.
+        db.flush()
+        response = to_estimate_role_assignment_read(assignment, role, category)
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Role is already assigned to this task on this estimate",
+        ) from exc
+    return response
+
+
+@router.patch(
+    "/{project_id}/estimates/{estimate_id}/role-assignments/{assignment_id}",
+    response_model=EstimateRoleAssignmentRead,
+)
+def update_estimate_role_assignment(
+    project_id: int,
+    estimate_id: int,
+    assignment_id: int,
+    payload: EstimateRoleAssignmentUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> EstimateRoleAssignmentRead:
+    """``task_id``/``role_id`` are immutable once created, so unlike ``create``
+    above, no rate-coverage recheck is needed here -- only ``cost_code_id``/
+    ``quantity``/``hours``/``comment`` may change."""
+    get_mutable_project_lock(db, project_id, current_user.id)
+    get_draft_estimate_or_409(db, project_id, estimate_id)
+    row = (
+        db.query(EstimateRoleAssignment, ResourceRole, CostCategory)
+        .join(ResourceRole, EstimateRoleAssignment.role_id == ResourceRole.id)
+        .join(CostCategory, ResourceRole.cost_category_id == CostCategory.id)
+        .filter(EstimateRoleAssignment.id == assignment_id)
+        .filter(EstimateRoleAssignment.estimate_id == estimate_id)
+        .first()
+    )
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Role assignment not found",
+        )
+
+    assignment, role, category = row
+    values = payload.model_dump(exclude_unset=True)
+    if "cost_code_id" in values:
+        # An explicit null resolves back to the project's root, exactly like an omitted
+        # field does at create time -- never silently detaches the line from imputation.
+        values["cost_code_id"] = resolve_cost_code_id(db, project_id, values["cost_code_id"])
+    for field, value in values.items():
+        setattr(assignment, field, value)
+    db.add(assignment)
+    # Same before-commit response construction as create_estimate_role_assignment.
+    db.flush()
+    response = to_estimate_role_assignment_read(assignment, role, category)
+    db.commit()
+    return response
+
+
+@router.delete(
+    "/{project_id}/estimates/{estimate_id}/role-assignments/{assignment_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_estimate_role_assignment(
+    project_id: int,
+    estimate_id: int,
+    assignment_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> None:
+    get_mutable_project_lock(db, project_id, current_user.id)
+    get_draft_estimate_or_409(db, project_id, estimate_id)
+    assignment = (
+        db.query(EstimateRoleAssignment)
+        .filter(EstimateRoleAssignment.id == assignment_id)
+        .filter(EstimateRoleAssignment.estimate_id == estimate_id)
+        .first()
+    )
+    if assignment is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Role assignment not found",
+        )
+    db.delete(assignment)
     db.commit()
 
 

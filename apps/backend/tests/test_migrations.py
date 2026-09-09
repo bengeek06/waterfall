@@ -204,7 +204,7 @@ def test_migration_upgrade_creates_expected_schema() -> None:
 
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260909_0011"
+                == "20260909_0012"
             )
 
 
@@ -476,7 +476,7 @@ def test_calendar_default_flag_migration_backfills_standard_and_enforces_uniquen
 
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260909_0011"
+                == "20260909_0012"
             )
 
         # STANDARD is already backfilled to is_default=1 above, so a second row
@@ -959,7 +959,7 @@ def _assert_create_all_schema_can_be_stamped_by_migrate_up(database_url: str) ->
     _run_alembic(database_url, "head")
 
     with _disposable_engine(database_url) as engine, engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260909_0011"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260909_0012"
         standard = connection.execute(
             text("SELECT id, is_active, is_default FROM wf_calendar WHERE code = 'STANDARD'")
         ).one()
@@ -1079,7 +1079,7 @@ def test_legacy_prepare_reuses_empty_alembic_version_table() -> None:
         with _disposable_engine(database_url) as engine, engine.connect() as connection:
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260909_0011"
+                == "20260909_0012"
             )
 
 
@@ -1107,7 +1107,7 @@ def test_create_all_schema_before_planning_revision_is_repaired_then_migrated() 
         with _disposable_engine(database_url) as engine, engine.connect() as connection:
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260909_0011"
+                == "20260909_0012"
             )
             planning_columns = {
                 column["name"] for column in inspect(connection).get_columns("wf_planning")
@@ -1214,7 +1214,7 @@ def test_schema_revision_check_rejects_database_behind_head() -> None:
             assert_database_schema_current(engine)
 
     assert error.value.current_revision == "20260901_0005"
-    assert error.value.expected_revision == "20260909_0011"
+    assert error.value.expected_revision == "20260909_0012"
     assert "Run `make migrate-up`" in str(error.value)
 
 
@@ -1260,7 +1260,7 @@ def test_postgres_migration_upgrade_head_succeeds(postgres_database_url: str) ->
             "wf_estimate",
             "wf_estimate_task_row",
         }.issubset(table_names)
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260909_0011"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260909_0012"
 
 
 def test_postgres_project_external_uid_accepts_canonical_guid(
@@ -1397,7 +1397,7 @@ def test_project_cost_code_migration_backfills_root_from_code_and_prj_fallback()
 
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260909_0011"
+                == "20260909_0012"
             )
 
 
@@ -1910,3 +1910,280 @@ def test_postgres_estimate_cost_line_planned_date_migration_backfill_and_downgra
         inspector = inspect(connection)
         columns = {column["name"] for column in inspector.get_columns("wf_estimate_cost_line")}
         assert "planned_date" in columns
+
+
+def _seed_project_with_estimates_and_role_assignment_at_revision(
+    database_url: str, revision: str, *, project_name: str
+) -> dict[str, int]:
+    """Seed a project (with its root cost code) that already has two draft
+    estimates, one validated estimate, and a single pre-existing
+    `wf_task_role_assignment` row on a shared task -- fixture for the E12-01/#273
+    backfill migration (20260909_0012), which must copy that one legacy row into
+    each *draft* estimate independently, and into neither the validated one.
+
+    Runs every insert through the ORM models rather than schema-shape-sensitive
+    `sa.table()` Core proxies (unlike `_seed_project_root_and_cost_lines_at_revision`
+    above): none of these tables' columns change between `revision` and head, only a
+    brand new table (`wf_estimate_role_assignment`) is added, so the current ORM
+    models already match `revision`'s schema exactly.
+    """
+    from sqlalchemy.orm import Session
+
+    from waterfall.models.ms_core import MsProject, MsTask
+    from waterfall.models.resources import (
+        CostCategory,
+        CostType,
+        Estimate,
+        ProjectCostCode,
+        ResourceNode,
+        ResourceRole,
+        TaskRoleAssignment,
+    )
+
+    _run_alembic(database_url, revision)
+    with _disposable_engine(database_url) as engine, Session(engine) as session:
+        project = MsProject(
+            source_version=2016,
+            save_version_out=16,
+            name=project_name,
+            schedule_from_start=True,
+            start_date=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        session.add(project)
+        session.flush()
+
+        root = ProjectCostCode(
+            project_id=project.id, parent_id=None, code=f"PRJ-{project.id}", name=project_name
+        )
+        session.add(root)
+        session.flush()
+
+        # Codes/accounting codes are suffixed with the project id so this fixture can be
+        # called more than once against the same database (e.g. to prove per-project
+        # backfill isolation) without tripping a UNIQUE constraint across projects.
+        cost_type = CostType(code=f"MO-{project.id}", name="Main d'oeuvre", kind="labor")
+        session.add(cost_type)
+        session.flush()
+        cost_category = CostCategory(
+            cost_type_id=cost_type.id, accounting_code=f"DEV-{project.id}", name="Developpement"
+        )
+        session.add(cost_category)
+        session.flush()
+        node = ResourceNode(code=f"IT-{project.id}", name="Informatique")
+        session.add(node)
+        session.flush()
+        role = ResourceRole(node_id=node.id, cost_category_id=cost_category.id, name="Dev")
+        session.add(role)
+        session.flush()
+
+        task = MsTask(project_id=project.id, uid=1, name="Task")
+        session.add(task)
+        session.flush()
+
+        draft_one = Estimate(
+            project_id=project.id, version_number=1, kind="initial", currency_code="EUR"
+        )
+        draft_two = Estimate(
+            project_id=project.id,
+            version_number=2,
+            kind="forecast_remaining",
+            currency_code="EUR",
+        )
+        validated = Estimate(
+            project_id=project.id,
+            version_number=3,
+            kind="contract_reference",
+            status="validated",
+            currency_code="EUR",
+            validated_at=datetime.now(UTC),
+        )
+        session.add_all([draft_one, draft_two, validated])
+        session.flush()
+
+        assignment = TaskRoleAssignment(
+            task_id=task.id,
+            role_id=role.id,
+            cost_code_id=root.id,
+            quantity=Decimal("2.00"),
+            hours=Decimal("10.00"),
+            comment="Legacy",
+        )
+        session.add(assignment)
+        session.flush()
+
+        session.commit()
+        return {
+            "project_id": project.id,
+            "task_id": task.id,
+            "role_id": role.id,
+            "root_cost_code_id": root.id,
+            "assignment_id": assignment.id,
+            "draft_one_id": draft_one.id,
+            "draft_two_id": draft_two.id,
+            "validated_id": validated.id,
+        }
+
+
+def test_estimate_role_assignment_migration_backfills_one_independent_copy_per_draft() -> None:
+    """E12-01 (#273): the 20260909_0012 migration backfills a *separate* copy of
+    each pre-existing `wf_task_role_assignment` row into every currently-draft
+    estimate of its project -- never a single shared row -- and into no
+    `validated` estimate at all."""
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "migration.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        ids = _seed_project_with_estimates_and_role_assignment_at_revision(
+            database_url, "20260909_0011", project_name="Projet Backfill Affectations"
+        )
+
+        _run_alembic(database_url, "head")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            rows = connection.execute(
+                text(
+                    "SELECT estimate_id, task_id, role_id, cost_code_id, quantity, hours, "
+                    "comment FROM wf_estimate_role_assignment ORDER BY estimate_id"
+                )
+            ).all()
+            assert [row.estimate_id for row in rows] == [ids["draft_one_id"], ids["draft_two_id"]]
+            for row in rows:
+                assert row.task_id == ids["task_id"]
+                assert row.role_id == ids["role_id"]
+                assert row.cost_code_id == ids["root_cost_code_id"]
+                assert row.quantity == Decimal("2.00")
+                assert row.hours == Decimal("10.00")
+                assert row.comment == "Legacy"
+
+            # Independently editable: mutating one draft's copy must not affect the
+            # other draft's copy, nor the (nonexistent) validated one.
+            connection.execute(
+                text(
+                    "UPDATE wf_estimate_role_assignment SET quantity = :quantity "
+                    "WHERE estimate_id = :estimate_id"
+                ),
+                {"quantity": 9.0, "estimate_id": ids["draft_one_id"]},
+            )
+            connection.commit()
+            unchanged_quantity = connection.scalar(
+                text("SELECT quantity FROM wf_estimate_role_assignment WHERE estimate_id = :id"),
+                {"id": ids["draft_two_id"]},
+            )
+            assert unchanged_quantity == Decimal("2.00")
+
+
+def test_estimate_role_assignment_migration_backfill_is_scoped_per_project() -> None:
+    """E12-01/#273 review finding (medium #2): the backfill's `INSERT ... SELECT
+    ... JOIN` on `wf_estimate.project_id = wf_task_role_assignment.project_id`
+    must never leak a project's `TaskRoleAssignment` into another project's draft
+    estimate. Proven with two distinct projects (each with its own draft estimate
+    and its own `TaskRoleAssignment`, on distinct tasks/roles) seeded into the
+    SAME database before the single backfill run."""
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "migration.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        project_a = _seed_project_with_estimates_and_role_assignment_at_revision(
+            database_url, "20260909_0011", project_name="Projet A Isolation Affectations"
+        )
+        project_b = _seed_project_with_estimates_and_role_assignment_at_revision(
+            database_url, "20260909_0011", project_name="Projet B Isolation Affectations"
+        )
+        assert project_a["project_id"] != project_b["project_id"]
+
+        _run_alembic(database_url, "head")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            project_a_rows = connection.execute(
+                text(
+                    "SELECT estimate_id, task_id, role_id FROM wf_estimate_role_assignment "
+                    "WHERE estimate_id IN (:draft_one, :draft_two)"
+                ),
+                {"draft_one": project_a["draft_one_id"], "draft_two": project_a["draft_two_id"]},
+            ).all()
+            assert {row.estimate_id for row in project_a_rows} == {
+                project_a["draft_one_id"],
+                project_a["draft_two_id"],
+            }
+            for row in project_a_rows:
+                assert row.task_id == project_a["task_id"]
+                assert row.role_id == project_a["role_id"]
+                # Never project B's copy leaking in via a mis-scoped join.
+                assert row.task_id != project_b["task_id"]
+                assert row.role_id != project_b["role_id"]
+
+            project_b_rows = connection.execute(
+                text(
+                    "SELECT estimate_id, task_id, role_id FROM wf_estimate_role_assignment "
+                    "WHERE estimate_id IN (:draft_one, :draft_two)"
+                ),
+                {"draft_one": project_b["draft_one_id"], "draft_two": project_b["draft_two_id"]},
+            ).all()
+            assert {row.estimate_id for row in project_b_rows} == {
+                project_b["draft_one_id"],
+                project_b["draft_two_id"],
+            }
+            for row in project_b_rows:
+                assert row.task_id == project_b["task_id"]
+                assert row.role_id == project_b["role_id"]
+                assert row.task_id != project_a["task_id"]
+                assert row.role_id != project_a["role_id"]
+
+            total_rows = connection.scalar(text("SELECT COUNT(*) FROM wf_estimate_role_assignment"))
+            assert total_rows == 4
+
+
+def test_estimate_role_assignment_migration_is_reversible() -> None:
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "migration.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        _seed_project_with_estimates_and_role_assignment_at_revision(
+            database_url, "20260909_0011", project_name="Projet Reversible Affectations"
+        )
+        _run_alembic(database_url, "head")
+        _downgrade_alembic(database_url, "20260909_0011")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            table_names = set(inspect(connection).get_table_names())
+            assert "wf_estimate_role_assignment" not in table_names
+            assert (
+                connection.scalar(text("SELECT version_num FROM alembic_version"))
+                == "20260909_0011"
+            )
+
+        _run_alembic(database_url, "head")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            table_names = set(inspect(connection).get_table_names())
+            assert "wf_estimate_role_assignment" in table_names
+
+
+def test_postgres_estimate_role_assignment_migration_backfill_and_downgrade(
+    postgres_database_url: str,
+) -> None:
+    """PostgreSQL variant of the estimate role assignment migration round trip
+    (E12-01, #273): backfill, then downgrade, then re-upgrade."""
+    ids = _seed_project_with_estimates_and_role_assignment_at_revision(
+        postgres_database_url, "20260909_0011", project_name="Projet PG Backfill Affectations"
+    )
+
+    _run_alembic(postgres_database_url, "head")
+
+    with _disposable_engine(postgres_database_url) as engine, engine.connect() as connection:
+        rows = connection.execute(
+            text(
+                "SELECT estimate_id, quantity FROM wf_estimate_role_assignment ORDER BY estimate_id"
+            )
+        ).all()
+        assert [row.estimate_id for row in rows] == [ids["draft_one_id"], ids["draft_two_id"]]
+        assert all(row.quantity == Decimal("2.00") for row in rows)
+
+    _downgrade_alembic(postgres_database_url, "20260909_0011")
+
+    with _disposable_engine(postgres_database_url) as engine, engine.connect() as connection:
+        table_names = set(inspect(connection).get_table_names())
+        assert "wf_estimate_role_assignment" not in table_names
+
+    _run_alembic(postgres_database_url, "head")
+
+    with _disposable_engine(postgres_database_url) as engine, engine.connect() as connection:
+        table_names = set(inspect(connection).get_table_names())
+        assert "wf_estimate_role_assignment" in table_names

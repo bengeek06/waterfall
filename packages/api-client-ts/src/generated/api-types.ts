@@ -741,48 +741,6 @@ export interface paths {
         patch: operations["updateTaskDescription"];
         trace?: never;
     };
-    "/projects/{projectId}/tasks/{taskUid}/role-assignments": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Lister les affectations de main-d'œuvre d'une tâche
-         * @description Le parametre `q` recherche sur `role_name` (nom du role affecte).
-         */
-        get: operations["listTaskRoleAssignments"];
-        put?: never;
-        /**
-         * Affecter un rôle de main-d'œuvre à une tâche
-         * @description Sans `cost_code_id` explicite, l'affectation est rattachée au code d'imputation racine actif du projet ; un `cost_code_id` fourni doit appartenir au projet, sous peine de `400`.
-         */
-        post: operations["createTaskRoleAssignment"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/projects/{projectId}/tasks/{taskUid}/role-assignments/{assignmentId}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /** Supprimer une affectation de rôle */
-        delete: operations["deleteTaskRoleAssignment"];
-        options?: never;
-        head?: never;
-        /** Modifier une affectation de rôle */
-        patch: operations["updateTaskRoleAssignment"];
-        trace?: never;
-    };
     "/projects/{projectId}/estimates": {
         parameters: {
             query?: never;
@@ -921,6 +879,54 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/projects/{projectId}/estimates/{estimateId}/role-assignments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Lister les affectations de main-d'œuvre d'un devis
+         * @description Le parametre `q` recherche sur `role_name` (nom du role affecte).
+         */
+        get: operations["listEstimateRoleAssignments"];
+        put?: never;
+        /**
+         * Affecter un rôle de main-d'œuvre à une tâche, dans un devis brouillon
+         * @description `task_id` reference `MsTask.id` (jamais un uid de planning). Sans `cost_code_id` explicite, l'affectation est rattachée au code d'imputation racine actif du projet ; un `cost_code_id` fourni doit appartenir au projet, sous peine de `400`. Refuse avec `409` si le devis n'est pas un brouillon, ou si une affectation existe deja pour ce couple tache/role sur ce devis (E12-01, #273).
+         */
+        post: operations["createEstimateRoleAssignment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{projectId}/estimates/{estimateId}/role-assignments/{assignmentId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Supprimer une affectation de rôle d'un devis brouillon
+         * @description Refuse avec `409` si le devis n'est pas un brouillon.
+         */
+        delete: operations["deleteEstimateRoleAssignment"];
+        options?: never;
+        head?: never;
+        /**
+         * Modifier une affectation de rôle d'un devis brouillon
+         * @description `task_id`/`role_id` sont immuables ; refuse avec `409` si le devis n'est pas un brouillon.
+         */
+        patch: operations["updateEstimateRoleAssignment"];
         trace?: never;
     };
     "/projects/{projectId}/estimates/{estimateId}/validate": {
@@ -1757,21 +1763,23 @@ export interface components {
         TaskDescriptionUpdate: {
             description?: string | null;
         };
-        TaskRoleAssignmentCreate: {
+        EstimateRoleAssignmentCreate: {
+            task_id: number;
             role_id: number;
             cost_code_id?: number | null;
             quantity: number;
             hours: number;
             comment?: string | null;
         };
-        TaskRoleAssignmentUpdate: {
+        EstimateRoleAssignmentUpdate: {
             cost_code_id?: number | null;
             quantity?: number;
             hours?: number;
             comment?: string | null;
         };
-        TaskRoleAssignmentRead: {
+        EstimateRoleAssignmentRead: {
             id: number;
+            estimate_id: number;
             task_id: number;
             role_id: number;
             role_code: string;
@@ -2119,8 +2127,8 @@ export interface components {
         EstimateCostLineListRead: components["schemas"]["PaginationMeta"] & {
             items: components["schemas"]["EstimateCostLineRead"][];
         };
-        TaskRoleAssignmentListRead: components["schemas"]["PaginationMeta"] & {
-            items: components["schemas"]["TaskRoleAssignmentRead"][];
+        EstimateRoleAssignmentListRead: components["schemas"]["PaginationMeta"] & {
+            items: components["schemas"]["EstimateRoleAssignmentRead"][];
         };
         UserAdminListRead: components["schemas"]["PaginationMeta"] & {
             items: components["schemas"]["UserAdminRead"][];
@@ -2180,6 +2188,22 @@ export interface components {
             links: components["schemas"]["TaskLinkWrite"][];
             expected_revision: number;
         };
+        EstimateTaskCreate: {
+            name: string;
+            /** @default false */
+            is_milestone: boolean;
+            target_parent_uid?: number | null;
+            insert_after_uid?: number | null;
+        };
+        /** @enum {string} */
+        MilestoneTemplate: "fourniture" | "sous_traitance";
+        EstimateCostLineMilestonesCreate: {
+            template: components["schemas"]["MilestoneTemplate"];
+            /** @default 0 */
+            intermediate_milestones_count: number;
+            /** @default 0 */
+            lag_minutes: number;
+        };
         /** @description Une combinaison (categorie de cout, annee) sans `CostRate`, element de `MissingRateCoverage.detail.missing_cost_rates` (E6-11, #175). */
         MissingRateCoverageEntry: {
             category_id: number;
@@ -2197,22 +2221,6 @@ export interface components {
                 /** @description Chaque annee (dedupliquee, triee) utilisee par une affectation de main-d'oeuvre sans `InflationRate` correspondant, independamment de la categorie. Vide si seule la couverture `CostRate` manque. */
                 missing_inflation_years: number[];
             };
-        };
-        EstimateTaskCreate: {
-            name: string;
-            /** @default false */
-            is_milestone: boolean;
-            target_parent_uid?: number | null;
-            insert_after_uid?: number | null;
-        };
-        /** @enum {string} */
-        MilestoneTemplate: "fourniture" | "sous_traitance";
-        EstimateCostLineMilestonesCreate: {
-            template: components["schemas"]["MilestoneTemplate"];
-            /** @default 0 */
-            intermediate_milestones_count: number;
-            /** @default 0 */
-            lag_minutes: number;
         };
         /**
          * @description Issue #65 (E6-04) : une tache "reelle" du planning (ni recapitulative ni
@@ -2581,8 +2589,8 @@ export interface components {
                 "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
-        /** @description Requete invalide -- soit le role ne correspond pas a une categorie de cout main-d'oeuvre active (detail generique FastAPIErrorResponse), soit la tache est deja datee (start_at et finish_at renseignes) et au moins une (categorie de cout, annee) qu'elle couvre n'a pas de CostRate/InflationRate (detail.code=MISSING_RATE_COVERAGE, E6-11, #175). */
-        CreateTaskRoleAssignmentBadRequest: {
+        /** @description Requete invalide -- soit `task_id` ne correspond a aucune tache du projet, soit le role ne correspond pas a une categorie de cout main-d'oeuvre active (detail generique FastAPIErrorResponse), soit la tache est deja datee (start_at et finish_at renseignes) et au moins une (categorie de cout, annee) qu'elle couvre n'a pas de CostRate/InflationRate (detail.code=MISSING_RATE_COVERAGE, E6-11, #175). */
+        CreateEstimateRoleAssignmentBadRequest: {
             headers: {
                 [name: string]: unknown;
             };
@@ -4037,136 +4045,6 @@ export interface operations {
             404: components["responses"]["TaskNotFound"];
         };
     };
-    listTaskRoleAssignments: {
-        parameters: {
-            query?: {
-                /** @description Nombre maximum de lignes renvoyees. Absent, l'endpoint renvoie l'integralite des lignes du jeu filtre (voir PaginationMeta.yaml) : il n'y a pas de valeur par defaut qui tronquerait silencieusement une liste. */
-                limit?: components["parameters"]["Limit"];
-                /** @description Nombre de lignes a sauter avant le debut de la page. Requiert `limit` : fourni sans `limit`, il serait sous-specifie (voir la note "Regle offset/limit" dans PaginationMeta.yaml) et est donc rejete avec la reponse BadRequest.yaml. */
-                offset?: components["parameters"]["Offset"];
-                /** @description Recherche plein texte simple (sous-chaine, insensible a la casse), sur le sous-ensemble de colonnes documente par chaque ressource dans la description de ce parametre au niveau de l'operation. A distinguer des filtres structures deja existants sur certaines ressources (`include_inactive`, `node_id`, `role_id`, ...), qui restent des parametres dedies et se combinent avec `q`. */
-                q?: components["parameters"]["Search"];
-                sort?: "role_name" | "-role_name" | "quantity" | "-quantity" | "hours" | "-hours";
-            };
-            header?: never;
-            path: {
-                /** @description Identifiant technique ms_project.id */
-                projectId: components["parameters"]["ProjectId"];
-                /** @description UID fonctionnel de la tache dans un projet */
-                taskUid: components["parameters"]["TaskUid"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Affectations de rôles */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TaskRoleAssignmentListRead"];
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            404: components["responses"]["TaskNotFound"];
-        };
-    };
-    createTaskRoleAssignment: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Identifiant technique ms_project.id */
-                projectId: components["parameters"]["ProjectId"];
-                /** @description UID fonctionnel de la tache dans un projet */
-                taskUid: components["parameters"]["TaskUid"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TaskRoleAssignmentCreate"];
-            };
-        };
-        responses: {
-            /** @description Affectation créée */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TaskRoleAssignmentRead"];
-                };
-            };
-            400: components["responses"]["CreateTaskRoleAssignmentBadRequest"];
-            401: components["responses"]["Unauthorized"];
-            404: components["responses"]["TaskNotFound"];
-            409: components["responses"]["Conflict"];
-        };
-    };
-    deleteTaskRoleAssignment: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Identifiant technique ms_project.id */
-                projectId: components["parameters"]["ProjectId"];
-                /** @description UID fonctionnel de la tache dans un projet */
-                taskUid: components["parameters"]["TaskUid"];
-                /** @description Identifiant technique de l'affectation de rôle */
-                assignmentId: components["parameters"]["AssignmentId"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Affectation supprimée */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            401: components["responses"]["Unauthorized"];
-            404: components["responses"]["TaskNotFound"];
-        };
-    };
-    updateTaskRoleAssignment: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Identifiant technique ms_project.id */
-                projectId: components["parameters"]["ProjectId"];
-                /** @description UID fonctionnel de la tache dans un projet */
-                taskUid: components["parameters"]["TaskUid"];
-                /** @description Identifiant technique de l'affectation de rôle */
-                assignmentId: components["parameters"]["AssignmentId"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TaskRoleAssignmentUpdate"];
-            };
-        };
-        responses: {
-            /** @description Affectation modifiée */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TaskRoleAssignmentRead"];
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            404: components["responses"]["TaskNotFound"];
-        };
-    };
     listProjectEstimates: {
         parameters: {
             query?: {
@@ -4486,6 +4364,138 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EstimateTaskRowListRead"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    listEstimateRoleAssignments: {
+        parameters: {
+            query?: {
+                /** @description Nombre maximum de lignes renvoyees. Absent, l'endpoint renvoie l'integralite des lignes du jeu filtre (voir PaginationMeta.yaml) : il n'y a pas de valeur par defaut qui tronquerait silencieusement une liste. */
+                limit?: components["parameters"]["Limit"];
+                /** @description Nombre de lignes a sauter avant le debut de la page. Requiert `limit` : fourni sans `limit`, il serait sous-specifie (voir la note "Regle offset/limit" dans PaginationMeta.yaml) et est donc rejete avec la reponse BadRequest.yaml. */
+                offset?: components["parameters"]["Offset"];
+                /** @description Recherche plein texte simple (sous-chaine, insensible a la casse), sur le sous-ensemble de colonnes documente par chaque ressource dans la description de ce parametre au niveau de l'operation. A distinguer des filtres structures deja existants sur certaines ressources (`include_inactive`, `node_id`, `role_id`, ...), qui restent des parametres dedies et se combinent avec `q`. */
+                q?: components["parameters"]["Search"];
+                sort?: "role_name" | "-role_name" | "quantity" | "-quantity" | "hours" | "-hours";
+            };
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de devis */
+                estimateId: components["parameters"]["EstimateId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Affectations de rôles du devis */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EstimateRoleAssignmentListRead"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+        };
+    };
+    createEstimateRoleAssignment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de devis */
+                estimateId: components["parameters"]["EstimateId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EstimateRoleAssignmentCreate"];
+            };
+        };
+        responses: {
+            /** @description Affectation créée */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EstimateRoleAssignmentRead"];
+                };
+            };
+            400: components["responses"]["CreateEstimateRoleAssignmentBadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    deleteEstimateRoleAssignment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de devis */
+                estimateId: components["parameters"]["EstimateId"];
+                /** @description Identifiant technique de l'affectation de rôle */
+                assignmentId: components["parameters"]["AssignmentId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Affectation supprimée */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    updateEstimateRoleAssignment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de devis */
+                estimateId: components["parameters"]["EstimateId"];
+                /** @description Identifiant technique de l'affectation de rôle */
+                assignmentId: components["parameters"]["AssignmentId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EstimateRoleAssignmentUpdate"];
+            };
+        };
+        responses: {
+            /** @description Affectation modifiée */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EstimateRoleAssignmentRead"];
                 };
             };
             400: components["responses"]["BadRequest"];

@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from waterfall.models.resources import (
     EstimateCostLine,
     EstimateLine,
+    EstimateRoleAssignment,
     EstimateTaskRow,
     TaskRoleAssignment,
 )
@@ -14,10 +15,11 @@ from waterfall.models.wf_core import WfChargeLine
 
 # Every column that keys a reference off the legacy ms_task.id -- kept as a
 # single tuple so find_referenced_task_uids can batch each one into a single
-# IN (...) query instead of re-checking is_task_referenced's five filters
+# IN (...) query instead of re-checking is_task_referenced's six filters
 # once per task.
 _TASK_ID_REFERENCE_COLUMNS = (
     TaskRoleAssignment.task_id,
+    EstimateRoleAssignment.task_id,
     EstimateCostLine.task_id,
     EstimateLine.task_id,
     EstimateTaskRow.task_id,
@@ -34,6 +36,10 @@ def is_task_referenced(
 ) -> bool:
     if task_id is not None and (
         db.query(TaskRoleAssignment.id).filter(TaskRoleAssignment.task_id == task_id).first()
+        is not None
+        or db.query(EstimateRoleAssignment.id)
+        .filter(EstimateRoleAssignment.task_id == task_id)
+        .first()
         is not None
         or db.query(EstimateCostLine.id).filter(EstimateCostLine.task_id == task_id).first()
         is not None

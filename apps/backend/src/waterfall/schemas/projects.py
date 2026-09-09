@@ -490,60 +490,6 @@ class PlanningTreeRead(BaseModel):
     tasks: list[PlanningTaskTreeRead]
 
 
-class TaskRoleAssignmentCreate(BaseModel):
-    role_id: int = Field(gt=0)
-    # Issue #63 (E6-02): the project cost-imputation code this line of labor cost is
-    # attached to. Left unset, it defaults to the project's active root cost code
-    # (see resolve_cost_code_id); an explicit value must belong to the same project.
-    cost_code_id: int | None = Field(default=None, gt=0)
-    quantity: Decimal = Field(gt=0, max_digits=10, decimal_places=2)
-    hours: Decimal = Field(ge=0, max_digits=14, decimal_places=2)
-    comment: str | None = Field(default=None, max_length=10000)
-
-    @field_validator("comment", mode="before")
-    @classmethod
-    def normalize_comment(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        normalized = value.strip()
-        return normalized or None
-
-
-class TaskRoleAssignmentUpdate(BaseModel):
-    cost_code_id: int | None = Field(default=None, gt=0)
-    quantity: Decimal | None = Field(default=None, gt=0, max_digits=10, decimal_places=2)
-    hours: Decimal | None = Field(default=None, ge=0, max_digits=14, decimal_places=2)
-    comment: str | None = Field(default=None, max_length=10000)
-
-    @field_validator("comment", mode="before")
-    @classmethod
-    def normalize_comment(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        normalized = value.strip()
-        return normalized or None
-
-
-class TaskRoleAssignmentRead(BaseModel):
-    id: int
-    task_id: int
-    role_id: int
-    role_code: str
-    role_name: str
-    cost_category_id: int
-    accounting_code: str
-    cost_code_id: int | None
-    quantity: Decimal
-    hours: Decimal
-    comment: str | None
-    created_at: datetime
-    updated_at: datetime
-
-
-class TaskRoleAssignmentListRead(PaginatedList[TaskRoleAssignmentRead]):
-    pass
-
-
 class MissingRateCoverageEntry(BaseModel):
     """One missing (cost category, year) `CostRate` combination, part of
     `MissingRateCoverageDetail.missing_cost_rates` (E6-11/#175)."""
@@ -555,7 +501,7 @@ class MissingRateCoverageEntry(BaseModel):
 
 
 class MissingRateCoverageDetail(BaseModel):
-    """Structured 400/409 `detail` for `create_task_role_assignment`
+    """Structured 400/409 `detail` for `create_estimate_role_assignment`
     (``POST .../role-assignments``) and `validate_project_estimate`
     (``POST .../validate``) when a labor assignment covers a (cost category,
     year) with no `CostRate`, or a year with no `InflationRate` (E6-11/#175).
@@ -741,8 +687,8 @@ SupplyStatus = Literal["planned", "ordered", "received", "cancelled"]
 class EstimateCostLineCreate(BaseModel):
     task_id: int | None = Field(default=None, gt=0)
     cost_category_id: int = Field(gt=0)
-    # Issue #63 (E6-02): see TaskRoleAssignmentCreate.cost_code_id above for the same
-    # default-to-project-root / must-belong-to-project rules.
+    # Issue #63 (E6-02): see EstimateRoleAssignmentCreate.cost_code_id below for the
+    # same default-to-project-root / must-belong-to-project rules.
     cost_code_id: int | None = Field(default=None, gt=0)
     label: str = Field(min_length=1, max_length=512)
     quantity: Decimal = Field(gt=0, max_digits=14, decimal_places=2)
@@ -809,6 +755,72 @@ class EstimateCostLineRead(BaseModel):
 
 
 class EstimateCostLineListRead(PaginatedList[EstimateCostLineRead]):
+    pass
+
+
+class EstimateRoleAssignmentCreate(BaseModel):
+    """A devis-version-scoped labor role assignment (E12-01/#273).
+
+    `task_id` refers to `MsTask.id` -- like `EstimateCostLineCreate.task_id` --
+    never a planning uid: the caller is expected to already have resolved a
+    task through the estimate's own task-rows/tasks endpoints.
+    """
+
+    task_id: int = Field(gt=0)
+    role_id: int = Field(gt=0)
+    # Issue #63 (E6-02): the project cost-imputation code this line of labor cost is
+    # attached to. Left unset, it defaults to the project's active root cost code
+    # (see resolve_cost_code_id); an explicit value must belong to the same project.
+    cost_code_id: int | None = Field(default=None, gt=0)
+    quantity: Decimal = Field(gt=0, max_digits=10, decimal_places=2)
+    hours: Decimal = Field(ge=0, max_digits=14, decimal_places=2)
+    comment: str | None = Field(default=None, max_length=10000)
+
+    @field_validator("comment", mode="before")
+    @classmethod
+    def normalize_comment(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+
+class EstimateRoleAssignmentUpdate(BaseModel):
+    """`task_id`/`role_id` are immutable once created -- only the fields below may
+    change, mirroring the removed `TaskRoleAssignmentUpdate`'s own contract."""
+
+    cost_code_id: int | None = Field(default=None, gt=0)
+    quantity: Decimal | None = Field(default=None, gt=0, max_digits=10, decimal_places=2)
+    hours: Decimal | None = Field(default=None, ge=0, max_digits=14, decimal_places=2)
+    comment: str | None = Field(default=None, max_length=10000)
+
+    @field_validator("comment", mode="before")
+    @classmethod
+    def normalize_comment(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+
+class EstimateRoleAssignmentRead(BaseModel):
+    id: int
+    estimate_id: int
+    task_id: int
+    role_id: int
+    role_code: str
+    role_name: str
+    cost_category_id: int
+    accounting_code: str
+    cost_code_id: int | None
+    quantity: Decimal
+    hours: Decimal
+    comment: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class EstimateRoleAssignmentListRead(PaginatedList[EstimateRoleAssignmentRead]):
     pass
 
 

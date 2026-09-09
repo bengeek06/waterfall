@@ -163,11 +163,19 @@ def test_create_estimate_task_creates_shared_uid_twin_and_row() -> None:
 
         # The twin MsTask row unblocks both role-assignment and cost-line creation,
         # which key off ms_task.id and previously 409'd for a snapshot-only task
-        # (see create_task_role_assignment's "Snapshot-only tasks..." guard).
+        # (see the removed create_task_role_assignment's "Snapshot-only tasks..."
+        # guard -- E12-01/#273 replaced it with a plain "task belongs to project"
+        # check on create_estimate_role_assignment, since the payload now
+        # references ms_task.id directly rather than a planning uid).
         role_id = _seed_labor_role()
         assignment_response = client.post(
-            f"/projects/{project_id}/tasks/{task.uid}/role-assignments",
-            json={"role_id": role_id, "quantity": "1.00", "hours": "10.00"},
+            f"/projects/{project_id}/estimates/{estimate_id}/role-assignments",
+            json={
+                "task_id": row["task_id"],
+                "role_id": role_id,
+                "quantity": "1.00",
+                "hours": "10.00",
+            },
             headers=headers,
         )
         assert assignment_response.status_code == 201

@@ -135,6 +135,35 @@ def _seed_resources_with_rates() -> tuple[int, dict[int, dict[int, Decimal]]]:
         return labor_role.id, rates_by_category
 
 
+def _seed_task_role_assignment(
+    project_id: int, task_uid: int, role_id: int, quantity: str, hours: str
+) -> int:
+    """Insert a `TaskRoleAssignment` directly via the ORM.
+
+    E12-01 (#273) removed the `/tasks/{uid}/role-assignments` HTTP route this
+    module used to create these fixtures through; `TaskRoleAssignment` (and
+    `calculate_estimate_lines`'s own reading of it, unaffected by that issue) is
+    untouched, so this reaches directly into the DB instead of going through a
+    route that no longer exists.
+    """
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        task = (
+            session.query(MsTask)
+            .filter(MsTask.project_id == project_id, MsTask.uid == task_uid)
+            .one()
+        )
+        assignment = TaskRoleAssignment(
+            task_id=task.id,
+            role_id=role_id,
+            quantity=Decimal(quantity),
+            hours=Decimal(hours),
+        )
+        session.add(assignment)
+        session.commit()
+        return assignment.id
+
+
 def test_validation_rejects_assignments_outside_estimate_planning_snapshot() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)
@@ -188,12 +217,7 @@ def test_validation_rejects_assignments_outside_estimate_planning_snapshot() -> 
         assert estimate.status_code == 201
         estimate_payload = cast(dict[str, Any], estimate.json())
         estimate_id = cast(int, estimate_payload["id"])
-        assignment = client.post(
-            f"/projects/{project_id}/tasks/9999/role-assignments",
-            json={"role_id": labor_role_id, "quantity": "1", "hours": "10"},
-            headers=headers,
-        )
-        assert assignment.status_code == 201
+        _seed_task_role_assignment(project_id, 9999, labor_role_id, "1", "10")
 
         validation = client.post(
             f"/projects/{project_id}/estimates/{estimate_id}/validate",
@@ -269,12 +293,7 @@ def test_calculate_labor_lines_spanning_years() -> None:
         estimate_id = cast(int, estimate["id"])
 
         # Add task role assignment
-        assign_response = client.post(
-            f"/projects/{project_id}/tasks/{task_uid}/role-assignments",
-            json={"role_id": labor_role_id, "quantity": "1", "hours": "1000"},
-            headers=headers,
-        )
-        assert assign_response.status_code == 201
+        _seed_task_role_assignment(project_id, task_uid, labor_role_id, "1", "1000")
 
         # Validate and trigger calculation
         validate_response = client.post(
@@ -374,12 +393,7 @@ def test_calculate_labor_lines_across_two_years() -> None:
         estimate_id = cast(int, estimate["id"])
 
         # Add task role assignment with 1000 total hours
-        assign_response = client.post(
-            f"/projects/{project_id}/tasks/{task_uid}/role-assignments",
-            json={"role_id": labor_role_id, "quantity": "1", "hours": "1000"},
-            headers=headers,
-        )
-        assert assign_response.status_code == 201
+        _seed_task_role_assignment(project_id, task_uid, labor_role_id, "1", "1000")
 
         # Validate
         validate_response = client.post(
@@ -664,12 +678,7 @@ def test_validate_estimate_rejects_missing_cost_rate_and_persists_no_lines() -> 
         estimate = cast(dict[str, Any], create_response.json())
         estimate_id = cast(int, estimate["id"])
 
-        assign_response = client.post(
-            f"/projects/{project_id}/tasks/{task_uid}/role-assignments",
-            json={"role_id": labor_role_id, "quantity": "1", "hours": "100"},
-            headers=headers,
-        )
-        assert assign_response.status_code == 201
+        _seed_task_role_assignment(project_id, task_uid, labor_role_id, "1", "100")
 
         with session_factory() as session:
             scheduled_task = (
