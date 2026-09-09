@@ -2224,10 +2224,11 @@ export interface components {
         };
         /**
          * @description Issue #65 (E6-04) : une tache "reelle" du planning (ni recapitulative ni
-         *     jalon) qui n'a ni affectation de role (`TaskRoleAssignment`) ni ligne de
-         *     cout de ce devis (`EstimateCostLine.task_id`) la referencant -- c'est-a-dire
-         *     une tache probablement oubliee lors du chiffrage. Purement informatif :
-         *     n'empeche jamais la validation d'aboutir.
+         *     jalon) qui n'a ni affectation de role de ce devis (`EstimateRoleAssignment`,
+         *     scopee par `estimate_id`, E12-02/#274) ni ligne de cout de ce devis
+         *     (`EstimateCostLine.task_id`) la referencant -- c'est-a-dire une tache
+         *     probablement oubliee lors du chiffrage. Purement informatif : n'empeche
+         *     jamais la validation d'aboutir.
          */
         EstimateValidationWarning: {
             task_uid: number;

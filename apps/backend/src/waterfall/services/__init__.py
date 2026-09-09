@@ -18,6 +18,7 @@ from waterfall.services.estimate_calculation import (
     format_missing_rate_message,
     get_estimate_validation_warnings,
     missing_rate_coverage_detail,
+    sync_task_role_assignments_from_estimate,
 )
 from waterfall.services.estimate_export import build_estimate_workbook
 from waterfall.services.estimate_reconciliation_export import (
@@ -75,6 +76,7 @@ __all__ = [
     "format_missing_rate_message",
     "get_estimate_validation_warnings",
     "missing_rate_coverage_detail",
+    "sync_task_role_assignments_from_estimate",
     "build_estimate_workbook",
     "build_estimate_reconciliation_workbook",
     "CostLineFileRow",

@@ -20,6 +20,7 @@ from waterfall.models.resources import (
     CostType,
     Estimate,
     EstimateCostLine,
+    EstimateRoleAssignment,
     EstimateTaskRow,
     InflationRate,
     ProjectCostCode,
@@ -228,12 +229,15 @@ def _seed_task_role_assignment(
     """Insert a `TaskRoleAssignment` directly via the ORM.
 
     E12-01 (#273) removed the `/tasks/{uid}/role-assignments` HTTP route this
-    module used to create these fixtures through; `TaskRoleAssignment` itself
-    (still feeding the reconciliation export and `get_estimate_validation_warnings`,
-    both unaffected by that issue) is untouched, so this reaches directly into the
-    DB instead of going through a route that no longer exists. Defaults to the
-    project's root cost code (mirroring the API's own `resolve_cost_code_id`
-    default) unless the caller passes an explicit `cost_code_id`.
+    module used to create these fixtures through. Since E12-02 (#274),
+    `calculate_estimate_lines`/`get_estimate_validation_warnings` no longer read
+    `TaskRoleAssignment` at all -- use `_seed_estimate_role_assignment` below for
+    those; this helper only remains relevant to the reconciliation export
+    (`_scoped_task_role_assignments`, still project-wide and untouched by that
+    issue) and to seed a pre-existing row a devis validation's resync is
+    expected to replace/remove. Defaults to the project's root cost code
+    (mirroring the API's own `resolve_cost_code_id` default) unless the caller
+    passes an explicit `cost_code_id`.
     """
     if cost_code_id is None:
         cost_code_id = _root_cost_code_id(client, headers, project_id)
@@ -245,6 +249,47 @@ def _seed_task_role_assignment(
             .one()
         )
         assignment = TaskRoleAssignment(
+            task_id=task.id,
+            role_id=role_id,
+            cost_code_id=cost_code_id,
+            quantity=Decimal(str(quantity)),
+            hours=Decimal(str(hours)),
+            comment=comment,
+        )
+        session.add(assignment)
+        session.commit()
+        return assignment.id
+
+
+def _seed_estimate_role_assignment(
+    project_id: int,
+    estimate_id: int,
+    task_uid: int,
+    role_id: int,
+    quantity: str | float,
+    hours: str | float,
+    *,
+    comment: str | None = None,
+    cost_code_id: int | None = None,
+) -> int:
+    """Insert an `EstimateRoleAssignment` directly via the ORM, scoped to `estimate_id`.
+
+    Mirrors `_seed_task_role_assignment` above, but on the devis-scoped table
+    `calculate_estimate_lines`/`get_estimate_validation_warnings` read from since
+    E12-02/#274. Unlike that helper, `cost_code_id` is left `None` (unassigned)
+    by default rather than defaulted to the project's root: none of this
+    module's tests assert on it, and doing so would require an extra HTTP round
+    trip this ORM-only helper otherwise avoids.
+    """
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        task = (
+            session.query(MsTask)
+            .filter(MsTask.project_id == project_id, MsTask.uid == task_uid)
+            .one()
+        )
+        assignment = EstimateRoleAssignment(
+            estimate_id=estimate_id,
             task_id=task.id,
             role_id=role_id,
             cost_code_id=cost_code_id,
@@ -1889,8 +1934,9 @@ def test_project_estimate_snapshots_tasks_and_validates() -> None:
 
 def test_validate_estimate_warns_about_uncovered_tasks_only() -> None:
     """Issue #65 (E6-04): the validation warning only flags "real" tasks (excludes
-    summaries/milestones) with neither a TaskRoleAssignment nor an EstimateCostLine
-    of this estimate referencing them -- and never blocks validation."""
+    summaries/milestones) with neither an EstimateRoleAssignment nor an
+    EstimateCostLine of this estimate referencing them -- and never blocks
+    validation (E12-02/#274: both are now scoped to this estimate)."""
     with TestClient(app) as client:
         headers = _auth_headers(client, "projects.validation-warnings@example.com")
         owner_id = _current_user_id(client, headers)
@@ -1938,8 +1984,8 @@ def test_validate_estimate_warns_about_uncovered_tasks_only() -> None:
         assert estimate_response.status_code == 201
         estimate_id = cast(int, estimate_response.json()["id"])
 
-        # Task 1001 is covered via a TaskRoleAssignment.
-        _seed_task_role_assignment(client, headers, project_id, 1001, labor_role_id, 1, 1)
+        # Task 1001 is covered via this estimate's own EstimateRoleAssignment.
+        _seed_estimate_role_assignment(project_id, estimate_id, 1001, labor_role_id, 1, 1)
 
         # Task 1002 is covered via an EstimateCostLine.task_id.
         cost_line_response = client.post(
@@ -1999,7 +2045,7 @@ def test_validate_estimate_reports_no_warnings_when_all_tasks_are_covered() -> N
         assert estimate_response.status_code == 201
         estimate_id = cast(int, estimate_response.json()["id"])
 
-        _seed_task_role_assignment(client, headers, project_id, 1001, labor_role_id, 1, 1)
+        _seed_estimate_role_assignment(project_id, estimate_id, 1001, labor_role_id, 1, 1)
         assert (
             client.post(
                 f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
@@ -2988,8 +3034,8 @@ def test_estimate_cost_line_planned_date_is_editable_independently_of_task_id() 
 
 def test_estimate_line_snapshot_carries_source_cost_code_id() -> None:
     """Issue #63 (E6-02): calculate_estimate_lines copies `cost_code_id` from its
-    source (TaskRoleAssignment for labor, EstimateCostLine for non-labor) onto the
-    frozen EstimateLine snapshot at validation time, independently of
+    source (EstimateRoleAssignment for labor, EstimateCostLine for non-labor) onto
+    the frozen EstimateLine snapshot at validation time, independently of
     `accounting_code`."""
     with TestClient(app) as client:
         headers = _auth_headers(client)
@@ -3029,10 +3075,9 @@ def test_estimate_line_snapshot_carries_source_cost_code_id() -> None:
         )
         estimate_id = cast(int, estimate_response.json()["id"])
 
-        _seed_task_role_assignment(
-            client,
-            headers,
+        _seed_estimate_role_assignment(
             project_id,
+            estimate_id,
             1001,
             labor_role_id,
             1,

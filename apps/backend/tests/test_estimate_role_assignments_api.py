@@ -30,6 +30,7 @@ from waterfall.models.resources import (
     ProjectCostCode,
     ResourceNode,
     ResourceRole,
+    TaskRoleAssignment,
 )
 
 
@@ -810,19 +811,15 @@ def test_create_without_dates_skips_rate_coverage_check() -> None:
         assert response.status_code == 201
 
 
-def test_estimate_role_assignment_not_yet_used_by_labor_calculation_pending_e12_02() -> None:
-    """Non-regression (E12-01/#273 review finding, high #2): `calculate_estimate_
-    lines`/`get_estimate_validation_warnings` still only read the legacy,
-    project-wide `TaskRoleAssignment` -- never the new estimate-scoped
-    `EstimateRoleAssignment` this issue introduces. This is deliberate: the
-    resync between the two is planned for E12-02 (#274, see the docstring of
-    migration 20260909_0012_estimate_role_assignment.py), not this issue.
-
-    Pins today's actual behavior so a future change doesn't silently start (or
-    keep failing to start) folding `EstimateRoleAssignment` into the labor
-    calculation without anyone noticing: creating one here and validating the
-    devis must produce ZERO matching `EstimateLine` for it. Remove or adapt this
-    test once E12-02 ships and changes this on purpose."""
+def test_estimate_role_assignment_used_by_labor_calculation_on_validation() -> None:
+    """E12-02 (#274): `calculate_estimate_lines` now reads this estimate's own
+    `EstimateRoleAssignment` rows (E12-01/#273 review finding, high #2, tracked
+    the transitional gap this closes -- see the docstring of migration
+    20260909_0012_estimate_role_assignment.py). Creating one and validating the
+    devis must produce a matching `EstimateLine`, and synchronize a
+    project-wide `TaskRoleAssignment` for the same (task, role) pair (full
+    sync/replacement semantics and calendar resolution are covered end-to-end
+    in `test_estimate_calculation.py`)."""
     with TestClient(app) as client:
         headers = _auth_headers(client)
         project_id, task_id = _seed_project_and_task(_current_user_id(client, headers))
@@ -850,7 +847,16 @@ def test_estimate_role_assignment_not_yet_used_by_labor_calculation_pending_e12_
                 .filter(EstimateLine.role_id == labor_role_id)
                 .count()
             )
-        assert matching_lines == 0
+            assert matching_lines == 1
+
+            synced = (
+                session.query(TaskRoleAssignment)
+                .filter(TaskRoleAssignment.task_id == task_id)
+                .filter(TaskRoleAssignment.role_id == labor_role_id)
+                .one()
+            )
+            assert synced.quantity == Decimal("1")
+            assert synced.hours == Decimal("1")
 
 
 def test_delete_project_purges_its_estimate_role_assignments() -> None:
