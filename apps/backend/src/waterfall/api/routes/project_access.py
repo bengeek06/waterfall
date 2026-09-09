@@ -76,6 +76,40 @@ def get_mutable_draft_planning_with_locks(
     return project, planning
 
 
+def get_displayed_draft_planning_lock_or_409(db: Session, project: MsProject) -> WfPlanning:
+    """Lock and return ``project``'s displayed planning, requiring it to be a draft.
+
+    Used by mutations that add tasks to the currently displayed planning tree
+    from a screen other than the Planning tree editor itself (E6-06/#67's "add
+    task from the estimate"). ``project`` must already be locked
+    (``with_for_update``) by the caller, typically via :func:`get_mutable_project_lock`.
+
+    When the displayed planning is absent, or present but not a draft --
+    most commonly because it was validated and no draft has been reopened
+    since -- raises a structured 409 pointing the caller at
+    ``POST /{project_id}/planning-structure/reopen``, mirroring
+    ``PLANNING_STRUCTURE_REOPEN_REQUIRES_VALIDATION``.
+    """
+    planning = None
+    if project.displayed_planning_id is not None:
+        planning = (
+            db.query(WfPlanning)
+            .filter(
+                WfPlanning.id == project.displayed_planning_id,
+                WfPlanning.project_id == project.id,
+            )
+            .populate_existing()
+            .with_for_update()
+            .first()
+        )
+    if planning is None or planning.status != "draft":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "ESTIMATE_TASK_CREATE_REQUIRES_PLANNING_DRAFT"},
+        )
+    return planning
+
+
 def raise_on_planning_revision_conflict(
     project_id: int, planning: WfPlanning, expected_revision: int
 ) -> None:

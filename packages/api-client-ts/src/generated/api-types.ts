@@ -841,6 +841,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{projectId}/estimates/{estimateId}/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ajouter une tache au planning affiche depuis le devis
+         * @description Insere la tache dans le brouillon de planning affiche du projet (via `create_planning_task`) et cree, dans la meme transaction, une ligne `MsTask` jumelle partageant le meme `uid` ainsi que la ligne `EstimateTaskRow` correspondante dans ce devis -- necessaire pour que la tache puisse ensuite recevoir une affectation de role ou une ligne de cout, toutes deux rattachees a `ms_task.id`. Le planning affiche doit etre un brouillon (code `ESTIMATE_TASK_CREATE_REQUIRES_PLANNING_DRAFT` sinon, a resoudre via `POST /{projectId}/planning-structure/reopen`) et le devis doit etre a l'etat `draft`.
+         */
+        post: operations["createEstimateTask"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/projects/{projectId}/estimates/{estimateId}/cost-lines": {
         parameters: {
             query?: never;
@@ -2079,6 +2099,13 @@ export interface components {
         TaskLinksReplace: {
             links: components["schemas"]["TaskLinkWrite"][];
             expected_revision: number;
+        };
+        EstimateTaskCreate: {
+            name: string;
+            /** @default false */
+            is_milestone: boolean;
+            target_parent_uid?: number | null;
+            insert_after_uid?: number | null;
         };
         /**
          * @description Issue #65 (E6-04) : une tache "reelle" du planning (ni recapitulative ni
@@ -4101,6 +4128,39 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["ProjectNotFound"];
+        };
+    };
+    createEstimateTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de devis */
+                estimateId: components["parameters"]["EstimateId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EstimateTaskCreate"];
+            };
+        };
+        responses: {
+            /** @description Tache creee et ligne de devis correspondante */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EstimateTaskRowRead"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     listEstimateCostLines: {

@@ -1,15 +1,20 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { RefObject } from "react";
 import type { useRouter } from "next/navigation";
 
 import {
   ApiError,
   createEstimateCostLine,
+  createEstimateTask,
   createProjectEstimate,
   deleteEstimateCostLine,
   EstimateCostLine,
   EstimateValidationWarning,
   exportEstimateExcel,
+  getPlanning,
   getProjectCostCodes,
+  isEstimateTaskCreateRequiresPlanningDraft,
+  PlanningDetail,
   Project,
   ProjectCostCode,
   ProjectEstimate,
@@ -72,6 +77,17 @@ interface UseEstimateCostLinesParams {
   setSelectedEstimateId: (id: number) => void;
   setActiveTab: (tab: ProjectTab) => void;
   setCostLines: (updater: (previous: EstimateCostLine[]) => EstimateCostLine[]) => void;
+  setEstimateTaskRowCount: (updater: (previous: number) => number) => void;
+  // Wiring for the post-creation planning refetch below (Haute review finding on E6-06/#67):
+  // submitCreateTask attaches the new task to the project's *displayed* planning, so
+  // `planningDetail` -- otherwise only loaded by usePlanningDetailEffect -- must be refreshed
+  // here too, or the "Tâche parente" selector and the Planning tab never see it without a
+  // full page reload. `selectedPlanningIdRef` mirrors the same ref page.tsx already threads
+  // through use-planning-tree-mutations.ts, so the guard after the refetch's `await` uses the
+  // exact same up-to-date-read pattern as the rest of the codebase.
+  selectedPlanningId: number | null;
+  selectedPlanningIdRef: RefObject<number | null>;
+  setPlanningDetail: (detail: PlanningDetail | null) => void;
   onSessionRefresh: (next: SessionTokens) => void;
   router: AppRouter;
   setError: (message: string | null) => void;
@@ -90,6 +106,10 @@ export function useEstimateCostLines({
   setSelectedEstimateId,
   setActiveTab,
   setCostLines,
+  setEstimateTaskRowCount,
+  selectedPlanningId,
+  selectedPlanningIdRef,
+  setPlanningDetail,
   onSessionRefresh,
   router,
   setError,
@@ -117,6 +137,18 @@ export function useEstimateCostLines({
   const [bulkCostCodeId, setBulkCostCodeId] = useState("");
   const [bulkAssignBusy, setBulkAssignBusy] = useState(false);
   const [validationWarnings, setValidationWarnings] = useState<EstimateValidationWarning[]>([]);
+
+  // E6-06/#67: "add a task to the planning" dialog, launched from this tab. Kept here rather
+  // than a standalone hook so it can reuse this hook's selectedEstimateIdRef guard below
+  // instead of duplicating its own -- see submitCreateTask for the guarded mutation.
+  const [taskDialogOpen, setTaskDialogOpen] = useState(false);
+  const [taskDraftName, setTaskDraftName] = useState("");
+  const [taskDraftIsMilestone, setTaskDraftIsMilestone] = useState(false);
+  const [taskDraftParentUid, setTaskDraftParentUid] = useState("");
+  const [taskCreateError, setTaskCreateError] = useState<string | null>(null);
+  // True only for the specific 409 raised when the project's displayed planning is not a
+  // draft -- lets the dialog offer a "reopen the structure" action instead of just text.
+  const [taskCreateRequiresPlanningDraft, setTaskCreateRequiresPlanningDraft] = useState(false);
 
   const selectedEstimate = estimates.find((estimate) => estimate.id === selectedEstimateId) ?? null;
 
@@ -207,6 +239,136 @@ export function useEstimateCostLines({
 
   function updateBulkCostCodeId(value: string) {
     setBulkCostCodeId(value);
+  }
+
+  function openCreateTaskDialog() {
+    setTaskDraftName("");
+    setTaskDraftIsMilestone(false);
+    setTaskDraftParentUid("");
+    setTaskCreateError(null);
+    setTaskCreateRequiresPlanningDraft(false);
+    setTaskDialogOpen(true);
+  }
+
+  function closeCreateTaskDialog() {
+    setTaskDialogOpen(false);
+    setTaskDraftName("");
+    setTaskDraftIsMilestone(false);
+    setTaskDraftParentUid("");
+    setTaskCreateError(null);
+    setTaskCreateRequiresPlanningDraft(false);
+  }
+
+  function updateTaskDraftName(value: string) {
+    setTaskDraftName(value);
+  }
+  function updateTaskDraftIsMilestone(value: boolean) {
+    setTaskDraftIsMilestone(value);
+  }
+  function updateTaskDraftParentUid(value: string) {
+    setTaskDraftParentUid(value);
+  }
+
+  // Haute review finding on #67: the backend just attached the new task to the project's
+  // displayed planning (bumping its revision), but nothing else in this hook ever touches
+  // `planningDetail` -- a full refetch (rather than an optimistic patch) is simpler and safer,
+  // and createEstimateTask's response doesn't even carry the new task's `uid` (EstimateTaskRowRead
+  // only exposes `task_id`) to build one from anyway. Extracted out of submitCreateTask purely to
+  // keep that function under this file's complexity budget -- same stale-response guard
+  // (`selectedPlanningIdRef`) as every other await in this file, and the same
+  // session-expiry-first catch shape, just applied to a call whose own failure must never be
+  // reported as a task-creation failure (the task itself was already created successfully).
+  async function refreshPlanningDetailAfterTaskCreation(launchedPlanningId: number, tokens: SessionTokens) {
+    try {
+      const freshPlanningDetail = await getPlanning(projectId, launchedPlanningId, tokens, onSessionRefresh);
+      if (selectedPlanningIdRef.current === launchedPlanningId) {
+        setPlanningDetail(freshPlanningDetail);
+      }
+    } catch (refetchCause) {
+      if (refetchCause instanceof SessionExpiredError || (refetchCause instanceof ApiError && refetchCause.status === 401)) {
+        clearSession();
+        router.push("/login");
+      }
+      // Otherwise non-blocking: a failed refresh only means the Planning tab/parent-task
+      // selector show stale data until the next reload, not that the mutation itself failed.
+    }
+  }
+
+  // Applies a successful createEstimateTask response: bumps the task-row count, closes the
+  // dialog, and triggers the planning refetch above -- but only if the estimate version hasn't
+  // since changed (same stale-response guard as every other handler in this file). Extracted out
+  // of submitCreateTask purely to keep that function under this file's complexity budget.
+  async function applyCreateTaskSuccess(launchedEstimateId: number, tokens: SessionTokens) {
+    if (selectedEstimateIdRef.current !== launchedEstimateId) {
+      return;
+    }
+    setEstimateTaskRowCount((previous) => previous + 1);
+    closeCreateTaskDialog();
+    if (selectedPlanningId !== null) {
+      await refreshPlanningDetailAfterTaskCreation(selectedPlanningId, tokens);
+    }
+  }
+
+  // E6-06/#67: creates a task straight from this screen, attaching it to the project's
+  // displayed draft planning and snapshotting it into the current (draft) estimate in one
+  // backend call. `selectedEstimateIdRef` guard mirrors addCostLine/saveCostLine above: the
+  // user could switch estimate version while this request is in flight (nothing currently
+  // disables the version selector while busy), and a stale response must never be applied to
+  // whatever version is displayed once it resolves.
+  async function submitCreateTask() {
+    if (!session || selectedEstimateId === null) {
+      return;
+    }
+    const trimmedName = taskDraftName.trim();
+    if (!trimmedName) {
+      setTaskCreateError("Le nom de la tâche est obligatoire.");
+      return;
+    }
+
+    const launchedEstimateId = selectedEstimateId;
+    const targetParentUid = taskDraftParentUid ? Number(taskDraftParentUid) : undefined;
+
+    setEstimateBusy(true);
+    setTaskCreateError(null);
+    setTaskCreateRequiresPlanningDraft(false);
+    try {
+      await createEstimateTask(
+        projectId,
+        launchedEstimateId,
+        { name: trimmedName, is_milestone: taskDraftIsMilestone, target_parent_uid: targetParentUid },
+        session,
+        onSessionRefresh,
+      );
+      await applyCreateTaskSuccess(launchedEstimateId, session);
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      if (selectedEstimateIdRef.current !== launchedEstimateId) {
+        return;
+      }
+      if (cause instanceof ApiError && cause.status === 409) {
+        if (isEstimateTaskCreateRequiresPlanningDraft(cause)) {
+          // cause.message already carries the "reopen the structure" guidance (see
+          // describeStructuredDetailCode in lib/backend.ts) -- the dialog additionally offers
+          // a direct action button for it via taskCreateRequiresPlanningDraft.
+          setTaskCreateRequiresPlanningDraft(true);
+          setTaskCreateError(cause.message);
+        } else {
+          // A different 409 on this endpoint means either the estimate is no longer a draft
+          // or the project became read-only while the dialog was open -- both collapse to the
+          // backend's generic {"code": "GENERIC_ERROR"} detail, so cause.message alone would
+          // only say "Une erreur est survenue...". Distinct, actionable copy instead.
+          setTaskCreateError("Ce devis ou le planning affiché ne sont plus modifiables.");
+        }
+      } else {
+        setTaskCreateError(cause instanceof ApiError ? cause.message : "Impossible d'ajouter la tâche.");
+      }
+    } finally {
+      setEstimateBusy(false);
+    }
   }
 
   // Applies each settled `updateEstimateCostLine` result to `costLines` (success only -- a
@@ -545,5 +707,17 @@ export function useEstimateCostLines({
     saveCostLine,
     removeCostLine,
     validateEstimate,
+    taskDialogOpen,
+    taskDraftName,
+    taskDraftIsMilestone,
+    taskDraftParentUid,
+    taskCreateError,
+    taskCreateRequiresPlanningDraft,
+    openCreateTaskDialog,
+    closeCreateTaskDialog,
+    updateTaskDraftName,
+    updateTaskDraftIsMilestone,
+    updateTaskDraftParentUid,
+    submitCreateTask,
   };
 }

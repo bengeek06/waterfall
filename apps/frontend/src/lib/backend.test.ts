@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   ApiError,
+  createEstimateTask,
   deletePlanningTasks,
   getCalendars,
   getCostTypes,
@@ -10,6 +11,7 @@ import {
   getProjects,
   getResourceRoles,
   getUsers,
+  isEstimateTaskCreateRequiresPlanningDraft,
   movePlanningTasks,
   updateResourceRole,
 } from "./backend";
@@ -574,5 +576,100 @@ describe("getPlanningTaskDeleteConflict", () => {
     expect(getPlanningTaskDeleteConflict(new ApiError(404, "Not found"))).toBeNull();
     expect(getPlanningTaskDeleteConflict(new ApiError(409, "Conflict"))).toBeNull();
     expect(getPlanningTaskDeleteConflict(new Error("boom"))).toBeNull();
+  });
+});
+
+// E6-06/#67: creates a task directly from the Devis screen.
+describe("createEstimateTask", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("posts the payload to the estimate's tasks endpoint and returns the created row", async () => {
+    const createdRow = {
+      id: 1,
+      estimate_id: 7,
+      task_id: 42,
+      parent_task_id: null,
+      position: 3,
+      task_name: "Terrassement",
+      outline_number: "1.3",
+      outline_level: 1,
+      is_milestone: false,
+    };
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+      async () =>
+        new Response(JSON.stringify(createdRow), {
+          status: 201,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await createEstimateTask(
+      1,
+      7,
+      { name: "Terrassement", is_milestone: false, target_parent_uid: 5 },
+      { accessToken: "token" },
+      vi.fn(),
+    );
+
+    expect(result).toEqual(createdRow);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/projects/1/estimates/7/tasks");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({
+      name: "Terrassement",
+      is_milestone: false,
+      target_parent_uid: 5,
+    });
+  });
+
+  it("turns an ESTIMATE_TASK_CREATE_REQUIRES_PLANNING_DRAFT conflict into a readable message that isEstimateTaskCreateRequiresPlanningDraft recognizes", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ detail: { code: "ESTIMATE_TASK_CREATE_REQUIRES_PLANNING_DRAFT" } }), {
+        status: 409,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    let thrown: unknown;
+    try {
+      await createEstimateTask(1, 7, { name: "Terrassement", is_milestone: false }, { accessToken: "token" }, vi.fn());
+    } catch (cause) {
+      thrown = cause;
+    }
+
+    expect(thrown).toBeInstanceOf(ApiError);
+    expect((thrown as ApiError).message).toBe(
+      "Le planning affiché n'est plus un brouillon : rouvre sa structure depuis l'onglet Planning avant d'ajouter une tâche depuis le devis.",
+    );
+    expect(isEstimateTaskCreateRequiresPlanningDraft(thrown)).toBe(true);
+  });
+
+  it("does not flag a generic 409 (e.g. estimate/planning no longer a draft) as the reopen-structure case", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ detail: "Estimate is not a draft" }), {
+        status: 409,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    let thrown: unknown;
+    try {
+      await createEstimateTask(1, 7, { name: "Terrassement", is_milestone: false }, { accessToken: "token" }, vi.fn());
+    } catch (cause) {
+      thrown = cause;
+    }
+
+    expect(isEstimateTaskCreateRequiresPlanningDraft(thrown)).toBe(false);
+  });
+
+  it("returns false for a non-409 error, a 409 without a structured detail, or an unrelated error", () => {
+    expect(isEstimateTaskCreateRequiresPlanningDraft(new ApiError(404, "Not found"))).toBe(false);
+    expect(isEstimateTaskCreateRequiresPlanningDraft(new ApiError(409, "Conflict"))).toBe(false);
+    expect(isEstimateTaskCreateRequiresPlanningDraft(new Error("boom"))).toBe(false);
   });
 });

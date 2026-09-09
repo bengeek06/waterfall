@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { BulkCostCodeAssignmentBar } from "@/components/bulk-cost-code-assignment-bar";
 import { CostLineForm, type CostLineDraft } from "@/components/cost-line-form";
 import { CostLinesTable, type EditingLineDraft } from "@/components/cost-lines-table";
+import { EstimateCreateTaskDialog } from "@/components/estimate-create-task-dialog";
 import { EstimateVersionControls } from "@/components/estimate-version-controls";
 import type {
   CostCategory,
@@ -12,6 +13,7 @@ import type {
   EstimateValidationWarning,
   ProjectCostCode,
   ProjectEstimate,
+  Task,
 } from "@/lib/backend";
 
 export type EstimateTabProps = {
@@ -54,6 +56,22 @@ export type EstimateTabProps = {
   onBulkCostCodeIdChange: (value: string) => void;
   bulkAssignBusy: boolean;
   onBulkAssignCostCode: () => void;
+  // E6-06/#67: "add a task to the planning" dialog, launched from this tab.
+  taskDialogOpen: boolean;
+  taskDraftName: string;
+  taskDraftIsMilestone: boolean;
+  taskDraftParentUid: string;
+  parentTaskOptions: Task[];
+  taskCreateBusy: boolean;
+  taskCreateError: string | null;
+  taskCreateRequiresPlanningDraft: boolean;
+  onOpenCreateTaskDialog: () => void;
+  onCloseCreateTaskDialog: () => void;
+  onTaskDraftNameChange: (value: string) => void;
+  onTaskDraftIsMilestoneChange: (value: boolean) => void;
+  onTaskDraftParentUidChange: (value: string) => void;
+  onSubmitCreateTask: () => void;
+  onReopenStructure: () => void;
 };
 
 // Extracted from ProjectDetailsPage (E4-11 / #151): composes the whole "Devis" tab (version
@@ -100,6 +118,21 @@ export function EstimateTab({
   onBulkCostCodeIdChange,
   bulkAssignBusy,
   onBulkAssignCostCode,
+  taskDialogOpen,
+  taskDraftName,
+  taskDraftIsMilestone,
+  taskDraftParentUid,
+  parentTaskOptions,
+  taskCreateBusy,
+  taskCreateError,
+  taskCreateRequiresPlanningDraft,
+  onOpenCreateTaskDialog,
+  onCloseCreateTaskDialog,
+  onTaskDraftNameChange,
+  onTaskDraftIsMilestoneChange,
+  onTaskDraftParentUidChange,
+  onSubmitCreateTask,
+  onReopenStructure,
 }: EstimateTabProps) {
   if (!active) {
     return null;
@@ -163,6 +196,14 @@ export function EstimateTab({
           </div>
 
           {canEditEstimate ? (
+            <div>
+              <Button type="button" variant="outline" disabled={estimateBusy} onClick={onOpenCreateTaskDialog}>
+                Ajouter une tâche au planning
+              </Button>
+            </div>
+          ) : null}
+
+          {canEditEstimate ? (
             <CostLineForm
               costCategories={costCategories}
               costLineDraft={costLineDraft}
@@ -206,6 +247,23 @@ export function EstimateTab({
           />
         </div>
       ) : null}
+
+      <EstimateCreateTaskDialog
+        open={taskDialogOpen}
+        name={taskDraftName}
+        isMilestone={taskDraftIsMilestone}
+        parentTaskUid={taskDraftParentUid}
+        parentTaskOptions={parentTaskOptions}
+        busy={taskCreateBusy}
+        error={taskCreateError}
+        requiresPlanningDraft={taskCreateRequiresPlanningDraft}
+        onNameChange={onTaskDraftNameChange}
+        onMilestoneChange={onTaskDraftIsMilestoneChange}
+        onParentTaskUidChange={onTaskDraftParentUidChange}
+        onClose={onCloseCreateTaskDialog}
+        onSubmit={onSubmitCreateTask}
+        onReopenStructure={onReopenStructure}
+      />
     </div>
   );
 }

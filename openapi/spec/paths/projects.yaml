@@ -1016,6 +1016,48 @@
         $ref: ../components/responses/Unauthorized.yaml
       '404':
         $ref: ../components/responses/ProjectNotFound.yaml
+/projects/{projectId}/estimates/{estimateId}/tasks:
+  post:
+    tags:
+    - projects
+    summary: Ajouter une tache au planning affiche depuis le devis
+    description: >-
+      Insere la tache dans le brouillon de planning affiche du projet (via
+      `create_planning_task`) et cree, dans la meme transaction, une ligne
+      `MsTask` jumelle partageant le meme `uid` ainsi que la ligne
+      `EstimateTaskRow` correspondante dans ce devis -- necessaire pour que la
+      tache puisse ensuite recevoir une affectation de role ou une ligne de
+      cout, toutes deux rattachees a `ms_task.id`. Le planning affiche doit
+      etre un brouillon (code `ESTIMATE_TASK_CREATE_REQUIRES_PLANNING_DRAFT`
+      sinon, a resoudre via `POST /{projectId}/planning-structure/reopen`) et
+      le devis doit etre a l'etat `draft`.
+    operationId: createEstimateTask
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/EstimateId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/EstimateTaskCreate.yaml
+    responses:
+      '201':
+        description: Tache creee et ligne de devis correspondante
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/EstimateTaskRowRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
 /projects/{projectId}/estimates/{estimateId}/cost-lines:
   get:
     tags:
