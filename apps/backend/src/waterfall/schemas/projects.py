@@ -492,6 +492,10 @@ class PlanningTreeRead(BaseModel):
 
 class TaskRoleAssignmentCreate(BaseModel):
     role_id: int = Field(gt=0)
+    # Issue #63 (E6-02): the project cost-imputation code this line of labor cost is
+    # attached to. Left unset, it defaults to the project's active root cost code
+    # (see resolve_cost_code_id); an explicit value must belong to the same project.
+    cost_code_id: int | None = Field(default=None, gt=0)
     quantity: Decimal = Field(gt=0, max_digits=10, decimal_places=2)
     hours: Decimal = Field(ge=0, max_digits=14, decimal_places=2)
     comment: str | None = Field(default=None, max_length=10000)
@@ -506,6 +510,7 @@ class TaskRoleAssignmentCreate(BaseModel):
 
 
 class TaskRoleAssignmentUpdate(BaseModel):
+    cost_code_id: int | None = Field(default=None, gt=0)
     quantity: Decimal | None = Field(default=None, gt=0, max_digits=10, decimal_places=2)
     hours: Decimal | None = Field(default=None, ge=0, max_digits=14, decimal_places=2)
     comment: str | None = Field(default=None, max_length=10000)
@@ -527,6 +532,7 @@ class TaskRoleAssignmentRead(BaseModel):
     role_name: str
     cost_category_id: int
     accounting_code: str
+    cost_code_id: int | None
     quantity: Decimal
     hours: Decimal
     comment: str | None
@@ -603,6 +609,9 @@ SupplyStatus = Literal["planned", "ordered", "received", "cancelled"]
 class EstimateCostLineCreate(BaseModel):
     task_id: int | None = Field(default=None, gt=0)
     cost_category_id: int = Field(gt=0)
+    # Issue #63 (E6-02): see TaskRoleAssignmentCreate.cost_code_id above for the same
+    # default-to-project-root / must-belong-to-project rules.
+    cost_code_id: int | None = Field(default=None, gt=0)
     label: str = Field(min_length=1, max_length=512)
     quantity: Decimal = Field(gt=0, max_digits=14, decimal_places=2)
     unit_cost: Decimal = Field(ge=0, max_digits=16, decimal_places=2)
@@ -624,6 +633,7 @@ class EstimateCostLineCreate(BaseModel):
 class EstimateCostLineUpdate(BaseModel):
     task_id: int | None = Field(default=None, gt=0)
     cost_category_id: int | None = Field(default=None, gt=0)
+    cost_code_id: int | None = Field(default=None, gt=0)
     label: str | None = Field(default=None, min_length=1, max_length=512)
     quantity: Decimal | None = Field(default=None, gt=0, max_digits=14, decimal_places=2)
     unit_cost: Decimal | None = Field(default=None, ge=0, max_digits=16, decimal_places=2)
@@ -650,6 +660,7 @@ class EstimateCostLineRead(BaseModel):
     task_id: int | None
     cost_type_id: int
     cost_category_id: int
+    cost_code_id: int | None
     cost_type_code: str
     accounting_code: str
     category_code: str | None

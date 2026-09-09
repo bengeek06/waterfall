@@ -19,6 +19,7 @@ from waterfall.api.routes.project_access import (
     get_planning_or_404,
     get_project_or_404,
 )
+from waterfall.api.routes.project_cost_codes import resolve_cost_code_id
 from waterfall.api.routes.projects import (
     get_task_or_404,
     to_task_read,
@@ -41,7 +42,6 @@ from waterfall.schemas.projects import (
 )
 from waterfall.schemas.resources import CostTypeKind
 from waterfall.services import apply_pagination
-from waterfall.services.project_lifecycle import ensure_project_mutable
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -231,7 +231,9 @@ def create_task_role_assignment(
         )
 
     role, category, _ = row
-    assignment = TaskRoleAssignment(task_id=task.id, **payload.model_dump())
+    payload_data = payload.model_dump(exclude={"cost_code_id"})
+    cost_code_id = resolve_cost_code_id(db, project_id, payload.cost_code_id)
+    assignment = TaskRoleAssignment(task_id=task.id, cost_code_id=cost_code_id, **payload_data)
     db.add(assignment)
     try:
         db.commit()
@@ -257,8 +259,7 @@ def update_task_role_assignment(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> TaskRoleAssignmentRead:
-    project = get_project_or_404(db, project_id, current_user.id)
-    ensure_project_mutable(project)
+    get_mutable_project_lock(db, project_id, current_user.id)
     task = get_task_or_404(db, project_id, task_uid)
     row = (
         db.query(TaskRoleAssignment, ResourceRole, CostCategory)
@@ -275,7 +276,14 @@ def update_task_role_assignment(
         )
 
     assignment, role, category = row
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    values = payload.model_dump(exclude_unset=True)
+    if "cost_code_id" in values:
+        # An explicit null resolves back to the project's root, exactly like an omitted
+        # field does at create time -- never silently detaches the line from imputation
+        # (the `.get(...) is not None` form used to let `{"cost_code_id": null}` bypass
+        # both validation and the "always attached" invariant).
+        values["cost_code_id"] = resolve_cost_code_id(db, project_id, values["cost_code_id"])
+    for field, value in values.items():
         setattr(assignment, field, value)
     db.add(assignment)
     db.commit()
@@ -294,8 +302,7 @@ def delete_task_role_assignment(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> None:
-    project = get_project_or_404(db, project_id, current_user.id)
-    ensure_project_mutable(project)
+    get_mutable_project_lock(db, project_id, current_user.id)
     task = get_task_or_404(db, project_id, task_uid)
     assignment = (
         db.query(TaskRoleAssignment)

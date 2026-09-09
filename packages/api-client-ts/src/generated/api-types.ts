@@ -754,7 +754,10 @@ export interface paths {
          */
         get: operations["listTaskRoleAssignments"];
         put?: never;
-        /** Affecter un rôle de main-d'œuvre à une tâche */
+        /**
+         * Affecter un rôle de main-d'œuvre à une tâche
+         * @description Sans `cost_code_id` explicite, l'affectation est rattachée au code d'imputation racine actif du projet ; un `cost_code_id` fourni doit appartenir au projet, sous peine de `400`.
+         */
         post: operations["createTaskRoleAssignment"];
         delete?: never;
         options?: never;
@@ -851,7 +854,10 @@ export interface paths {
          */
         get: operations["listEstimateCostLines"];
         put?: never;
-        /** Ajouter une ligne Fourniture, Frais ou UO à un brouillon */
+        /**
+         * Ajouter une ligne Fourniture, Frais ou UO à un brouillon
+         * @description Sans `cost_code_id` explicite, la ligne est rattachée au code d'imputation racine actif du projet ; un `cost_code_id` fourni doit appartenir au projet, sous peine de `400`.
+         */
         post: operations["createEstimateCostLine"];
         delete?: never;
         options?: never;
@@ -1653,11 +1659,13 @@ export interface components {
         };
         TaskRoleAssignmentCreate: {
             role_id: number;
+            cost_code_id?: number | null;
             quantity: number;
             hours: number;
             comment?: string | null;
         };
         TaskRoleAssignmentUpdate: {
+            cost_code_id?: number | null;
             quantity?: number;
             hours?: number;
             comment?: string | null;
@@ -1670,6 +1678,7 @@ export interface components {
             role_name: string;
             cost_category_id: number;
             accounting_code: string;
+            cost_code_id?: number | null;
             quantity: number;
             hours: number;
             comment?: string | null;
@@ -1718,6 +1727,7 @@ export interface components {
         EstimateCostLineCreate: {
             task_id?: number | null;
             cost_category_id: number;
+            cost_code_id?: number | null;
             label: string;
             quantity: number;
             unit_cost: number;
@@ -1726,6 +1736,7 @@ export interface components {
         EstimateCostLineUpdate: {
             task_id?: number | null;
             cost_category_id?: number;
+            cost_code_id?: number | null;
             label?: string;
             quantity?: number;
             unit_cost?: number;
@@ -1737,6 +1748,7 @@ export interface components {
             task_id?: number | null;
             cost_type_id: number;
             cost_category_id: number;
+            cost_code_id?: number | null;
             cost_type_code: string;
             accounting_code: string;
             category_code?: string | null;
@@ -3932,6 +3944,7 @@ export interface operations {
                     "application/json": components["schemas"]["TaskRoleAssignmentRead"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["TaskNotFound"];
         };

@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 from httpx import Response
+from sqlalchemy.orm import Session, sessionmaker
 
 from waterfall.db.session import get_session_factory
 from waterfall.main import app
@@ -16,9 +17,28 @@ from waterfall.models.resources import (
     CostRate,
     CostType,
     InflationRate,
+    ProjectCostCode,
     ResourceNode,
     ResourceRole,
 )
+
+
+def _seed_root_cost_code(
+    session_factory: sessionmaker[Session], project_id: int, project_name: str
+) -> None:
+    """Uphold the #62/E6-01 root-cost-code invariant for a project seeded directly
+    via the ORM (bypassing POST /projects, which creates it automatically) -- role
+    assignment / cost line creation (E6-02/#63) below relies on it always existing."""
+    with session_factory() as session:
+        session.add(
+            ProjectCostCode(
+                project_id=project_id,
+                parent_id=None,
+                code=f"PRJ-{project_id}",
+                name=project_name,
+            )
+        )
+        session.commit()
 
 
 def _auth_headers(client: TestClient, email: str | None = None) -> dict[str, str]:
@@ -227,6 +247,9 @@ def test_calculate_labor_lines_spanning_years() -> None:
             session.commit()
             project_id = project.id
             task_uid = task.uid
+            project_name = project.name
+
+        _seed_root_cost_code(session_factory, project_id, project_name)
 
         # Create estimate
         create_response = client.post(
@@ -329,6 +352,9 @@ def test_calculate_labor_lines_across_two_years() -> None:
             session.commit()
             project_id = project.id
             task_uid = task.uid
+            project_name = project.name
+
+        _seed_root_cost_code(session_factory, project_id, project_name)
 
         # Create estimate
         create_response = client.post(
@@ -425,7 +451,10 @@ def test_non_labor_cost_lines_create_single_snapshot() -> None:
             session.add(supply_category)
             session.commit()
             project_id = project.id
+            project_name = project.name
             supply_category_id = supply_category.id
+
+        _seed_root_cost_code(session_factory, project_id, project_name)
 
         # Create estimate
         create_response = client.post(

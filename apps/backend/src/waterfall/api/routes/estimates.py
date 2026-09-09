@@ -17,6 +17,7 @@ from waterfall.api.routes.project_access import (
     get_planning_or_404,
     get_project_or_404,
 )
+from waterfall.api.routes.project_cost_codes import resolve_cost_code_id
 from waterfall.api.routes.projects import (
     get_draft_estimate_or_409,
     get_estimate_or_404,
@@ -358,6 +359,7 @@ def create_estimate_cost_line(
                 detail="Task does not belong to project",
             )
     category, cost_type = get_non_labor_category_or_400(db, payload.cost_category_id)
+    cost_code_id = resolve_cost_code_id(db, project_id, payload.cost_code_id)
     supply_status = "planned" if cost_type.kind == CostTypeKind.SUPPLY else None
     if payload.supply_status is not None:
         if cost_type.kind != CostTypeKind.SUPPLY:
@@ -372,6 +374,7 @@ def create_estimate_cost_line(
         task_id=payload.task_id,
         cost_type_id=cost_type.id,
         cost_category_id=category.id,
+        cost_code_id=cost_code_id,
         cost_type_code=cost_type.code,
         accounting_code=category.accounting_code,
         category_code=category.category_code,
@@ -421,6 +424,12 @@ def update_estimate_cost_line(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Task does not belong to project",
             )
+    if "cost_code_id" in values:
+        # An explicit null resolves back to the project's root, exactly like an omitted
+        # field does at create time -- never silently detaches the line from imputation
+        # (the `.get(...) is not None` form used to let `{"cost_code_id": null}` bypass
+        # both validation and the "always attached" invariant).
+        values["cost_code_id"] = resolve_cost_code_id(db, project_id, values["cost_code_id"])
 
     category, cost_type = get_non_labor_category_or_400(
         db,
