@@ -974,6 +974,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{projectId}/estimates/{estimateId}/export-reconciliation.xlsx": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Exporter le devis au format Excel réconciliable (E6-08)
+         * @description Export technique distinct de /export.xlsx, destiné à une réimportation fidèle (E6-09) : une feuille par nature de ligne (Tâches, MO, Non-MO), chacune portant l'identifiant interne stable de sa ligne source (EstimateTaskRow.id / TaskRoleAssignment.id / EstimateCostLine.id) en plus des libellés lisibles, permettant de distinguer une mise à jour d'une création à la réimportation.
+         */
+        get: operations["exportEstimateReconciliationExcel"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/projects/{projectId}/cost-codes": {
         parameters: {
             query?: never;
@@ -4429,6 +4449,33 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Classeur Excel du devis */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": string;
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+        };
+    };
+    exportEstimateReconciliationExcel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de devis */
+                estimateId: components["parameters"]["EstimateId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Classeur Excel réconciliable du devis (feuilles Tâches / MO / Non-MO) */
             200: {
                 headers: {
                     [name: string]: unknown;

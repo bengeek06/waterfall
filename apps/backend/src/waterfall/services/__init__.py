@@ -16,6 +16,9 @@ from waterfall.services.estimate_calculation import (
     get_estimate_validation_warnings,
 )
 from waterfall.services.estimate_export import build_estimate_workbook
+from waterfall.services.estimate_reconciliation_export import (
+    build_estimate_reconciliation_workbook,
+)
 from waterfall.services.pagination import PaginationResult, apply_pagination
 from waterfall.services.planning_links import (
     PlanningLinkError,
@@ -57,6 +60,7 @@ __all__ = [
     "calculate_estimate_aggregates",
     "get_estimate_validation_warnings",
     "build_estimate_workbook",
+    "build_estimate_reconciliation_workbook",
     "PaginationResult",
     "apply_pagination",
     "generate_planning_snapshot",
