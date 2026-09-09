@@ -611,6 +611,28 @@ class EstimateValidationRead(ProjectEstimateRead):
     warnings: list[EstimateValidationWarning]
 
 
+class EstimateTaskCreate(BaseModel):
+    """Add a task to the project's displayed draft planning from the estimate screen (E6-06/#67).
+
+    Mirrors ``PlanningTaskCreate``'s own task-placement fields (``target_parent_uid``
+    identifies the parent by its planning uid, not by an ``EstimateTaskRow``/``MsTask``
+    id) so the same placement semantics apply regardless of which screen -- Planning
+    tree or Devis -- created the task; kept as its own schema (rather than reused
+    directly) since this is a distinct capability documented under the estimates
+    resource, with its own response shape (``EstimateTaskRowRead``, not
+    ``PlanningDetailRead``). Absence of ``insert_after_uid`` places the new task as
+    the first child of ``target_parent_uid`` -- or, when ``target_parent_uid`` is
+    itself absent, as the first root task -- identical to ``PlanningTaskCreate``.
+    """
+
+    name: str = Field(min_length=1, max_length=512)
+    is_milestone: bool = False
+    target_parent_uid: int | None = Field(default=None, gt=0)
+    insert_after_uid: int | None = Field(default=None, gt=0)
+
+    _normalize_name = field_validator("name")(_required_text)
+
+
 class EstimateTaskRowRead(BaseModel):
     id: int
     estimate_id: int

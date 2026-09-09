@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError, SessionExpiredError, type Planning, type PlanningDetail, type Project } from "@/lib/backend";
@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   listEstimateTaskRows: vi.fn(),
   listEstimateCostLines: vi.fn(),
   getEstimateAggregates: vi.fn(),
+  createEstimateTask: vi.fn(),
   createImportBatch: vi.fn(),
   uploadImportSourceXml: vi.fn(),
   runImportBatch: vi.fn(),
@@ -57,6 +58,7 @@ vi.mock("@/lib/backend", async () => {
     listEstimateTaskRows: mocks.listEstimateTaskRows,
     listEstimateCostLines: mocks.listEstimateCostLines,
     getEstimateAggregates: mocks.getEstimateAggregates,
+    createEstimateTask: mocks.createEstimateTask,
     createImportBatch: mocks.createImportBatch,
     uploadImportSourceXml: mocks.uploadImportSourceXml,
     runImportBatch: mocks.runImportBatch,
@@ -144,6 +146,21 @@ const detail = (version: Planning): PlanningDetail => ({
   links: [],
 });
 
+// E6-06/#67: a single draft estimate, used by the "add a task from the Devis tab" tests below
+// to make canEditEstimate true.
+function draftEstimate() {
+  return {
+    id: 1,
+    project_id: 1,
+    planning_id: null,
+    version_number: 1,
+    kind: "initial",
+    status: "draft",
+    currency_code: "EUR",
+    created_at: "2026-01-01T00:00:00Z",
+  };
+}
+
 describe("ProjectDetailsPage planning lifecycle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -155,6 +172,7 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     mocks.listEstimateTaskRows.mockReset();
     mocks.listEstimateCostLines.mockReset();
     mocks.getEstimateAggregates.mockReset();
+    mocks.createEstimateTask.mockReset();
     mocks.createImportBatch.mockReset();
     mocks.uploadImportSourceXml.mockReset();
     mocks.runImportBatch.mockReset();
@@ -2117,5 +2135,112 @@ describe("ProjectDetailsPage planning lifecycle", () => {
       expect.anything(),
       expect.anything(),
     );
+  });
+
+  // E6-06/#67 (Haute + Moyenne review findings): creating a task from the Devis tab must
+  // refresh `planningDetail` -- without a page reload -- so the "Tâche parente" selector in a
+  // second, consecutive "Ajouter une tâche au planning" can offer the task just created.
+  describe("adding a task to the planning from the Devis tab", () => {
+    it("creates the task and refreshes the parent-task selector without a page reload", async () => {
+      const draft = planning({ id: 3, status: "draft" });
+      const initialDetail = detail(draft);
+      const updatedDetail: PlanningDetail = {
+        ...initialDetail,
+        tasks: [
+          ...initialDetail.tasks,
+          { ...initialDetail.tasks[0], uid: 11, name: "Terrassement", outline_number: "2" },
+        ],
+      };
+      mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draft.id }));
+      mocks.listPlannings.mockResolvedValue([draft]);
+      mocks.getPlanning.mockResolvedValueOnce(initialDetail).mockResolvedValue(updatedDetail);
+      mocks.listProjectEstimates.mockResolvedValue([draftEstimate()]);
+      mocks.listEstimateTaskRows.mockResolvedValue([]);
+      mocks.listEstimateCostLines.mockResolvedValue([]);
+      mocks.createEstimateTask.mockResolvedValue({
+        id: 1,
+        estimate_id: 1,
+        task_id: 42,
+        parent_task_id: null,
+        position: 2,
+        task_name: "Terrassement",
+        outline_number: "2",
+        outline_level: 1,
+        is_milestone: false,
+      });
+
+      render(<ProjectDetailsPage />);
+
+      fireEvent.click(await screen.findByRole("tab", { name: "Devis" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Ajouter une tâche au planning" }));
+
+      const dialog = await screen.findByRole("dialog");
+      fireEvent.change(within(dialog).getByLabelText("Nom de la nouvelle tâche"), {
+        target: { value: "Terrassement" },
+      });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Ajouter" }));
+
+      await waitFor(() =>
+        expect(mocks.createEstimateTask).toHaveBeenCalledWith(
+          1,
+          1,
+          { name: "Terrassement", is_milestone: false, target_parent_uid: undefined },
+          expect.anything(),
+          expect.anything(),
+        ),
+      );
+      await waitFor(() =>
+        expect(mocks.getPlanning).toHaveBeenCalledWith(1, draft.id, expect.anything(), expect.anything()),
+      );
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+      // Re-open the dialog: the parent-task selector must now list the task just created,
+      // proving `planningDetail` was actually refreshed rather than left stale.
+      fireEvent.click(screen.getByRole("button", { name: "Ajouter une tâche au planning" }));
+      const reopenedDialog = await screen.findByRole("dialog");
+      expect(within(reopenedDialog).getByRole("option", { name: /Terrassement/ })).toBeInTheDocument();
+    });
+
+    it("closes the dialog, switches to the Planning tab, and reopens the structure on the draft-required 409", async () => {
+      const validated = planning({ id: 4, status: "validated" });
+      const reopened = planning({ id: 5, status: "draft" });
+      mocks.getProject.mockResolvedValue(
+        project({ status: "initialise", displayed_planning_id: validated.id, planning_reference_id: validated.id }),
+      );
+      mocks.listPlannings.mockResolvedValueOnce([validated]).mockResolvedValue([validated, reopened]);
+      mocks.getPlanning.mockImplementation(async (_projectId, planningId) =>
+        planningId === reopened.id ? detail(reopened) : detail(validated),
+      );
+      mocks.listProjectEstimates.mockResolvedValue([draftEstimate()]);
+      mocks.listEstimateTaskRows.mockResolvedValue([]);
+      mocks.listEstimateCostLines.mockResolvedValue([]);
+      mocks.createEstimateTask.mockRejectedValue(
+        new ApiError(
+          409,
+          "Le planning affiché n'est plus un brouillon : rouvre sa structure depuis l'onglet Planning avant d'ajouter une tâche depuis le devis.",
+          { code: "ESTIMATE_TASK_CREATE_REQUIRES_PLANNING_DRAFT" },
+        ),
+      );
+      mocks.reopenPlanningStructure.mockResolvedValue(
+        project({ status: "initialise", displayed_planning_id: reopened.id }),
+      );
+
+      render(<ProjectDetailsPage />);
+
+      fireEvent.click(await screen.findByRole("tab", { name: "Devis" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Ajouter une tâche au planning" }));
+
+      const dialog = await screen.findByRole("dialog");
+      fireEvent.change(within(dialog).getByLabelText("Nom de la nouvelle tâche"), {
+        target: { value: "Terrassement" },
+      });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Ajouter" }));
+
+      fireEvent.click(await within(dialog).findByRole("button", { name: "Rouvrir la structure" }));
+
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(await screen.findByRole("heading", { name: "Lotissement du projet" })).toBeInTheDocument();
+      expect(mocks.reopenPlanningStructure).toHaveBeenCalledTimes(1);
+    });
   });
 });

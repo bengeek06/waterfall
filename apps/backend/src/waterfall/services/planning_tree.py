@@ -491,7 +491,7 @@ def create_planning_task(
     db: Session,
     planning: WfPlanning,
     command: PlanningTaskCreate,
-) -> None:
+) -> WfPlanningTaskSnapshot:
     """Insert a single new task into a draft planning at an explicit position (E3-05).
 
     ``command.target_parent_uid`` -- when provided -- must reference an
@@ -501,6 +501,14 @@ def create_planning_task(
     sibling of the resolved parent; its absence places the new task as the
     first child of that parent (or the first root task when
     ``target_parent_uid`` is also absent).
+
+    Returns the newly created snapshot, already carrying its final
+    ``uid``/``position``/``outline_number``/``outline_level`` once
+    :func:`_recalculate_outline_and_durations` has run below -- reused by
+    issue #67 (E6-06) to create an ``MsTask`` twin and ``EstimateTaskRow``
+    sharing the exact same ``uid``/outline without recomputing either
+    independently (which risks diverging from this function's own
+    project-wide uid allocation, see the comment above ``max_uid`` below).
     """
     tasks = (
         db.query(WfPlanningTaskSnapshot)
@@ -579,6 +587,7 @@ def create_planning_task(
         task.position = position
 
     _recalculate_outline_and_durations(db, planning, tasks_by_uid)
+    return new_task
 
 
 def _subtree_uids(

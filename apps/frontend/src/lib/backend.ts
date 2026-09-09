@@ -107,6 +107,9 @@ function describeStructuredDetailCode(code: unknown): string | null {
   if (code === "PLANNING_STRUCTURE_REOPEN_INTEGRITY_CONFLICT") {
     return "Cette structure ne peut pas être rouverte : son intégrité a été compromise depuis sa validation.";
   }
+  if (code === "ESTIMATE_TASK_CREATE_REQUIRES_PLANNING_DRAFT") {
+    return "Le planning affiché n'est plus un brouillon : rouvre sa structure depuis l'onglet Planning avant d'ajouter une tâche depuis le devis.";
+  }
   if (code === "GENERIC_ERROR") {
     return GENERIC_ERROR_MESSAGE;
   }
@@ -926,6 +929,45 @@ export async function listEstimateTaskRows(
     onSessionRefresh,
   );
   return page.items;
+}
+
+export type EstimateTaskCreate = components["schemas"]["EstimateTaskCreate"];
+
+// Adds a task directly from the Devis screen (E6-06/#67): creates a snapshot task in the
+// project's *displayed* planning (which must be a draft) and a matching EstimateTaskRow in
+// this estimate (which must also be a draft) in one backend transaction. `target_parent_uid`/
+// `insert_after_uid`, when set, must be uids of the displayed planning's own tasks -- never an
+// EstimateTaskRow id/task_id, which the read model doesn't expose a uid for.
+export function createEstimateTask(
+  projectId: number,
+  estimateId: number,
+  payload: EstimateTaskCreate,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<EstimateTaskRow>(
+    `/projects/${projectId}/estimates/${estimateId}/tasks`,
+    tokens,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    onSessionRefresh,
+  );
+}
+
+// Inspects an error thrown by createEstimateTask for the structured 409 raised when the
+// project's displayed planning is not a draft (most commonly because it was validated and no
+// draft has been reopened since). Distinct from reading cause.message (already a full French
+// sentence via describeStructuredDetailCode above) because the caller needs to know this
+// specific case to also offer a "reopen the structure" action, not just display text.
+export function isEstimateTaskCreateRequiresPlanningDraft(cause: unknown): boolean {
+  if (!(cause instanceof ApiError) || cause.status !== 409) {
+    return false;
+  }
+  const detail = cause.detail as { code?: string } | undefined;
+  return detail?.code === "ESTIMATE_TASK_CREATE_REQUIRES_PLANNING_DRAFT";
 }
 
 export async function listEstimateCostLines(

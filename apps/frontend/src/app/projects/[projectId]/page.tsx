@@ -435,6 +435,10 @@ export default function ProjectDetailsPage() {
     setSelectedEstimateId,
     setActiveTab,
     setCostLines,
+    setEstimateTaskRowCount,
+    selectedPlanningId,
+    selectedPlanningIdRef,
+    setPlanningDetail,
     onSessionRefresh,
     router,
     setError,
@@ -706,6 +710,25 @@ export default function ProjectDetailsPage() {
           onBulkCostCodeIdChange={estimateCostLines.updateBulkCostCodeId}
           bulkAssignBusy={estimateCostLines.bulkAssignBusy}
           onBulkAssignCostCode={() => void estimateCostLines.bulkAssignCostCode()}
+          taskDialogOpen={estimateCostLines.taskDialogOpen}
+          taskDraftName={estimateCostLines.taskDraftName}
+          taskDraftIsMilestone={estimateCostLines.taskDraftIsMilestone}
+          taskDraftParentUid={estimateCostLines.taskDraftParentUid}
+          parentTaskOptions={planningDetail?.tasks ?? []}
+          taskCreateBusy={estimateCostLines.estimateBusy}
+          taskCreateError={estimateCostLines.taskCreateError}
+          taskCreateRequiresPlanningDraft={estimateCostLines.taskCreateRequiresPlanningDraft}
+          onOpenCreateTaskDialog={estimateCostLines.openCreateTaskDialog}
+          onCloseCreateTaskDialog={estimateCostLines.closeCreateTaskDialog}
+          onTaskDraftNameChange={estimateCostLines.updateTaskDraftName}
+          onTaskDraftIsMilestoneChange={estimateCostLines.updateTaskDraftIsMilestone}
+          onTaskDraftParentUidChange={estimateCostLines.updateTaskDraftParentUid}
+          onSubmitCreateTask={() => void estimateCostLines.submitCreateTask()}
+          onReopenStructure={() => {
+            estimateCostLines.closeCreateTaskDialog();
+            setActiveTab("planning");
+            void planningMutations.reopenStructure();
+          }}
         />
 
         <CommitmentsTabPlaceholder active={activeTab === "commitments"} />

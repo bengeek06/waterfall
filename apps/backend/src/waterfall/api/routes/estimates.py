@@ -1,3 +1,5 @@
+# pyright: reportPrivateUsage=false
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -5,14 +7,17 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from waterfall.api.dependencies import get_current_active_user
 from waterfall.api.pagination import ListParams, list_params
 from waterfall.api.routes.planning_support import (
+    _PlanningTaskBodyValidationRoute,
     order_snapshots_depth_first,
 )
 from waterfall.api.routes.project_access import (
+    get_displayed_draft_planning_lock_or_409,
     get_mutable_project_lock,
     get_planning_or_404,
     get_project_or_404,
@@ -38,8 +43,11 @@ from waterfall.schemas.projects import (
     EstimateCostLineListRead,
     EstimateCostLineRead,
     EstimateCostLineUpdate,
+    EstimateTaskCreate,
     EstimateTaskRowListRead,
+    EstimateTaskRowRead,
     EstimateValidationRead,
+    PlanningTaskCreate,
     ProjectEstimateCreate,
     ProjectEstimateListRead,
     ProjectEstimateRead,
@@ -47,10 +55,14 @@ from waterfall.schemas.projects import (
 )
 from waterfall.schemas.resources import CostTypeKind
 from waterfall.services import (
+    PlanningTreeInvariantError,
+    PlanningTreeMoveError,
+    PlanningTreeMoveNotFoundError,
     apply_pagination,
     build_estimate_workbook,
     calculate_estimate_aggregates,
     calculate_estimate_lines,
+    create_planning_task,
     get_estimate_validation_warnings,
 )
 from waterfall.services.project_lifecycle import ensure_project_mutable
@@ -278,6 +290,149 @@ def list_estimate_task_rows(
         limit=result.limit,
         offset=result.offset,
     )
+
+
+def _resolve_legacy_parent_task(
+    db: Session, project_id: int, parent_uid: int | None
+) -> MsTask | None:
+    """Bridge a planning snapshot uid to its legacy ``MsTask`` twin, if any.
+
+    A task added through :func:`create_planning_task` before E6-06 only ever
+    lived in ``WfPlanningTaskSnapshot`` -- it has no ``MsTask`` twin unless one
+    was separately generated (e.g. by ``generate_planning_structure`` or an
+    import). ``EstimateTaskRow.parent_task_id``/``MsTask.parent_uid`` can only
+    ever reference an existing ``MsTask`` row (the latter through a DB-level
+    foreign key), so a parent with no twin resolves to ``None`` here -- the new
+    task becomes a root in the legacy ``MsTask`` tree, mirroring the same
+    already-established fallback ``create_project_estimate`` uses when
+    snapshotting a task whose uid isn't in its own ``task_by_uid`` map.
+    """
+    if parent_uid is None:
+        return None
+    return (
+        db.query(MsTask).filter(MsTask.project_id == project_id, MsTask.uid == parent_uid).first()
+    )
+
+
+def create_estimate_task(
+    project_id: int,
+    estimate_id: int,
+    payload: EstimateTaskCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> EstimateTaskRowRead:
+    """Add a task to the project's displayed draft planning from the Devis screen (E6-06/#67).
+
+    Creates, in a single transaction: the ``WfPlanningTaskSnapshot`` (via
+    :func:`create_planning_task`), a twin ``MsTask`` row sharing its uid --
+    required because ``TaskRoleAssignment``/``EstimateCostLine`` both key off
+    ``ms_task.id``, never off the snapshot -- and an ``EstimateTaskRow`` in
+    the current estimate pointing at that ``MsTask``.
+
+    Bumps ``planning.revision`` (like every other planning-tree mutation) so a
+    concurrently open Planning tree editor detects the change on its own next
+    edit -- but does not itself require an ``expected_revision`` from the
+    caller: unlike the Planning tree editor, this screen holds no long-lived,
+    optimistically-edited in-memory copy of the tree to protect, and the
+    project/planning row locks already prevent a lost update.
+    """
+    project = get_mutable_project_lock(db, project_id, current_user.id)
+    planning = get_displayed_draft_planning_lock_or_409(db, project)
+    get_draft_estimate_or_409(db, project_id, estimate_id)
+
+    command = PlanningTaskCreate(
+        name=payload.name,
+        is_milestone=payload.is_milestone,
+        target_parent_uid=payload.target_parent_uid,
+        insert_after_uid=payload.insert_after_uid,
+        # Unused by create_planning_task itself (only the plannings.py route layer
+        # compares expected_revision against planning.revision) -- set to the
+        # current value only to satisfy the schema's required field.
+        expected_revision=planning.revision,
+    )
+    try:
+        snapshot = create_planning_task(db, planning, command)
+
+        parent_task = _resolve_legacy_parent_task(db, project_id, snapshot.parent_uid)
+        if parent_task is not None and not parent_task.is_summary:
+            # create_planning_task already recalculated is_summary=True on the
+            # parent's snapshot twin (_recalculate_outline_and_durations); the
+            # legacy MsTask twin needs the same flip or it goes stale (e.g. a
+            # `livrable` leaf freshly promoted to a container by this insert),
+            # which get_estimate_validation_warnings and the MS Project XML
+            # export both read straight off MsTask.is_summary.
+            parent_task.is_summary = True
+            db.add(parent_task)
+        task = MsTask(
+            project_id=project_id,
+            uid=snapshot.uid,
+            parent_uid=parent_task.uid if parent_task is not None else None,
+            position=snapshot.position,
+            name=snapshot.name,
+            task_type=snapshot.task_type,
+            outline_number=snapshot.outline_number,
+            outline_level=snapshot.outline_level,
+            is_summary=snapshot.is_summary,
+            is_milestone=snapshot.is_milestone,
+        )
+        db.add(task)
+        db.flush()
+
+        # Appended after every existing row of this estimate: mid-tree renumbering
+        # would require rewriting outline_number/outline_level/position for every
+        # other row too, and existing rows with task_id=None (created from a
+        # snapshot task with no legacy MsTask twin, see _resolve_legacy_parent_task)
+        # cannot be traced back to a planning uid at all to do so safely.
+        max_position = (
+            db.query(func.max(EstimateTaskRow.position))
+            .filter(EstimateTaskRow.estimate_id == estimate_id)
+            .scalar()
+            or 0
+        )
+        row = EstimateTaskRow(
+            estimate_id=estimate_id,
+            task_id=task.id,
+            parent_task_id=parent_task.id if parent_task is not None else None,
+            position=max_position + 1,
+            task_name=task.name,
+            outline_number=task.outline_number,
+            outline_level=task.outline_level,
+            is_milestone=task.is_milestone,
+        )
+        db.add(row)
+        planning.revision += 1
+        db.add(planning)
+        db.flush()
+        # Capture the response while the row locks are still held so a concurrent
+        # writer cannot make us return a later transaction's state.
+        result = to_estimate_task_row_read(row)
+        db.commit()
+    except PlanningTreeMoveNotFoundError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except PlanningTreeInvariantError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except PlanningTreeMoveError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Planning hierarchy conflicts with existing planning data",
+        ) from exc
+    return result
+
+
+router.add_api_route(
+    "/{project_id}/estimates/{estimate_id}/tasks",
+    create_estimate_task,
+    methods=["POST"],
+    response_model=EstimateTaskRowRead,
+    status_code=status.HTTP_201_CREATED,
+    route_class_override=_PlanningTaskBodyValidationRoute,
+)
 
 
 @router.get(

@@ -1,15 +1,18 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
+import { useRef } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { EstimateCostLine, Project, ProjectCostCode, ProjectEstimate } from "@/lib/backend";
+import type { EstimateCostLine, PlanningDetail, Project, ProjectCostCode, ProjectEstimate } from "@/lib/backend";
 import { ApiError } from "@/lib/backend";
 
 const mocks = vi.hoisted(() => ({
   createProjectEstimate: vi.fn(),
   createEstimateCostLine: vi.fn(),
+  createEstimateTask: vi.fn(),
   updateEstimateCostLine: vi.fn(),
   deleteEstimateCostLine: vi.fn(),
   getProjectCostCodes: vi.fn(),
+  getPlanning: vi.fn(),
   validateProjectEstimate: vi.fn(),
   clearSession: vi.fn(),
 }));
@@ -20,9 +23,11 @@ vi.mock("@/lib/backend", async () => {
     ...actual,
     createProjectEstimate: mocks.createProjectEstimate,
     createEstimateCostLine: mocks.createEstimateCostLine,
+    createEstimateTask: mocks.createEstimateTask,
     updateEstimateCostLine: mocks.updateEstimateCostLine,
     deleteEstimateCostLine: mocks.deleteEstimateCostLine,
     getProjectCostCodes: mocks.getProjectCostCodes,
+    getPlanning: mocks.getPlanning,
     validateProjectEstimate: mocks.validateProjectEstimate,
   };
 });
@@ -40,14 +45,23 @@ type SetCostLines = (updater: (previous: EstimateCostLine[]) => EstimateCostLine
 
 type SetEstimates = (updater: (previous: ProjectEstimate[]) => ProjectEstimate[]) => void;
 
-function setup(overrides: { selectedEstimateId?: number | null } = {}) {
+type SetEstimateTaskRowCount = (updater: (previous: number) => number) => void;
+
+function setup(
+  overrides: { selectedEstimateId?: number | null; selectedPlanningId?: number | null } = {},
+) {
   const router = { push: vi.fn() };
   const setError = vi.fn();
   const setCostLines = vi.fn<SetCostLines>();
   const setEstimates = vi.fn<SetEstimates>();
+  const setEstimateTaskRowCount = vi.fn<SetEstimateTaskRowCount>();
+  const setPlanningDetail = vi.fn<(detail: PlanningDetail | null) => void>();
   const { result, rerender } = renderHook(
-    (props: { selectedEstimateId: number | null }) =>
-      useEstimateCostLines({
+    (props: { selectedEstimateId: number | null; selectedPlanningId?: number | null }) => {
+      const selectedPlanningId = props.selectedPlanningId ?? null;
+      const selectedPlanningIdRef = useRef(selectedPlanningId);
+      selectedPlanningIdRef.current = selectedPlanningId;
+      return useEstimateCostLines({
         session,
         project,
         projectId: 1,
@@ -57,13 +71,32 @@ function setup(overrides: { selectedEstimateId?: number | null } = {}) {
         setSelectedEstimateId: vi.fn(),
         setActiveTab: vi.fn(),
         setCostLines,
+        setEstimateTaskRowCount,
+        selectedPlanningId,
+        selectedPlanningIdRef,
+        setPlanningDetail,
         onSessionRefresh: vi.fn(),
         router: router as never,
         setError,
-      }),
-    { initialProps: { selectedEstimateId: overrides.selectedEstimateId ?? null } },
+      });
+    },
+    {
+      initialProps: {
+        selectedEstimateId: overrides.selectedEstimateId ?? null,
+        selectedPlanningId: overrides.selectedPlanningId ?? null,
+      },
+    },
   );
-  return { result, rerender, router, setError, setCostLines, setEstimates };
+  return {
+    result,
+    rerender,
+    router,
+    setError,
+    setCostLines,
+    setEstimates,
+    setEstimateTaskRowCount,
+    setPlanningDetail,
+  };
 }
 
 describe("useEstimateCostLines createDraftEstimate", () => {
@@ -219,7 +252,7 @@ describe("useEstimateCostLines bulkAssignCostCode", () => {
 
     // The user switches to a different estimate version while the PATCH is still in
     // flight, then makes a fresh selection there.
-    rerender({ selectedEstimateId: 2 });
+    rerender({ selectedEstimateId: 2, selectedPlanningId: null });
     act(() => {
       result.current.setSelectedCostLineIds(new Set([5]));
     });
@@ -312,7 +345,7 @@ describe("useEstimateCostLines addCostLine planned date (E6-05)", () => {
       addPromise = result.current.addCostLine();
     });
 
-    rerender({ selectedEstimateId: 2 });
+    rerender({ selectedEstimateId: 2, selectedPlanningId: null });
 
     resolveCreate(makeLine(1));
     await act(async () => {
@@ -379,7 +412,7 @@ describe("useEstimateCostLines saveCostLine planned date (E6-05)", () => {
       savePromise = result.current.saveCostLine(makeLine(1));
     });
 
-    rerender({ selectedEstimateId: 2 });
+    rerender({ selectedEstimateId: 2, selectedPlanningId: null });
 
     resolveUpdate(makeLine(1));
     await act(async () => {
@@ -510,7 +543,7 @@ describe("useEstimateCostLines validateEstimate", () => {
     });
     expect(result.current.validationWarnings).toEqual(warnings);
 
-    rerender({ selectedEstimateId: 2 });
+    rerender({ selectedEstimateId: 2, selectedPlanningId: null });
 
     expect(result.current.validationWarnings).toEqual([]);
   });
@@ -536,7 +569,7 @@ describe("useEstimateCostLines validateEstimate", () => {
 
     // The user switches to a different estimate version while the request is still in
     // flight (nothing disables the version selector while busy).
-    rerender({ selectedEstimateId: 2 });
+    rerender({ selectedEstimateId: 2, selectedPlanningId: null });
 
     const warnings = [{ task_uid: 12, task_name: "Terrassement lot 3" }];
     resolveValidate(makeEstimate(1, { warnings } as never));
@@ -546,5 +579,275 @@ describe("useEstimateCostLines validateEstimate", () => {
 
     expect(result.current.validationWarnings).toEqual([]);
     expect(setError).not.toHaveBeenCalledWith(expect.stringContaining("valider"));
+  });
+});
+
+function makeTaskRow(overrides: Partial<{ id: number; task_name: string }> = {}) {
+  return {
+    id: 1,
+    estimate_id: 1,
+    task_id: 42,
+    parent_task_id: null,
+    position: 1,
+    task_name: "Terrassement",
+    outline_number: "1.1",
+    outline_level: 1,
+    is_milestone: false,
+    ...overrides,
+  };
+}
+
+// E6-06/#67: "add a task to the planning" dialog, submitted from the Devis tab.
+describe("useEstimateCostLines submitCreateTask", () => {
+  beforeEach(() => {
+    mocks.createEstimateTask.mockReset();
+    mocks.clearSession.mockReset();
+    mocks.getProjectCostCodes.mockReset().mockResolvedValue([]);
+    mocks.getPlanning.mockReset();
+  });
+
+  it("requires a non-empty name and never calls the backend for a blank one", async () => {
+    const { result } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.openCreateTaskDialog();
+    });
+    await act(async () => {
+      await result.current.submitCreateTask();
+    });
+
+    expect(mocks.createEstimateTask).not.toHaveBeenCalled();
+    expect(result.current.taskCreateError).toBe("Le nom de la tâche est obligatoire.");
+  });
+
+  it("creates the task, bumps the task-row count, and closes the dialog on success", async () => {
+    mocks.createEstimateTask.mockResolvedValue(makeTaskRow());
+    const { result, setEstimateTaskRowCount } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.openCreateTaskDialog();
+      result.current.updateTaskDraftName("Terrassement");
+      result.current.updateTaskDraftParentUid("5");
+      result.current.updateTaskDraftIsMilestone(true);
+    });
+
+    await act(async () => {
+      await result.current.submitCreateTask();
+    });
+
+    expect(mocks.createEstimateTask).toHaveBeenCalledWith(
+      1,
+      1,
+      { name: "Terrassement", is_milestone: true, target_parent_uid: 5 },
+      session,
+      expect.any(Function),
+    );
+    expect(setEstimateTaskRowCount).toHaveBeenCalled();
+    let count = 3;
+    for (const call of setEstimateTaskRowCount.mock.calls) {
+      const updater = call[0] as (previous: number) => number;
+      count = updater(count);
+    }
+    expect(count).toBe(4);
+    expect(result.current.taskDialogOpen).toBe(false);
+  });
+
+  // Haute review finding on #67: without this refetch, planningDetail (and therefore the
+  // "Tâche parente" selector fed from it in page.tsx) never learns about the task the backend
+  // just attached to the displayed planning -- a full page reload would be the only way to see
+  // it, which defeats building a hierarchy across several consecutive additions from the Devis
+  // tab.
+  it("refetches the displayed planning and applies the fresh detail once the task is created", async () => {
+    mocks.createEstimateTask.mockResolvedValue(makeTaskRow());
+    const freshDetail = { id: 3, tasks: [{ uid: 99, name: "Terrassement" }] } as never;
+    mocks.getPlanning.mockResolvedValue(freshDetail);
+    const { result, setPlanningDetail } = setup({ selectedEstimateId: 1, selectedPlanningId: 3 });
+
+    act(() => {
+      result.current.openCreateTaskDialog();
+      result.current.updateTaskDraftName("Terrassement");
+    });
+
+    await act(async () => {
+      await result.current.submitCreateTask();
+    });
+
+    expect(mocks.getPlanning).toHaveBeenCalledWith(1, 3, session, expect.any(Function));
+    expect(setPlanningDetail).toHaveBeenCalledWith(freshDetail);
+  });
+
+  it("does not apply the planning refetch if the displayed planning changed while it was in flight", async () => {
+    mocks.createEstimateTask.mockResolvedValue(makeTaskRow());
+    let resolveGetPlanning!: (detail: unknown) => void;
+    mocks.getPlanning.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveGetPlanning = resolve;
+        }),
+    );
+    const { result, rerender, setPlanningDetail } = setup({ selectedEstimateId: 1, selectedPlanningId: 3 });
+
+    act(() => {
+      result.current.openCreateTaskDialog();
+      result.current.updateTaskDraftName("Terrassement");
+    });
+
+    let submitPromise!: Promise<void>;
+    act(() => {
+      submitPromise = result.current.submitCreateTask();
+    });
+
+    // createEstimateTask itself resolves immediately (unlike the manually-paused mocks used by
+    // this file's other stale-response tests), so the refetch's own `getPlanning` call only
+    // fires a few microtasks later -- wait for it before switching the displayed planning,
+    // otherwise `resolveGetPlanning` would still be unassigned.
+    await waitFor(() => expect(mocks.getPlanning).toHaveBeenCalled());
+
+    // The user switches to a different displayed planning while the refetch triggered by the
+    // task creation is still in flight.
+    rerender({ selectedEstimateId: 1, selectedPlanningId: 4 });
+
+    resolveGetPlanning({ id: 3, tasks: [] });
+    await act(async () => {
+      await submitPromise;
+    });
+
+    expect(setPlanningDetail).not.toHaveBeenCalled();
+  });
+
+  it("logs out when the post-creation planning refetch fails with a post-refresh 401", async () => {
+    const { ApiError } = await vi.importActual<typeof import("@/lib/backend")>("@/lib/backend");
+    mocks.createEstimateTask.mockResolvedValue(makeTaskRow());
+    mocks.getPlanning.mockRejectedValue(new ApiError(401, "Unauthorized"));
+    const { result, router } = setup({ selectedEstimateId: 1, selectedPlanningId: 3 });
+
+    act(() => {
+      result.current.openCreateTaskDialog();
+      result.current.updateTaskDraftName("Terrassement");
+    });
+
+    await act(async () => {
+      await result.current.submitCreateTask();
+    });
+
+    expect(mocks.clearSession).toHaveBeenCalled();
+    expect(router.push).toHaveBeenCalledWith("/login");
+  });
+
+  it("does not treat a non-session planning refetch failure as a task-creation failure", async () => {
+    mocks.createEstimateTask.mockResolvedValue(makeTaskRow());
+    mocks.getPlanning.mockRejectedValue(new Error("network down"));
+    const { result, setEstimateTaskRowCount } = setup({ selectedEstimateId: 1, selectedPlanningId: 3 });
+
+    act(() => {
+      result.current.openCreateTaskDialog();
+      result.current.updateTaskDraftName("Terrassement");
+    });
+
+    await act(async () => {
+      await result.current.submitCreateTask();
+    });
+
+    // The task itself was created successfully -- a failed refresh must not resurrect the
+    // dialog or report a creation error.
+    expect(setEstimateTaskRowCount).toHaveBeenCalled();
+    expect(result.current.taskDialogOpen).toBe(false);
+    expect(result.current.taskCreateError).toBeNull();
+  });
+
+  it("shows an explicit reopen-the-structure message and flag on the draft-required 409", async () => {
+    const { ApiError } = await vi.importActual<typeof import("@/lib/backend")>("@/lib/backend");
+    mocks.createEstimateTask.mockRejectedValue(
+      new ApiError(
+        409,
+        "Le planning affiché n'est plus un brouillon : rouvre sa structure depuis l'onglet Planning avant d'ajouter une tâche depuis le devis.",
+        { code: "ESTIMATE_TASK_CREATE_REQUIRES_PLANNING_DRAFT" },
+      ),
+    );
+    const { result } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.openCreateTaskDialog();
+      result.current.updateTaskDraftName("Terrassement");
+    });
+
+    await act(async () => {
+      await result.current.submitCreateTask();
+    });
+
+    expect(result.current.taskCreateRequiresPlanningDraft).toBe(true);
+    expect(result.current.taskCreateError).toBe(
+      "Le planning affiché n'est plus un brouillon : rouvre sa structure depuis l'onglet Planning avant d'ajouter une tâche depuis le devis.",
+    );
+    expect(result.current.taskDialogOpen).toBe(true);
+  });
+
+  it("shows a distinct message for a generic 409 (estimate/planning no longer a draft)", async () => {
+    const { ApiError } = await vi.importActual<typeof import("@/lib/backend")>("@/lib/backend");
+    mocks.createEstimateTask.mockRejectedValue(new ApiError(409, "Une erreur est survenue."));
+    const { result } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.openCreateTaskDialog();
+      result.current.updateTaskDraftName("Terrassement");
+    });
+
+    await act(async () => {
+      await result.current.submitCreateTask();
+    });
+
+    expect(result.current.taskCreateRequiresPlanningDraft).toBe(false);
+    expect(result.current.taskCreateError).toBe("Ce devis ou le planning affiché ne sont plus modifiables.");
+  });
+
+  it("clears the session and redirects to login on a post-refresh 401", async () => {
+    const { ApiError } = await vi.importActual<typeof import("@/lib/backend")>("@/lib/backend");
+    mocks.createEstimateTask.mockRejectedValue(new ApiError(401, "Unauthorized"));
+    const { result, router } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.openCreateTaskDialog();
+      result.current.updateTaskDraftName("Terrassement");
+    });
+
+    await act(async () => {
+      await result.current.submitCreateTask();
+    });
+
+    expect(mocks.clearSession).toHaveBeenCalled();
+    expect(router.push).toHaveBeenCalledWith("/login");
+  });
+
+  // Same stale-response guard as addCostLine/bulkAssignCostCode/validateEstimate above: the
+  // user could switch estimate version while this request is in flight.
+  it("does not apply a stale success/error result if the estimate version changed while the request was in flight", async () => {
+    let resolveCreate!: (row: ReturnType<typeof makeTaskRow>) => void;
+    mocks.createEstimateTask.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveCreate = resolve;
+        }),
+    );
+    const { result, rerender, setEstimateTaskRowCount } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.openCreateTaskDialog();
+      result.current.updateTaskDraftName("Terrassement");
+    });
+
+    let submitPromise!: Promise<void>;
+    act(() => {
+      submitPromise = result.current.submitCreateTask();
+    });
+
+    rerender({ selectedEstimateId: 2, selectedPlanningId: null });
+
+    resolveCreate(makeTaskRow());
+    await act(async () => {
+      await submitPromise;
+    });
+
+    expect(setEstimateTaskRowCount).not.toHaveBeenCalled();
+    expect(result.current.taskDialogOpen).toBe(true);
   });
 });

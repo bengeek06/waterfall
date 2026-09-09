@@ -124,6 +124,8 @@ paths:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}
   /projects/{projectId}/estimates/{estimateId}/task-rows:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1task-rows
+  /projects/{projectId}/estimates/{estimateId}/tasks:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1tasks
   /projects/{projectId}/estimates/{estimateId}/cost-lines:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1cost-lines
   /projects/{projectId}/estimates/{estimateId}/cost-lines/{costLineId}:
