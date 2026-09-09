@@ -98,6 +98,9 @@ def calculate_estimate_lines(db: Session, estimate_id: int) -> list[EstimateLine
             role_code="",
             role_name="",
             accounting_code=cost_line.accounting_code,
+            # Issue #63 (E6-02): snapshot the source EstimateCostLine's cost-imputation
+            # code at validation time, independently of accounting_code above.
+            cost_code_id=cost_line.cost_code_id,
             year=snapshot_year,
             quantity=cost_line.quantity,
             hours=Decimal("0"),
@@ -166,6 +169,10 @@ def _generate_labor_lines(
             role_code=role.name,
             role_name=role.name,
             accounting_code=category.accounting_code,
+            # Issue #63 (E6-02): snapshot the source TaskRoleAssignment's
+            # cost-imputation code at validation time, independently of
+            # accounting_code above.
+            cost_code_id=assignment.cost_code_id,
             year=year,
             quantity=assignment.quantity,
             hours=hours_per_year,

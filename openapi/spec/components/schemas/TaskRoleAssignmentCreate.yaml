@@ -7,6 +7,9 @@ properties:
   role_id:
     type: integer
     minimum: 1
+  cost_code_id:
+    type: [integer, "null"]
+    minimum: 1
   quantity:
     type: number
     exclusiveMinimum: 0

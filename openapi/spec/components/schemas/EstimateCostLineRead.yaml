@@ -26,6 +26,9 @@ properties:
   cost_category_id:
     type: integer
     minimum: 1
+  cost_code_id:
+    type: [integer, "null"]
+    minimum: 1
   cost_type_code:
     type: string
   accounting_code:

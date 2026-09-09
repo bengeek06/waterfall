@@ -322,11 +322,20 @@ class TaskRoleAssignment(Base):
         CheckConstraint("quantity > 0", name="ck_wf_task_role_quantity"),
         CheckConstraint("hours >= 0", name="ck_wf_task_role_hours"),
         Index("idx_wf_task_role_assignment_role", "role_id"),
+        Index("idx_wf_task_role_assignment_cost_code", "cost_code_id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     task_id: Mapped[int] = mapped_column(ForeignKey("ms_task.id"), nullable=False)
     role_id: Mapped[int] = mapped_column(ForeignKey("wf_resource_role.id"), nullable=False)
+    # Issue #63 (E6-02): the project cost-imputation code this line of labor cost is
+    # attached to. Nullable at the column level only because pre-existing rows have no
+    # value to backfill from other than the project's root (see the migration); every
+    # row created going forward always receives one -- either the caller's explicit
+    # choice or the project's active root code (see resolve_cost_code_id).
+    cost_code_id: Mapped[int | None] = mapped_column(
+        ForeignKey("wf_project_cost_code.id"), nullable=True
+    )
     quantity: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     hours: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -446,11 +455,18 @@ class EstimateCostLine(Base):
             "id",
         ),
         Index("idx_wf_estimate_cost_line_estimate_created_at", "estimate_id", "created_at", "id"),
+        Index("idx_wf_estimate_cost_line_cost_code", "cost_code_id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     estimate_id: Mapped[int] = mapped_column(ForeignKey("wf_estimate.id"), nullable=False)
     task_id: Mapped[int | None] = mapped_column(ForeignKey("ms_task.id"), nullable=True)
+    # Issue #63 (E6-02): see TaskRoleAssignment.cost_code_id above for the same
+    # rationale -- nullable only because pre-existing rows are backfilled to the
+    # project's root, every new row gets one via resolve_cost_code_id.
+    cost_code_id: Mapped[int | None] = mapped_column(
+        ForeignKey("wf_project_cost_code.id"), nullable=True
+    )
     cost_type_id: Mapped[int] = mapped_column(ForeignKey("wf_cost_type.id"), nullable=False)
     cost_category_id: Mapped[int] = mapped_column(ForeignKey("wf_cost_category.id"), nullable=False)
     cost_type_code: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -480,12 +496,22 @@ class EstimateLine(Base):
         Index("idx_wf_estimate_line_estimate", "estimate_id"),
         Index("idx_wf_estimate_line_task", "task_id"),
         Index("idx_wf_estimate_line_role", "role_id"),
+        Index("idx_wf_estimate_line_cost_code", "cost_code_id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     estimate_id: Mapped[int] = mapped_column(ForeignKey("wf_estimate.id"), nullable=False)
     task_id: Mapped[int | None] = mapped_column(ForeignKey("ms_task.id"), nullable=True)
     role_id: Mapped[int | None] = mapped_column(ForeignKey("wf_resource_role.id"), nullable=True)
+    # Issue #63 (E6-02): frozen snapshot of the source line's cost_code_id at
+    # validation time. Estimates validated before this issue shipped have no source to
+    # retroactively recover this from, so those pre-existing EstimateLine rows are left
+    # NULL by the migration (see 20260909_0010's docstring) rather than backfilled to
+    # the project's root -- unlike TaskRoleAssignment/EstimateCostLine, which are still
+    # live rows with a project to resolve a root from.
+    cost_code_id: Mapped[int | None] = mapped_column(
+        ForeignKey("wf_project_cost_code.id"), nullable=True
+    )
     task_name: Mapped[str] = mapped_column(String(512), nullable=False)
     role_code: Mapped[str] = mapped_column(String(255), nullable=False)
     role_name: Mapped[str] = mapped_column(String(255), nullable=False)

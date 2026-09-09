@@ -1,5 +1,8 @@
 type: object
 properties:
+  cost_code_id:
+    type: [integer, "null"]
+    minimum: 1
   quantity:
     type: number
     exclusiveMinimum: 0

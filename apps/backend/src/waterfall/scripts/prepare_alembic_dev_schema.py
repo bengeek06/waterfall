@@ -19,7 +19,7 @@ from waterfall.db.base import Base
 from waterfall.db.schema_revision import get_alembic_config_path
 from waterfall.models import User
 
-HEAD_REVISION = "20260909_0009"
+HEAD_REVISION = "20260909_0010"
 STANDARD_CALENDAR_CODE = "STANDARD"
 STANDARD_WEEKDAY_HOURS = {
     1: Decimal("0.00"),

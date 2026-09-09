@@ -1376,6 +1376,7 @@ paths:
       tags:
         - projects
       summary: Affecter un rôle de main-d'œuvre à une tâche
+      description: Sans `cost_code_id` explicite, l'affectation est rattachée au code d'imputation racine actif du projet ; un `cost_code_id` fourni doit appartenir au projet, sous peine de `400`.
       operationId: createTaskRoleAssignment
       security:
         - bearerAuth: []
@@ -1428,6 +1429,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TaskRoleAssignmentRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -1634,6 +1637,7 @@ paths:
       tags:
         - projects
       summary: Ajouter une ligne Fourniture, Frais ou UO à un brouillon
+      description: Sans `cost_code_id` explicite, la ligne est rattachée au code d'imputation racine actif du projet ; un `cost_code_id` fourni doit appartenir au projet, sous peine de `400`.
       operationId: createEstimateCostLine
       security:
         - bearerAuth: []
@@ -3926,6 +3930,11 @@ components:
         role_id:
           type: integer
           minimum: 1
+        cost_code_id:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
         quantity:
           type: number
           exclusiveMinimum: 0
@@ -3940,6 +3949,11 @@ components:
     TaskRoleAssignmentUpdate:
       type: object
       properties:
+        cost_code_id:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
         quantity:
           type: number
           exclusiveMinimum: 0
@@ -3984,6 +3998,11 @@ components:
           minimum: 1
         accounting_code:
           type: string
+        cost_code_id:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
         quantity:
           type: number
         hours:
@@ -4145,6 +4164,11 @@ components:
         cost_category_id:
           type: integer
           minimum: 1
+        cost_code_id:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
         label:
           type: string
           minLength: 1
@@ -4169,6 +4193,11 @@ components:
           minimum: 1
         cost_category_id:
           type: integer
+          minimum: 1
+        cost_code_id:
+          type:
+            - integer
+            - 'null'
           minimum: 1
         label:
           type: string
@@ -4214,6 +4243,11 @@ components:
           minimum: 1
         cost_category_id:
           type: integer
+          minimum: 1
+        cost_code_id:
+          type:
+            - integer
+            - 'null'
           minimum: 1
         cost_type_code:
           type: string

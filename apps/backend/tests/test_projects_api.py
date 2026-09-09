@@ -17,6 +17,7 @@ from waterfall.models.resources import (
     CostType,
     Estimate,
     EstimateTaskRow,
+    ProjectCostCode,
     ResourceNode,
     ResourceRole,
 )
@@ -69,6 +70,20 @@ def _seed_projects_and_tasks(owner_id: int) -> tuple[int, int]:
             currency_code="EUR",
         )
         session.add(project)
+        session.flush()
+
+        # This helper bypasses POST /projects (which auto-creates the project's root
+        # cost code -- see create_project), so it must uphold that same #62/E6-01
+        # invariant itself: role-assignment/cost-line creation (E6-02/#63) requires
+        # every project to always have an active root cost code to default to.
+        session.add(
+            ProjectCostCode(
+                project_id=project.id,
+                parent_id=None,
+                code=f"PRJ-{project.id}",
+                name=project.name,
+            )
+        )
         session.flush()
 
         task1 = MsTask(
@@ -152,6 +167,21 @@ def _seed_roles() -> tuple[int, int]:
         session.add_all([labor_role, supply_role])
         session.commit()
         return labor_role.id, supply_role.id
+
+
+def _list_cost_codes(
+    client: TestClient, headers: dict[str, str], project_id: int
+) -> list[dict[str, Any]]:
+    response: Response = client.get(f"/projects/{project_id}/cost-codes", headers=headers)
+    assert response.status_code == 200
+    return cast(list[dict[str, Any]], response.json()["items"])
+
+
+def _root_cost_code_id(client: TestClient, headers: dict[str, str], project_id: int) -> int:
+    root = next(
+        item for item in _list_cost_codes(client, headers, project_id) if item["parent_id"] is None
+    )
+    return cast(int, root["id"])
 
 
 def test_get_projects_and_project_tasks() -> None:
@@ -2016,6 +2046,323 @@ def test_estimate_cost_lines_support_non_labor_costs_and_draft_locking() -> None
         assert locked_response.status_code == 409
 
 
+def test_estimate_cost_line_defaults_to_project_root_cost_code() -> None:
+    """Issue #63 (E6-02): a non-labor cost line created without an explicit
+    `cost_code_id` is attached to the project's active root cost code by default."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        _, supply_role_id = _seed_roles()
+        root_id = _root_cost_code_id(client, headers, project_id)
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            supply_category_id = (
+                session.query(ResourceRole)
+                .filter(ResourceRole.id == supply_role_id)
+                .one()
+                .cost_category_id
+            )
+
+        estimate_response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        estimate_id = cast(int, estimate_response.json()["id"])
+
+        create_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "cost_category_id": supply_category_id,
+                "label": "Câble réseau",
+                "quantity": "1",
+                "unit_cost": "1",
+            },
+            headers=headers,
+        )
+        assert create_response.status_code == 201
+        assert create_response.json()["cost_code_id"] == root_id
+
+
+def test_estimate_cost_line_accepts_explicit_sub_cost_code_and_rejects_foreign_one() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        _, supply_role_id = _seed_roles()
+        root_id = _root_cost_code_id(client, headers, project_id)
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            supply_category_id = (
+                session.query(ResourceRole)
+                .filter(ResourceRole.id == supply_role_id)
+                .one()
+                .cost_category_id
+            )
+
+        sub_code_response = client.post(
+            f"/projects/{project_id}/cost-codes",
+            json={"code": "LOT-FOURN", "name": "Lot fourniture", "parent_id": root_id},
+            headers=headers,
+        )
+        assert sub_code_response.status_code == 201
+        sub_code_id = cast(int, sub_code_response.json()["id"])
+
+        estimate_response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        estimate_id = cast(int, estimate_response.json()["id"])
+
+        create_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "cost_category_id": supply_category_id,
+                "label": "Câble réseau",
+                "quantity": "1",
+                "unit_cost": "1",
+                "cost_code_id": sub_code_id,
+            },
+            headers=headers,
+        )
+        assert create_response.status_code == 201
+        cost_line_id = cast(int, create_response.json()["id"])
+        assert create_response.json()["cost_code_id"] == sub_code_id
+
+        other_project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        other_root_id = _root_cost_code_id(client, headers, other_project_id)
+
+        rejected_create_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "cost_category_id": supply_category_id,
+                "label": "Câble refusé",
+                "quantity": "1",
+                "unit_cost": "1",
+                "cost_code_id": other_root_id,
+            },
+            headers=headers,
+        )
+        assert rejected_create_response.status_code == 400
+
+        rejected_update_response = client.patch(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines/{cost_line_id}",
+            json={"cost_code_id": other_root_id},
+            headers=headers,
+        )
+        assert rejected_update_response.status_code == 400
+
+        accepted_update_response = client.patch(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines/{cost_line_id}",
+            json={"cost_code_id": root_id},
+            headers=headers,
+        )
+        assert accepted_update_response.status_code == 200
+        assert accepted_update_response.json()["cost_code_id"] == root_id
+
+
+def test_estimate_cost_line_explicit_null_cost_code_id_resolves_to_root_not_cleared() -> None:
+    """Review finding on #63: `{"cost_code_id": null}` must resolve back to the
+    project's root, exactly like an omitted field at create time -- never leave the
+    line with no attachment at all."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        _, supply_role_id = _seed_roles()
+        root_id = _root_cost_code_id(client, headers, project_id)
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            supply_category_id = (
+                session.query(ResourceRole)
+                .filter(ResourceRole.id == supply_role_id)
+                .one()
+                .cost_category_id
+            )
+
+        sub_code_response = client.post(
+            f"/projects/{project_id}/cost-codes",
+            json={"code": "LOT-NULL", "name": "Lot", "parent_id": root_id},
+            headers=headers,
+        )
+        sub_code_id = cast(int, sub_code_response.json()["id"])
+
+        estimate_id = cast(
+            int,
+            client.post(
+                f"/projects/{project_id}/estimates",
+                json={"kind": "initial", "currency_code": "EUR"},
+                headers=headers,
+            ).json()["id"],
+        )
+
+        create_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "cost_category_id": supply_category_id,
+                "label": "Câble",
+                "quantity": "1",
+                "unit_cost": "1",
+                "cost_code_id": sub_code_id,
+            },
+            headers=headers,
+        )
+        cost_line_id = cast(int, create_response.json()["id"])
+        assert create_response.json()["cost_code_id"] == sub_code_id
+
+        null_update_response = client.patch(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines/{cost_line_id}",
+            json={"cost_code_id": None},
+            headers=headers,
+        )
+        assert null_update_response.status_code == 200
+        assert null_update_response.json()["cost_code_id"] == root_id
+
+
+def test_estimate_cost_line_rejects_a_deactivated_cost_code() -> None:
+    """Review finding on #63: a deactivated cost code must never accept a new
+    attachment, even though it may still be referenced by pre-existing lines."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        _, supply_role_id = _seed_roles()
+        root_id = _root_cost_code_id(client, headers, project_id)
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            supply_category_id = (
+                session.query(ResourceRole)
+                .filter(ResourceRole.id == supply_role_id)
+                .one()
+                .cost_category_id
+            )
+
+        sub_code_response = client.post(
+            f"/projects/{project_id}/cost-codes",
+            json={"code": "LOT-INACTIVE", "name": "Lot", "parent_id": root_id},
+            headers=headers,
+        )
+        sub_code_id = cast(int, sub_code_response.json()["id"])
+
+        deactivate_response = client.delete(
+            f"/projects/{project_id}/cost-codes/{sub_code_id}", headers=headers
+        )
+        assert deactivate_response.status_code == 204
+
+        estimate_id = cast(
+            int,
+            client.post(
+                f"/projects/{project_id}/estimates",
+                json={"kind": "initial", "currency_code": "EUR"},
+                headers=headers,
+            ).json()["id"],
+        )
+        rejected_create_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "cost_category_id": supply_category_id,
+                "label": "Câble refusé",
+                "quantity": "1",
+                "unit_cost": "1",
+                "cost_code_id": sub_code_id,
+            },
+            headers=headers,
+        )
+        assert rejected_create_response.status_code == 400
+
+
+def test_estimate_line_snapshot_carries_source_cost_code_id() -> None:
+    """Issue #63 (E6-02): calculate_estimate_lines copies `cost_code_id` from its
+    source (TaskRoleAssignment for labor, EstimateCostLine for non-labor) onto the
+    frozen EstimateLine snapshot at validation time, independently of
+    `accounting_code`."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        labor_role_id, supply_role_id = _seed_roles()
+        root_id = _root_cost_code_id(client, headers, project_id)
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            supply_category_id = (
+                session.query(ResourceRole)
+                .filter(ResourceRole.id == supply_role_id)
+                .one()
+                .cost_category_id
+            )
+
+        labor_sub_code_response = client.post(
+            f"/projects/{project_id}/cost-codes",
+            json={"code": "LOT-MO-SNAP", "name": "Lot MO", "parent_id": root_id},
+            headers=headers,
+        )
+        assert labor_sub_code_response.status_code == 201
+        labor_sub_code_id = cast(int, labor_sub_code_response.json()["id"])
+
+        supply_sub_code_response = client.post(
+            f"/projects/{project_id}/cost-codes",
+            json={"code": "LOT-FOURN-SNAP", "name": "Lot fourniture", "parent_id": root_id},
+            headers=headers,
+        )
+        assert supply_sub_code_response.status_code == 201
+        supply_sub_code_id = cast(int, supply_sub_code_response.json()["id"])
+
+        estimate_response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        estimate_id = cast(int, estimate_response.json()["id"])
+
+        assignment_response = client.post(
+            f"/projects/{project_id}/tasks/1001/role-assignments",
+            json={
+                "role_id": labor_role_id,
+                "quantity": "1",
+                "hours": "1",
+                "cost_code_id": labor_sub_code_id,
+            },
+            headers=headers,
+        )
+        assert assignment_response.status_code == 201
+
+        cost_line_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "cost_category_id": supply_category_id,
+                "label": "Fourniture snapshot",
+                "quantity": "1",
+                "unit_cost": "1",
+                "cost_code_id": supply_sub_code_id,
+            },
+            headers=headers,
+        )
+        assert cost_line_response.status_code == 201
+
+        validate_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/validate",
+            headers=headers,
+        )
+        assert validate_response.status_code == 200
+
+        with session_factory() as session:
+            from waterfall.models.resources import EstimateLine
+
+            lines = (
+                session.query(EstimateLine)
+                .filter(EstimateLine.estimate_id == estimate_id)
+                .order_by(EstimateLine.role_id.is_(None))
+                .all()
+            )
+            cost_code_ids_by_role_presence = {
+                line.role_id is not None: line.cost_code_id for line in lines
+            }
+            assert cost_code_ids_by_role_presence[True] == labor_sub_code_id
+            assert cost_code_ids_by_role_presence[False] == supply_sub_code_id
+
+
 def test_forecast_estimate_requires_same_project_reference() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)
@@ -2102,6 +2449,185 @@ def test_task_role_assignment_lifecycle_and_labor_validation() -> None:
             headers=headers,
         )
         assert delete_response.status_code == 204
+
+
+def test_task_role_assignment_defaults_to_project_root_cost_code() -> None:
+    """Issue #63 (E6-02): a role assignment created without an explicit
+    `cost_code_id` is attached to the project's active root cost code by default."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        labor_role_id, _ = _seed_roles()
+        root_id = _root_cost_code_id(client, headers, project_id)
+
+        create_response = client.post(
+            f"/projects/{project_id}/tasks/1001/role-assignments",
+            json={"role_id": labor_role_id, "quantity": "1", "hours": "1"},
+            headers=headers,
+        )
+        assert create_response.status_code == 201
+        assert create_response.json()["cost_code_id"] == root_id
+
+
+def test_task_role_assignment_accepts_explicit_sub_cost_code_and_rejects_foreign_one() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        labor_role_id, _ = _seed_roles()
+        root_id = _root_cost_code_id(client, headers, project_id)
+
+        sub_code_response = client.post(
+            f"/projects/{project_id}/cost-codes",
+            json={"code": "LOT-MO", "name": "Lot main d'oeuvre", "parent_id": root_id},
+            headers=headers,
+        )
+        assert sub_code_response.status_code == 201
+        sub_code_id = cast(int, sub_code_response.json()["id"])
+
+        create_response = client.post(
+            f"/projects/{project_id}/tasks/1001/role-assignments",
+            json={
+                "role_id": labor_role_id,
+                "quantity": "1",
+                "hours": "1",
+                "cost_code_id": sub_code_id,
+            },
+            headers=headers,
+        )
+        assert create_response.status_code == 201
+        assignment_id = cast(int, create_response.json()["id"])
+        assert create_response.json()["cost_code_id"] == sub_code_id
+
+        other_project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        other_root_id = _root_cost_code_id(client, headers, other_project_id)
+
+        rejected_create_response = client.post(
+            f"/projects/{project_id}/tasks/1002/role-assignments",
+            json={
+                "role_id": labor_role_id,
+                "quantity": "1",
+                "hours": "1",
+                "cost_code_id": other_root_id,
+            },
+            headers=headers,
+        )
+        assert rejected_create_response.status_code == 400
+
+        rejected_update_response = client.patch(
+            f"/projects/{project_id}/tasks/1001/role-assignments/{assignment_id}",
+            json={"cost_code_id": other_root_id},
+            headers=headers,
+        )
+        assert rejected_update_response.status_code == 400
+
+        accepted_update_response = client.patch(
+            f"/projects/{project_id}/tasks/1001/role-assignments/{assignment_id}",
+            json={"cost_code_id": root_id},
+            headers=headers,
+        )
+        assert accepted_update_response.status_code == 200
+        assert accepted_update_response.json()["cost_code_id"] == root_id
+
+
+def test_task_role_assignment_explicit_null_cost_code_id_resolves_to_root_not_cleared() -> None:
+    """Review finding on #63: `{"cost_code_id": null}` must resolve back to the
+    project's root, exactly like an omitted field at create time -- never leave the
+    assignment with no attachment at all."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        labor_role_id, _ = _seed_roles()
+        root_id = _root_cost_code_id(client, headers, project_id)
+
+        sub_code_response = client.post(
+            f"/projects/{project_id}/cost-codes",
+            json={"code": "LOT-MO-NULL", "name": "Lot", "parent_id": root_id},
+            headers=headers,
+        )
+        sub_code_id = cast(int, sub_code_response.json()["id"])
+
+        create_response = client.post(
+            f"/projects/{project_id}/tasks/1001/role-assignments",
+            json={
+                "role_id": labor_role_id,
+                "quantity": "1",
+                "hours": "1",
+                "cost_code_id": sub_code_id,
+            },
+            headers=headers,
+        )
+        assignment_id = cast(int, create_response.json()["id"])
+        assert create_response.json()["cost_code_id"] == sub_code_id
+
+        null_update_response = client.patch(
+            f"/projects/{project_id}/tasks/1001/role-assignments/{assignment_id}",
+            json={"cost_code_id": None},
+            headers=headers,
+        )
+        assert null_update_response.status_code == 200
+        assert null_update_response.json()["cost_code_id"] == root_id
+
+
+def test_task_role_assignment_rejects_a_deactivated_cost_code() -> None:
+    """Review finding on #63: a deactivated cost code must never accept a new
+    attachment, even though it may still be referenced by pre-existing assignments."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        labor_role_id, _ = _seed_roles()
+        root_id = _root_cost_code_id(client, headers, project_id)
+
+        sub_code_response = client.post(
+            f"/projects/{project_id}/cost-codes",
+            json={"code": "LOT-MO-INACTIVE", "name": "Lot", "parent_id": root_id},
+            headers=headers,
+        )
+        sub_code_id = cast(int, sub_code_response.json()["id"])
+
+        deactivate_response = client.delete(
+            f"/projects/{project_id}/cost-codes/{sub_code_id}", headers=headers
+        )
+        assert deactivate_response.status_code == 204
+
+        rejected_create_response = client.post(
+            f"/projects/{project_id}/tasks/1001/role-assignments",
+            json={
+                "role_id": labor_role_id,
+                "quantity": "1",
+                "hours": "1",
+                "cost_code_id": sub_code_id,
+            },
+            headers=headers,
+        )
+        assert rejected_create_response.status_code == 400
+
+
+def test_task_role_assignment_reports_a_clean_error_if_project_has_no_active_root() -> None:
+    """Review finding on #63: the #62/E6-01 invariant (every project always has an
+    active root cost code) is guaranteed by application logic, not a DB constraint --
+    if it were ever violated, resolve_cost_code_id must surface a clean, documented
+    error rather than a bare, unhandled NoResultFound. Deactivating the root directly
+    at the ORM layer (bypassing the API, which always refuses this) is the only way
+    to construct that state for this test."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        labor_role_id, _ = _seed_roles()
+        root_id = _root_cost_code_id(client, headers, project_id)
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            root = session.query(ProjectCostCode).filter(ProjectCostCode.id == root_id).one()
+            root.is_active = False
+            session.add(root)
+            session.commit()
+
+        response = client.post(
+            f"/projects/{project_id}/tasks/1001/role-assignments",
+            json={"role_id": labor_role_id, "quantity": "1", "hours": "1"},
+            headers=headers,
+        )
+        assert response.status_code == 500
 
 
 def test_role_filter_can_include_descendant_nodes() -> None:

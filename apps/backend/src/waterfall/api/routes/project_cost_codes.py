@@ -4,7 +4,7 @@ from collections.abc import Callable
 from typing import TypeVar
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, NoResultFound
 from sqlalchemy.orm import Session
 
 from waterfall.api.dependencies import get_current_active_user
@@ -83,14 +83,18 @@ def _ensure_deactivatable(db: Session, cost_code: ProjectCostCode) -> None:
 
 
 def _get_cost_code_in_project_or_400(
-    db: Session, project_id: int, cost_code_id: int
+    db: Session,
+    project_id: int,
+    cost_code_id: int,
+    *,
+    detail: str = "Parent cost code does not belong to project",
 ) -> ProjectCostCode:
-    # Deliberately 400, not 404: this validates a caller-supplied `parent_id`
-    # reference, not the primary resource identified by the URL path -- same
-    # convention already used for `EstimateCostLineCreate.task_id` in
-    # api/routes/estimates.py ("Task does not belong to project"), so a parent_id
-    # that either does not exist at all or belongs to a different project is
-    # reported identically here.
+    # Deliberately 400, not 404: this validates a caller-supplied `parent_id` (or,
+    # since #63/E6-02, `cost_code_id`) reference, not the primary resource identified
+    # by the URL path -- same convention already used for
+    # `EstimateCostLineCreate.task_id` in api/routes/estimates.py ("Task does not
+    # belong to project"), so a reference that either does not exist at all or
+    # belongs to a different project is reported identically here.
     cost_code = (
         db.query(ProjectCostCode)
         .filter(ProjectCostCode.id == cost_code_id)
@@ -98,11 +102,54 @@ def _get_cost_code_in_project_or_400(
         .first()
     )
     if cost_code is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Parent cost code does not belong to project",
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
     return cost_code
+
+
+def resolve_cost_code_id(db: Session, project_id: int, requested_cost_code_id: int | None) -> int:
+    """Resolve the `cost_code_id` to store on a newly created cost line (#63/E6-02).
+
+    An explicit `cost_code_id` must belong to the project -- same 400 convention as
+    `parent_id` validation above. When omitted, every project is guaranteed to carry
+    exactly one active root cost code (the #62/E6-01 invariant), which becomes the
+    default attachment point for a cost line created without an explicit one.
+    """
+    if requested_cost_code_id is not None:
+        cost_code = _get_cost_code_in_project_or_400(
+            db,
+            project_id,
+            requested_cost_code_id,
+            detail="Cost code does not belong to project",
+        )
+        # Unlike parent_id validation (#62), which must be able to walk through an
+        # inactive ancestor to detect cycles, attaching new spend to a cost line is a
+        # forward-looking action: a deactivated code should never accept a new
+        # attachment, even though it may already be referenced by pre-existing lines.
+        if not cost_code.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cost code is not active",
+            )
+        return cost_code.id
+    try:
+        root = (
+            db.query(ProjectCostCode)
+            .filter(ProjectCostCode.project_id == project_id)
+            .filter(ProjectCostCode.parent_id.is_(None))
+            .filter(ProjectCostCode.is_active.is_(True))
+            .one()
+        )
+    except NoResultFound as exc:
+        # Should never happen: #62/E6-01 guarantees every project always has exactly
+        # one active root, enforced at creation (atomic with the project itself) and
+        # at deactivation (the root can never be deactivated). Surfaced as a clean 500
+        # rather than a bare, undocumented Starlette error if that invariant is ever
+        # violated (e.g. a project created by tooling that bypasses `create_project`).
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Project has no active root cost code",
+        ) from exc
+    return root.id
 
 
 def _validate_cost_code_parent(
