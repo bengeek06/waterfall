@@ -587,6 +587,30 @@ class ProjectEstimateListRead(PaginatedList[ProjectEstimateRead]):
     pass
 
 
+class EstimateValidationWarning(BaseModel):
+    """Issue #65 (E6-04): a "real" planning task with neither a labor
+    assignment nor a linked cost line at the moment an estimate is validated
+    -- i.e. a task the pricing exercise likely forgot. Purely advisory: it
+    never blocks validation, it only surfaces which tasks to double-check.
+    """
+
+    task_uid: int
+    task_name: str
+
+
+class EstimateValidationRead(ProjectEstimateRead):
+    """Response of ``POST .../estimates/{estimate_id}/validate`` only.
+
+    Deliberately not folded into ``ProjectEstimateRead`` itself: that schema
+    is shared by `list_project_estimates`/`create_project_estimate`/
+    `set_estimate_reference`, none of which compute this warning, so they
+    would otherwise carry an always-empty/absent `warnings` field with no
+    meaning in their context.
+    """
+
+    warnings: list[EstimateValidationWarning]
+
+
 class EstimateTaskRowRead(BaseModel):
     id: int
     estimate_id: int

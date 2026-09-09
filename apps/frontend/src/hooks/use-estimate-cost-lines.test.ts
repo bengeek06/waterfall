@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   updateEstimateCostLine: vi.fn(),
   deleteEstimateCostLine: vi.fn(),
   getProjectCostCodes: vi.fn(),
+  validateProjectEstimate: vi.fn(),
   clearSession: vi.fn(),
 }));
 
@@ -20,6 +21,7 @@ vi.mock("@/lib/backend", async () => {
     updateEstimateCostLine: mocks.updateEstimateCostLine,
     deleteEstimateCostLine: mocks.deleteEstimateCostLine,
     getProjectCostCodes: mocks.getProjectCostCodes,
+    validateProjectEstimate: mocks.validateProjectEstimate,
   };
 });
 
@@ -34,10 +36,13 @@ const project = { id: 1, name: "Projet A", currency_code: "EUR" } as Project;
 
 type SetCostLines = (updater: (previous: EstimateCostLine[]) => EstimateCostLine[]) => void;
 
+type SetEstimates = (updater: (previous: ProjectEstimate[]) => ProjectEstimate[]) => void;
+
 function setup(overrides: { selectedEstimateId?: number | null } = {}) {
   const router = { push: vi.fn() };
   const setError = vi.fn();
   const setCostLines = vi.fn<SetCostLines>();
+  const setEstimates = vi.fn<SetEstimates>();
   const { result, rerender } = renderHook(
     (props: { selectedEstimateId: number | null }) =>
       useEstimateCostLines({
@@ -46,7 +51,7 @@ function setup(overrides: { selectedEstimateId?: number | null } = {}) {
         projectId: 1,
         selectedEstimateId: props.selectedEstimateId,
         estimates: [] as ProjectEstimate[],
-        setEstimates: vi.fn(),
+        setEstimates,
         setSelectedEstimateId: vi.fn(),
         setActiveTab: vi.fn(),
         setCostLines,
@@ -56,7 +61,7 @@ function setup(overrides: { selectedEstimateId?: number | null } = {}) {
       }),
     { initialProps: { selectedEstimateId: overrides.selectedEstimateId ?? null } },
   );
-  return { result, rerender, router, setError, setCostLines };
+  return { result, rerender, router, setError, setCostLines, setEstimates };
 }
 
 describe("useEstimateCostLines createDraftEstimate", () => {
@@ -251,5 +256,110 @@ describe("useEstimateCostLines removeCostLine", () => {
 
     expect(mocks.deleteEstimateCostLine).toHaveBeenCalled();
     expect(result.current.selectedCostLineIds).toEqual(new Set([2]));
+  });
+});
+
+function makeEstimate(id: number, overrides: Partial<ProjectEstimate> = {}): ProjectEstimate {
+  return { id, kind: "initial", version_number: 1, currency_code: "EUR", status: "validated", ...overrides } as ProjectEstimate;
+}
+
+// #65 (E6-04): the validate endpoint now returns `warnings` (unassigned real tasks),
+// purely informative and never blocking -- see estimate-tab.tsx for the banner itself.
+describe("useEstimateCostLines validateEstimate", () => {
+  beforeEach(() => {
+    mocks.validateProjectEstimate.mockReset();
+    mocks.clearSession.mockReset();
+    mocks.getProjectCostCodes.mockReset().mockResolvedValue([]);
+  });
+
+  it("exposes the warnings returned by a validation that finds unassigned tasks", async () => {
+    const warnings = [{ task_uid: 12, task_name: "Terrassement lot 3" }];
+    mocks.validateProjectEstimate.mockResolvedValue(makeEstimate(1, { warnings } as never));
+    const { result, setEstimates } = setup({ selectedEstimateId: 1 });
+
+    await act(async () => {
+      await result.current.validateEstimate();
+    });
+
+    expect(result.current.validationWarnings).toEqual(warnings);
+    // The estimate itself is still folded into `estimates` -- the warnings never block
+    // the validation from succeeding.
+    expect(setEstimates).toHaveBeenCalled();
+  });
+
+  it("leaves validationWarnings empty when the validation finds nothing to warn about", async () => {
+    mocks.validateProjectEstimate.mockResolvedValue(makeEstimate(1, { warnings: [] } as never));
+    const { result } = setup({ selectedEstimateId: 1 });
+
+    await act(async () => {
+      await result.current.validateEstimate();
+    });
+
+    expect(result.current.validationWarnings).toEqual([]);
+  });
+
+  it("clears validationWarnings once acknowledged via dismissValidationWarnings", async () => {
+    const warnings = [{ task_uid: 12, task_name: "Terrassement lot 3" }];
+    mocks.validateProjectEstimate.mockResolvedValue(makeEstimate(1, { warnings } as never));
+    const { result } = setup({ selectedEstimateId: 1 });
+
+    await act(async () => {
+      await result.current.validateEstimate();
+    });
+    expect(result.current.validationWarnings).toEqual(warnings);
+
+    act(() => {
+      result.current.dismissValidationWarnings();
+    });
+
+    expect(result.current.validationWarnings).toEqual([]);
+  });
+
+  it("resets validationWarnings when the selected estimate version changes", async () => {
+    const warnings = [{ task_uid: 12, task_name: "Terrassement lot 3" }];
+    mocks.validateProjectEstimate.mockResolvedValue(makeEstimate(1, { warnings } as never));
+    const { result, rerender } = setup({ selectedEstimateId: 1 });
+
+    await act(async () => {
+      await result.current.validateEstimate();
+    });
+    expect(result.current.validationWarnings).toEqual(warnings);
+
+    rerender({ selectedEstimateId: 2 });
+
+    expect(result.current.validationWarnings).toEqual([]);
+  });
+
+  // Regression test for a review finding on #65: nothing disables the estimate-version
+  // selector while a validation is in flight (same gap as bulkAssignCostCode, #64), so a
+  // late-resolving response for a version the user has since navigated away from must
+  // never repopulate the warning banner with stale data.
+  it("does not repopulate the warning banner from a stale response after the estimate version changed", async () => {
+    let resolveValidate!: (estimate: ProjectEstimate) => void;
+    mocks.validateProjectEstimate.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveValidate = resolve;
+        }),
+    );
+    const { result, rerender, setError } = setup({ selectedEstimateId: 1 });
+
+    let validatePromise!: Promise<void>;
+    act(() => {
+      validatePromise = result.current.validateEstimate();
+    });
+
+    // The user switches to a different estimate version while the request is still in
+    // flight (nothing disables the version selector while busy).
+    rerender({ selectedEstimateId: 2 });
+
+    const warnings = [{ task_uid: 12, task_name: "Terrassement lot 3" }];
+    resolveValidate(makeEstimate(1, { warnings } as never));
+    await act(async () => {
+      await validatePromise;
+    });
+
+    expect(result.current.validationWarnings).toEqual([]);
+    expect(setError).not.toHaveBeenCalledWith(expect.stringContaining("valider"));
   });
 });

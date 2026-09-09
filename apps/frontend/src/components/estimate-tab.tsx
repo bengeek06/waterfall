@@ -1,10 +1,18 @@
 "use client";
 
+import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { BulkCostCodeAssignmentBar } from "@/components/bulk-cost-code-assignment-bar";
 import { CostLineForm, type CostLineDraft } from "@/components/cost-line-form";
 import { CostLinesTable, type EditingLineDraft } from "@/components/cost-lines-table";
 import { EstimateVersionControls } from "@/components/estimate-version-controls";
-import type { CostCategory, EstimateCostLine, ProjectCostCode, ProjectEstimate } from "@/lib/backend";
+import type {
+  CostCategory,
+  EstimateCostLine,
+  EstimateValidationWarning,
+  ProjectCostCode,
+  ProjectEstimate,
+} from "@/lib/backend";
 
 export type EstimateTabProps = {
   active: boolean;
@@ -18,6 +26,8 @@ export type EstimateTabProps = {
   canEditEstimate: boolean;
   estimateBusy: boolean;
   onOpenValidation: () => void;
+  validationWarnings: EstimateValidationWarning[];
+  onDismissValidationWarnings: () => void;
   estimateTaskRowCount: number;
   costLines: EstimateCostLine[];
   costCategories: CostCategory[];
@@ -60,6 +70,8 @@ export function EstimateTab({
   canEditEstimate,
   estimateBusy,
   onOpenValidation,
+  validationWarnings,
+  onDismissValidationWarnings,
   estimateTaskRowCount,
   costLines,
   costCategories,
@@ -111,6 +123,28 @@ export function EstimateTab({
           onOpenValidation={onOpenValidation}
         />
       </div>
+
+      {validationWarnings.length ? (
+        <Alert>
+          <AlertAction>
+            <Button size="sm" variant="outline" onClick={onDismissValidationWarnings}>
+              Fermer
+            </Button>
+          </AlertAction>
+          <AlertDescription>
+            <p>
+              Devis validé -- {validationWarnings.length} tâche
+              {validationWarnings.length > 1 ? "s" : ""} sans affectation de rôle ni ligne de coût :
+            </p>
+            <ul className="mt-1 list-disc pl-4">
+              {validationWarnings.map((warning) => (
+                <li key={warning.task_uid}>{warning.task_name}</li>
+              ))}
+            </ul>
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
       {!estimates.length ? <p className="py-6 text-sm text-muted-foreground">Aucune version de devis.</p> : null}
 
       {estimates.length ? (

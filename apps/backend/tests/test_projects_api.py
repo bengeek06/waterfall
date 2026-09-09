@@ -169,6 +169,13 @@ def _seed_roles() -> tuple[int, int]:
         return labor_role.id, supply_role.id
 
 
+def _cost_category_id_for_role(role_id: int) -> int:
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        role = session.query(ResourceRole).filter(ResourceRole.id == role_id).one()
+        return role.cost_category_id
+
+
 def _list_cost_codes(
     client: TestClient, headers: dict[str, str], project_id: int
 ) -> list[dict[str, Any]]:
@@ -1465,12 +1472,163 @@ def test_project_estimate_snapshots_tasks_and_validates() -> None:
         assert validate_response.status_code == 200
         assert validate_response.json()["status"] == "validated"
         assert validate_response.json()["validated_at"] is not None
+        # Issue #65 (E6-04): neither task got a role assignment nor a cost line, so
+        # both are surfaced as non-blocking warnings -- validation still succeeded.
+        assert {w["task_uid"] for w in validate_response.json()["warnings"]} == {1001, 1002}
 
         validate_again_response = client.post(
             f"/projects/{project_id}/estimates/{estimate_id}/validate",
             headers=headers,
         )
         assert validate_again_response.status_code == 409
+
+
+def test_validate_estimate_warns_about_uncovered_tasks_only() -> None:
+    """Issue #65 (E6-04): the validation warning only flags "real" tasks (excludes
+    summaries/milestones) with neither a TaskRoleAssignment nor an EstimateCostLine
+    of this estimate referencing them -- and never blocks validation."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client, "projects.validation-warnings@example.com")
+        owner_id = _current_user_id(client, headers)
+        project_id, _ = _seed_projects_and_tasks(owner_id)
+        labor_role_id, supply_role_id = _seed_roles()
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            summary_task = MsTask(
+                project_id=project_id,
+                uid=1003,
+                name="Summary task",
+                is_summary=True,
+                is_milestone=False,
+            )
+            milestone_task = MsTask(
+                project_id=project_id,
+                uid=1004,
+                name="Milestone task",
+                is_summary=False,
+                is_milestone=True,
+            )
+            uncovered_task = MsTask(
+                project_id=project_id,
+                uid=1005,
+                name="Forgotten task",
+                is_summary=False,
+                is_milestone=False,
+            )
+            session.add_all([summary_task, milestone_task, uncovered_task])
+            session.commit()
+
+        tasks_response = client.get(f"/projects/{project_id}/tasks", headers=headers)
+        assert tasks_response.status_code == 200
+        tasks_by_uid = {
+            task["uid"]: task["id"]
+            for task in cast(list[dict[str, Any]], tasks_response.json()["items"])
+        }
+
+        estimate_response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate_response.status_code == 201
+        estimate_id = cast(int, estimate_response.json()["id"])
+
+        # Task 1001 is covered via a TaskRoleAssignment.
+        assignment_response = client.post(
+            f"/projects/{project_id}/tasks/1001/role-assignments",
+            json={"role_id": labor_role_id, "quantity": "1", "hours": "1"},
+            headers=headers,
+        )
+        assert assignment_response.status_code == 201
+
+        # Task 1002 is covered via an EstimateCostLine.task_id.
+        cost_line_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "task_id": tasks_by_uid[1002],
+                "cost_category_id": _cost_category_id_for_role(supply_role_id),
+                "label": "Câble dédié",
+                "quantity": 1,
+                "unit_cost": 10,
+            },
+            headers=headers,
+        )
+        assert cost_line_response.status_code == 201
+
+        # A cost line with no task_id at all must not count as covering any task.
+        unattached_cost_line_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "cost_category_id": _cost_category_id_for_role(supply_role_id),
+                "label": "Frais generaux",
+                "quantity": 1,
+                "unit_cost": 5,
+            },
+            headers=headers,
+        )
+        assert unattached_cost_line_response.status_code == 201
+
+        validate_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/validate",
+            headers=headers,
+        )
+        assert validate_response.status_code == 200
+        body = cast(dict[str, Any], validate_response.json())
+        assert body["status"] == "validated"
+        assert body["warnings"] == [{"task_uid": 1005, "task_name": "Forgotten task"}]
+
+
+def test_validate_estimate_reports_no_warnings_when_all_tasks_are_covered() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client, "projects.validation-no-warnings@example.com")
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        labor_role_id, supply_role_id = _seed_roles()
+
+        tasks_response = client.get(f"/projects/{project_id}/tasks", headers=headers)
+        assert tasks_response.status_code == 200
+        tasks_by_uid = {
+            task["uid"]: task["id"]
+            for task in cast(list[dict[str, Any]], tasks_response.json()["items"])
+        }
+
+        estimate_response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate_response.status_code == 201
+        estimate_id = cast(int, estimate_response.json()["id"])
+
+        assert (
+            client.post(
+                f"/projects/{project_id}/tasks/1001/role-assignments",
+                json={"role_id": labor_role_id, "quantity": "1", "hours": "1"},
+                headers=headers,
+            ).status_code
+            == 201
+        )
+        assert (
+            client.post(
+                f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+                json={
+                    "task_id": tasks_by_uid[1002],
+                    "cost_category_id": _cost_category_id_for_role(supply_role_id),
+                    "label": "Câble dédié",
+                    "quantity": 1,
+                    "unit_cost": 10,
+                },
+                headers=headers,
+            ).status_code
+            == 201
+        )
+
+        validate_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/validate",
+            headers=headers,
+        )
+        assert validate_response.status_code == 200
+        assert validate_response.json()["warnings"] == []
 
 
 def test_project_estimate_can_snapshot_planning_without_legacy_tasks() -> None:

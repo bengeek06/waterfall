@@ -39,6 +39,7 @@ from waterfall.schemas.projects import (
     EstimateCostLineRead,
     EstimateCostLineUpdate,
     EstimateTaskRowListRead,
+    EstimateValidationRead,
     ProjectEstimateCreate,
     ProjectEstimateListRead,
     ProjectEstimateRead,
@@ -50,6 +51,7 @@ from waterfall.services import (
     build_estimate_workbook,
     calculate_estimate_aggregates,
     calculate_estimate_lines,
+    get_estimate_validation_warnings,
 )
 from waterfall.services.project_lifecycle import ensure_project_mutable
 
@@ -187,13 +189,15 @@ def get_project_estimate(
     return to_project_estimate_read(get_estimate_or_404(db, project_id, estimate_id))
 
 
-@router.post("/{project_id}/estimates/{estimate_id}/validate", response_model=ProjectEstimateRead)
+@router.post(
+    "/{project_id}/estimates/{estimate_id}/validate", response_model=EstimateValidationRead
+)
 def validate_project_estimate(
     project_id: int,
     estimate_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
-) -> ProjectEstimateRead:
+) -> EstimateValidationRead:
     get_mutable_project_lock(db, project_id, current_user.id)
     estimate = get_estimate_or_404(db, project_id, estimate_id)
     if estimate.status != "draft":
@@ -203,6 +207,10 @@ def validate_project_estimate(
     except ValueError as exc:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    # Issue #65 (E6-04): computed from the same in-progress transaction, before commit,
+    # so it reflects the estimate/cost-lines state actually being validated -- never a
+    # state read back after some later, unrelated write.
+    warnings = get_estimate_validation_warnings(db, project_id, estimate_id)
     db.add_all(estimate_lines)
     db.flush()
     estimate.status = "validated"
@@ -210,7 +218,10 @@ def validate_project_estimate(
     db.add(estimate)
     db.commit()
     db.refresh(estimate)
-    return to_project_estimate_read(estimate)
+    return EstimateValidationRead(
+        **to_project_estimate_read(estimate).model_dump(),
+        warnings=warnings,
+    )
 
 
 @router.post("/{project_id}/estimates/{estimate_id}/reference", response_model=ProjectRead)

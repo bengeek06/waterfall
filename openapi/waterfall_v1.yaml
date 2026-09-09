@@ -1731,11 +1731,11 @@ paths:
         - $ref: '#/components/parameters/EstimateId'
       responses:
         '200':
-          description: Devis validé
+          description: 'Devis validé. `warnings` (issue #65, E6-04) liste les tâches "réelles" du planning (ni récapitulatives ni jalons) sans affectation de rôle ni ligne de coût rattachée -- purement informatif, n''a jamais empêché cette validation d''aboutir.'
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ProjectEstimateRead'
+                $ref: '#/components/schemas/EstimateValidationRead'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -5178,6 +5178,39 @@ components:
         expected_revision:
           type: integer
           minimum: 0
+    EstimateValidationWarning:
+      type: object
+      required:
+        - task_uid
+        - task_name
+      properties:
+        task_uid:
+          type: integer
+        task_name:
+          type: string
+      description: |-
+        Issue #65 (E6-04) : une tache "reelle" du planning (ni recapitulative ni
+        jalon) qui n'a ni affectation de role (`TaskRoleAssignment`) ni ligne de
+        cout de ce devis (`EstimateCostLine.task_id`) la referencant -- c'est-a-dire
+        une tache probablement oubliee lors du chiffrage. Purement informatif :
+        n'empeche jamais la validation d'aboutir.
+    EstimateValidationRead:
+      allOf:
+        - $ref: '#/components/schemas/ProjectEstimateRead'
+        - type: object
+          required:
+            - warnings
+          properties:
+            warnings:
+              type: array
+              items:
+                $ref: '#/components/schemas/EstimateValidationWarning'
+      description: |-
+        Reponse de `POST .../estimates/{estimateId}/validate` uniquement.
+        Volontairement distinct de `ProjectEstimateRead` (partage par
+        `listProjectEstimates`/`createProjectEstimate`/`setEstimateReference`, qui
+        ne calculent pas cet avertissement) : ces endpoints ne renvoient donc jamais
+        ce champ `warnings` toujours vide/absent dans leur contexte.
     ProjectCostCodeCreate:
       type: object
       required:

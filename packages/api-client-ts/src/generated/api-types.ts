@@ -2074,6 +2074,27 @@ export interface components {
             links: components["schemas"]["TaskLinkWrite"][];
             expected_revision: number;
         };
+        /**
+         * @description Issue #65 (E6-04) : une tache "reelle" du planning (ni recapitulative ni
+         *     jalon) qui n'a ni affectation de role (`TaskRoleAssignment`) ni ligne de
+         *     cout de ce devis (`EstimateCostLine.task_id`) la referencant -- c'est-a-dire
+         *     une tache probablement oubliee lors du chiffrage. Purement informatif :
+         *     n'empeche jamais la validation d'aboutir.
+         */
+        EstimateValidationWarning: {
+            task_uid: number;
+            task_name: string;
+        };
+        /**
+         * @description Reponse de `POST .../estimates/{estimateId}/validate` uniquement.
+         *     Volontairement distinct de `ProjectEstimateRead` (partage par
+         *     `listProjectEstimates`/`createProjectEstimate`/`setEstimateReference`, qui
+         *     ne calculent pas cet avertissement) : ces endpoints ne renvoient donc jamais
+         *     ce champ `warnings` toujours vide/absent dans leur contexte.
+         */
+        EstimateValidationRead: components["schemas"]["ProjectEstimateRead"] & {
+            warnings: components["schemas"]["EstimateValidationWarning"][];
+        };
         ProjectCostCodeCreate: {
             code: string;
             name: string;
@@ -4222,13 +4243,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Devis validé */
+            /** @description Devis validé. `warnings` (issue #65, E6-04) liste les tâches "réelles" du planning (ni récapitulatives ni jalons) sans affectation de rôle ni ligne de coût rattachée -- purement informatif, n'a jamais empêché cette validation d'aboutir. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ProjectEstimateRead"];
+                    "application/json": components["schemas"]["EstimateValidationRead"];
                 };
             };
             401: components["responses"]["Unauthorized"];
