@@ -26,7 +26,6 @@ from waterfall.models.resources import (
     ProjectCostCode,
     ResourceNode,
     ResourceRole,
-    TaskRoleAssignment,
 )
 from waterfall.models.wf_core import WfTaskEnrichment
 
@@ -214,53 +213,6 @@ def _root_cost_code_id(client: TestClient, headers: dict[str, str], project_id: 
     return cast(int, root["id"])
 
 
-def _seed_task_role_assignment(
-    client: TestClient,
-    headers: dict[str, str],
-    project_id: int,
-    task_uid: int,
-    role_id: int,
-    quantity: str | float,
-    hours: str | float,
-    *,
-    comment: str | None = None,
-    cost_code_id: int | None = None,
-) -> int:
-    """Insert a `TaskRoleAssignment` directly via the ORM.
-
-    E12-01 (#273) removed the `/tasks/{uid}/role-assignments` HTTP route this
-    module used to create these fixtures through. Since E12-02 (#274),
-    `calculate_estimate_lines`/`get_estimate_validation_warnings` no longer read
-    `TaskRoleAssignment` at all -- use `_seed_estimate_role_assignment` below for
-    those; this helper only remains relevant to the reconciliation export
-    (`_scoped_task_role_assignments`, still project-wide and untouched by that
-    issue) and to seed a pre-existing row a devis validation's resync is
-    expected to replace/remove. Defaults to the project's root cost code
-    (mirroring the API's own `resolve_cost_code_id` default) unless the caller
-    passes an explicit `cost_code_id`.
-    """
-    if cost_code_id is None:
-        cost_code_id = _root_cost_code_id(client, headers, project_id)
-    session_factory = get_session_factory()
-    with session_factory() as session:
-        task = (
-            session.query(MsTask)
-            .filter(MsTask.project_id == project_id, MsTask.uid == task_uid)
-            .one()
-        )
-        assignment = TaskRoleAssignment(
-            task_id=task.id,
-            role_id=role_id,
-            cost_code_id=cost_code_id,
-            quantity=Decimal(str(quantity)),
-            hours=Decimal(str(hours)),
-            comment=comment,
-        )
-        session.add(assignment)
-        session.commit()
-        return assignment.id
-
-
 def _seed_estimate_role_assignment(
     project_id: int,
     estimate_id: int,
@@ -274,11 +226,11 @@ def _seed_estimate_role_assignment(
 ) -> int:
     """Insert an `EstimateRoleAssignment` directly via the ORM, scoped to `estimate_id`.
 
-    Mirrors `_seed_task_role_assignment` above, but on the devis-scoped table
-    `calculate_estimate_lines`/`get_estimate_validation_warnings` read from since
-    E12-02/#274. Unlike that helper, `cost_code_id` is left `None` (unassigned)
-    by default rather than defaulted to the project's root: none of this
-    module's tests assert on it, and doing so would require an extra HTTP round
+    The devis-scoped table `calculate_estimate_lines`/`get_estimate_validation_warnings`
+    read from since E12-02/#274, and the reconciliation export/import's own MO sheet
+    source of truth since E12-03/#275. `cost_code_id` is left `None` (unassigned) by
+    default rather than defaulted to the project's root: not every one of this module's
+    tests asserts on it, and doing so unconditionally would require an extra HTTP round
     trip this ORM-only helper otherwise avoids.
     """
     session_factory = get_session_factory()
@@ -726,9 +678,10 @@ def _fetch_task_id_by_uid(
 
 
 def _seed_reconciliation_fixture(client: TestClient, headers: dict[str, str]) -> dict[str, Any]:
-    """Set up a project with one task-role assignment (MO) and one non-labor cost
-    line, in a devis backed by a source planning -- E6-08 (#69) fixture shared by
-    the reconciliation export tests below.
+    """Set up a project with one estimate-scoped role assignment (MO) and one
+    non-labor cost line, in a devis backed by a source planning -- E6-08 (#69)
+    fixture shared by the reconciliation export tests below, migrated to
+    `EstimateRoleAssignment` by E12-03/#275.
     """
     project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
 
@@ -753,10 +706,6 @@ def _seed_reconciliation_fixture(client: TestClient, headers: dict[str, str]) ->
 
     task_id_by_uid = _fetch_task_id_by_uid(client, headers, project_id)
 
-    assignment_id = _seed_task_role_assignment(
-        client, headers, project_id, 1001, role_id, 2, 10, comment="Dev senior"
-    )
-
     estimate_response: Response = client.post(
         f"/projects/{project_id}/estimates",
         json={"kind": "initial", "currency_code": "EUR"},
@@ -765,6 +714,12 @@ def _seed_reconciliation_fixture(client: TestClient, headers: dict[str, str]) ->
     assert estimate_response.status_code == 201
     estimate_id = cast(int, estimate_response.json()["id"])
     assert estimate_response.json()["planning_id"] == planning_id
+
+    # EstimateRoleAssignment (not TaskRoleAssignment): the MO sheet's source of
+    # truth since E12-03/#275, scoped to this one estimate.
+    assignment_id = _seed_estimate_role_assignment(
+        project_id, estimate_id, 1001, role_id, 2, 10, comment="Dev senior"
+    )
 
     cost_line_response: Response = client.post(
         f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
@@ -896,7 +851,6 @@ def test_estimate_reconciliation_export_without_source_planning_does_not_crash()
         headers = _auth_headers(client)
         project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
         role_id, _ = _seed_roles()
-        _seed_task_role_assignment(client, headers, project_id, 1001, role_id, 1, 1)
 
         estimate_response: Response = client.post(
             f"/projects/{project_id}/estimates",
@@ -906,6 +860,8 @@ def test_estimate_reconciliation_export_without_source_planning_does_not_crash()
         assert estimate_response.status_code == 201
         estimate_id = cast(int, estimate_response.json()["id"])
         assert estimate_response.json()["planning_id"] is None
+
+        _seed_estimate_role_assignment(project_id, estimate_id, 1001, role_id, 1, 1)
 
         response: Response = client.get(
             f"/projects/{project_id}/estimates/{estimate_id}/export-reconciliation.xlsx",
@@ -1015,8 +971,8 @@ def test_estimate_reconciliation_export_flags_assignment_outside_planning_snapsh
             session.add(outside_task)
             session.commit()
 
-        outside_assignment_id = _seed_task_role_assignment(
-            client, headers, project_id, 1003, fixture["role_id"], 1, 5
+        outside_assignment_id = _seed_estimate_role_assignment(
+            project_id, cast(int, fixture["estimate_id"]), 1003, fixture["role_id"], 1, 5
         )
 
         response: Response = client.get(
@@ -1042,10 +998,11 @@ def test_estimate_reconciliation_export_flags_assignment_outside_planning_snapsh
 
 
 def test_estimate_reconciliation_export_does_not_leak_role_assignments_across_projects() -> None:
-    """Non-regression test for PR review finding Moyenne #2 (#69): TaskRoleAssignment
-    is a project-wide table (not scoped to a single estimate), so a regression in
-    `_scoped_task_role_assignments`'s `MsTask.project_id == project.id` filter
-    could silently pull another project's labor assignments into this one's
+    """Non-regression test for PR review finding Moyenne #2 (#69), migrated to
+    `EstimateRoleAssignment` by E12-03/#275: a regression in
+    `_scoped_estimate_role_assignments`'s `EstimateRoleAssignment.estimate_id ==
+    estimate.id` filter could silently pull another project's labor assignments
+    (scoped to one of that other project's own estimates) into this one's
     reconciliation export."""
     with TestClient(app) as client:
         headers = _auth_headers(client)
@@ -1054,10 +1011,25 @@ def test_estimate_reconciliation_export_does_not_leak_role_assignments_across_pr
         project_b_id, _ = _seed_projects_and_tasks(owner_id)
         role_id, _ = _seed_roles()
 
-        _seed_task_role_assignment(
-            client,
-            headers,
+        estimate_a_response: Response = client.post(
+            f"/projects/{project_a_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate_a_response.status_code == 201
+        estimate_a_id = cast(int, estimate_a_response.json()["id"])
+
+        estimate_b_response: Response = client.post(
+            f"/projects/{project_b_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate_b_response.status_code == 201
+        estimate_b_id = cast(int, estimate_b_response.json()["id"])
+
+        _seed_estimate_role_assignment(
             project_b_id,
+            estimate_b_id,
             1001,
             role_id,
             1,
@@ -1065,16 +1037,8 @@ def test_estimate_reconciliation_export_does_not_leak_role_assignments_across_pr
             comment="PROJECT_B_ONLY_MUST_NOT_LEAK",
         )
 
-        estimate_response: Response = client.post(
-            f"/projects/{project_a_id}/estimates",
-            json={"kind": "initial", "currency_code": "EUR"},
-            headers=headers,
-        )
-        assert estimate_response.status_code == 201
-        estimate_id = cast(int, estimate_response.json()["id"])
-
         response: Response = client.get(
-            f"/projects/{project_a_id}/estimates/{estimate_id}/export-reconciliation.xlsx",
+            f"/projects/{project_a_id}/estimates/{estimate_a_id}/export-reconciliation.xlsx",
             headers=headers,
         )
         assert response.status_code == 200
@@ -1083,6 +1047,52 @@ def test_estimate_reconciliation_export_does_not_leak_role_assignments_across_pr
         labor_records = _sheet_records(workbook["MO"])
         assert all(record["comment"] != "PROJECT_B_ONLY_MUST_NOT_LEAK" for record in labor_records)
         assert labor_records == []
+
+
+def test_estimate_reconciliation_export_does_not_leak_role_assignments_across_estimates() -> None:
+    """New acceptance test (E12-03/#275): two draft devis of the *same* project,
+    each carrying their own `EstimateRoleAssignment` for the same task (allowed
+    since E12-01/#273 scopes uniqueness per-estimate, never project-wide) --
+    exporting one devis must only ever include its own assignment, never the
+    sibling devis'."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        role_id, _ = _seed_roles()
+
+        estimate_a_response: Response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate_a_response.status_code == 201
+        estimate_a_id = cast(int, estimate_a_response.json()["id"])
+
+        estimate_b_response: Response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate_b_response.status_code == 201
+        estimate_b_id = cast(int, estimate_b_response.json()["id"])
+
+        assignment_a_id = _seed_estimate_role_assignment(
+            project_id, estimate_a_id, 1001, role_id, 1, 1, comment="ESTIMATE_A_ONLY"
+        )
+        _seed_estimate_role_assignment(
+            project_id, estimate_b_id, 1001, role_id, 2, 2, comment="ESTIMATE_B_ONLY"
+        )
+
+        response: Response = client.get(
+            f"/projects/{project_id}/estimates/{estimate_a_id}/export-reconciliation.xlsx",
+            headers=headers,
+        )
+        assert response.status_code == 200
+
+        workbook = load_workbook(BytesIO(cast(bytes, response.content)))
+        labor_records = _sheet_records(workbook["MO"])
+        assert [record["id"] for record in labor_records] == [assignment_a_id]
+        assert labor_records[0]["comment"] == "ESTIMATE_A_ONLY"
 
 
 def test_estimate_reconciliation_export_project_not_found() -> None:

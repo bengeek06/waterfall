@@ -50,7 +50,6 @@ from waterfall.models.resources import (
     EstimateTaskRow,
     ProjectCostCode,
     ResourceRole,
-    TaskRoleAssignment,
 )
 from waterfall.models.user import User
 from waterfall.models.wf_core import WfChargeLine
@@ -113,7 +112,7 @@ from waterfall.services import (
     replace_task_predecessor_links,
     sync_task_role_assignments_from_estimate,
 )
-from waterfall.services.estimate_reconciliation_export import _scoped_task_role_assignments
+from waterfall.services.estimate_reconciliation_export import _scoped_estimate_role_assignments
 from waterfall.services.project_lifecycle import ensure_project_mutable
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -959,7 +958,7 @@ def _stage_existing_labor_row(
     db: Session,
     project: MsProject,
     row: LaborFileRow,
-    existing_assignments: dict[int, TaskRoleAssignment],
+    existing_assignments: dict[int, EstimateRoleAssignment],
     issues: list[ReconciliationIssue],
 ) -> _LaborUpdateCandidate | None:
     assert row.id is not None
@@ -968,7 +967,7 @@ def _stage_existing_labor_row(
         issues.append(
             ReconciliationIssue(
                 code="LABOR_ROW_ID_UNKNOWN",
-                message=f"Role assignment id {row.id} does not belong to this project",
+                message=f"Role assignment id {row.id} does not belong to this estimate",
                 sheet="MO",
                 row=row.row_number,
             )
@@ -1038,6 +1037,7 @@ def _stage_new_labor_row(
     project: MsProject,
     row: LaborFileRow,
     staged_pairs: set[tuple[int, int]],
+    retained_pairs: set[tuple[int, int]],
     issues: list[ReconciliationIssue],
 ) -> _LaborCreateCandidate | None:
     if row.task_id is None or row.role_id is None or row.quantity is None or row.hours is None:
@@ -1083,14 +1083,15 @@ def _stage_new_labor_row(
         )
         return None
     pair = (row.task_id, row.role_id)
-    already_assigned = (
-        db.query(TaskRoleAssignment.id)
-        .filter(TaskRoleAssignment.task_id == row.task_id)
-        .filter(TaskRoleAssignment.role_id == row.role_id)
-        .first()
-        is not None
-    )
-    if already_assigned or pair in staged_pairs:
+    # Scoped to *this* estimate's own remaining assignments (issue #268/E12-03's fix):
+    # `retained_pairs` is `existing_assignments`' own (task_id, role_id) pairs minus
+    # whichever of them this same import also stages for deletion (see
+    # `_stage_labor_sheet`'s own docstring) -- so a pair that exists only in a
+    # *different* estimate of the same project never blocks this creation (the
+    # `(estimate_id, task_id, role_id)` unique constraint is per-estimate, never
+    # project-wide), and a pair this same file deletes-then-recreates is not
+    # spuriously rejected as still assigned.
+    if pair in retained_pairs or pair in staged_pairs:
         issues.append(
             ReconciliationIssue(
                 code="LABOR_DUPLICATE_ASSIGNMENT",
@@ -1119,12 +1120,12 @@ def _stage_labor_sheet(
     db: Session,
     project: MsProject,
     parsed_labor: list[LaborFileRow],
-    existing_assignments: dict[int, TaskRoleAssignment],
+    existing_assignments: dict[int, EstimateRoleAssignment],
     out_of_scope_assignment_ids: set[int],
     issues: list[ReconciliationIssue],
     warnings: list[ReconciliationIssue],
 ) -> tuple[list[_LaborCreateCandidate], list[_LaborUpdateCandidate], list[int]]:
-    """Validate the ``MO`` sheet against the project's scoped role assignments.
+    """Validate the ``MO`` sheet against this estimate's own scoped role assignments.
 
     A ``hors_perimetre_planning`` row is always skipped (never created,
     updated or deleted -- see #69's own export contract), with a plain
@@ -1137,11 +1138,25 @@ def _stage_labor_sheet(
     the user simply removed from the sheet (rather than flagging) would fall
     through to ``labor_to_delete`` and be genuinely deleted at confirm --
     contradicting the "never deleted" guarantee above.
+
+    Restructured into two passes over ``parsed_labor`` (issue #268, fixed as part
+    of E12-03/#275's migration to ``EstimateRoleAssignment``): every row carrying
+    an ``id`` (an update or a still-flagged hors-perimetre row) is staged first,
+    so ``labor_to_delete_ids`` -- and from it, the exact set of ``(task_id,
+    role_id)`` pairs this same import is about to free up -- is fully known
+    *before* the second pass evaluates any creation row's uniqueness. A single
+    pass could not do this: without it, a file that both deletes the MO row for
+    a pair and recreates a fresh row for that very same pair would spuriously
+    reject the creation as ``LABOR_DUPLICATE_ASSIGNMENT``, since the pair still
+    "exists" in the database until the deletion is actually applied, several
+    steps later in ``_run_reconciliation``.
     """
     labor_creates: list[_LaborCreateCandidate] = []
     labor_updates: list[_LaborUpdateCandidate] = []
     seen_assignment_ids: set[int] = set()
-    staged_labor_pairs: set[tuple[int, int]] = set()
+    creation_rows: list[LaborFileRow] = []
+
+    # ---- Pass 1: every row carrying an id (updates + hors-perimetre rows) ----
     for labor_row in parsed_labor:
         if labor_row.hors_perimetre_planning:
             if labor_row.id is not None:
@@ -1161,12 +1176,30 @@ def _stage_labor_sheet(
             if update is not None:
                 labor_updates.append(update)
             continue
-        create = _stage_new_labor_row(db, project, labor_row, staged_labor_pairs, issues)
-        if create is not None:
-            labor_creates.append(create)
+        creation_rows.append(labor_row)
+
     labor_to_delete_ids = sorted(
         set(existing_assignments) - seen_assignment_ids - out_of_scope_assignment_ids
     )
+    labor_to_delete_id_set = set(labor_to_delete_ids)
+    # (task_id, role_id) pairs still assigned in this estimate once this same
+    # import's own deletions are applied -- see this function's own docstring and
+    # `_stage_new_labor_row`'s for how this fixes #268.
+    retained_pairs = {
+        (assignment.task_id, assignment.role_id)
+        for assignment_id, assignment in existing_assignments.items()
+        if assignment_id not in labor_to_delete_id_set
+    }
+
+    # ---- Pass 2: rows without an id (creations), now that retained_pairs is final ----
+    staged_labor_pairs: set[tuple[int, int]] = set()
+    for labor_row in creation_rows:
+        create = _stage_new_labor_row(
+            db, project, labor_row, staged_labor_pairs, retained_pairs, issues
+        )
+        if create is not None:
+            labor_creates.append(create)
+
     return labor_creates, labor_updates, labor_to_delete_ids
 
 
@@ -1496,10 +1529,15 @@ def _task_deletion_blocking_issue(
                 row=None,
             )
 
+    # EstimateRoleAssignment (E12-01/#273), not the legacy TaskRoleAssignment: this
+    # devis-scoped table is now the reconciliation import's own source of truth for
+    # "still assigned" (E12-03/#275), and -- like EstimateCostLine.task_id just below
+    # -- deliberately not filtered to this one estimate, so a task still referenced
+    # by *another* estimate's own role assignment stays blocked from deletion too.
     remaining_assignment_ids = {
         row_id
-        for (row_id,) in db.query(TaskRoleAssignment.id)
-        .filter(TaskRoleAssignment.task_id == task.id)
+        for (row_id,) in db.query(EstimateRoleAssignment.id)
+        .filter(EstimateRoleAssignment.task_id == task.id)
         .all()
     } - excluded_assignment_ids
     remaining_cost_line_ids = {
@@ -1594,7 +1632,7 @@ def _apply_cost_line_deletes(
 
 
 def _apply_labor_deletes(
-    db: Session, assignment_ids: list[int], existing_assignments: dict[int, TaskRoleAssignment]
+    db: Session, assignment_ids: list[int], existing_assignments: dict[int, EstimateRoleAssignment]
 ) -> None:
     for assignment_id in assignment_ids:
         db.delete(existing_assignments[assignment_id])
@@ -1662,11 +1700,12 @@ def _apply_task_creates(
 
 
 def _apply_labor_creates(
-    db: Session, project: MsProject, labor_creates: list[_LaborCreateCandidate]
+    db: Session, project: MsProject, estimate: Estimate, labor_creates: list[_LaborCreateCandidate]
 ) -> None:
     for candidate in labor_creates:
         cost_code_id = resolve_cost_code_id(db, project.id, candidate.cost_code_id)
-        assignment = TaskRoleAssignment(
+        assignment = EstimateRoleAssignment(
+            estimate_id=estimate.id,
             task_id=candidate.task_id,
             role_id=candidate.role_id,
             cost_code_id=cost_code_id,
@@ -1719,7 +1758,7 @@ def _apply_labor_updates(
     db: Session,
     project: MsProject,
     labor_updates: list[_LaborUpdateCandidate],
-    existing_assignments: dict[int, TaskRoleAssignment],
+    existing_assignments: dict[int, EstimateRoleAssignment],
 ) -> None:
     for update in labor_updates:
         assignment = existing_assignments[update.assignment_id]
@@ -1846,9 +1885,9 @@ def _run_reconciliation(
         .filter(EstimateTaskRow.estimate_id == estimate.id)
         .all()
     }
-    existing_assignments: dict[int, TaskRoleAssignment] = {}
+    existing_assignments: dict[int, EstimateRoleAssignment] = {}
     out_of_scope_assignment_ids: set[int] = set()
-    for assignment, _task, _role, _category, hors_perimetre in _scoped_task_role_assignments(
+    for assignment, _task, _role, _category, hors_perimetre in _scoped_estimate_role_assignments(
         db, project, estimate
     ):
         existing_assignments[assignment.id] = assignment
@@ -1914,7 +1953,7 @@ def _run_reconciliation(
             planning_for_tasks.revision += 1
             db.add(planning_for_tasks)
             db.flush()
-        _apply_labor_creates(db, project, labor_creates)
+        _apply_labor_creates(db, project, estimate, labor_creates)
         _apply_cost_line_creates(db, project, estimate, non_labor_creates)
 
         # ---- Apply: updates (MO, then Non-MO) ----

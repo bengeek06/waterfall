@@ -31,9 +31,9 @@ from waterfall.models.planning import WfPlanningLinkSnapshot, WfPlanningTaskSnap
 from waterfall.models.resources import (
     CostCategory,
     CostType,
+    EstimateRoleAssignment,
     ResourceNode,
     ResourceRole,
-    TaskRoleAssignment,
 )
 
 _XLSX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -178,10 +178,10 @@ def _validate_displayed_planning(
 
 def _remove_task_from_planning_snapshot(project_id: int, task_uid: int) -> None:
     """Delete a task's ``WfPlanningTaskSnapshot`` twin directly, leaving its legacy
-    ``MsTask``/``TaskRoleAssignment`` rows untouched.
+    ``MsTask``/``EstimateRoleAssignment`` rows untouched.
 
     Engineers the exact "task removed from planning, legacy MsTask/assignment left
-    behind" gap that makes ``_scoped_task_role_assignments`` flag an assignment
+    behind" gap that makes ``_scoped_estimate_role_assignments`` flag an assignment
     ``hors_perimetre_planning=True`` at read time (see its own docstring) -- the
     safe, guarded ``delete_planning_tasks`` deliberately refuses this while the task
     is still referenced by an assignment (``TASK_REFERENCED``), so this reaches
@@ -277,8 +277,9 @@ def _seed_labor_role() -> int:
         return role.id
 
 
-def _create_task_role_assignment(
+def _create_estimate_role_assignment(
     project_id: int,
+    estimate_id: int,
     task_uid: int,
     role_id: int,
     *,
@@ -287,14 +288,16 @@ def _create_task_role_assignment(
     comment: str | None = None,
     cost_code_id: int | None = None,
 ) -> int:
-    """Insert a `TaskRoleAssignment` directly via the ORM.
+    """Insert an `EstimateRoleAssignment` directly via the ORM, scoped to `estimate_id`.
 
-    E12-01 (#273) removed the `/tasks/{uid}/role-assignments` HTTP route this
-    module used to create/read these fixtures through; `TaskRoleAssignment` (and
-    the reconciliation import/export machinery under test in this module,
-    unaffected by that issue) is untouched, so this reaches directly into the DB
-    the same way this module's other setup helpers (``_seed_labor_role``/
-    ``_remove_task_from_planning_snapshot``) already do.
+    `EstimateRoleAssignment` (E12-01/#273) is now the reconciliation export/import's
+    own MO sheet source of truth (E12-03/#275, replacing the legacy, project-wide
+    `TaskRoleAssignment`). This reaches directly into the DB rather than through the
+    real `POST .../role-assignments` route for the same reason this module's other
+    setup helpers (``_seed_labor_role``/``_remove_task_from_planning_snapshot``)
+    already do: full control over the exact quantity/hours/cost_code_id/comment
+    combination, without incidentally exercising that route's own rate-coverage
+    guard on every single reconciliation test.
     """
     with get_session_factory()() as session:
         task = (
@@ -302,7 +305,8 @@ def _create_task_role_assignment(
             .filter(MsTask.project_id == project_id, MsTask.uid == task_uid)
             .one()
         )
-        assignment = TaskRoleAssignment(
+        assignment = EstimateRoleAssignment(
+            estimate_id=estimate_id,
             task_id=task.id,
             role_id=role_id,
             cost_code_id=cost_code_id,
@@ -315,11 +319,11 @@ def _create_task_role_assignment(
         return assignment.id
 
 
-def _task_role_assignment(assignment_id: int) -> TaskRoleAssignment:
-    """Read a `TaskRoleAssignment` back directly (see `_create_task_role_assignment`
-    for why this no longer goes through the removed GET route)."""
+def _estimate_role_assignment(assignment_id: int) -> EstimateRoleAssignment:
+    """Read an `EstimateRoleAssignment` back directly (see
+    `_create_estimate_role_assignment` for why this reaches directly into the DB)."""
     with get_session_factory()() as session:
-        assignment = session.get(TaskRoleAssignment, assignment_id)
+        assignment = session.get(EstimateRoleAssignment, assignment_id)
         assert assignment is not None
         session.expunge(assignment)
         return assignment
@@ -454,8 +458,14 @@ def _seed_fixture(client: TestClient, headers: dict[str, str]) -> dict[str, Any]
     role_id = _seed_labor_role()
     category_id = _seed_non_labor_category()
 
-    assignment_id = _create_task_role_assignment(
-        project_id, deliverable.uid, role_id, quantity="2.00", hours="10.00", comment="Initial"
+    assignment_id = _create_estimate_role_assignment(
+        project_id,
+        estimate_id,
+        deliverable.uid,
+        role_id,
+        quantity="2.00",
+        hours="10.00",
+        comment="Initial",
     )
 
     cost_line_response = client.post(
@@ -542,7 +552,7 @@ def test_reconciliation_import_updates_only_modified_labor_quantity() -> None:
         assert confirm.status_code == 200
         assert _plan(confirm.json())["applied"] is True
 
-        updated = _task_role_assignment(fixture["assignment_id"])
+        updated = _estimate_role_assignment(fixture["assignment_id"])
         assert updated.quantity == Decimal("5.00")
 
 
@@ -745,7 +755,7 @@ def test_reconciliation_import_unknown_id_is_blocking_and_nothing_applied() -> N
             for issue in confirmed_plan["blocking_issues"]
         )
 
-        unchanged = _task_role_assignment(fixture["assignment_id"])
+        unchanged = _estimate_role_assignment(fixture["assignment_id"])
         assert unchanged.quantity == Decimal("2.00")
 
 
@@ -813,7 +823,7 @@ def test_reconciliation_import_hors_perimetre_row_is_ignored() -> None:
         confirm = _confirm(client, headers, fixture["project_id"], fixture["estimate_id"], edited)
         assert confirm.status_code == 200
 
-        unchanged = _task_role_assignment(fixture["assignment_id"])
+        unchanged = _estimate_role_assignment(fixture["assignment_id"])
         assert unchanged.quantity == Decimal("2.00")
 
 
@@ -844,8 +854,191 @@ def test_reconciliation_import_hors_perimetre_row_absent_from_file_is_not_delete
         assert confirm.status_code == 200
         assert _plan(confirm.json())["applied"] is True
 
-        # `_task_role_assignment` itself asserts the row still exists.
-        _task_role_assignment(fixture["assignment_id"])
+        # `_estimate_role_assignment` itself asserts the row still exists.
+        _estimate_role_assignment(fixture["assignment_id"])
+
+
+def test_reconciliation_import_delete_and_recreate_same_pair_succeeds() -> None:
+    """Regression test for issue #268 (fixed as part of E12-03/#275's migration to
+    ``EstimateRoleAssignment``): a file that both deletes the MO row for a
+    ``(task_id, role_id)`` pair and creates a fresh row for that *exact same* pair
+    must succeed -- not be spuriously rejected as ``LABOR_DUPLICATE_ASSIGNMENT``.
+    Before the fix, ``_stage_new_labor_row``'s uniqueness check saw the pair as
+    still assigned (the deletion is only actually applied later, in
+    ``_run_reconciliation``), so a delete+recreate of the same pair in one import
+    could never succeed.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        fixture = _seed_fixture(client, headers)
+        content = _export_workbook(client, headers, fixture["project_id"], fixture["estimate_id"])
+
+        workbook = load_workbook(BytesIO(content))
+        _delete_row(workbook["MO"], "id", fixture["assignment_id"])
+        workbook["MO"].append(
+            [
+                None,
+                fixture["deliverable_id"],
+                None,
+                fixture["role_id"],
+                None,
+                None,
+                None,
+                None,
+                4,
+                8,
+                "Recreated",
+                False,
+            ]
+        )
+        edited = _dump_workbook(workbook)
+
+        preview = _preview(client, headers, fixture["project_id"], fixture["estimate_id"], edited)
+        assert preview.status_code == 200
+        plan = _plan(preview.json())
+        assert plan["blocking_issues"] == []
+        assert plan["labor_to_delete"] == [fixture["assignment_id"]]
+        assert plan["labor_to_create"] == 1
+
+        confirm = _confirm(client, headers, fixture["project_id"], fixture["estimate_id"], edited)
+        assert confirm.status_code == 200
+        assert _plan(confirm.json())["applied"] is True
+
+        assignments_response = _get(
+            client,
+            f"/projects/{fixture['project_id']}/estimates/{fixture['estimate_id']}/role-assignments",
+            headers,
+        )
+        assert assignments_response.status_code == 200
+        items = _items(assignments_response.json())
+        # Exactly one assignment for this (task, role) pair: the delete and the
+        # creation both happened, never a rejected/duplicated pair. The recreated
+        # row's id may or may not coincide with the deleted one's (SQLite is free to
+        # recycle a freed rowid), so this asserts on content, not identity.
+        matching = [item for item in items if item["role_id"] == fixture["role_id"]]
+        assert len(matching) == 1
+        recreated = matching[0]
+        assert float(recreated["quantity"]) == 4.0
+        assert float(recreated["hours"]) == 8.0
+        assert recreated["comment"] == "Recreated"
+
+
+def test_reconciliation_import_does_not_touch_role_assignments_of_another_estimate() -> None:
+    """New acceptance test (E12-03/#275), on the model of
+    ``test_estimate_reconciliation_export_does_not_leak_role_assignments_across_projects``
+    (``test_projects_api.py``, #69): reimporting one devis' reconciliation file must
+    only ever update/create/delete ``EstimateRoleAssignment`` rows of *that* devis,
+    never a sibling devis' of the same project.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        fixture = _seed_fixture(client, headers)
+        other_estimate_id = _create_estimate(client, headers, fixture["project_id"])
+        other_role_id = _seed_labor_role()
+        other_assignment_id = _create_estimate_role_assignment(
+            fixture["project_id"],
+            other_estimate_id,
+            fixture["deliverable_uid"],
+            other_role_id,
+            quantity="9.00",
+            hours="9.00",
+            comment="OTHER_ESTIMATE_ONLY",
+        )
+
+        content = _export_workbook(client, headers, fixture["project_id"], fixture["estimate_id"])
+        workbook = load_workbook(BytesIO(content))
+        _set_cell(workbook["MO"], "id", fixture["assignment_id"], "quantity", 7)
+        edited = _dump_workbook(workbook)
+
+        confirm = _confirm(client, headers, fixture["project_id"], fixture["estimate_id"], edited)
+        assert confirm.status_code == 200
+        assert _plan(confirm.json())["applied"] is True
+
+        updated = _estimate_role_assignment(fixture["assignment_id"])
+        assert updated.quantity == Decimal("7.00")
+
+        untouched = _estimate_role_assignment(other_assignment_id)
+        assert untouched.quantity == Decimal("9.00")
+        assert untouched.comment == "OTHER_ESTIMATE_ONLY"
+
+
+def test_reconciliation_import_duplicate_check_is_scoped_per_estimate() -> None:
+    """New acceptance test (E12-03/#275): a MO creation row proposing a
+    ``(task_id, role_id)`` pair already present in a *different* devis of the same
+    project must NOT be rejected as ``LABOR_DUPLICATE_ASSIGNMENT`` -- the
+    ``(estimate_id, task_id, role_id)`` unique constraint (E12-01/#273) is scoped
+    per-estimate, never project-wide. Only a duplicate *within the same* devis is
+    refused.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        fixture = _seed_fixture(client, headers)
+        other_role_id = _seed_labor_role()
+        other_estimate_id = _create_estimate(client, headers, fixture["project_id"])
+        _create_estimate_role_assignment(
+            fixture["project_id"],
+            other_estimate_id,
+            fixture["deliverable_uid"],
+            other_role_id,
+            quantity="3.00",
+            hours="3.00",
+        )
+
+        content = _export_workbook(client, headers, fixture["project_id"], fixture["estimate_id"])
+        workbook = load_workbook(BytesIO(content))
+        # Same (task, role) pair as the OTHER estimate's own assignment: must be
+        # accepted as a fresh creation on THIS estimate -- no cross-estimate collision.
+        workbook["MO"].append(
+            [
+                None,
+                fixture["deliverable_id"],
+                None,
+                other_role_id,
+                None,
+                None,
+                None,
+                None,
+                1,
+                1,
+                None,
+                False,
+            ]
+        )
+        # Same (task, role) pair as THIS estimate's own existing assignment
+        # (fixture["role_id"]): a genuine duplicate, must be rejected.
+        workbook["MO"].append(
+            [
+                None,
+                fixture["deliverable_id"],
+                None,
+                fixture["role_id"],
+                None,
+                None,
+                None,
+                None,
+                1,
+                1,
+                None,
+                False,
+            ]
+        )
+        edited = _dump_workbook(workbook)
+
+        preview = _preview(client, headers, fixture["project_id"], fixture["estimate_id"], edited)
+        assert preview.status_code == 200
+        plan = _plan(preview.json())
+        duplicate_issues = [
+            issue
+            for issue in plan["blocking_issues"]
+            if issue["code"] == "LABOR_DUPLICATE_ASSIGNMENT"
+        ]
+        assert len(duplicate_issues) == 1
+        assert plan["labor_to_create"] == 1
+        assert plan["applied"] is False
+
+        confirm = _confirm(client, headers, fixture["project_id"], fixture["estimate_id"], edited)
+        assert confirm.status_code == 409
+        assert _plan(confirm.json())["applied"] is False
 
 
 def test_reconciliation_import_blank_cost_line_task_id_does_not_clear_it() -> None:
@@ -1327,8 +1520,9 @@ def test_reconciliation_import_blank_labor_cost_code_id_does_not_clear_it() -> N
         role_id = _seed_labor_role()
         sub_cost_code_id = _create_sub_cost_code(client, headers, project_id, "LOT-CRIT-MO")
 
-        assignment_id = _create_task_role_assignment(
+        assignment_id = _create_estimate_role_assignment(
             project_id,
+            estimate_id,
             deliverable.uid,
             role_id,
             quantity="2.00",
@@ -1352,7 +1546,7 @@ def test_reconciliation_import_blank_labor_cost_code_id_does_not_clear_it() -> N
         assert confirm.status_code == 200
         assert _plan(confirm.json())["applied"] is True
 
-        updated = _task_role_assignment(assignment_id)
+        updated = _estimate_role_assignment(assignment_id)
         assert updated.cost_code_id == sub_cost_code_id
         assert updated.quantity == Decimal("5.00")
 

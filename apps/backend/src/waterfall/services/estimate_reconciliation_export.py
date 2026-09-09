@@ -11,11 +11,11 @@ Only a *draft* estimate has anything meaningful to reconcile: ``EstimateLine``
 (the cost-calculation snapshot written once by ``calculate_estimate_lines`` at
 ``POST .../validate``) does not exist yet for a draft, and a validated
 estimate is no longer editable. So the labor ("MO") sheet is **not** sourced
-from ``EstimateLine`` -- it reads the live, project-wide ``TaskRoleAssignment``
-rows instead, scoped to this estimate's source planning exactly like
-``estimate_calculation.calculate_estimate_lines`` scopes them for its own cost
-calculation (see ``_scoped_task_role_assignments`` below), but without any of
-that function's cost/hours-per-year computation -- only line identification.
+from ``EstimateLine`` -- it reads the devis-version-scoped ``EstimateRoleAssignment``
+rows instead (E12-01/#273, the same table ``estimate_calculation.calculate_estimate_lines``
+reads for its own cost calculation since E12-02/#274 -- see
+``_scoped_estimate_role_assignments`` below), but without any of that function's
+cost/hours-per-year computation -- only line identification.
 
 Sheets
 ------
@@ -28,16 +28,22 @@ Sheets
     ``outline_level``, ``is_milestone``.
 
 ``MO``
-    One row per ``TaskRoleAssignment`` (``wf_task_role_assignment``, a
-    project-wide table -- not scoped to a single estimate version) whose task
-    belongs to this project. When the estimate has a source planning
-    (``estimate.planning_id``), assignments whose task uid is *not* present in
-    that planning's snapshot are still included (never silently dropped) but
+    One row per ``EstimateRoleAssignment`` (``wf_estimate_role_assignment``,
+    scoped to this estimate version -- E12-01/#273) belonging to this estimate.
+    When the estimate has a source planning (``estimate.planning_id``),
+    assignments whose task uid is *not* present in that planning's snapshot are
+    still included (never silently dropped) but
     flagged via ``hors_perimetre_planning=True`` -- this is the same condition
     ``calculate_estimate_lines`` would otherwise reject at validation time, but
     an export is a read-only reconciliation aid, not a validation gate, so it
-    stays usable instead of failing. On reimport (E6-09), a flagged row is not
-    expected to be reprised without explicit user action. Columns: ``id``
+    stays usable instead of failing. This flag stays relevant even though
+    ``EstimateRoleAssignment`` is itself estimate-scoped from creation on
+    (E12-01/#273): nothing at creation time
+    (``create_estimate_role_assignment``, ``api/routes/estimates.py``) checks
+    that the assigned task is actually a node of *this* estimate's own source
+    planning snapshot, only that it belongs to the project -- so a row can
+    still exist entirely outside that snapshot. On reimport (E6-09), a flagged
+    row is not expected to be reprised without explicit user action. Columns: ``id``
     (stable id), ``task_id``, ``task_name`` (via ``MsTask.name``), ``role_id``,
     ``role_name`` (via ``ResourceRole.name`` -- ``ResourceRole`` carries no
     separate ``code`` field), ``cost_category_id`` (via
@@ -62,8 +68,8 @@ Stable identifiers
 -------------------
 The first column of every sheet (``id``) is the row's stable identifier: it
 is the source row's own primary key (``EstimateTaskRow.id`` /
-``TaskRoleAssignment.id`` / ``EstimateCostLine.id``), never recalculated by
-this export. On reimport (E6-09), a present id means "update this existing
+``EstimateRoleAssignment.id`` / ``EstimateCostLine.id``), never recalculated
+by this export. On reimport (E6-09), a present id means "update this existing
 row"; an absent/blank id means "create a new row".
 """
 
@@ -83,9 +89,9 @@ from waterfall.models.resources import (
     CostType,
     Estimate,
     EstimateCostLine,
+    EstimateRoleAssignment,
     EstimateTaskRow,
     ResourceRole,
-    TaskRoleAssignment,
 )
 from waterfall.schemas.resources import CostTypeKind
 from waterfall.services.estimate_export import HEADER_FONT
@@ -137,7 +143,7 @@ COST_LINE_HEADERS = [
     "planned_date",
 ]
 
-_LaborAssignmentRow = tuple[TaskRoleAssignment, MsTask, ResourceRole, CostCategory, bool]
+_LaborAssignmentRow = tuple[EstimateRoleAssignment, MsTask, ResourceRole, CostCategory, bool]
 _CostLineRow = tuple[EstimateCostLine, CostType]
 # openpyxl's `Cell.value` accepts this exact union (see `openpyxl.cell._CellSetValue`);
 # `int` isn't itself part of it but is accepted at both runtime and by pyright's numeric
@@ -152,28 +158,31 @@ def _write_headers(sheet: Worksheet, headers: list[str]) -> None:
         sheet.column_dimensions[get_column_letter(column)].width = 20
 
 
-def _scoped_task_role_assignments(
+def _scoped_estimate_role_assignments(
     db: Session, project: MsProject, estimate: Estimate
 ) -> list[_LaborAssignmentRow]:
-    """Reads the legacy, project-wide `TaskRoleAssignment` (#69) -- not yet the
-    devis-scoped `EstimateRoleAssignment` introduced by E12-01/#273 and read by
-    `calculate_estimate_lines` since E12-02/#274. Migrating this export (and the
-    reconciliation import) to the new model is E12-03/#275's scope.
+    """Reads this estimate's own devis-scoped `EstimateRoleAssignment` rows
+    (E12-01/#273), the same table `calculate_estimate_lines` reads for its cost
+    calculation since E12-02/#274 -- migrated from the legacy, project-wide
+    `TaskRoleAssignment` by E12-03/#275.
 
     Unlike `calculate_estimate_lines`, an assignment whose task uid falls outside
     the estimate's source planning snapshot is never excluded here: this export is
-    a read-only reconciliation aid, not a validation gate, so every assignment on
-    a project task is kept. Instead, the out-of-scope condition (the same one
+    a read-only reconciliation aid, not a validation gate, so every assignment of
+    this estimate is kept. Instead, the out-of-scope condition (the same one
     `calculate_estimate_lines` would reject with a `ValueError` at validation
-    time) is surfaced via the returned row's ``hors_perimetre_planning`` flag.
+    time) is surfaced via the returned row's ``hors_perimetre_planning`` flag --
+    still reachable today since `create_estimate_role_assignment` only checks
+    that the task belongs to the project, not that it is a node of this
+    estimate's own source planning snapshot.
     """
     assignments = (
-        db.query(TaskRoleAssignment, MsTask, ResourceRole, CostCategory)
-        .join(MsTask, TaskRoleAssignment.task_id == MsTask.id)
-        .join(ResourceRole, TaskRoleAssignment.role_id == ResourceRole.id)
+        db.query(EstimateRoleAssignment, MsTask, ResourceRole, CostCategory)
+        .join(MsTask, EstimateRoleAssignment.task_id == MsTask.id)
+        .join(ResourceRole, EstimateRoleAssignment.role_id == ResourceRole.id)
         .join(CostCategory, ResourceRole.cost_category_id == CostCategory.id)
-        .filter(MsTask.project_id == project.id)
-        .order_by(TaskRoleAssignment.id)
+        .filter(EstimateRoleAssignment.estimate_id == estimate.id)
+        .order_by(EstimateRoleAssignment.id)
         .all()
     )
     if estimate.planning_id is None:
@@ -280,7 +289,7 @@ def build_estimate_reconciliation_workbook(
     """Build the round-trip reconciliation workbook: `Tâches` / `MO` / `Non-MO` sheets.
 
     See the module docstring for the exact column layout of each sheet and for
-    why labor lines are sourced from `TaskRoleAssignment` rather than
+    why labor lines are sourced from `EstimateRoleAssignment` rather than
     `EstimateLine`.
     """
     task_rows = (
@@ -292,7 +301,7 @@ def build_estimate_reconciliation_workbook(
     task_uid_by_id = {
         task.id: task.uid for task in db.query(MsTask).filter(MsTask.project_id == project.id).all()
     }
-    assignments = _scoped_task_role_assignments(db, project, estimate)
+    assignments = _scoped_estimate_role_assignments(db, project, estimate)
     cost_lines = _non_labor_cost_lines(db, estimate.id)
 
     workbook = Workbook()
