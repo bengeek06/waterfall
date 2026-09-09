@@ -90,7 +90,10 @@ from waterfall.models.resources import (
 from waterfall.schemas.resources import CostTypeKind
 from waterfall.services.estimate_export import HEADER_FONT
 
-_TASK_HEADERS = [
+# Not underscore-prefixed: shared with the reimport side of the round-trip
+# (services/estimate_reconciliation_import.py, E6-09/#70) so both directions of
+# the file agree on the exact column layout from a single source of truth.
+TASK_HEADERS = [
     "id",
     "task_id",
     "task_uid",
@@ -102,7 +105,7 @@ _TASK_HEADERS = [
     "is_milestone",
 ]
 
-_LABOR_HEADERS = [
+LABOR_HEADERS = [
     "id",
     "task_id",
     "task_name",
@@ -117,7 +120,7 @@ _LABOR_HEADERS = [
     "hors_perimetre_planning",
 ]
 
-_COST_LINE_HEADERS = [
+COST_LINE_HEADERS = [
     "id",
     "task_id",
     "cost_type_id",
@@ -206,7 +209,7 @@ def _write_tasks_sheet(
     rows: list[EstimateTaskRow],
     task_uid_by_id: dict[int, int],
 ) -> None:
-    _write_headers(sheet, _TASK_HEADERS)
+    _write_headers(sheet, TASK_HEADERS)
     for row_index, row in enumerate(rows, start=2):
         values: list[_CellValue] = [
             row.id,
@@ -224,7 +227,7 @@ def _write_tasks_sheet(
 
 
 def _write_labor_sheet(sheet: Worksheet, assignments: list[_LaborAssignmentRow]) -> None:
-    _write_headers(sheet, _LABOR_HEADERS)
+    _write_headers(sheet, LABOR_HEADERS)
     for row_index, (assignment, task, role, category, hors_perimetre) in enumerate(
         assignments, start=2
     ):
@@ -247,7 +250,7 @@ def _write_labor_sheet(sheet: Worksheet, assignments: list[_LaborAssignmentRow])
 
 
 def _write_non_labor_sheet(sheet: Worksheet, cost_lines: list[_CostLineRow]) -> None:
-    _write_headers(sheet, _COST_LINE_HEADERS)
+    _write_headers(sheet, COST_LINE_HEADERS)
     for row_index, (line, _cost_type) in enumerate(cost_lines, start=2):
         values: list[_CellValue] = [
             line.id,

@@ -1331,6 +1331,117 @@
         $ref: ../components/responses/Unauthorized.yaml
       '404':
         $ref: ../components/responses/ProjectNotFound.yaml
+/projects/{projectId}/estimates/{estimateId}/import-reconciliation/preview:
+  post:
+    tags:
+    - projects
+    summary: Prévisualiser une réimportation Excel réconciliable (E6-09)
+    description: >-
+      Analyse le fichier réexporté par /export-reconciliation.xlsx (E6-08),
+      éventuellement édité, et calcule le diff (créations / mises à jour /
+      suppressions sur les feuilles Tâches, MO, Non-MO) sans rien écrire en
+      base. Le devis doit être à l'état `draft`. Exécute exactement la même
+      analyse que /confirm sur le même fichier, garantissant un diagnostic
+      identique -- seul `applied` (toujours `false` ici) distingue les deux
+      réponses.
+    operationId: previewEstimateReconciliationImport
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/EstimateId.yaml
+    requestBody:
+      required: true
+      content:
+        multipart/form-data:
+          schema:
+            type: object
+            required:
+            - file
+            properties:
+              file:
+                type: string
+                format: binary
+                description: Classeur Excel réconciliable (voir /export-reconciliation.xlsx)
+    responses:
+      '200':
+        description: Diagnostic de réconciliation (aperçu, rien n'est appliqué)
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ReconciliationPlanRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
+      '413':
+        description: Classeur de reconciliation trop volumineux
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/FastAPIErrorResponse.yaml
+/projects/{projectId}/estimates/{estimateId}/import-reconciliation/confirm:
+  post:
+    tags:
+    - projects
+    summary: Confirmer une réimportation Excel réconciliable (E6-09)
+    description: >-
+      Rejoue exactement la même analyse que /preview sur le fichier resoumis
+      (aucune session d'import stockée côté serveur) et applique le résultat
+      en une seule transaction si `blocking_issues` est vide. Ordre
+      d'application : suppressions (Non-MO, MO, puis Tâches), créations
+      (Tâches, puis MO/Non-MO), mises à jour (MO, puis Non-MO). Le devis doit
+      être à l'état `draft`. Si des problèmes bloquants sont trouvés, rien
+      n'est écrit et la réponse est un 409 portant le `ReconciliationPlanRead`
+      complet (`applied=false`), jamais un 2xx trompeur. Dans de rares cas, une
+      écriture concurrente entre le precheck (hors verrou) et l'application
+      réelle (sous verrou) peut aussi produire un 409 au format
+      `PlanningTaskDeleteConflict`, identique à celui de la suppression directe
+      de tâches du planning.
+    operationId: confirmEstimateReconciliationImport
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/EstimateId.yaml
+    requestBody:
+      required: true
+      content:
+        multipart/form-data:
+          schema:
+            type: object
+            required:
+            - file
+            properties:
+              file:
+                type: string
+                format: binary
+                description: Le même classeur Excel que celui soumis à /preview
+    responses:
+      '200':
+        description: Réconciliation appliquée
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ReconciliationPlanRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+      '409':
+        $ref: ../components/responses/EstimateReconciliationConfirmConflict.yaml
+      '413':
+        description: Classeur de reconciliation trop volumineux
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/FastAPIErrorResponse.yaml
 /projects/{projectId}/cost-codes:
   get:
     tags:

@@ -994,6 +994,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{projectId}/estimates/{estimateId}/import-reconciliation/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Prévisualiser une réimportation Excel réconciliable (E6-09)
+         * @description Analyse le fichier réexporté par /export-reconciliation.xlsx (E6-08), éventuellement édité, et calcule le diff (créations / mises à jour / suppressions sur les feuilles Tâches, MO, Non-MO) sans rien écrire en base. Le devis doit être à l'état `draft`. Exécute exactement la même analyse que /confirm sur le même fichier, garantissant un diagnostic identique -- seul `applied` (toujours `false` ici) distingue les deux réponses.
+         */
+        post: operations["previewEstimateReconciliationImport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{projectId}/estimates/{estimateId}/import-reconciliation/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirmer une réimportation Excel réconciliable (E6-09)
+         * @description Rejoue exactement la même analyse que /preview sur le fichier resoumis (aucune session d'import stockée côté serveur) et applique le résultat en une seule transaction si `blocking_issues` est vide. Ordre d'application : suppressions (Non-MO, MO, puis Tâches), créations (Tâches, puis MO/Non-MO), mises à jour (MO, puis Non-MO). Le devis doit être à l'état `draft`. Si des problèmes bloquants sont trouvés, rien n'est écrit et la réponse est un 409 portant le `ReconciliationPlanRead` complet (`applied=false`), jamais un 2xx trompeur. Dans de rares cas, une écriture concurrente entre le precheck (hors verrou) et l'application réelle (sous verrou) peut aussi produire un 409 au format `PlanningTaskDeleteConflict`, identique à celui de la suppression directe de tâches du planning.
+         */
+        post: operations["confirmEstimateReconciliationImport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/projects/{projectId}/cost-codes": {
         parameters: {
             query?: never;
@@ -2177,6 +2217,36 @@ export interface components {
         EstimateValidationRead: components["schemas"]["ProjectEstimateRead"] & {
             warnings: components["schemas"]["EstimateValidationWarning"][];
         };
+        /** @description Une entree structuree de `ReconciliationPlanRead.blocking_issues` ou `.warnings` (E6-09, #70). */
+        ReconciliationIssue: {
+            code: string;
+            message: string;
+            sheet?: string | null;
+            /** @description Numero de ligne Excel (1-based, en comptant l'entete). Absent pour un probleme qui ne pointe pas vers une ligne precise du fichier (ex : precondition globale, ou ligne existante proposee a la suppression, qui par definition n'apparait plus dans le fichier). */
+            row?: number | null;
+        };
+        /** @description Diagnostic + resultat d'un import de reconciliation de devis (E6-09, #70). `POST .../import-reconciliation/preview` et `POST .../import-reconciliation/confirm` executent exactement la meme analyse sur le meme fichier -- seul `applied` distingue les deux reponses. */
+        ReconciliationPlanRead: {
+            /** @description Non vide => rien n'est/ne sera applique, meme pour un confirm (voir `applied`). */
+            blocking_issues: components["schemas"]["ReconciliationIssue"][];
+            /** @description Changements ignores (ex : renommage d'une tache existante), lignes hors perimetre, etc. -- jamais bloquant. */
+            warnings: components["schemas"]["ReconciliationIssue"][];
+            tasks_to_create: number;
+            /** @description Identifiants `EstimateTaskRow.id` proposes a la suppression. */
+            tasks_to_delete: number[];
+            labor_to_create: number;
+            /** @description Identifiants `TaskRoleAssignment.id` a mettre a jour. */
+            labor_to_update: number[];
+            /** @description Identifiants `TaskRoleAssignment.id` proposes a la suppression. */
+            labor_to_delete: number[];
+            non_labor_to_create: number;
+            /** @description Identifiants `EstimateCostLine.id` a mettre a jour. */
+            non_labor_to_update: number[];
+            /** @description Identifiants `EstimateCostLine.id` proposes a la suppression. */
+            non_labor_to_delete: number[];
+            /** @description Toujours `false` pour un preview. Pour un confirm, `true` uniquement si `blocking_issues` etait vide et que les changements ont ete appliques. */
+            applied: boolean;
+        };
         ProjectCostCodeCreate: {
             code: string;
             name: string;
@@ -2491,6 +2561,15 @@ export interface components {
             };
             content: {
                 "application/json": components["schemas"]["FastAPIErrorResponse"];
+            };
+        };
+        /** @description Soit des problemes bloquants ont ete trouves et rien n'a ete applique -- le corps est alors le `ReconciliationPlanRead` complet (pas l'enveloppe `FastAPIErrorResponse` habituelle), avec `applied=false` ; soit le precheck (execute hors verrou) n'a rien trouve mais une ecriture concurrente a fait echouer la suppression de tache reelle une fois le verrou pris, auquel cas le corps est un `PlanningTaskDeleteConflict` (detail.code=CASCADE_CONFIRMATION_REQUIRED/TASK_REFERENCED), exactement comme la suppression directe de taches du planning (`DeletePlanningTasksConflict`). */
+        EstimateReconciliationConfirmConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ReconciliationPlanRead"] | components["schemas"]["PlanningTaskDeleteConflict"];
             };
         };
     };
@@ -4486,6 +4565,102 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["ProjectNotFound"];
+        };
+    };
+    previewEstimateReconciliationImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de devis */
+                estimateId: components["parameters"]["EstimateId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /**
+                     * Format: binary
+                     * @description Classeur Excel réconciliable (voir /export-reconciliation.xlsx)
+                     */
+                    file: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Diagnostic de réconciliation (aperçu, rien n'est appliqué) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconciliationPlanRead"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+            409: components["responses"]["Conflict"];
+            /** @description Classeur de reconciliation trop volumineux */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FastAPIErrorResponse"];
+                };
+            };
+        };
+    };
+    confirmEstimateReconciliationImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de devis */
+                estimateId: components["parameters"]["EstimateId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /**
+                     * Format: binary
+                     * @description Le même classeur Excel que celui soumis à /preview
+                     */
+                    file: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Réconciliation appliquée */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconciliationPlanRead"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+            409: components["responses"]["EstimateReconciliationConfirmConflict"];
+            /** @description Classeur de reconciliation trop volumineux */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FastAPIErrorResponse"];
+                };
+            };
         };
     };
     listProjectCostCodes: {
