@@ -778,125 +778,6 @@
         $ref: ../components/responses/Unauthorized.yaml
       '404':
         $ref: ../components/responses/TaskNotFound.yaml
-/projects/{projectId}/tasks/{taskUid}/role-assignments:
-  get:
-    tags:
-    - projects
-    summary: Lister les affectations de main-d'œuvre d'une tâche
-    description: 'Le parametre `q` recherche sur `role_name` (nom du role affecte).'
-    operationId: listTaskRoleAssignments
-    security:
-    - bearerAuth: []
-    parameters:
-    - $ref: ../components/parameters/ProjectId.yaml
-    - $ref: ../components/parameters/TaskUid.yaml
-    - $ref: ../components/parameters/Limit.yaml
-    - $ref: ../components/parameters/Offset.yaml
-    - $ref: ../components/parameters/Search.yaml
-    - name: sort
-      in: query
-      required: false
-      schema:
-        allOf:
-        - $ref: ../components/schemas/SortColumn.yaml
-        enum: [role_name, -role_name, quantity, -quantity, hours, -hours]
-    responses:
-      '200':
-        description: Affectations de rôles
-        content:
-          application/json:
-            schema:
-              $ref: ../components/schemas/TaskRoleAssignmentListRead.yaml
-      '400':
-        $ref: ../components/responses/BadRequest.yaml
-      '401':
-        $ref: ../components/responses/Unauthorized.yaml
-      '404':
-        $ref: ../components/responses/TaskNotFound.yaml
-  post:
-    tags:
-    - projects
-    summary: Affecter un rôle de main-d'œuvre à une tâche
-    description: >-
-      Sans `cost_code_id` explicite, l'affectation est rattachée au code
-      d'imputation racine actif du projet ; un `cost_code_id` fourni doit
-      appartenir au projet, sous peine de `400`.
-    operationId: createTaskRoleAssignment
-    security:
-    - bearerAuth: []
-    parameters:
-    - $ref: ../components/parameters/ProjectId.yaml
-    - $ref: ../components/parameters/TaskUid.yaml
-    requestBody:
-      required: true
-      content:
-        application/json:
-          schema:
-            $ref: ../components/schemas/TaskRoleAssignmentCreate.yaml
-    responses:
-      '201':
-        description: Affectation créée
-        content:
-          application/json:
-            schema:
-              $ref: ../components/schemas/TaskRoleAssignmentRead.yaml
-      '400':
-        $ref: ../components/responses/CreateTaskRoleAssignmentBadRequest.yaml
-      '401':
-        $ref: ../components/responses/Unauthorized.yaml
-      '404':
-        $ref: ../components/responses/TaskNotFound.yaml
-      '409':
-        $ref: ../components/responses/Conflict.yaml
-/projects/{projectId}/tasks/{taskUid}/role-assignments/{assignmentId}:
-  patch:
-    tags:
-    - projects
-    summary: Modifier une affectation de rôle
-    operationId: updateTaskRoleAssignment
-    security:
-    - bearerAuth: []
-    parameters:
-    - $ref: ../components/parameters/ProjectId.yaml
-    - $ref: ../components/parameters/TaskUid.yaml
-    - $ref: ../components/parameters/AssignmentId.yaml
-    requestBody:
-      required: true
-      content:
-        application/json:
-          schema:
-            $ref: ../components/schemas/TaskRoleAssignmentUpdate.yaml
-    responses:
-      '200':
-        description: Affectation modifiée
-        content:
-          application/json:
-            schema:
-              $ref: ../components/schemas/TaskRoleAssignmentRead.yaml
-      '400':
-        $ref: ../components/responses/BadRequest.yaml
-      '401':
-        $ref: ../components/responses/Unauthorized.yaml
-      '404':
-        $ref: ../components/responses/TaskNotFound.yaml
-  delete:
-    tags:
-    - projects
-    summary: Supprimer une affectation de rôle
-    operationId: deleteTaskRoleAssignment
-    security:
-    - bearerAuth: []
-    parameters:
-    - $ref: ../components/parameters/ProjectId.yaml
-    - $ref: ../components/parameters/TaskUid.yaml
-    - $ref: ../components/parameters/AssignmentId.yaml
-    responses:
-      '204':
-        description: Affectation supprimée
-      '401':
-        $ref: ../components/responses/Unauthorized.yaml
-      '404':
-        $ref: ../components/responses/TaskNotFound.yaml
 /projects/{projectId}/estimates:
   get:
     tags:
@@ -1222,6 +1103,136 @@
               $ref: ../components/schemas/EstimateTaskRowListRead.yaml
       '400':
         $ref: ../components/responses/BadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
+/projects/{projectId}/estimates/{estimateId}/role-assignments:
+  get:
+    tags:
+    - projects
+    summary: Lister les affectations de main-d'œuvre d'un devis
+    description: 'Le parametre `q` recherche sur `role_name` (nom du role affecte).'
+    operationId: listEstimateRoleAssignments
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/EstimateId.yaml
+    - $ref: ../components/parameters/Limit.yaml
+    - $ref: ../components/parameters/Offset.yaml
+    - $ref: ../components/parameters/Search.yaml
+    - name: sort
+      in: query
+      required: false
+      schema:
+        allOf:
+        - $ref: ../components/schemas/SortColumn.yaml
+        enum: [role_name, -role_name, quantity, -quantity, hours, -hours]
+    responses:
+      '200':
+        description: Affectations de rôles du devis
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/EstimateRoleAssignmentListRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+  post:
+    tags:
+    - projects
+    summary: Affecter un rôle de main-d'œuvre à une tâche, dans un devis brouillon
+    description: >-
+      `task_id` reference `MsTask.id` (jamais un uid de planning). Sans
+      `cost_code_id` explicite, l'affectation est rattachée au code
+      d'imputation racine actif du projet ; un `cost_code_id` fourni doit
+      appartenir au projet, sous peine de `400`. Refuse avec `409` si le
+      devis n'est pas un brouillon, ou si une affectation existe deja pour
+      ce couple tache/role sur ce devis (E12-01, #273).
+    operationId: createEstimateRoleAssignment
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/EstimateId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/EstimateRoleAssignmentCreate.yaml
+    responses:
+      '201':
+        description: Affectation créée
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/EstimateRoleAssignmentRead.yaml
+      '400':
+        $ref: ../components/responses/CreateEstimateRoleAssignmentBadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
+/projects/{projectId}/estimates/{estimateId}/role-assignments/{assignmentId}:
+  patch:
+    tags:
+    - projects
+    summary: Modifier une affectation de rôle d'un devis brouillon
+    description: >-
+      `task_id`/`role_id` sont immuables ; refuse avec `409` si le devis
+      n'est pas un brouillon.
+    operationId: updateEstimateRoleAssignment
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/EstimateId.yaml
+    - $ref: ../components/parameters/AssignmentId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/EstimateRoleAssignmentUpdate.yaml
+    responses:
+      '200':
+        description: Affectation modifiée
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/EstimateRoleAssignmentRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
+  delete:
+    tags:
+    - projects
+    summary: Supprimer une affectation de rôle d'un devis brouillon
+    description: Refuse avec `409` si le devis n'est pas un brouillon.
+    operationId: deleteEstimateRoleAssignment
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/EstimateId.yaml
+    - $ref: ../components/parameters/AssignmentId.yaml
+    responses:
+      '204':
+        description: Affectation supprimée
       '401':
         $ref: ../components/responses/Unauthorized.yaml
       '404':

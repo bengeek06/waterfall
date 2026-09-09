@@ -1331,128 +1331,6 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/TaskNotFound'
-  /projects/{projectId}/tasks/{taskUid}/role-assignments:
-    get:
-      tags:
-        - projects
-      summary: Lister les affectations de main-d'œuvre d'une tâche
-      description: Le parametre `q` recherche sur `role_name` (nom du role affecte).
-      operationId: listTaskRoleAssignments
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: '#/components/parameters/ProjectId'
-        - $ref: '#/components/parameters/TaskUid'
-        - $ref: '#/components/parameters/Limit'
-        - $ref: '#/components/parameters/Offset'
-        - $ref: '#/components/parameters/Search'
-        - name: sort
-          in: query
-          required: false
-          schema:
-            allOf:
-              - $ref: '#/components/schemas/SortColumn'
-            enum:
-              - role_name
-              - -role_name
-              - quantity
-              - -quantity
-              - hours
-              - -hours
-      responses:
-        '200':
-          description: Affectations de rôles
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/TaskRoleAssignmentListRead'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/TaskNotFound'
-    post:
-      tags:
-        - projects
-      summary: Affecter un rôle de main-d'œuvre à une tâche
-      description: Sans `cost_code_id` explicite, l'affectation est rattachée au code d'imputation racine actif du projet ; un `cost_code_id` fourni doit appartenir au projet, sous peine de `400`.
-      operationId: createTaskRoleAssignment
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: '#/components/parameters/ProjectId'
-        - $ref: '#/components/parameters/TaskUid'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/TaskRoleAssignmentCreate'
-      responses:
-        '201':
-          description: Affectation créée
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/TaskRoleAssignmentRead'
-        '400':
-          $ref: '#/components/responses/CreateTaskRoleAssignmentBadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/TaskNotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-  /projects/{projectId}/tasks/{taskUid}/role-assignments/{assignmentId}:
-    patch:
-      tags:
-        - projects
-      summary: Modifier une affectation de rôle
-      operationId: updateTaskRoleAssignment
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: '#/components/parameters/ProjectId'
-        - $ref: '#/components/parameters/TaskUid'
-        - $ref: '#/components/parameters/AssignmentId'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/TaskRoleAssignmentUpdate'
-      responses:
-        '200':
-          description: Affectation modifiée
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/TaskRoleAssignmentRead'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/TaskNotFound'
-    delete:
-      tags:
-        - projects
-      summary: Supprimer une affectation de rôle
-      operationId: deleteTaskRoleAssignment
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: '#/components/parameters/ProjectId'
-        - $ref: '#/components/parameters/TaskUid'
-        - $ref: '#/components/parameters/AssignmentId'
-      responses:
-        '204':
-          description: Affectation supprimée
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/TaskNotFound'
   /projects/{projectId}/estimates:
     get:
       tags:
@@ -1779,6 +1657,134 @@ paths:
                 $ref: '#/components/schemas/EstimateTaskRowListRead'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /projects/{projectId}/estimates/{estimateId}/role-assignments:
+    get:
+      tags:
+        - projects
+      summary: Lister les affectations de main-d'œuvre d'un devis
+      description: Le parametre `q` recherche sur `role_name` (nom du role affecte).
+      operationId: listEstimateRoleAssignments
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/EstimateId'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/Search'
+        - name: sort
+          in: query
+          required: false
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/SortColumn'
+            enum:
+              - role_name
+              - -role_name
+              - quantity
+              - -quantity
+              - hours
+              - -hours
+      responses:
+        '200':
+          description: Affectations de rôles du devis
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EstimateRoleAssignmentListRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+    post:
+      tags:
+        - projects
+      summary: Affecter un rôle de main-d'œuvre à une tâche, dans un devis brouillon
+      description: '`task_id` reference `MsTask.id` (jamais un uid de planning). Sans `cost_code_id` explicite, l''affectation est rattachée au code d''imputation racine actif du projet ; un `cost_code_id` fourni doit appartenir au projet, sous peine de `400`. Refuse avec `409` si le devis n''est pas un brouillon, ou si une affectation existe deja pour ce couple tache/role sur ce devis (E12-01, #273).'
+      operationId: createEstimateRoleAssignment
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/EstimateId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EstimateRoleAssignmentCreate'
+      responses:
+        '201':
+          description: Affectation créée
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EstimateRoleAssignmentRead'
+        '400':
+          $ref: '#/components/responses/CreateEstimateRoleAssignmentBadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /projects/{projectId}/estimates/{estimateId}/role-assignments/{assignmentId}:
+    patch:
+      tags:
+        - projects
+      summary: Modifier une affectation de rôle d'un devis brouillon
+      description: '`task_id`/`role_id` sont immuables ; refuse avec `409` si le devis n''est pas un brouillon.'
+      operationId: updateEstimateRoleAssignment
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/EstimateId'
+        - $ref: '#/components/parameters/AssignmentId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EstimateRoleAssignmentUpdate'
+      responses:
+        '200':
+          description: Affectation modifiée
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EstimateRoleAssignmentRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    delete:
+      tags:
+        - projects
+      summary: Supprimer une affectation de rôle d'un devis brouillon
+      description: Refuse avec `409` si le devis n'est pas un brouillon.
+      operationId: deleteEstimateRoleAssignment
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/EstimateId'
+        - $ref: '#/components/parameters/AssignmentId'
+      responses:
+        '204':
+          description: Affectation supprimée
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -4103,13 +4109,17 @@ components:
             - string
             - 'null'
           maxLength: 10000
-    TaskRoleAssignmentCreate:
+    EstimateRoleAssignmentCreate:
       type: object
       required:
+        - task_id
         - role_id
         - quantity
         - hours
       properties:
+        task_id:
+          type: integer
+          minimum: 1
         role_id:
           type: integer
           minimum: 1
@@ -4129,7 +4139,7 @@ components:
             - string
             - 'null'
           maxLength: 10000
-    TaskRoleAssignmentUpdate:
+    EstimateRoleAssignmentUpdate:
       type: object
       properties:
         cost_code_id:
@@ -4148,10 +4158,11 @@ components:
             - string
             - 'null'
           maxLength: 10000
-    TaskRoleAssignmentRead:
+    EstimateRoleAssignmentRead:
       type: object
       required:
         - id
+        - estimate_id
         - task_id
         - role_id
         - role_code
@@ -4164,6 +4175,9 @@ components:
         - updated_at
       properties:
         id:
+          type: integer
+          minimum: 1
+        estimate_id:
           type: integer
           minimum: 1
         task_id:
@@ -5192,7 +5206,7 @@ components:
               type: array
               items:
                 $ref: '#/components/schemas/EstimateCostLineRead'
-    TaskRoleAssignmentListRead:
+    EstimateRoleAssignmentListRead:
       allOf:
         - $ref: '#/components/schemas/PaginationMeta'
         - type: object
@@ -5202,7 +5216,7 @@ components:
             items:
               type: array
               items:
-                $ref: '#/components/schemas/TaskRoleAssignmentRead'
+                $ref: '#/components/schemas/EstimateRoleAssignmentRead'
     UserAdminListRead:
       allOf:
         - $ref: '#/components/schemas/PaginationMeta'
@@ -5376,50 +5390,6 @@ components:
         expected_revision:
           type: integer
           minimum: 0
-    MissingRateCoverageEntry:
-      type: object
-      required:
-        - category_id
-        - category_name
-        - accounting_code
-        - year
-      properties:
-        category_id:
-          type: integer
-        category_name:
-          type: string
-        accounting_code:
-          type: string
-        year:
-          type: integer
-      description: 'Une combinaison (categorie de cout, annee) sans `CostRate`, element de `MissingRateCoverage.detail.missing_cost_rates` (E6-11, #175).'
-    MissingRateCoverage:
-      type: object
-      required:
-        - detail
-      properties:
-        detail:
-          type: object
-          required:
-            - code
-            - missing_cost_rates
-            - missing_inflation_years
-          properties:
-            code:
-              type: string
-              enum:
-                - MISSING_RATE_COVERAGE
-            missing_cost_rates:
-              description: Chaque combinaison (categorie de cout, annee) utilisee par une affectation de main-d'oeuvre sans `CostRate` correspondant -- dedupliquee et triee par `(accounting_code, year)`. Vide si seule la couverture `InflationRate` manque.
-              type: array
-              items:
-                $ref: '#/components/schemas/MissingRateCoverageEntry'
-            missing_inflation_years:
-              description: Chaque annee (dedupliquee, triee) utilisee par une affectation de main-d'oeuvre sans `InflationRate` correspondant, independamment de la categorie. Vide si seule la couverture `CostRate` manque.
-              type: array
-              items:
-                type: integer
-      description: 'Corps 400/409 structure pour `POST .../role-assignments` et `POST .../validate` quand une affectation de main-d''oeuvre couvre une (categorie de cout, annee) sans `CostRate`, ou une annee sans `InflationRate` (E6-11, #175). Liste chaque combinaison manquante trouvee, pas seulement la premiere.'
     EstimateTaskCreate:
       type: object
       required:
@@ -5464,6 +5434,50 @@ components:
           minimum: 0
           maximum: 7884000
           default: 0
+    MissingRateCoverageEntry:
+      type: object
+      required:
+        - category_id
+        - category_name
+        - accounting_code
+        - year
+      properties:
+        category_id:
+          type: integer
+        category_name:
+          type: string
+        accounting_code:
+          type: string
+        year:
+          type: integer
+      description: 'Une combinaison (categorie de cout, annee) sans `CostRate`, element de `MissingRateCoverage.detail.missing_cost_rates` (E6-11, #175).'
+    MissingRateCoverage:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: object
+          required:
+            - code
+            - missing_cost_rates
+            - missing_inflation_years
+          properties:
+            code:
+              type: string
+              enum:
+                - MISSING_RATE_COVERAGE
+            missing_cost_rates:
+              description: Chaque combinaison (categorie de cout, annee) utilisee par une affectation de main-d'oeuvre sans `CostRate` correspondant -- dedupliquee et triee par `(accounting_code, year)`. Vide si seule la couverture `InflationRate` manque.
+              type: array
+              items:
+                $ref: '#/components/schemas/MissingRateCoverageEntry'
+            missing_inflation_years:
+              description: Chaque annee (dedupliquee, triee) utilisee par une affectation de main-d'oeuvre sans `InflationRate` correspondant, independamment de la categorie. Vide si seule la couverture `CostRate` manque.
+              type: array
+              items:
+                type: integer
+      description: 'Corps 400/409 structure pour `POST .../role-assignments` et `POST .../validate` quand une affectation de main-d''oeuvre couvre une (categorie de cout, annee) sans `CostRate`, ou une annee sans `InflationRate` (E6-11, #175). Liste chaque combinaison manquante trouvee, pas seulement la premiere.'
     EstimateValidationWarning:
       type: object
       required:
@@ -6019,8 +6033,8 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/FastAPIErrorResponse'
-    CreateTaskRoleAssignmentBadRequest:
-      description: 'Requete invalide -- soit le role ne correspond pas a une categorie de cout main-d''oeuvre active (detail generique FastAPIErrorResponse), soit la tache est deja datee (start_at et finish_at renseignes) et au moins une (categorie de cout, annee) qu''elle couvre n''a pas de CostRate/InflationRate (detail.code=MISSING_RATE_COVERAGE, E6-11, #175).'
+    CreateEstimateRoleAssignmentBadRequest:
+      description: 'Requete invalide -- soit `task_id` ne correspond a aucune tache du projet, soit le role ne correspond pas a une categorie de cout main-d''oeuvre active (detail generique FastAPIErrorResponse), soit la tache est deja datee (start_at et finish_at renseignes) et au moins une (categorie de cout, annee) qu''elle couvre n''a pas de CostRate/InflationRate (detail.code=MISSING_RATE_COVERAGE, E6-11, #175).'
       content:
         application/json:
           schema:

@@ -24,6 +24,8 @@ from waterfall.models.planning import WfPlanning, WfPlanningTaskSnapshot
 from waterfall.models.resources import (
     CostCategory,
     CostType,
+    Estimate,
+    EstimateRoleAssignment,
     ResourceNode,
     ResourceRole,
     TaskRoleAssignment,
@@ -647,6 +649,69 @@ def test_delete_task_referenced_by_role_assignment_in_cascade_conflicts_without_
                 .all()
             }
         assert remaining_uids == {1, 2, 3, 4, 5, 6}
+
+
+def test_delete_task_referenced_by_estimate_role_assignment_conflicts_without_mutation() -> None:
+    """E12-01 (#273): `EstimateRoleAssignment.task_id` is a new FK to `ms_task.id`,
+    just like `TaskRoleAssignment.task_id` above -- a task referenced only by a
+    devis-scoped assignment (never by the legacy, project-wide table) must be
+    refused the same way, not left to fail as an uncaught FK violation."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        planning_id = _seed_planning(project_id)
+        legacy_task_id = _bridge_legacy_task(project_id, 6)
+
+        with get_session_factory()() as session:
+            cost_type = CostType(code=f"MO-{uuid4().hex[:8]}", name="Main d'oeuvre", kind="labor")
+            session.add(cost_type)
+            session.flush()
+            category = CostCategory(
+                cost_type_id=cost_type.id,
+                accounting_code=f"DEV-{uuid4().hex[:8]}",
+                name="Developpement",
+            )
+            node = ResourceNode(code=f"IT-{uuid4().hex[:8]}", name="Informatique")
+            session.add_all([category, node])
+            session.flush()
+            role = ResourceRole(node_id=node.id, cost_category_id=category.id, name="Developpeur")
+            session.add(role)
+            session.flush()
+            estimate = Estimate(
+                project_id=project_id, version_number=1, kind="initial", currency_code="EUR"
+            )
+            session.add(estimate)
+            session.flush()
+            session.add(
+                EstimateRoleAssignment(
+                    estimate_id=estimate.id,
+                    task_id=legacy_task_id,
+                    role_id=role.id,
+                    quantity=Decimal("1.00"),
+                    hours=Decimal("10.00"),
+                )
+            )
+            session.commit()
+
+        response = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/tasks/delete",
+            json={"task_uids": [6], "expected_revision": 0},
+            headers=headers,
+        )
+
+        assert response.status_code == 409
+        detail = cast(dict[str, Any], response.json())["detail"]
+        assert detail["code"] == "TASK_REFERENCED"
+        assert detail["task_uids"] == [6]
+
+        with get_session_factory()() as session:
+            remaining_uids = {
+                task.uid
+                for task in session.query(WfPlanningTaskSnapshot)
+                .filter(WfPlanningTaskSnapshot.planning_id == planning_id)
+                .all()
+            }
+        assert 6 in remaining_uids
 
 
 # ---------------------------------------------------------------------------

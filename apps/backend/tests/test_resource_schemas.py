@@ -6,6 +6,8 @@ from pydantic import ValidationError
 from waterfall.schemas.projects import (
     EstimateCostLineCreate,
     EstimateCostLineUpdate,
+    EstimateRoleAssignmentCreate,
+    EstimateRoleAssignmentUpdate,
     PlanningTaskCreate,
     ProjectCreate,
     ProjectEstimateCreate,
@@ -22,8 +24,6 @@ from waterfall.schemas.resources import (
     InflationRateCreate,
     ResourceNodeCreate,
     ResourceNodeUpdate,
-    TaskRoleAssignmentCreate,
-    TaskRoleAssignmentUpdate,
 )
 
 
@@ -89,7 +89,7 @@ def test_resource_schema_rejects_invalid_values() -> None:
         InflationRateCreate(year=2026, coefficient=Decimal("0"))
 
     with pytest.raises(ValidationError):
-        TaskRoleAssignmentCreate(
+        EstimateRoleAssignmentCreate(
             task_id=1,
             role_id=1,
             quantity=Decimal("0"),
@@ -139,8 +139,8 @@ def test_project_schema_normalizes_and_rejects_blank_input() -> None:
         }
     )
     line_update = EstimateCostLineUpdate(label="  Ligne modifiée  ")
-    assignment_update = TaskRoleAssignmentUpdate(comment="  Commentaire de mission  ")
-    assignment_create = TaskRoleAssignmentCreate(
+    assignment_update = EstimateRoleAssignmentUpdate(comment="  Commentaire de mission  ")
+    assignment_create = EstimateRoleAssignmentCreate(
         task_id=1,
         role_id=2,
         quantity=Decimal("1"),
@@ -155,7 +155,7 @@ def test_project_schema_normalizes_and_rejects_blank_input() -> None:
     )
     category_update = CostCategoryUpdate(category_code="  MAJ  ")
     task = PlanningTaskCreate(name="  Nouvelle tâche  ", is_milestone=True, expected_revision=0)
-    task_assignment = TaskRoleAssignmentCreate(
+    task_assignment = EstimateRoleAssignmentCreate(
         task_id=1,
         role_id=2,
         quantity=Decimal("1"),

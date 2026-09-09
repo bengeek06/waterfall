@@ -19,6 +19,7 @@ from waterfall.models.resources import (
     Estimate,
     EstimateCostLine,
     EstimateLine,
+    EstimateRoleAssignment,
     EstimateTaskRow,
     ProjectCostCode,
     ResourceRole,
@@ -28,6 +29,7 @@ from waterfall.models.user import User
 from waterfall.models.wf_core import WfChargeLine, WfExcelImport, WfImportBatch, WfTaskEnrichment
 from waterfall.schemas.projects import (
     EstimateCostLineRead,
+    EstimateRoleAssignmentRead,
     EstimateTaskRowRead,
     ProjectCreate,
     ProjectEstimateRead,
@@ -41,7 +43,6 @@ from waterfall.schemas.projects import (
     SupplyStatus,
     TaskLinkRead,
     TaskRead,
-    TaskRoleAssignmentRead,
 )
 from waterfall.schemas.resources import CostTypeKind
 from waterfall.services import apply_pagination, get_project_setup_warnings
@@ -226,13 +227,14 @@ def to_task_read(
     )
 
 
-def to_task_role_assignment_read(
-    assignment: TaskRoleAssignment,
+def to_estimate_role_assignment_read(
+    assignment: EstimateRoleAssignment,
     role: ResourceRole,
     category: CostCategory,
-) -> TaskRoleAssignmentRead:
-    return TaskRoleAssignmentRead(
+) -> EstimateRoleAssignmentRead:
+    return EstimateRoleAssignmentRead(
         id=assignment.id,
+        estimate_id=assignment.estimate_id,
         task_id=assignment.task_id,
         role_id=role.id,
         role_code=role.name,
@@ -450,6 +452,9 @@ def delete_project(
         db.query(EstimateCostLine).filter(EstimateCostLine.estimate_id.in_(estimate_ids)).delete(
             synchronize_session=False
         )
+        db.query(EstimateRoleAssignment).filter(
+            EstimateRoleAssignment.estimate_id.in_(estimate_ids)
+        ).delete(synchronize_session=False)
         db.query(EstimateLine).filter(EstimateLine.estimate_id.in_(estimate_ids)).delete(
             synchronize_session=False
         )

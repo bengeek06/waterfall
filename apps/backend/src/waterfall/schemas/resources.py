@@ -367,49 +367,6 @@ class RoleCapacityListRead(PaginatedList[RoleCapacityRead]):
     pass
 
 
-class TaskRoleAssignmentBase(BaseModel):
-    quantity: Decimal = Field(gt=0, max_digits=10, decimal_places=2)
-    hours: Decimal = Field(ge=0, max_digits=14, decimal_places=2)
-    comment: str | None = Field(default=None, max_length=10000)
-
-
-class TaskRoleAssignmentCreate(TaskRoleAssignmentBase):
-    task_id: int = Field(gt=0)
-    role_id: int = Field(gt=0)
-
-    @field_validator("comment", mode="before")
-    @classmethod
-    def normalize_comment(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        normalized = value.strip()
-        return normalized or None
-
-
-class TaskRoleAssignmentUpdate(BaseModel):
-    quantity: Decimal | None = Field(default=None, gt=0, max_digits=10, decimal_places=2)
-    hours: Decimal | None = Field(default=None, ge=0, max_digits=14, decimal_places=2)
-    comment: str | None = Field(default=None, max_length=10000)
-
-    @field_validator("comment", mode="before")
-    @classmethod
-    def normalize_comment(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        normalized = value.strip()
-        return normalized or None
-
-
-class TaskRoleAssignmentRead(TaskRoleAssignmentBase):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    task_id: int
-    role_id: int
-    created_at: datetime
-    updated_at: datetime
-
-
 class EstimateBase(BaseModel):
     kind: EstimateKind
     currency_code: str = Field(min_length=3, max_length=3)

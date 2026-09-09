@@ -7,4 +7,4 @@ allOf:
     items:
       type: array
       items:
-        $ref: TaskRoleAssignmentRead.yaml
+        $ref: EstimateRoleAssignmentRead.yaml
