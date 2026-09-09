@@ -15,6 +15,7 @@ from waterfall.models.resources import (
     EstimateCostLine,
     EstimateLine,
     InflationRate,
+    ProjectCostCode,
     ResourceRole,
     TaskRoleAssignment,
 )
@@ -191,6 +192,22 @@ class EstimateAggregates(TypedDict):
     total_purchase_cost: Decimal
     total_unburdened_cost: Decimal
     by_category: dict[str, Decimal]
+    by_cost_code: dict[str, Decimal]
+
+
+# Issue #71 (E6-10): shared fallback label for a line with no `cost_code_id`, used both
+# by this aggregate and by the human-readable Excel export (services/estimate_export.py)
+# so the two views never disagree on how an unassigned line is displayed.
+UNASSIGNED_COST_CODE_LABEL = "—"
+
+
+def _resolve_cost_code_labels(db: Session, cost_code_ids: set[int]) -> dict[int, str]:
+    """Resolve a set of `cost_code_id` values to their `ProjectCostCode.code` in a
+    single query, avoiding one lookup per estimate line."""
+    if not cost_code_ids:
+        return {}
+    codes = db.query(ProjectCostCode).filter(ProjectCostCode.id.in_(cost_code_ids)).all()
+    return {code.id: code.code for code in codes}
 
 
 def calculate_estimate_aggregates(db: Session, estimate_id: int) -> EstimateAggregates:
@@ -201,10 +218,14 @@ def calculate_estimate_aggregates(db: Session, estimate_id: int) -> EstimateAggr
     """
     lines = db.query(EstimateLine).filter(EstimateLine.estimate_id == estimate_id).all()
 
+    cost_code_ids = {line.cost_code_id for line in lines if line.cost_code_id is not None}
+    cost_code_labels = _resolve_cost_code_labels(db, cost_code_ids)
+
     total_labor_cost: Decimal = Decimal("0")
     total_purchase_cost: Decimal = Decimal("0")
     total_unburdened_cost: Decimal = Decimal("0")
     by_category: dict[str, Decimal] = {}
+    by_cost_code: dict[str, Decimal] = {}
 
     for line in lines:
         # Accumulate totals
@@ -220,11 +241,22 @@ def calculate_estimate_aggregates(db: Session, estimate_id: int) -> EstimateAggr
             by_category[line.accounting_code] = Decimal("0")
         by_category[line.accounting_code] += line.budget_cost
 
+        # By cost-imputation code (issue #71 / E6-10)
+        cost_code_label = (
+            cost_code_labels.get(line.cost_code_id, UNASSIGNED_COST_CODE_LABEL)
+            if line.cost_code_id is not None
+            else UNASSIGNED_COST_CODE_LABEL
+        )
+        if cost_code_label not in by_cost_code:
+            by_cost_code[cost_code_label] = Decimal("0")
+        by_cost_code[cost_code_label] += line.budget_cost
+
     return {
         "total_labor_cost": total_labor_cost,
         "total_purchase_cost": total_purchase_cost,
         "total_unburdened_cost": total_unburdened_cost,
         "by_category": by_category,
+        "by_cost_code": by_cost_code,
     }
 
 

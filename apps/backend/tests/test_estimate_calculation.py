@@ -16,10 +16,16 @@ from waterfall.models.resources import (
     CostCategory,
     CostRate,
     CostType,
+    Estimate,
+    EstimateLine,
     InflationRate,
     ProjectCostCode,
     ResourceNode,
     ResourceRole,
+)
+from waterfall.services.estimate_calculation import (
+    UNASSIGNED_COST_CODE_LABEL,
+    calculate_estimate_aggregates,
 )
 
 
@@ -498,3 +504,94 @@ def test_non_labor_cost_lines_create_single_snapshot() -> None:
             line = lines[0]
             assert line.role_id is None
             assert line.budget_cost == Decimal("125.00")  # 5 * 25
+
+
+def test_calculate_estimate_aggregates_by_cost_code_sums_match_total() -> None:
+    """Issue #71 (E6-10): `by_cost_code` must partition `total_unburdened_cost` exactly
+    the way `by_category` already does, keyed by `ProjectCostCode.code`. A line with no
+    `cost_code_id` (e.g. one validated before #63/E6-02 shipped, see
+    `EstimateLine.cost_code_id`'s docstring) must fall back to
+    `UNASSIGNED_COST_CODE_LABEL` rather than being dropped or raising."""
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        project = MsProject(
+            owner_id=None,
+            external_uid=None,
+            source_version=2016,
+            save_version_out=16,
+            name="Cost code aggregates",
+            schedule_from_start=True,
+            start_date=datetime(2026, 1, 1, 8, 0, tzinfo=UTC),
+            finish_date=datetime(2026, 12, 31, 18, 0, tzinfo=UTC),
+            calendar_uid=1,
+            minutes_per_day=480,
+            minutes_per_week=2400,
+            days_per_month=20,
+            currency_code="EUR",
+        )
+        session.add(project)
+        session.flush()
+
+        root_code = ProjectCostCode(project_id=project.id, parent_id=None, code="ROOT", name="Root")
+        session.add(root_code)
+        session.flush()
+        child_code = ProjectCostCode(
+            project_id=project.id, parent_id=root_code.id, code="ROOT.1", name="Child"
+        )
+        session.add(child_code)
+        session.flush()
+
+        estimate = Estimate(
+            project_id=project.id,
+            version_number=1,
+            kind="initial",
+            status="draft",
+            currency_code="EUR",
+        )
+        session.add(estimate)
+        session.flush()
+
+        def _line(
+            cost_code_id: int | None, accounting_code: str, budget_cost: Decimal
+        ) -> EstimateLine:
+            return EstimateLine(
+                estimate_id=estimate.id,
+                task_id=None,
+                role_id=None,
+                cost_code_id=cost_code_id,
+                task_name="Line",
+                role_code="",
+                role_name="",
+                accounting_code=accounting_code,
+                year=2026,
+                quantity=Decimal("1"),
+                hours=Decimal("0"),
+                hourly_rate=Decimal("0"),
+                inflation_coefficient=Decimal("1"),
+                budget_cost=budget_cost,
+            )
+
+        session.add_all(
+            [
+                _line(root_code.id, "ACC-A", Decimal("100.00")),
+                _line(child_code.id, "ACC-B", Decimal("50.00")),
+                _line(None, "ACC-C", Decimal("25.00")),
+            ]
+        )
+        session.commit()
+        estimate_id = estimate.id
+        root_code_value = root_code.code
+        child_code_value = child_code.code
+
+    with session_factory() as session:
+        aggregates = calculate_estimate_aggregates(session, estimate_id)
+
+    assert aggregates["by_cost_code"] == {
+        root_code_value: Decimal("100.00"),
+        child_code_value: Decimal("50.00"),
+        UNASSIGNED_COST_CODE_LABEL: Decimal("25.00"),
+    }
+    assert (
+        sum(aggregates["by_cost_code"].values(), Decimal("0"))
+        == aggregates["total_unburdened_cost"]
+    )
