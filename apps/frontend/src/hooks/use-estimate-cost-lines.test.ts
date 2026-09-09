@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   createProjectEstimate: vi.fn(),
   createEstimateCostLine: vi.fn(),
   createEstimateTask: vi.fn(),
+  applyEstimateCostLineMilestoneTemplate: vi.fn(),
   updateEstimateCostLine: vi.fn(),
   deleteEstimateCostLine: vi.fn(),
   getProjectCostCodes: vi.fn(),
@@ -24,6 +25,7 @@ vi.mock("@/lib/backend", async () => {
     createProjectEstimate: mocks.createProjectEstimate,
     createEstimateCostLine: mocks.createEstimateCostLine,
     createEstimateTask: mocks.createEstimateTask,
+    applyEstimateCostLineMilestoneTemplate: mocks.applyEstimateCostLineMilestoneTemplate,
     updateEstimateCostLine: mocks.updateEstimateCostLine,
     deleteEstimateCostLine: mocks.deleteEstimateCostLine,
     getProjectCostCodes: mocks.getProjectCostCodes,
@@ -849,5 +851,250 @@ describe("useEstimateCostLines submitCreateTask", () => {
 
     expect(setEstimateTaskRowCount).not.toHaveBeenCalled();
     expect(result.current.taskDialogOpen).toBe(true);
+  });
+});
+
+function makeMilestoneRows(count: number) {
+  return Array.from({ length: count }, (_unused, index) => makeTaskRow({ id: index + 1 }));
+}
+
+// E6-07/#68: "apply a milestone template" dialog, submitted from a single cost-line row.
+describe("useEstimateCostLines submitMilestoneTemplate", () => {
+  beforeEach(() => {
+    mocks.applyEstimateCostLineMilestoneTemplate.mockReset();
+    mocks.clearSession.mockReset();
+    mocks.getProjectCostCodes.mockReset().mockResolvedValue([]);
+    mocks.getPlanning.mockReset();
+  });
+
+  it("applies the fourniture template with the default zero intermediate count and lag", async () => {
+    mocks.applyEstimateCostLineMilestoneTemplate.mockResolvedValue(makeMilestoneRows(2));
+    const { result, setEstimateTaskRowCount } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.openMilestoneDialog(makeLine(3, { label: "Ascenseur" }));
+    });
+
+    await act(async () => {
+      await result.current.submitMilestoneTemplate();
+    });
+
+    expect(mocks.applyEstimateCostLineMilestoneTemplate).toHaveBeenCalledWith(
+      1,
+      1,
+      3,
+      { template: "fourniture", intermediate_milestones_count: 0, lag_minutes: 0 },
+      session,
+      expect.any(Function),
+    );
+    expect(setEstimateTaskRowCount).toHaveBeenCalled();
+    let count = 5;
+    for (const call of setEstimateTaskRowCount.mock.calls) {
+      const updater = call[0] as (previous: number) => number;
+      count = updater(count);
+    }
+    expect(count).toBe(7);
+    expect(result.current.milestoneDialogOpen).toBe(false);
+  });
+
+  it("applies the sous_traitance template with the chosen intermediate count and lag", async () => {
+    mocks.applyEstimateCostLineMilestoneTemplate.mockResolvedValue(makeMilestoneRows(5));
+    const { result } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.openMilestoneDialog(makeLine(3, { label: "Ascenseur" }));
+      result.current.updateMilestoneTemplate("sous_traitance");
+      result.current.updateMilestoneIntermediateCount("3");
+      result.current.updateMilestoneLagMinutes("120");
+    });
+
+    await act(async () => {
+      await result.current.submitMilestoneTemplate();
+    });
+
+    expect(mocks.applyEstimateCostLineMilestoneTemplate).toHaveBeenCalledWith(
+      1,
+      1,
+      3,
+      { template: "sous_traitance", intermediate_milestones_count: 3, lag_minutes: 120 },
+      session,
+      expect.any(Function),
+    );
+  });
+
+  // Regression-style guard: switching back to "fourniture" must reset any previously-entered
+  // intermediate count, since the backend rejects a non-zero value for that template with a 400.
+  it("resets the intermediate count to 0 when switching back to the fourniture template", async () => {
+    mocks.applyEstimateCostLineMilestoneTemplate.mockResolvedValue(makeMilestoneRows(2));
+    const { result } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.openMilestoneDialog(makeLine(3));
+      result.current.updateMilestoneTemplate("sous_traitance");
+      result.current.updateMilestoneIntermediateCount("4");
+      result.current.updateMilestoneTemplate("fourniture");
+    });
+
+    await act(async () => {
+      await result.current.submitMilestoneTemplate();
+    });
+
+    expect(mocks.applyEstimateCostLineMilestoneTemplate).toHaveBeenCalledWith(
+      1,
+      1,
+      3,
+      { template: "fourniture", intermediate_milestones_count: 0, lag_minutes: 0 },
+      session,
+      expect.any(Function),
+    );
+  });
+
+  it("refetches the displayed planning and applies the fresh detail once the milestones are created", async () => {
+    mocks.applyEstimateCostLineMilestoneTemplate.mockResolvedValue(makeMilestoneRows(2));
+    const freshDetail = { id: 3, tasks: [{ uid: 99, name: "Commande" }] } as never;
+    mocks.getPlanning.mockResolvedValue(freshDetail);
+    const { result, setPlanningDetail } = setup({ selectedEstimateId: 1, selectedPlanningId: 3 });
+
+    act(() => {
+      result.current.openMilestoneDialog(makeLine(3));
+    });
+
+    await act(async () => {
+      await result.current.submitMilestoneTemplate();
+    });
+
+    expect(mocks.getPlanning).toHaveBeenCalledWith(1, 3, session, expect.any(Function));
+    expect(setPlanningDetail).toHaveBeenCalledWith(freshDetail);
+  });
+
+  it("shows an explicit reopen-the-structure message and flag on the draft-required 409", async () => {
+    const { ApiError } = await vi.importActual<typeof import("@/lib/backend")>("@/lib/backend");
+    mocks.applyEstimateCostLineMilestoneTemplate.mockRejectedValue(
+      new ApiError(
+        409,
+        "Le planning affiché n'est plus un brouillon : rouvre sa structure depuis l'onglet Planning avant d'ajouter une tâche depuis le devis.",
+        { code: "ESTIMATE_TASK_CREATE_REQUIRES_PLANNING_DRAFT" },
+      ),
+    );
+    const { result } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.openMilestoneDialog(makeLine(3));
+    });
+
+    await act(async () => {
+      await result.current.submitMilestoneTemplate();
+    });
+
+    expect(result.current.milestoneRequiresPlanningDraft).toBe(true);
+    expect(result.current.milestoneError).toBe(
+      "Le planning affiché n'est plus un brouillon : rouvre sa structure depuis l'onglet Planning avant d'ajouter une tâche depuis le devis.",
+    );
+    expect(result.current.milestoneDialogOpen).toBe(true);
+  });
+
+  it("shows a distinct message for a generic 409 (estimate/planning no longer a draft)", async () => {
+    const { ApiError } = await vi.importActual<typeof import("@/lib/backend")>("@/lib/backend");
+    mocks.applyEstimateCostLineMilestoneTemplate.mockRejectedValue(new ApiError(409, "Une erreur est survenue."));
+    const { result } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.openMilestoneDialog(makeLine(3));
+    });
+
+    await act(async () => {
+      await result.current.submitMilestoneTemplate();
+    });
+
+    expect(result.current.milestoneRequiresPlanningDraft).toBe(false);
+    expect(result.current.milestoneError).toBe("Ce devis ou le planning affiché ne sont plus modifiables.");
+  });
+
+  it("shows a distinct message for a 404 (cost line not found)", async () => {
+    const { ApiError } = await vi.importActual<typeof import("@/lib/backend")>("@/lib/backend");
+    mocks.applyEstimateCostLineMilestoneTemplate.mockRejectedValue(new ApiError(404, "Une erreur est survenue."));
+    const { result } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.openMilestoneDialog(makeLine(3));
+    });
+
+    await act(async () => {
+      await result.current.submitMilestoneTemplate();
+    });
+
+    expect(result.current.milestoneError).toBe("Cette ligne de coût est introuvable dans ce devis.");
+  });
+
+  // The backend rejects a labor cost line with an unstructured 400 (see
+  // describeMilestoneTemplateError's doc comment) -- the only case a 400 can mean here, since
+  // updateMilestoneTemplate always resets the intermediate count to 0 for "fourniture".
+  it("shows a distinct message for a 400 (labor cost line)", async () => {
+    const { ApiError } = await vi.importActual<typeof import("@/lib/backend")>("@/lib/backend");
+    mocks.applyEstimateCostLineMilestoneTemplate.mockRejectedValue(new ApiError(400, "Une erreur est survenue."));
+    const { result } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.openMilestoneDialog(makeLine(3));
+    });
+
+    await act(async () => {
+      await result.current.submitMilestoneTemplate();
+    });
+
+    expect(result.current.milestoneError).toBe(
+      "Ce gabarit de jalons ne s'applique qu'aux lignes de coût qui ne sont pas de la main d'œuvre.",
+    );
+  });
+
+  it("clears the session and redirects to login on a post-refresh 401", async () => {
+    const { ApiError } = await vi.importActual<typeof import("@/lib/backend")>("@/lib/backend");
+    mocks.applyEstimateCostLineMilestoneTemplate.mockRejectedValue(new ApiError(401, "Unauthorized"));
+    const { result, router } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.openMilestoneDialog(makeLine(3));
+    });
+
+    await act(async () => {
+      await result.current.submitMilestoneTemplate();
+    });
+
+    expect(mocks.clearSession).toHaveBeenCalled();
+    expect(router.push).toHaveBeenCalledWith("/login");
+  });
+
+  // Same stale-response guard as submitCreateTask/addCostLine/bulkAssignCostCode/validateEstimate
+  // above: the user could switch estimate version while this request is in flight (nothing
+  // currently disables the version selector while busy) -- this is the exact class of bug the
+  // review flagged 3 times before #67, so it's exercised here too.
+  it("does not apply a stale success/error result if the estimate version changed while the request was in flight", async () => {
+    let resolveApply!: (rows: ReturnType<typeof makeMilestoneRows>) => void;
+    mocks.applyEstimateCostLineMilestoneTemplate.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveApply = resolve;
+        }),
+    );
+    const { result, rerender, setEstimateTaskRowCount } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.openMilestoneDialog(makeLine(3));
+    });
+
+    let submitPromise!: Promise<void>;
+    act(() => {
+      submitPromise = result.current.submitMilestoneTemplate();
+    });
+
+    rerender({ selectedEstimateId: 2, selectedPlanningId: null });
+
+    resolveApply(makeMilestoneRows(2));
+    await act(async () => {
+      await submitPromise;
+    });
+
+    expect(setEstimateTaskRowCount).not.toHaveBeenCalled();
+    expect(result.current.milestoneDialogOpen).toBe(true);
   });
 });

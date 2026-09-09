@@ -26,6 +26,21 @@ export type CostLinesTableProps = {
   selectedCostLineIds: Set<number>;
   onSelectedCostLineIdsChange: (next: Set<number>) => void;
   bulkAssignBusy: boolean;
+  // E6-07/#68: opens the "apply a milestone template" dialog for a single line. The backend
+  // (not this table) remains the sole authority on whether a line's *cost type* is eligible
+  // (non-labor) -- see estimate-milestone-template-dialog.tsx's doc comment -- so the action
+  // still stays visible for every line on that axis rather than trying to infer a labor line's
+  // `kind` from fields this table doesn't otherwise load (EstimateCostLineRead exposes
+  // `cost_type_code`, not `cost_type.kind`).
+  onOpenMilestoneDialog: (line: EstimateCostLine) => void;
+  // Haute review finding on #68: unlike the labor-line case above, whether `line.task_id` points
+  // at a milestone task *is* known client-side (it's the same `Task.is_milestone` flag
+  // estimate-create-task-dialog.tsx already filters parent options on) and the backend rejects it
+  // unconditionally -- `create_planning_task` raises `PlanningTreeInvariantError("A milestone
+  // cannot contain children")`, mapped to a 409 -- so there is no scenario where retrying helps.
+  // Set of `Task.id`s (not uids) that are milestones, resolved by the caller from
+  // `parentTaskOptions`/`planningDetail.tasks`.
+  milestoneTaskIds: Set<number>;
 };
 
 // `planned_date` (#66 / E6-05) is returned by the backend as a full ISO datetime (the column is
@@ -66,6 +81,8 @@ export function CostLinesTable({
   selectedCostLineIds,
   onSelectedCostLineIdsChange,
   bulkAssignBusy,
+  onOpenMilestoneDialog,
+  milestoneTaskIds,
 }: CostLinesTableProps) {
   // Live DOM refs for the two constrained fields (`min`/`step`, `quantity` also
   // `required` -- see below) of whichever row is currently being edited, so
@@ -158,6 +175,8 @@ export function CostLinesTable({
       <TableBody>
         {costLines.map((line) => {
           const editing = editingLineId === line.id;
+          // Haute review finding on #68 -- see the milestoneTaskIds prop doc comment above.
+          const attachedToMilestoneTask = line.task_id != null && milestoneTaskIds.has(line.task_id);
           return (
             <TableRow key={line.id}>
               {canEditEstimate ? (
@@ -234,6 +253,20 @@ export function CostLinesTable({
                         Modifier
                       </Button>
                     )}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      type="button"
+                      disabled={estimateBusy || attachedToMilestoneTask}
+                      title={
+                        attachedToMilestoneTask
+                          ? "Cette ligne est rattachée à une tâche-jalon, qui ne peut pas recevoir de sous-tâches."
+                          : undefined
+                      }
+                      onClick={() => onOpenMilestoneDialog(line)}
+                    >
+                      Gabarit de jalons
+                    </Button>
                     <Button
                       size="sm"
                       variant="destructive"

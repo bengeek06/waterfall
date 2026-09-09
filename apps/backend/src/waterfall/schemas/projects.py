@@ -649,6 +649,57 @@ class EstimateTaskRowListRead(PaginatedList[EstimateTaskRowRead]):
     pass
 
 
+class MilestoneTemplate(StrEnum):
+    """Fixed chained-milestone templates applied to a non-labor cost line (E6-07/#68).
+
+    Hard-coded, not an editable engine: ``FOURNITURE`` always yields exactly the
+    2 milestones "Commande" -> "Reception" linked by 1 FS link; ``SOUS_TRAITANCE``
+    always yields "Commande" -> N "Jalon intermediaire" milestones -> "Livraison"
+    (N+2 total, chained by N+1 FS links), N coming from
+    ``EstimateCostLineMilestonesCreate.intermediate_milestones_count``.
+    """
+
+    FOURNITURE = "fourniture"
+    SOUS_TRAITANCE = "sous_traitance"
+
+
+class EstimateCostLineMilestonesCreate(BaseModel):
+    """Apply a chained-milestone template to a non-labor cost line (E6-07/#68).
+
+    All milestones created by a single call share the exact same lag: the
+    template models a single supplier delay applied uniformly to every link in
+    the chain, not a per-link value the caller would otherwise have to repeat.
+    ``intermediate_milestones_count`` only applies to ``SOUS_TRAITANCE`` -- an
+    explicit non-zero value together with ``FOURNITURE`` is rejected rather
+    than silently ignored, since it can only reflect a caller/template mismatch.
+    """
+
+    template: MilestoneTemplate
+    # Bounded well above any realistic subcontracting chain, but still finite: an
+    # unbounded value would let a single call insert an arbitrarily large number of
+    # tasks/links into the draft planning within one request.
+    intermediate_milestones_count: int = Field(default=0, ge=0, le=50)
+    # Expressed in minutes -- like the rest of this schema's duration/lag fields
+    # (see PlanningTaskScheduleUpdate.duration_minutes) -- and converted to
+    # lag_tenth_minute (x10) plus a fixed lag_format=7 (MSPDI "d", working days,
+    # see services.planning_tree's own LagFormat convention comment), matching
+    # the convention already used by TaskLinkWrite-based predecessor edits (see
+    # apps/frontend/src/hooks/use-planning-task-links.ts). Bounded to the same
+    # ~15 years as PlanningTaskScheduleUpdate.duration_minutes.
+    lag_minutes: int = Field(default=0, ge=0, le=7_884_000)
+
+    @model_validator(mode="after")
+    def _validate_intermediate_count(self) -> "EstimateCostLineMilestonesCreate":
+        if (
+            self.template == MilestoneTemplate.FOURNITURE
+            and self.intermediate_milestones_count != 0
+        ):
+            raise ValueError(
+                "intermediate_milestones_count is only valid for the sous_traitance template"
+            )
+        return self
+
+
 SupplyStatus = Literal["planned", "ordered", "received", "cancelled"]
 
 

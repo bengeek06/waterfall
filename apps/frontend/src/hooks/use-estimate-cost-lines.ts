@@ -4,11 +4,13 @@ import type { useRouter } from "next/navigation";
 
 import {
   ApiError,
+  applyEstimateCostLineMilestoneTemplate,
   createEstimateCostLine,
   createEstimateTask,
   createProjectEstimate,
   deleteEstimateCostLine,
   EstimateCostLine,
+  EstimateCostLineMilestonesCreate,
   EstimateValidationWarning,
   exportEstimateExcel,
   getPlanning,
@@ -149,6 +151,24 @@ export function useEstimateCostLines({
   // True only for the specific 409 raised when the project's displayed planning is not a
   // draft -- lets the dialog offer a "reopen the structure" action instead of just text.
   const [taskCreateRequiresPlanningDraft, setTaskCreateRequiresPlanningDraft] = useState(false);
+
+  // E6-07/#68: "apply a milestone template" dialog, launched from a single cost line row in
+  // CostLinesTable. Kept alongside the task-creation dialog's state above for the same reason:
+  // it reuses this hook's selectedEstimateIdRef guard and refreshPlanningDetailAfterTaskCreation
+  // helper rather than duplicating either. `milestoneLineId` identifies which cost line the
+  // dialog currently targets (the backend, not this dialog, decides whether that line is a
+  // labor line and rejects it with a 400 -- see submitMilestoneTemplate's error handling).
+  const [milestoneDialogOpen, setMilestoneDialogOpen] = useState(false);
+  const [milestoneLineId, setMilestoneLineId] = useState<number | null>(null);
+  const [milestoneTemplate, setMilestoneTemplate] = useState<EstimateCostLineMilestonesCreate["template"]>(
+    "fourniture",
+  );
+  const [milestoneIntermediateCount, setMilestoneIntermediateCount] = useState("0");
+  const [milestoneLagMinutes, setMilestoneLagMinutes] = useState("0");
+  const [milestoneError, setMilestoneError] = useState<string | null>(null);
+  // Same meaning as taskCreateRequiresPlanningDraft above -- both endpoints raise the exact same
+  // structured 409 code.
+  const [milestoneRequiresPlanningDraft, setMilestoneRequiresPlanningDraft] = useState(false);
 
   const selectedEstimate = estimates.find((estimate) => estimate.id === selectedEstimateId) ?? null;
 
@@ -366,6 +386,165 @@ export function useEstimateCostLines({
       } else {
         setTaskCreateError(cause instanceof ApiError ? cause.message : "Impossible d'ajouter la tâche.");
       }
+    } finally {
+      setEstimateBusy(false);
+    }
+  }
+
+  function openMilestoneDialog(line: EstimateCostLine) {
+    setMilestoneLineId(line.id);
+    setMilestoneTemplate("fourniture");
+    setMilestoneIntermediateCount("0");
+    setMilestoneLagMinutes("0");
+    setMilestoneError(null);
+    setMilestoneRequiresPlanningDraft(false);
+    setMilestoneDialogOpen(true);
+  }
+
+  function closeMilestoneDialog() {
+    setMilestoneDialogOpen(false);
+    setMilestoneLineId(null);
+    setMilestoneTemplate("fourniture");
+    setMilestoneIntermediateCount("0");
+    setMilestoneLagMinutes("0");
+    setMilestoneError(null);
+    setMilestoneRequiresPlanningDraft(false);
+  }
+
+  function updateMilestoneTemplate(value: EstimateCostLineMilestonesCreate["template"]) {
+    setMilestoneTemplate(value);
+    // "fourniture" never takes an intermediate-milestone count (rejected with a 400 if non-zero,
+    // see EstimateCostLineMilestonesCreate.yaml) -- reset it here so switching templates back and
+    // forth can never silently carry over a stale, now-invalid value into the request.
+    if (value === "fourniture") {
+      setMilestoneIntermediateCount("0");
+    }
+  }
+  function updateMilestoneIntermediateCount(value: string) {
+    setMilestoneIntermediateCount(value);
+  }
+  function updateMilestoneLagMinutes(value: string) {
+    setMilestoneLagMinutes(value);
+  }
+
+  // Applies a successful applyEstimateCostLineMilestoneTemplate response: bumps the task-row
+  // count by however many milestones were created, closes the dialog, and triggers the same
+  // planning refetch as applyCreateTaskSuccess above -- but only if the estimate version hasn't
+  // since changed (same stale-response guard as every other handler in this file).
+  async function applyMilestoneTemplateSuccess(launchedEstimateId: number, createdCount: number, tokens: SessionTokens) {
+    if (selectedEstimateIdRef.current !== launchedEstimateId) {
+      return;
+    }
+    setEstimateTaskRowCount((previous) => previous + createdCount);
+    closeMilestoneDialog();
+    if (selectedPlanningId !== null) {
+      await refreshPlanningDetailAfterTaskCreation(selectedPlanningId, tokens);
+    }
+  }
+
+  // Validates the two numeric milestone-dialog fields before any network call -- returns the
+  // parsed `{lagMinutes, intermediateCount}` pair, or an error message to show instead.
+  // Extracted purely to keep submitMilestoneTemplate under this file's complexity budget.
+  function parseMilestoneTemplateDraft(): { lagMinutes: number; intermediateCount: number } | { error: string } {
+    const lagMinutes = Number(milestoneLagMinutes);
+    if (!Number.isFinite(lagMinutes) || lagMinutes < 0) {
+      return { error: "Le délai entre jalons doit être un nombre de minutes positif ou nul." };
+    }
+    const intermediateCount = milestoneTemplate === "sous_traitance" ? Number(milestoneIntermediateCount) : 0;
+    if (!Number.isInteger(intermediateCount) || intermediateCount < 0 || intermediateCount > 50) {
+      return { error: "Le nombre de jalons intermédiaires doit être un entier compris entre 0 et 50." };
+    }
+    return { lagMinutes, intermediateCount };
+  }
+
+  // Translates a submitMilestoneTemplate failure into `{message, requiresPlanningDraft}` --
+  // extracted purely to keep that function under this file's complexity budget. Callers must
+  // handle SessionExpiredError/a post-refresh 401 before reaching this (those redirect to
+  // /login instead of showing any of this copy).
+  //
+  // The backend has no code to distinguish its several possible 400s (a labor cost line, a
+  // non-zero intermediate count sent with "fourniture", an orphaned task reference, or a generic
+  // PlanningTreeMoveError/PlanningLinkError) from one another -- the global exception handler
+  // rewrites every plain-string HTTPException.detail to {"code": "GENERIC_ERROR"} (see
+  // lib/backend.ts's describeStructuredDetailCode doc comment). The "fourniture" case can never
+  // actually happen here since updateMilestoneTemplate always resets the count to 0 when
+  // "fourniture" is selected (and parseMilestoneTemplateDraft above validates it client-side
+  // regardless), and the orphaned-task-reference/generic-planning-tree-error cases are
+  // theoretical edge cases not expected in normal usage (they'd require the cost line's task_id
+  // to point outside the project, or a planning-tree invariant violation this endpoint doesn't
+  // otherwise trigger) -- so the only client-reachable-in-practice 400 is the labor line: distinct,
+  // actionable copy for it below, keyed on the status code alone rather than an inspectable detail
+  // code.
+  function describeMilestoneTemplateError(cause: unknown): { message: string; requiresPlanningDraft: boolean } {
+    if (!(cause instanceof ApiError)) {
+      return { message: "Impossible d'appliquer ce gabarit de jalons.", requiresPlanningDraft: false };
+    }
+    if (cause.status === 409 && isEstimateTaskCreateRequiresPlanningDraft(cause)) {
+      // Same structured code/copy as submitCreateTask's own draft-required 409 above.
+      return { message: cause.message, requiresPlanningDraft: true };
+    }
+    if (cause.status === 409) {
+      return { message: "Ce devis ou le planning affiché ne sont plus modifiables.", requiresPlanningDraft: false };
+    }
+    if (cause.status === 404) {
+      return { message: "Cette ligne de coût est introuvable dans ce devis.", requiresPlanningDraft: false };
+    }
+    if (cause.status === 400) {
+      return {
+        message: "Ce gabarit de jalons ne s'applique qu'aux lignes de coût qui ne sont pas de la main d'œuvre.",
+        requiresPlanningDraft: false,
+      };
+    }
+    return { message: cause.message, requiresPlanningDraft: false };
+  }
+
+  // E6-07/#68: applies a chained-milestone template to the cost line targeted by
+  // openMilestoneDialog. `selectedEstimateIdRef` guard mirrors submitCreateTask above: the user
+  // could switch estimate version while this request is in flight (nothing currently disables
+  // the version selector while busy), and a stale response must never be applied to whatever
+  // version is displayed once it resolves.
+  async function submitMilestoneTemplate() {
+    if (!session || selectedEstimateId === null || milestoneLineId === null) {
+      return;
+    }
+    const draft = parseMilestoneTemplateDraft();
+    if ("error" in draft) {
+      setMilestoneError(draft.error);
+      return;
+    }
+
+    const launchedEstimateId = selectedEstimateId;
+    const lineId = milestoneLineId;
+
+    setEstimateBusy(true);
+    setMilestoneError(null);
+    setMilestoneRequiresPlanningDraft(false);
+    try {
+      const rows = await applyEstimateCostLineMilestoneTemplate(
+        projectId,
+        launchedEstimateId,
+        lineId,
+        {
+          template: milestoneTemplate,
+          intermediate_milestones_count: draft.intermediateCount,
+          lag_minutes: Math.round(draft.lagMinutes),
+        },
+        session,
+        onSessionRefresh,
+      );
+      await applyMilestoneTemplateSuccess(launchedEstimateId, rows.length, session);
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      if (selectedEstimateIdRef.current !== launchedEstimateId) {
+        return;
+      }
+      const described = describeMilestoneTemplateError(cause);
+      setMilestoneRequiresPlanningDraft(described.requiresPlanningDraft);
+      setMilestoneError(described.message);
     } finally {
       setEstimateBusy(false);
     }
@@ -719,5 +898,18 @@ export function useEstimateCostLines({
     updateTaskDraftIsMilestone,
     updateTaskDraftParentUid,
     submitCreateTask,
+    milestoneDialogOpen,
+    milestoneLineId,
+    milestoneTemplate,
+    milestoneIntermediateCount,
+    milestoneLagMinutes,
+    milestoneError,
+    milestoneRequiresPlanningDraft,
+    openMilestoneDialog,
+    closeMilestoneDialog,
+    updateMilestoneTemplate,
+    updateMilestoneIntermediateCount,
+    updateMilestoneLagMinutes,
+    submitMilestoneTemplate,
   };
 }

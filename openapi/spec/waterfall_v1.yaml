@@ -130,6 +130,8 @@ paths:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1cost-lines
   /projects/{projectId}/estimates/{estimateId}/cost-lines/{costLineId}:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1cost-lines~1{costLineId}
+  /projects/{projectId}/estimates/{estimateId}/cost-lines/{costLineId}/milestones:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1cost-lines~1{costLineId}~1milestones
   /projects/{projectId}/estimates/{estimateId}/validate:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1validate
   /projects/{projectId}/estimates/{estimateId}/aggregates:

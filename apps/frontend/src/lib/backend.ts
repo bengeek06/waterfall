@@ -1042,6 +1042,39 @@ export function deleteEstimateCostLine(
   );
 }
 
+export type EstimateCostLineMilestonesCreate = components["schemas"]["EstimateCostLineMilestonesCreate"];
+
+// Applies a chained-milestone template to a non-labor cost line (E6-07/#68): creates 2
+// ("fourniture") or `2 + intermediate_milestones_count` ("sous_traitance") milestone tasks in the
+// project's *displayed* draft planning -- same snapshot/MsTask-twin/EstimateTaskRow wiring as
+// createEstimateTask above, one call for the whole chain -- then chains them pairwise with
+// Finish-to-Start links all carrying `payload.lag_minutes`. Rejects a labor cost line, a
+// non-draft estimate, or a non-draft displayed planning
+// (ESTIMATE_TASK_CREATE_REQUIRES_PLANNING_DRAFT, the exact same code createEstimateTask raises --
+// see isEstimateTaskCreateRequiresPlanningDraft above, reusable as-is by this endpoint's callers
+// too). Returns the created rows directly (not the envelope) since no caller here ever paginates
+// this fixed-size, single-shot result.
+export async function applyEstimateCostLineMilestoneTemplate(
+  projectId: number,
+  estimateId: number,
+  lineId: number,
+  payload: EstimateCostLineMilestonesCreate,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+): Promise<EstimateTaskRow[]> {
+  const page = await authRequest<components["schemas"]["EstimateTaskRowListRead"]>(
+    `/projects/${projectId}/estimates/${estimateId}/cost-lines/${lineId}/milestones`,
+    tokens,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    onSessionRefresh,
+  );
+  return page.items;
+}
+
 // #65 (E6-04): `validate` returns `warnings` (unassigned real tasks) on top of the usual
 // `ProjectEstimateRead` fields -- distinct from `ProjectEstimate` since no other estimate
 // endpoint computes/returns this field.

@@ -34,27 +34,33 @@ from waterfall.api.routes.projects import (
 )
 from waterfall.db.session import get_db
 from waterfall.models.ms_core import MsTask
-from waterfall.models.planning import WfPlanningTaskSnapshot
-from waterfall.models.resources import Estimate, EstimateCostLine, EstimateTaskRow
+from waterfall.models.planning import WfPlanning, WfPlanningTaskSnapshot
+from waterfall.models.resources import CostType, Estimate, EstimateCostLine, EstimateTaskRow
 from waterfall.models.user import User
 from waterfall.schemas.projects import (
     EstimateAggregatesRead,
     EstimateCostLineCreate,
     EstimateCostLineListRead,
+    EstimateCostLineMilestonesCreate,
     EstimateCostLineRead,
     EstimateCostLineUpdate,
     EstimateTaskCreate,
     EstimateTaskRowListRead,
     EstimateTaskRowRead,
     EstimateValidationRead,
+    MilestoneTemplate,
     PlanningTaskCreate,
     ProjectEstimateCreate,
     ProjectEstimateListRead,
     ProjectEstimateRead,
     ProjectRead,
+    TaskLinkWrite,
 )
 from waterfall.schemas.resources import CostTypeKind
 from waterfall.services import (
+    PlanningLinkError,
+    PlanningLinkInvariantError,
+    PlanningLinkNotFoundError,
     PlanningTreeInvariantError,
     PlanningTreeMoveError,
     PlanningTreeMoveNotFoundError,
@@ -64,6 +70,7 @@ from waterfall.services import (
     calculate_estimate_lines,
     create_planning_task,
     get_estimate_validation_warnings,
+    replace_task_predecessor_links,
 )
 from waterfall.services.project_lifecycle import ensure_project_mutable
 
@@ -314,6 +321,90 @@ def _resolve_legacy_parent_task(
     )
 
 
+def _create_estimate_planning_task(
+    db: Session,
+    project_id: int,
+    estimate_id: int,
+    planning: WfPlanning,
+    *,
+    name: str,
+    is_milestone: bool,
+    target_parent_uid: int | None,
+    insert_after_uid: int | None,
+) -> tuple[MsTask, EstimateTaskRow]:
+    """Create one planning-snapshot + legacy ``MsTask`` twin + ``EstimateTaskRow`` (E6-06/#67).
+
+    Factored out of ``create_estimate_task`` so #68's milestone-template endpoint can
+    call it N+2 times within a single transaction without duplicating the
+    snapshot/twin/row wiring (including the parent ``is_summary`` flip below). Does
+    *not* flush ``planning.revision`` or commit -- the caller owns the transaction
+    boundary, since a multi-task batch must bump the revision once for the whole
+    call, not once per created task (see ``create_estimate_task``'s and
+    ``create_estimate_cost_line_milestones``'s own revision-bump comments).
+    """
+    command = PlanningTaskCreate(
+        name=name,
+        is_milestone=is_milestone,
+        target_parent_uid=target_parent_uid,
+        insert_after_uid=insert_after_uid,
+        # Unused by create_planning_task itself (only the plannings.py route layer
+        # compares expected_revision against planning.revision) -- set to the
+        # current value only to satisfy the schema's required field.
+        expected_revision=planning.revision,
+    )
+    snapshot = create_planning_task(db, planning, command)
+
+    parent_task = _resolve_legacy_parent_task(db, project_id, snapshot.parent_uid)
+    if parent_task is not None and not parent_task.is_summary:
+        # create_planning_task already recalculated is_summary=True on the
+        # parent's snapshot twin (_recalculate_outline_and_durations); the
+        # legacy MsTask twin needs the same flip or it goes stale (e.g. a
+        # `livrable` leaf freshly promoted to a container by this insert),
+        # which get_estimate_validation_warnings and the MS Project XML
+        # export both read straight off MsTask.is_summary.
+        parent_task.is_summary = True
+        db.add(parent_task)
+    task = MsTask(
+        project_id=project_id,
+        uid=snapshot.uid,
+        parent_uid=parent_task.uid if parent_task is not None else None,
+        position=snapshot.position,
+        name=snapshot.name,
+        task_type=snapshot.task_type,
+        outline_number=snapshot.outline_number,
+        outline_level=snapshot.outline_level,
+        is_summary=snapshot.is_summary,
+        is_milestone=snapshot.is_milestone,
+    )
+    db.add(task)
+    db.flush()
+
+    # Appended after every existing row of this estimate: mid-tree renumbering
+    # would require rewriting outline_number/outline_level/position for every
+    # other row too, and existing rows with task_id=None (created from a
+    # snapshot task with no legacy MsTask twin, see _resolve_legacy_parent_task)
+    # cannot be traced back to a planning uid at all to do so safely.
+    max_position = (
+        db.query(func.max(EstimateTaskRow.position))
+        .filter(EstimateTaskRow.estimate_id == estimate_id)
+        .scalar()
+        or 0
+    )
+    row = EstimateTaskRow(
+        estimate_id=estimate_id,
+        task_id=task.id,
+        parent_task_id=parent_task.id if parent_task is not None else None,
+        position=max_position + 1,
+        task_name=task.name,
+        outline_number=task.outline_number,
+        outline_level=task.outline_level,
+        is_milestone=task.is_milestone,
+    )
+    db.add(row)
+    db.flush()
+    return task, row
+
+
 def create_estimate_task(
     project_id: int,
     estimate_id: int,
@@ -340,66 +431,17 @@ def create_estimate_task(
     planning = get_displayed_draft_planning_lock_or_409(db, project)
     get_draft_estimate_or_409(db, project_id, estimate_id)
 
-    command = PlanningTaskCreate(
-        name=payload.name,
-        is_milestone=payload.is_milestone,
-        target_parent_uid=payload.target_parent_uid,
-        insert_after_uid=payload.insert_after_uid,
-        # Unused by create_planning_task itself (only the plannings.py route layer
-        # compares expected_revision against planning.revision) -- set to the
-        # current value only to satisfy the schema's required field.
-        expected_revision=planning.revision,
-    )
     try:
-        snapshot = create_planning_task(db, planning, command)
-
-        parent_task = _resolve_legacy_parent_task(db, project_id, snapshot.parent_uid)
-        if parent_task is not None and not parent_task.is_summary:
-            # create_planning_task already recalculated is_summary=True on the
-            # parent's snapshot twin (_recalculate_outline_and_durations); the
-            # legacy MsTask twin needs the same flip or it goes stale (e.g. a
-            # `livrable` leaf freshly promoted to a container by this insert),
-            # which get_estimate_validation_warnings and the MS Project XML
-            # export both read straight off MsTask.is_summary.
-            parent_task.is_summary = True
-            db.add(parent_task)
-        task = MsTask(
-            project_id=project_id,
-            uid=snapshot.uid,
-            parent_uid=parent_task.uid if parent_task is not None else None,
-            position=snapshot.position,
-            name=snapshot.name,
-            task_type=snapshot.task_type,
-            outline_number=snapshot.outline_number,
-            outline_level=snapshot.outline_level,
-            is_summary=snapshot.is_summary,
-            is_milestone=snapshot.is_milestone,
+        _, row = _create_estimate_planning_task(
+            db,
+            project_id,
+            estimate_id,
+            planning,
+            name=payload.name,
+            is_milestone=payload.is_milestone,
+            target_parent_uid=payload.target_parent_uid,
+            insert_after_uid=payload.insert_after_uid,
         )
-        db.add(task)
-        db.flush()
-
-        # Appended after every existing row of this estimate: mid-tree renumbering
-        # would require rewriting outline_number/outline_level/position for every
-        # other row too, and existing rows with task_id=None (created from a
-        # snapshot task with no legacy MsTask twin, see _resolve_legacy_parent_task)
-        # cannot be traced back to a planning uid at all to do so safely.
-        max_position = (
-            db.query(func.max(EstimateTaskRow.position))
-            .filter(EstimateTaskRow.estimate_id == estimate_id)
-            .scalar()
-            or 0
-        )
-        row = EstimateTaskRow(
-            estimate_id=estimate_id,
-            task_id=task.id,
-            parent_task_id=parent_task.id if parent_task is not None else None,
-            position=max_position + 1,
-            task_name=task.name,
-            outline_number=task.outline_number,
-            outline_level=task.outline_level,
-            is_milestone=task.is_milestone,
-        )
-        db.add(row)
         planning.revision += 1
         db.add(planning)
         db.flush()
@@ -654,3 +696,178 @@ def delete_estimate_cost_line(
         )
     db.delete(line)
     db.commit()
+
+
+def _milestone_template_names(payload: EstimateCostLineMilestonesCreate) -> list[str]:
+    """Fixed milestone names for each template (E6-07/#68) -- see ``MilestoneTemplate``."""
+    if payload.template == MilestoneTemplate.FOURNITURE:
+        return ["Commande", "Réception"]
+    names = ["Commande"]
+    names.extend(
+        f"Jalon intermédiaire {index}"
+        for index in range(1, payload.intermediate_milestones_count + 1)
+    )
+    names.append("Livraison")
+    return names
+
+
+def create_estimate_cost_line_milestones(
+    project_id: int,
+    estimate_id: int,
+    line_id: int,
+    payload: EstimateCostLineMilestonesCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> EstimateTaskRowListRead:
+    """Apply a chained-milestone template to a non-labor cost line (E6-07/#68).
+
+    Creates N+2 milestone tasks (``FOURNITURE``: 2, ``SOUS_TRAITANCE``: 2 +
+    ``payload.intermediate_milestones_count``) via
+    :func:`_create_estimate_planning_task` -- the same snapshot/``MsTask`` twin/
+    ``EstimateTaskRow`` wiring #67 introduced -- then chains them pairwise with
+    N+1 Finish-to-Start links (``link_type=1``) carrying the same
+    ``payload.lag_minutes`` via :func:`replace_task_predecessor_links`. The
+    milestones are siblings (all children of the same parent, or all roots),
+    never a parent/child chain among themselves -- only the FS links relate
+    them.
+
+    When ``EstimateCostLine.task_id`` is set, the first milestone becomes that
+    task's child (flipping its ``is_summary`` to ``True`` if it was a leaf,
+    exactly like #67); otherwise every milestone is a root task. Either way,
+    the whole chain is appended after every existing sibling rather than
+    inserted at the front, since the templates model a sequence of *future*
+    events for an already-priced cost line.
+
+    Single transaction, single ``planning.revision`` bump for the whole
+    call -- like every other batch planning-tree mutation in this module (see
+    ``create_estimate_task``) -- not one per created task/link.
+    """
+    project = get_mutable_project_lock(db, project_id, current_user.id)
+    planning = get_displayed_draft_planning_lock_or_409(db, project)
+    get_draft_estimate_or_409(db, project_id, estimate_id)
+
+    line = (
+        db.query(EstimateCostLine)
+        .filter(EstimateCostLine.id == line_id)
+        .filter(EstimateCostLine.estimate_id == estimate_id)
+        .first()
+    )
+    if line is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Estimate cost line not found",
+        )
+    cost_type = db.get(CostType, line.cost_type_id)
+    if cost_type is None or cost_type.kind == CostTypeKind.LABOR:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Milestone templates are only available for a non-labor cost line",
+        )
+
+    target_parent_uid: int | None = None
+    if line.task_id is not None:
+        parent_task = (
+            db.query(MsTask)
+            .filter(MsTask.id == line.task_id, MsTask.project_id == project_id)
+            .first()
+        )
+        if parent_task is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cost line task does not belong to project",
+            )
+        target_parent_uid = parent_task.uid
+
+    # Appended at the end of the resolved parent's (or the root level's) existing
+    # children, mirroring create_estimate_task's own append-only placement --
+    # never inserted at the front, which would silently reorder tasks priced
+    # before this one.
+    last_sibling = (
+        db.query(WfPlanningTaskSnapshot)
+        .filter(WfPlanningTaskSnapshot.planning_id == planning.id)
+        .filter(WfPlanningTaskSnapshot.parent_uid == target_parent_uid)
+        .order_by(WfPlanningTaskSnapshot.position.desc())
+        .first()
+    )
+    insert_after_uid = last_sibling.uid if last_sibling is not None else None
+    names = _milestone_template_names(payload)
+    lag_tenth_minute = payload.lag_minutes * 10
+
+    try:
+        rows: list[EstimateTaskRow] = []
+        previous_uid: int | None = None
+        for name in names:
+            task, row = _create_estimate_planning_task(
+                db,
+                project_id,
+                estimate_id,
+                planning,
+                name=name,
+                is_milestone=True,
+                target_parent_uid=target_parent_uid,
+                insert_after_uid=insert_after_uid,
+            )
+            rows.append(row)
+            insert_after_uid = task.uid
+            if previous_uid is not None:
+                replace_task_predecessor_links(
+                    db,
+                    planning,
+                    task.uid,
+                    [
+                        TaskLinkWrite(
+                            predecessor_uid=previous_uid,
+                            link_type=1,
+                            lag_tenth_minute=lag_tenth_minute,
+                            lag_format=7,
+                        )
+                    ],
+                )
+            previous_uid = task.uid
+        planning.revision += 1
+        db.add(planning)
+        db.flush()
+        # Capture the response while the row locks are still held so a concurrent
+        # writer cannot make us return a later transaction's state.
+        result = EstimateTaskRowListRead(
+            items=[to_estimate_task_row_read(row) for row in rows],
+            total=len(rows),
+            limit=None,
+            offset=0,
+        )
+        db.commit()
+    except PlanningTreeMoveNotFoundError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except PlanningTreeInvariantError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except PlanningTreeMoveError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except PlanningLinkNotFoundError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except PlanningLinkInvariantError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except PlanningLinkError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Planning hierarchy conflicts with existing planning data",
+        ) from exc
+    return result
+
+
+router.add_api_route(
+    "/{project_id}/estimates/{estimate_id}/cost-lines/{line_id}/milestones",
+    create_estimate_cost_line_milestones,
+    methods=["POST"],
+    response_model=EstimateTaskRowListRead,
+    status_code=status.HTTP_201_CREATED,
+    route_class_override=_PlanningTaskBodyValidationRoute,
+)

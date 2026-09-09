@@ -61,6 +61,21 @@ function renderTab(overrides: Partial<EstimateTabProps> = {}) {
     onTaskDraftParentUidChange: vi.fn(),
     onSubmitCreateTask: vi.fn(),
     onReopenStructure: vi.fn(),
+    milestoneDialogOpen: false,
+    milestoneLineId: null,
+    milestoneTemplate: "fourniture",
+    milestoneIntermediateCount: "0",
+    milestoneLagMinutes: "0",
+    milestoneBusy: false,
+    milestoneError: null,
+    milestoneRequiresPlanningDraft: false,
+    onOpenMilestoneDialog: vi.fn(),
+    onCloseMilestoneDialog: vi.fn(),
+    onMilestoneTemplateChange: vi.fn(),
+    onMilestoneIntermediateCountChange: vi.fn(),
+    onMilestoneLagMinutesChange: vi.fn(),
+    onSubmitMilestoneTemplate: vi.fn(),
+    onReopenStructureForMilestone: vi.fn(),
     ...overrides,
   };
   return render(<EstimateTab {...props} />);
@@ -100,5 +115,36 @@ describe("EstimateTab validation warnings banner", () => {
     fireEvent.click(screen.getByRole("button", { name: "Fermer" }));
 
     expect(onDismissValidationWarnings).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Haute review finding on #68: parentTaskOptions (planningDetail.tasks) is the source this tab
+// resolves milestoneTaskIds from before handing it to CostLinesTable -- see estimate-tab.tsx's
+// own doc comment on that computation.
+describe("EstimateTab milestone-template gating (E6-07 review finding)", () => {
+  afterEach(() => cleanup());
+
+  it("disables the milestone-template action for a cost line attached to a milestone task", () => {
+    renderTab({
+      canEditEstimate: true,
+      costLines: [
+        { id: 1, accounting_code: "6011", label: "Livraison lot 3", quantity: "1", unit_cost: "0", purchase_cost: "0", task_id: 42 },
+      ] as never,
+      parentTaskOptions: [{ id: 42, is_milestone: true }] as never,
+    });
+
+    expect(screen.getByRole("button", { name: "Gabarit de jalons" })).toBeDisabled();
+  });
+
+  it("keeps the milestone-template action enabled for a cost line attached to a non-milestone task", () => {
+    renderTab({
+      canEditEstimate: true,
+      costLines: [
+        { id: 1, accounting_code: "6011", label: "Fourniture lot 2", quantity: "1", unit_cost: "0", purchase_cost: "0", task_id: 7 },
+      ] as never,
+      parentTaskOptions: [{ id: 42, is_milestone: true }] as never,
+    });
+
+    expect(screen.getByRole("button", { name: "Gabarit de jalons" })).not.toBeDisabled();
   });
 });

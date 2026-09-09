@@ -729,6 +729,25 @@ export default function ProjectDetailsPage() {
             setActiveTab("planning");
             void planningMutations.reopenStructure();
           }}
+          milestoneDialogOpen={estimateCostLines.milestoneDialogOpen}
+          milestoneLineId={estimateCostLines.milestoneLineId}
+          milestoneTemplate={estimateCostLines.milestoneTemplate}
+          milestoneIntermediateCount={estimateCostLines.milestoneIntermediateCount}
+          milestoneLagMinutes={estimateCostLines.milestoneLagMinutes}
+          milestoneBusy={estimateCostLines.estimateBusy}
+          milestoneError={estimateCostLines.milestoneError}
+          milestoneRequiresPlanningDraft={estimateCostLines.milestoneRequiresPlanningDraft}
+          onOpenMilestoneDialog={estimateCostLines.openMilestoneDialog}
+          onCloseMilestoneDialog={estimateCostLines.closeMilestoneDialog}
+          onMilestoneTemplateChange={estimateCostLines.updateMilestoneTemplate}
+          onMilestoneIntermediateCountChange={estimateCostLines.updateMilestoneIntermediateCount}
+          onMilestoneLagMinutesChange={estimateCostLines.updateMilestoneLagMinutes}
+          onSubmitMilestoneTemplate={() => void estimateCostLines.submitMilestoneTemplate()}
+          onReopenStructureForMilestone={() => {
+            estimateCostLines.closeMilestoneDialog();
+            setActiveTab("planning");
+            void planningMutations.reopenStructure();
+          }}
         />
 
         <CommitmentsTabPlaceholder active={activeTab === "commitments"} />
