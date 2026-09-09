@@ -3,6 +3,7 @@
 import { useRef } from "react";
 
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { EstimateCostLine } from "@/lib/backend";
@@ -21,6 +22,9 @@ export type CostLinesTableProps = {
   onStartEdit: (line: EstimateCostLine) => void;
   onSave: (line: EstimateCostLine) => void;
   onRequestDelete: (line: EstimateCostLine) => void;
+  selectedCostLineIds: Set<number>;
+  onSelectedCostLineIdsChange: (next: Set<number>) => void;
+  bulkAssignBusy: boolean;
 };
 
 // Extracted from ProjectDetailsPage (E4-11 / #151): the cost lines table with inline editing.
@@ -40,6 +44,9 @@ export function CostLinesTable({
   onStartEdit,
   onSave,
   onRequestDelete,
+  selectedCostLineIds,
+  onSelectedCostLineIdsChange,
+  bulkAssignBusy,
 }: CostLinesTableProps) {
   // Live DOM refs for the two constrained fields (`min`/`step`, `quantity` also
   // `required` -- see below) of whichever row is currently being edited, so
@@ -64,6 +71,33 @@ export function CostLinesTable({
   const quantityRef = useRef<HTMLInputElement>(null);
   const unitCostRef = useRef<HTMLInputElement>(null);
 
+  // "Select all" mirrors ProjectsTable's own header checkbox (E5): it only ever applies to the
+  // rows currently rendered here, merging/subtracting their ids into `selectedCostLineIds` rather
+  // than replacing the whole set outright.
+  const allSelected = costLines.length > 0 && costLines.every((line) => selectedCostLineIds.has(line.id));
+
+  function toggleCostLine(lineId: number, checked: boolean) {
+    const next = new Set(selectedCostLineIds);
+    if (checked) {
+      next.add(lineId);
+    } else {
+      next.delete(lineId);
+    }
+    onSelectedCostLineIdsChange(next);
+  }
+
+  function toggleAllCostLines(checked: boolean) {
+    const next = new Set(selectedCostLineIds);
+    for (const line of costLines) {
+      if (checked) {
+        next.add(line.id);
+      } else {
+        next.delete(line.id);
+      }
+    }
+    onSelectedCostLineIdsChange(next);
+  }
+
   function handleSave(line: EstimateCostLine) {
     // Before this fix, "Sauver" was a raw `type="button"` that called `onSave`
     // directly, bypassing the `min`/`step`/`required` constraints declared on
@@ -83,6 +117,16 @@ export function CostLinesTable({
     <Table>
       <TableHeader>
         <TableRow>
+          {canEditEstimate ? (
+            <TableHead>
+              <Checkbox
+                aria-label="Tout sélectionner"
+                checked={allSelected}
+                disabled={bulkAssignBusy}
+                onCheckedChange={(checked) => toggleAllCostLines(Boolean(checked))}
+              />
+            </TableHead>
+          ) : null}
           <TableHead>Catégorie</TableHead>
           <TableHead>Libellé</TableHead>
           <TableHead>Quantité</TableHead>
@@ -96,6 +140,16 @@ export function CostLinesTable({
           const editing = editingLineId === line.id;
           return (
             <TableRow key={line.id}>
+              {canEditEstimate ? (
+                <TableCell>
+                  <Checkbox
+                    aria-label={`Sélectionner ${line.label}`}
+                    checked={selectedCostLineIds.has(line.id)}
+                    disabled={bulkAssignBusy}
+                    onCheckedChange={(checked) => toggleCostLine(line.id, Boolean(checked))}
+                  />
+                </TableCell>
+              ) : null}
               <TableCell>{line.accounting_code}</TableCell>
               <TableCell>
                 {editing ? (
@@ -165,7 +219,7 @@ export function CostLinesTable({
         })}
         {!costLines.length ? (
           <TableRow>
-            <TableCell colSpan={canEditEstimate ? 6 : 5} className="text-muted-foreground">
+            <TableCell colSpan={canEditEstimate ? 7 : 5} className="text-muted-foreground">
               Aucune ligne de coût.
             </TableCell>
           </TableRow>
