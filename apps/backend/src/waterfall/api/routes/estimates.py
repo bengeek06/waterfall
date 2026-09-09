@@ -520,7 +520,17 @@ def get_estimate_aggregates(
 ) -> EstimateAggregatesRead:
     get_project_or_404(db, project_id, current_user.id)
     get_estimate_or_404(db, project_id, estimate_id)
-    return EstimateAggregatesRead(**calculate_estimate_aggregates(db, estimate_id))
+    aggregates = calculate_estimate_aggregates(db, estimate_id)
+    # Issue #71 (E6-10): `calculate_estimate_aggregates` also returns `by_cost_code`,
+    # consumed by the Excel export (services/estimate_export.py) -- this JSON endpoint
+    # deliberately keeps exposing only the pre-existing fields, so it's built
+    # explicitly rather than by unpacking the whole dict.
+    return EstimateAggregatesRead(
+        total_labor_cost=aggregates["total_labor_cost"],
+        total_purchase_cost=aggregates["total_purchase_cost"],
+        total_unburdened_cost=aggregates["total_unburdened_cost"],
+        by_category=aggregates["by_category"],
+    )
 
 
 @router.get("/{project_id}/estimates/{estimate_id}/export.xlsx")

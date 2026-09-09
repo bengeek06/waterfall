@@ -10,8 +10,9 @@ from openpyxl.worksheet.worksheet import Worksheet
 from sqlalchemy.orm import Session
 
 from waterfall.models.ms_core import MsProject
-from waterfall.models.resources import Estimate, EstimateCostLine, EstimateLine
+from waterfall.models.resources import Estimate, EstimateCostLine, EstimateLine, ProjectCostCode
 from waterfall.services.estimate_calculation import (
+    UNASSIGNED_COST_CODE_LABEL,
     EstimateAggregates,
     calculate_estimate_aggregates,
 )
@@ -35,17 +36,35 @@ def _write_header(sheet: Worksheet, project: MsProject, estimate: Estimate) -> N
     sheet["B6"] = estimate.validated_at.strftime("%Y-%m-%d %H:%M") if estimate.validated_at else "-"
 
 
+def _resolve_cost_code(cost_code_id: int | None, cost_code_labels: dict[int, str]) -> str:
+    """Resolve a line's `cost_code_id` to its `ProjectCostCode.code`, falling back to
+    `UNASSIGNED_COST_CODE_LABEL` for a line with no cost code -- shared with the
+    `by_cost_code` aggregate (estimate_calculation.py) so both views agree (#71 / E6-10)."""
+    if cost_code_id is None:
+        return UNASSIGNED_COST_CODE_LABEL
+    return cost_code_labels.get(cost_code_id, UNASSIGNED_COST_CODE_LABEL)
+
+
 def _write_grid_sheet(
     sheet: Worksheet,
     project: MsProject,
     estimate: Estimate,
     labor_lines: list[EstimateLine],
     cost_lines: list[EstimateCostLine],
+    cost_code_labels: dict[int, str],
 ) -> None:
     _write_header(sheet, project, estimate)
 
     row = 8
-    headers = ["Nature", "Catégorie", "Libellé", "Quantité", "Coût unitaire / horaire", "Montant"]
+    headers = [
+        "Nature",
+        "Catégorie",
+        "Code d'imputation",
+        "Libellé",
+        "Quantité",
+        "Coût unitaire / horaire",
+        "Montant",
+    ]
     for column, title in enumerate(headers, start=1):
         cell = sheet.cell(row=row, column=column, value=title)
         cell.font = HEADER_FONT
@@ -55,10 +74,11 @@ def _write_grid_sheet(
     for line in labor_lines:
         sheet.cell(row=row, column=1, value="MO")
         sheet.cell(row=row, column=2, value=line.accounting_code)
-        sheet.cell(row=row, column=3, value=f"{line.task_name} ({line.role_name})")
-        sheet.cell(row=row, column=4, value=float(line.hours))
-        sheet.cell(row=row, column=5, value=float(line.hourly_rate))
-        sheet.cell(row=row, column=6, value=float(line.budget_cost))
+        sheet.cell(row=row, column=3, value=_resolve_cost_code(line.cost_code_id, cost_code_labels))
+        sheet.cell(row=row, column=4, value=f"{line.task_name} ({line.role_name})")
+        sheet.cell(row=row, column=5, value=float(line.hours))
+        sheet.cell(row=row, column=6, value=float(line.hourly_rate))
+        sheet.cell(row=row, column=7, value=float(line.budget_cost))
         total_labor += float(line.budget_cost)
         row += 1
 
@@ -66,10 +86,13 @@ def _write_grid_sheet(
     for cost_line in cost_lines:
         sheet.cell(row=row, column=1, value=cost_line.cost_type_code)
         sheet.cell(row=row, column=2, value=cost_line.accounting_code)
-        sheet.cell(row=row, column=3, value=cost_line.label)
-        sheet.cell(row=row, column=4, value=float(cost_line.quantity))
-        sheet.cell(row=row, column=5, value=float(cost_line.unit_cost))
-        sheet.cell(row=row, column=6, value=float(cost_line.purchase_cost))
+        sheet.cell(
+            row=row, column=3, value=_resolve_cost_code(cost_line.cost_code_id, cost_code_labels)
+        )
+        sheet.cell(row=row, column=4, value=cost_line.label)
+        sheet.cell(row=row, column=5, value=float(cost_line.quantity))
+        sheet.cell(row=row, column=6, value=float(cost_line.unit_cost))
+        sheet.cell(row=row, column=7, value=float(cost_line.purchase_cost))
         total_purchase += float(cost_line.purchase_cost)
         row += 1
 
@@ -79,11 +102,11 @@ def _write_grid_sheet(
         ("Sous-total Achat", total_purchase),
         ("PRU non chargé", total_labor + total_purchase),
     ):
-        sheet.cell(row=row, column=5, value=label).font = HEADER_FONT
-        sheet.cell(row=row, column=6, value=value).font = HEADER_FONT
+        sheet.cell(row=row, column=6, value=label).font = HEADER_FONT
+        sheet.cell(row=row, column=7, value=value).font = HEADER_FONT
         row += 1
 
-    for column, width in enumerate([10, 16, 40, 12, 20, 14], start=1):
+    for column, width in enumerate([10, 16, 18, 40, 12, 20, 14], start=1):
         sheet.column_dimensions[chr(64 + column)].width = width
 
 
@@ -107,6 +130,15 @@ def _write_aggregates_sheet(sheet: Worksheet, aggregates: EstimateAggregates) ->
         sheet.cell(row=row, column=2, value=float(amount))
         row += 1
 
+    row += 1
+    sheet.cell(row=row, column=1, value="Code d'imputation").font = HEADER_FONT
+    sheet.cell(row=row, column=2, value="Montant").font = HEADER_FONT
+    row += 1
+    for cost_code, amount in aggregates["by_cost_code"].items():
+        sheet.cell(row=row, column=1, value=cost_code)
+        sheet.cell(row=row, column=2, value=float(amount))
+        row += 1
+
     sheet.column_dimensions["A"].width = 24
     sheet.column_dimensions["B"].width = 16
 
@@ -127,12 +159,18 @@ def build_estimate_workbook(db: Session, project: MsProject, estimate: Estimate)
         .all()
     )
     aggregates = calculate_estimate_aggregates(db, estimate.id)
+    cost_code_labels = {
+        cost_code.id: cost_code.code
+        for cost_code in db.query(ProjectCostCode)
+        .filter(ProjectCostCode.project_id == project.id)
+        .all()
+    }
 
     workbook = Workbook()
     grid_sheet = workbook.active
     assert grid_sheet is not None
     grid_sheet.title = "Devis"
-    _write_grid_sheet(grid_sheet, project, estimate, labor_lines, cost_lines)
+    _write_grid_sheet(grid_sheet, project, estimate, labor_lines, cost_lines, cost_code_labels)
 
     aggregates_sheet = workbook.create_sheet("Agrégats")
     _write_aggregates_sheet(aggregates_sheet, aggregates)
