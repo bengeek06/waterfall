@@ -3,3 +3,7 @@ properties:
   description:
     type: [string, "null"]
     maxLength: 10000
+  name:
+    type: [string, "null"]
+    minLength: 1
+    maxLength: 512

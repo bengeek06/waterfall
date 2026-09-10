@@ -752,8 +752,16 @@
   patch:
     tags:
     - projects
-    summary: Mettre a jour la description d'une tache
-    operationId: updateTaskDescription
+    summary: Mettre a jour le nom et/ou la description d'une tache
+    description: >-
+      Issue #290 (E12-08) a ajoute le champ optionnel `name`, en plus du
+      champ `description` preexistant. Quand un planning est affiche, le
+      renommage met a jour `WfPlanningTaskSnapshot.name` et son jumeau
+      `MsTask.name` dans la meme transaction ; sinon, `MsTask.name` seul.
+      Ce renommage est immediatement visible sur toutes les lignes de
+      taches d'un devis brouillon referencant cette tache (voir
+      `EstimateTaskRowRead`).
+    operationId: updateTask
     security:
     - bearerAuth: []
     parameters:
@@ -764,7 +772,7 @@
       content:
         application/json:
           schema:
-            $ref: ../components/schemas/TaskDescriptionUpdate.yaml
+            $ref: ../components/schemas/TaskUpdate.yaml
     responses:
       '200':
         description: Tache mise a jour

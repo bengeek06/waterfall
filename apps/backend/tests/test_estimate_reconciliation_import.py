@@ -849,6 +849,131 @@ def test_reconciliation_import_task_name_change_is_warning_not_applied() -> None
         assert row["task_name"] == "Requirements"
 
 
+def test_reconciliation_import_still_ignores_task_name_after_a_live_rename() -> None:
+    """Issue #290 (E12-08): the new ``PATCH .../tasks/{task_uid}`` rename channel does
+    not change this import's own comparison baseline or its ``Tâches`` sheet export.
+
+    Renaming the task live (Planning/devis-grid channel) makes ``GET .../task-rows``
+    report the new name for this still-draft estimate, but the reconciliation import
+    keeps comparing against -- and never writes -- ``EstimateTaskRow``'s own frozen
+    ``task_name`` column, so an unrelated third name typed into the re-imported file
+    is still only ever a ``TASK_FIELD_CHANGE_IGNORED`` warning.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        fixture = _seed_fixture(client, headers)
+        content = _export_workbook(client, headers, fixture["project_id"], fixture["estimate_id"])
+
+        rename = client.patch(
+            f"/projects/{fixture['project_id']}/tasks/{fixture['deliverable_uid']}",
+            json={"name": "Requirements (Renamed Live)"},
+            headers=headers,
+        )
+        assert rename.status_code == 200
+        assert rename.json()["name"] == "Requirements (Renamed Live)"
+
+        live_task_rows = _get(
+            client,
+            f"/projects/{fixture['project_id']}/estimates/{fixture['estimate_id']}/task-rows",
+            headers,
+        )
+        live_row = next(
+            item for item in _items(live_task_rows.json()) if item["id"] == fixture["task_row_id"]
+        )
+        assert live_row["task_name"] == "Requirements (Renamed Live)"
+
+        workbook = load_workbook(BytesIO(content))
+        _set_cell(workbook["Tâches"], "id", fixture["task_row_id"], "task_name", "From Excel")
+        edited = _dump_workbook(workbook)
+
+        preview = _preview(client, headers, fixture["project_id"], fixture["estimate_id"], edited)
+        assert preview.status_code == 200
+        plan = _plan(preview.json())
+        assert plan["blocking_issues"] == []
+        assert any(issue["code"] == "TASK_FIELD_CHANGE_IGNORED" for issue in plan["warnings"])
+
+        confirm = _confirm(client, headers, fixture["project_id"], fixture["estimate_id"], edited)
+        assert confirm.status_code == 200
+
+        task_rows_after = _get(
+            client,
+            f"/projects/{fixture['project_id']}/estimates/{fixture['estimate_id']}/task-rows",
+            headers,
+        )
+        row_after = next(
+            item for item in _items(task_rows_after.json()) if item["id"] == fixture["task_row_id"]
+        )
+        # Neither the import's own name nor the pre-rename original -- the live name.
+        assert row_after["task_name"] == "Requirements (Renamed Live)"
+
+
+def test_export_reconciliation_tasks_sheet_reflects_live_task_rename() -> None:
+    """Issue #290 (E12-08): the `Tâches` sheet already read `MO`/`Non-MO`'s own
+    `task_name` column live (via `MsTask.name`, kept in sync by the rename
+    endpoint) -- this asserts the `Tâches` sheet's own `task_name`/`position`
+    columns are now live too, for a draft estimate.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        fixture = _seed_fixture(client, headers)
+
+        rename = client.patch(
+            f"/projects/{fixture['project_id']}/tasks/{fixture['deliverable_uid']}",
+            json={"name": "Requirements (Renamed For Export)"},
+            headers=headers,
+        )
+        assert rename.status_code == 200
+
+        content = _export_workbook(client, headers, fixture["project_id"], fixture["estimate_id"])
+        workbook = load_workbook(BytesIO(content))
+        tasks_sheet = workbook["Tâches"]
+        headers_row = _header_row(tasks_sheet)
+        row_number = _find_row_number(tasks_sheet, "id", fixture["task_row_id"])
+        name_cell = tasks_sheet.cell(row=row_number, column=headers_row.index("task_name") + 1)
+        assert name_cell.value == "Requirements (Renamed For Export)"
+
+
+def test_reconciliation_import_round_trip_after_live_rename_produces_no_warnings() -> None:
+    """E12-08 Finding Haute #1 (round 4 review): the reconciliation round-trip must
+    stay desynchronization-free after a *live* rename/move, not just after a plain
+    export/reimport with no changes at all.
+
+    Renaming the task live already makes the ``Tâches`` sheet export the new name
+    (``test_export_reconciliation_tasks_sheet_reflects_live_task_rename`` above).
+    Reimporting that exact file with zero further edits must diff clean against
+    that same live value -- comparing it against ``EstimateTaskRow``'s still-frozen
+    stored column (the bug) instead spuriously reports a
+    ``TASK_FIELD_CHANGE_IGNORED`` warning for a file that changed nothing.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        fixture = _seed_fixture(client, headers)
+
+        rename = client.patch(
+            f"/projects/{fixture['project_id']}/tasks/{fixture['deliverable_uid']}",
+            json={"name": "Requirements (Renamed Live, No Further Edit)"},
+            headers=headers,
+        )
+        assert rename.status_code == 200
+
+        content = _export_workbook(client, headers, fixture["project_id"], fixture["estimate_id"])
+
+        preview = _preview(client, headers, fixture["project_id"], fixture["estimate_id"], content)
+        assert preview.status_code == 200
+        plan = _plan(preview.json())
+        assert plan["blocking_issues"] == []
+        assert plan["warnings"] == []
+        assert plan["tasks_to_create"] == 0
+        assert plan["tasks_to_delete"] == []
+
+        confirm = _confirm(client, headers, fixture["project_id"], fixture["estimate_id"], content)
+        assert confirm.status_code == 200
+        confirmed_plan = _plan(confirm.json())
+        assert confirmed_plan["blocking_issues"] == []
+        assert confirmed_plan["warnings"] == []
+        assert confirmed_plan["applied"] is True
+
+
 def test_reconciliation_import_hors_perimetre_row_is_ignored() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)

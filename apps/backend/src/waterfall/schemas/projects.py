@@ -194,8 +194,23 @@ class TaskLinksReplace(BaseModel):
     expected_revision: int = Field(ge=0)
 
 
-class TaskDescriptionUpdate(BaseModel):
+class TaskUpdate(BaseModel):
+    """`PATCH .../tasks/{task_uid}` (issue #290, E12-08, extends the pre-existing
+    description-only endpoint with `name`).
+
+    ``description`` keeps its pre-existing "always applied" semantics (an
+    absent/blank value clears it -- see ``normalize_description`` below,
+    unchanged since before E12-08): it is the endpoint's original, only field,
+    and every caller of this schema already always supplies it. ``name`` is
+    genuinely optional -- ``None`` means "leave the task's name untouched",
+    never "clear the name" (`MsTask.name`/`WfPlanningTaskSnapshot.name` are
+    both `NOT NULL`), so it deliberately does *not* reuse
+    ``normalize_description``'s blank-clears-to-``None`` behaviour: a blank
+    ``name`` is rejected outright by ``_optional_text`` instead.
+    """
+
     description: str | None = Field(default=None, max_length=10000)
+    name: str | None = Field(default=None, min_length=1, max_length=512)
 
     @field_validator("description", mode="before")
     @classmethod
@@ -204,6 +219,8 @@ class TaskDescriptionUpdate(BaseModel):
             return None
         normalized = value.strip()
         return normalized or None
+
+    _normalize_name = field_validator("name")(_optional_text)
 
 
 class PlanningDeliverableCreate(BaseModel):
@@ -622,6 +639,11 @@ class EstimateTaskRowRead(BaseModel):
     id: int
     estimate_id: int
     task_id: int | None = None
+    # Issue #290 (E12-08): the task's own business `uid`, resolved live from
+    # WfPlanningTaskSnapshot/MsTask for a draft estimate (see
+    # services.estimate_task_display) -- exposed for E12-09's future
+    # tasks/cost-lines tree merge, not consumed by anything in this issue.
+    task_uid: int | None = None
     parent_task_id: int | None = None
     position: int
     task_name: str

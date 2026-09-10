@@ -40,6 +40,11 @@ from waterfall.services.estimate_reconciliation_import import (
     TaskFileRow,
     parse_estimate_reconciliation_workbook,
 )
+from waterfall.services.estimate_task_display import (
+    ResolvedTaskDisplay,
+    resolve_live_task_display,
+    resolve_task_uid_by_id,
+)
 from waterfall.services.pagination import PaginationResult, apply_pagination
 from waterfall.services.planning_links import (
     PlanningLinkError,
@@ -99,6 +104,9 @@ __all__ = [
     "ParsedReconciliationWorkbook",
     "TaskFileRow",
     "parse_estimate_reconciliation_workbook",
+    "ResolvedTaskDisplay",
+    "resolve_live_task_display",
+    "resolve_task_uid_by_id",
     "PaginationResult",
     "apply_pagination",
     "generate_planning_snapshot",

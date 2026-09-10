@@ -737,8 +737,11 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** Mettre a jour la description d'une tache */
-        patch: operations["updateTaskDescription"];
+        /**
+         * Mettre a jour le nom et/ou la description d'une tache
+         * @description Issue #290 (E12-08) a ajoute le champ optionnel `name`, en plus du champ `description` preexistant. Quand un planning est affiche, le renommage met a jour `WfPlanningTaskSnapshot.name` et son jumeau `MsTask.name` dans la meme transaction ; sinon, `MsTask.name` seul. Ce renommage est immediatement visible sur toutes les lignes de taches d'un devis brouillon referencant cette tache (voir `EstimateTaskRowRead`).
+         */
+        patch: operations["updateTask"];
         trace?: never;
     };
     "/projects/{projectId}/estimates": {
@@ -1780,8 +1783,9 @@ export interface components {
         PlanningTaskTreeRead: components["schemas"]["TaskRead"] & {
             children: components["schemas"]["PlanningTaskTreeRead"][];
         };
-        TaskDescriptionUpdate: {
+        TaskUpdate: {
             description?: string | null;
+            name?: string | null;
         };
         EstimateRoleAssignmentCreate: {
             task_id: number;
@@ -1856,6 +1860,7 @@ export interface components {
             id: number;
             estimate_id: number;
             task_id?: number | null;
+            task_uid?: number | null;
             parent_task_id?: number | null;
             position: number;
             task_name: string;
@@ -4103,7 +4108,7 @@ export interface operations {
             404: components["responses"]["ProjectNotFound"];
         };
     };
-    updateTaskDescription: {
+    updateTask: {
         parameters: {
             query?: never;
             header?: never;
@@ -4117,7 +4122,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["TaskDescriptionUpdate"];
+                "application/json": components["schemas"]["TaskUpdate"];
             };
         };
         responses: {

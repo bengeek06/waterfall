@@ -1305,8 +1305,9 @@ paths:
     patch:
       tags:
         - projects
-      summary: Mettre a jour la description d'une tache
-      operationId: updateTaskDescription
+      summary: Mettre a jour le nom et/ou la description d'une tache
+      description: 'Issue #290 (E12-08) a ajoute le champ optionnel `name`, en plus du champ `description` preexistant. Quand un planning est affiche, le renommage met a jour `WfPlanningTaskSnapshot.name` et son jumeau `MsTask.name` dans la meme transaction ; sinon, `MsTask.name` seul. Ce renommage est immediatement visible sur toutes les lignes de taches d''un devis brouillon referencant cette tache (voir `EstimateTaskRowRead`).'
+      operationId: updateTask
       security:
         - bearerAuth: []
       parameters:
@@ -1317,7 +1318,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/TaskDescriptionUpdate'
+              $ref: '#/components/schemas/TaskUpdate'
       responses:
         '200':
           description: Tache mise a jour
@@ -4147,7 +4148,7 @@ components:
               type: array
               items:
                 $ref: '#/components/schemas/PlanningTaskTreeRead'
-    TaskDescriptionUpdate:
+    TaskUpdate:
       type: object
       properties:
         description:
@@ -4155,6 +4156,12 @@ components:
             - string
             - 'null'
           maxLength: 10000
+        name:
+          type:
+            - string
+            - 'null'
+          minLength: 1
+          maxLength: 512
     EstimateRoleAssignmentCreate:
       type: object
       required:
@@ -4386,6 +4393,11 @@ components:
           type: integer
           minimum: 1
         task_id:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
+        task_uid:
           type:
             - integer
             - 'null'

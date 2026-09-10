@@ -491,6 +491,22 @@ class EstimateGridNode(Base):
 
 
 class EstimateTaskRow(Base):
+    """One task already priced by this estimate -- membership is fixed at row
+    creation time (see `create_project_estimate`/`_create_estimate_planning_task`,
+    `api/routes/estimates.py`) and never changes afterwards.
+
+    `task_name`/`outline_number`/`outline_level`/`parent_task_id`/`position`
+    are written once, at creation, and then read as-is only for a *validated*
+    estimate or as a defensive fallback -- for a *draft* estimate they are no
+    longer authoritative: `services.estimate_task_display.resolve_live_task_display`
+    resolves the current label/position live from `WfPlanningTaskSnapshot`/
+    `MsTask` instead (issue #290, E12-08), so a task rename or a Planning-tree
+    move is immediately visible on every draft estimate that already priced
+    it, without rewriting these columns or recreating the estimate. Kept
+    around (rather than dropped) precisely so a validated estimate keeps its
+    own frozen, never-drifting snapshot of what it was priced against.
+    """
+
     __tablename__ = "wf_estimate_task_row"
     __table_args__ = (
         UniqueConstraint("estimate_id", "task_id", name="uq_wf_estimate_task_row"),

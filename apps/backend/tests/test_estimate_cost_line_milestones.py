@@ -499,6 +499,37 @@ def test_schema_validation_returns_bad_request() -> None:
         assert error_payload["detail"] == {"code": "GENERIC_ERROR"}
 
 
+def test_milestones_response_reports_full_tree_position() -> None:
+    """Finding Haute (E12-08/#290, round 5 review): `resolve_live_task_display`
+    renumbers `position` 1..N depth-first across only the rows it is given
+    (see its own docstring) -- passing it only the batch's freshly created
+    `rows` made a template `POST` response always announce positions 1..N
+    among themselves, regardless of the milestones' true place after the
+    devis's pre-existing tasks.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        _generate_structure(client, headers, project_id)
+        estimate_id = _create_estimate(client, headers, project_id)
+        line_id = _create_cost_line(client, headers, project_id, estimate_id)
+
+        # `_generate_structure` already seeds 4 tasks -- Design, Specification,
+        # Requirements, and the lot's auto-generated "Fin Specification"
+        # completion milestone -- snapshotted into 4 EstimateTaskRow at
+        # positions 1-4; this cost line has no task_id, so its two
+        # "fourniture" milestones are appended as the last two root tasks,
+        # depth-first after the whole pre-existing "Design" subtree.
+        response = client.post(
+            _milestones_path(project_id, estimate_id, line_id),
+            json={"template": "fourniture", "lag_minutes": 0},
+            headers=headers,
+        )
+        assert response.status_code == 201
+        items = cast(list[dict[str, Any]], response.json()["items"])
+        assert [item["position"] for item in items] == [5, 6]
+
+
 def test_root_milestones_appended_after_existing_root_tasks() -> None:
     """When the cost line has no ``task_id``, milestones are appended as the last
     root tasks -- not inserted ahead of the existing top-level ``poste``.

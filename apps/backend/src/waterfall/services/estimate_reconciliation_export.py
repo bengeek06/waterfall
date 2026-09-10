@@ -101,6 +101,7 @@ from waterfall.models.resources import (
 )
 from waterfall.schemas.resources import CostTypeKind
 from waterfall.services.estimate_export import HEADER_FONT
+from waterfall.services.estimate_task_display import ResolvedTaskDisplay, resolve_live_task_display
 
 # Not underscore-prefixed: shared with the reimport side of the round-trip
 # (services/estimate_reconciliation_import.py, E6-09/#70) so both directions of
@@ -234,18 +235,31 @@ def _write_tasks_sheet(
     sheet: Worksheet,
     rows: list[EstimateTaskRow],
     task_uid_by_id: dict[int, int],
+    resolved_by_row_id: dict[int, ResolvedTaskDisplay],
 ) -> None:
+    """Write the ``Tâches`` sheet.
+
+    ``parent_task_id``/``position``/``task_name``/``outline_number``/
+    ``outline_level`` are read from ``resolved_by_row_id`` when present (a
+    draft estimate, E12-08/#290 -- see
+    ``services.estimate_task_display.resolve_live_task_display``), falling
+    back to ``row``'s own frozen stored columns otherwise -- the same rule
+    ``to_estimate_task_row_read`` applies for the JSON endpoint, so a
+    reconciliation export always shows the same task label/position a
+    concurrent ``GET .../task-rows`` call would.
+    """
     _write_headers(sheet, TASK_HEADERS)
     for row_index, row in enumerate(rows, start=2):
+        resolved = resolved_by_row_id.get(row.id)
         values: list[_CellValue] = [
             row.id,
             row.task_id,
             task_uid_by_id.get(row.task_id) if row.task_id is not None else None,
-            row.parent_task_id,
-            row.position,
-            row.task_name,
-            row.outline_number,
-            row.outline_level,
+            resolved.parent_task_id if resolved is not None else row.parent_task_id,
+            resolved.position if resolved is not None else row.position,
+            resolved.task_name if resolved is not None else row.task_name,
+            resolved.outline_number if resolved is not None else row.outline_number,
+            resolved.outline_level if resolved is not None else row.outline_level,
             row.is_milestone,
         ]
         for column, value in enumerate(values, start=1):
@@ -316,6 +330,12 @@ def build_estimate_reconciliation_workbook(
     task_uid_by_id = {
         task.id: task.uid for task in db.query(MsTask).filter(MsTask.project_id == project.id).all()
     }
+    # Issue #290 (E12-08): only a draft estimate's task rows are live -- a
+    # validated estimate exports its own frozen stored columns instead (see
+    # resolve_live_task_display's docstring).
+    resolved_by_row_id = (
+        resolve_live_task_display(db, project, task_rows) if estimate.status == "draft" else {}
+    )
     assignments = _scoped_estimate_role_assignments(db, project, estimate)
     cost_lines = _non_labor_cost_lines(db, estimate.id)
 
@@ -323,7 +343,7 @@ def build_estimate_reconciliation_workbook(
     tasks_sheet = workbook.active
     assert tasks_sheet is not None
     tasks_sheet.title = "Tâches"
-    _write_tasks_sheet(tasks_sheet, task_rows, task_uid_by_id)
+    _write_tasks_sheet(tasks_sheet, task_rows, task_uid_by_id, resolved_by_row_id)
 
     labor_sheet = workbook.create_sheet("MO")
     _write_labor_sheet(labor_sheet, assignments)
