@@ -31,6 +31,10 @@ describe("resolveRoleAssignmentYear", () => {
   it("falls back to the current calendar year when the task can't be found", () => {
     expect(resolveRoleAssignmentYear(999, [])).toBe(new Date().getFullYear());
   });
+
+  it("falls back to the current calendar year for a root labor line (task_id: null)", () => {
+    expect(resolveRoleAssignmentYear(null, [])).toBe(new Date().getFullYear());
+  });
 });
 
 describe("resolveIndicativeHourlyRate", () => {

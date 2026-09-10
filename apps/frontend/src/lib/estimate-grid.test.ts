@@ -223,6 +223,22 @@ describe("buildEstimateGridEntries with role assignments (E12-06)", () => {
     ]);
   });
 
+  // E12-07/#289: EstimateRoleAssignmentRead.task_id is now nullable (a "root" labor line with no
+  // attached task). There's no UI yet to create one (that's E12-10/#292's scope), but the grid
+  // must not silently drop it if the backend ever returns one -- same orphan fallback as above.
+  it("falls back a role assignment with a null task_id into the global section, instead of dropping it", () => {
+    const taskRow = makeTaskRow({ id: 1, task_id: 42 });
+    const rootAssignment = makeAssignment({ task_id: null });
+
+    const entries = buildEstimateGridEntries([], [taskRow], [rootAssignment]);
+
+    expect(entries).toEqual([
+      { kind: "task", taskRow },
+      { kind: "global-header" },
+      { kind: "labor", assignment: rootAssignment, indentLevel: 0 },
+    ]);
+  });
+
   it("lists an orphaned role assignment ahead of global cost lines within the same global section", () => {
     const taskRow = makeTaskRow({ id: 1, task_id: 42 });
     const orphanedAssignment = makeAssignment({ task_id: 999 });

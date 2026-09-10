@@ -8,7 +8,16 @@ import type { CostRate, EstimateRoleAssignment, Task } from "@/lib/backend";
 // once the estimate is validated, so this function must never be mistaken for a second
 // calculation engine (see resolveIndicativeHourlyRate/computeIndicativeLaborCost below, same
 // caveat).
-export function resolveRoleAssignmentYear(taskId: number, planningTasks: Task[]): number {
+//
+// E12-07/#289: `taskId` is `null` for a "root" labor line with no attached task (the backend's
+// own EstimateRoleAssignmentRead.task_id is now nullable, mirroring EstimateCostLine.task_id).
+// Same fallback as the backend's estimate_calculation.py for that case: the current calendar
+// year. There is no UI yet to create/move a labor line to the root (that lands with E12-10/#292),
+// so this branch is defensive/contract-compliance only, not a new product behavior.
+export function resolveRoleAssignmentYear(taskId: number | null, planningTasks: Task[]): number {
+  if (taskId == null) {
+    return new Date().getFullYear();
+  }
   const task = planningTasks.find((candidate) => candidate.id === taskId);
   if (task?.start_at) {
     const parsed = new Date(task.start_at);
