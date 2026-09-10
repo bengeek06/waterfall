@@ -23,6 +23,7 @@ function renderTab(overrides: Partial<EstimateTabProps> = {}) {
     estimateTaskRows: [],
     costLines: [],
     costCategories: [],
+    allCostCategories: [],
     costLineDraft: { categoryId: "", label: "", quantity: "1", unitCost: "0", plannedDate: "", taskId: "" },
     onCategoryChange: vi.fn(),
     onLabelChange: vi.fn(),

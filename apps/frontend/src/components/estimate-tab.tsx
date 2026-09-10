@@ -41,6 +41,11 @@ export type EstimateTabProps = {
   estimateTaskRows: EstimateTaskRow[];
   costLines: EstimateCostLine[];
   costCategories: CostCategory[];
+  // E12-05/#277: the full (including inactive) cost-category referential, threaded straight
+  // through to CostLinesTable for its "Catégorie" column's name resolution -- see that prop's own
+  // doc comment on why it's a separate list from `costCategories` above (that one stays
+  // active-only, since it feeds CostLineForm's create-line `<select>`).
+  allCostCategories: CostCategory[];
   costLineDraft: CostLineDraft;
   onCategoryChange: (value: string) => void;
   onLabelChange: (value: string) => void;
@@ -121,6 +126,7 @@ export function EstimateTab({
   estimateTaskRows,
   costLines,
   costCategories,
+  allCostCategories,
   costLineDraft,
   onCategoryChange,
   onLabelChange,
@@ -291,6 +297,7 @@ export function EstimateTab({
           <CostLinesTable
             costLines={costLines}
             estimateTaskRows={estimateTaskRows}
+            allCostCategories={allCostCategories}
             canEditEstimate={canEditEstimate}
             editingLineId={editingLineId}
             editingLineDraft={editingLineDraft}
