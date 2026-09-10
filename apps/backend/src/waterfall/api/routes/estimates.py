@@ -103,6 +103,7 @@ from waterfall.services import (
     PlanningTreeMoveError,
     PlanningTreeMoveNotFoundError,
     PlanningTreeTaskReferencedError,
+    ResolvedTaskDisplay,
     TaskFileRow,
     apply_pagination,
     build_estimate_reconciliation_workbook,
@@ -118,6 +119,8 @@ from waterfall.services import (
     move_estimate_grid_nodes,
     parse_estimate_reconciliation_workbook,
     replace_task_predecessor_links,
+    resolve_live_task_display,
+    resolve_task_uid_by_id,
     sync_task_role_assignments_from_estimate,
 )
 from waterfall.services.estimate_reconciliation_export import _scoped_estimate_role_assignments
@@ -280,7 +283,7 @@ def validate_project_estimate(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> EstimateValidationRead:
-    get_mutable_project_lock(db, project_id, current_user.id)
+    project = get_mutable_project_lock(db, project_id, current_user.id)
     estimate = get_estimate_or_404(db, project_id, estimate_id)
     if estimate.status != "draft":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Estimate is not a draft")
@@ -315,6 +318,30 @@ def validate_project_estimate(
             status_code=status.HTTP_409_CONFLICT,
             detail="Role assignment synchronization conflicts with existing data",
         ) from exc
+    # Issue #290 (E12-08) Finding Moyenne #3, round 4 review: freeze each
+    # EstimateTaskRow's task-derived columns to the *live* state seen right now,
+    # in the same transaction as (and immediately before) the status flip below --
+    # not the state they had back at row-creation time. A task renamed/moved one
+    # or more times while this devis was still a draft must validate with its
+    # last-seen name/position, mirroring the same "freeze at validation, not
+    # creation" rule this same EPIC already applies to a root labor line's own
+    # pricing (calculate_estimate_lines). A row silently kept as-is when
+    # resolve_live_task_display omits it (no task_id, or a task_id that can no
+    # longer be resolved live) -- the same pre-existing degenerate fallback its
+    # own docstring documents.
+    task_rows = db.query(EstimateTaskRow).filter(EstimateTaskRow.estimate_id == estimate_id).all()
+    resolved_by_row_id = resolve_live_task_display(db, project, task_rows)
+    for task_row in task_rows:
+        resolved = resolved_by_row_id.get(task_row.id)
+        if resolved is None:
+            continue
+        task_row.task_name = resolved.task_name
+        task_row.outline_number = resolved.outline_number
+        task_row.outline_level = resolved.outline_level
+        task_row.parent_task_id = resolved.parent_task_id
+        task_row.position = resolved.position
+        db.add(task_row)
+
     estimate.status = "validated"
     estimate.validated_at = datetime.now(UTC)
     db.add(estimate)
@@ -363,12 +390,20 @@ def list_estimate_task_rows(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> EstimateTaskRowListRead:
-    get_project_or_404(db, project_id, current_user.id)
-    get_estimate_or_404(db, project_id, estimate_id)
+    project = get_project_or_404(db, project_id, current_user.id)
+    estimate = get_estimate_or_404(db, project_id, estimate_id)
     query = db.query(EstimateTaskRow).filter(EstimateTaskRow.estimate_id == estimate_id)
     result = apply_pagination(
         query,
         params,
+        # Sorting/searching stays on the stored columns (the SQL-level pagination
+        # boundary) even though the returned field *values* are resolved live
+        # below for a draft estimate -- see resolve_live_task_display's own
+        # docstring. Both agree at the moment a row is created; a later
+        # rename/move of a task already priced by a draft estimate can make a
+        # requested `?sort=task_name`/`?sort=position` order stale until the
+        # unified tasks/cost-lines tree (E12-09) replaces this endpoint's
+        # ordering altogether.
         sortable={
             "position": EstimateTaskRow.position,
             "task_name": EstimateTaskRow.task_name,
@@ -379,8 +414,36 @@ def list_estimate_task_rows(
         tiebreaker=EstimateTaskRow.id,
         searchable=[EstimateTaskRow.task_name],
     )
+    # Issue #290 (E12-08): only a draft estimate's task rows are live -- a
+    # validated estimate keeps reading its own frozen stored columns (see
+    # resolve_live_task_display's docstring).
+    # Finding Haute (round-5 review): resolve_live_task_display renumbers
+    # `position` 1..N depth-first across *only the rows it is given* -- not a
+    # global rank over the estimate's whole task tree (see its own
+    # docstring). `result.rows` is already the paginated page (limit/offset
+    # applied in SQL by apply_pagination above), so passing it directly here
+    # would make every page report `position` starting back at 1 instead of
+    # the row's true position in the full devis. Resolve against every task
+    # row of the estimate, then only materialize the current page's entries
+    # into the response below.
+    resolved = (
+        resolve_live_task_display(
+            db,
+            project,
+            db.query(EstimateTaskRow).filter(EstimateTaskRow.estimate_id == estimate_id).all(),
+        )
+        if estimate.status == "draft"
+        else {}
+    )
+    # task_uid, unlike the fields above, is resolved regardless of draft/validated
+    # status (Finding Moyenne #4, round 4 review) -- see to_estimate_task_row_read's
+    # own docstring.
+    task_uid_by_task_id = resolve_task_uid_by_id(db, project)
     return EstimateTaskRowListRead(
-        items=[to_estimate_task_row_read(row) for row in result.rows],
+        items=[
+            to_estimate_task_row_read(row, resolved.get(row.id), task_uid_by_task_id)
+            for row in result.rows
+        ],
         total=result.total,
         limit=result.limit,
         offset=result.offset,
@@ -534,8 +597,20 @@ def create_estimate_task(
         db.add(planning)
         db.flush()
         # Capture the response while the row locks are still held so a concurrent
-        # writer cannot make us return a later transaction's state.
-        result = to_estimate_task_row_read(row)
+        # writer cannot make us return a later transaction's state. Always a draft
+        # estimate here (get_draft_estimate_or_409 above), so the row is live --
+        # `resolved` always has an entry for it, so the task_uid fallback map
+        # is never actually consulted here.
+        # Finding Haute (round-5 review): resolve against every task row of the
+        # estimate, not just the newly created `row` -- resolve_live_task_display
+        # renumbers `position` 1..N depth-first across only the rows it is given
+        # (see its own docstring), so passing a single-row list here always
+        # reported `position: 1` regardless of the task's true place in the tree.
+        all_task_rows = (
+            db.query(EstimateTaskRow).filter(EstimateTaskRow.estimate_id == estimate_id).all()
+        )
+        resolved = resolve_live_task_display(db, project, all_task_rows)
+        result = to_estimate_task_row_read(row, resolved.get(row.id), {})
         db.commit()
     except PlanningTreeMoveNotFoundError as exc:
         db.rollback()
@@ -716,7 +791,28 @@ def _planned_dates_equal(file_value: datetime | None, existing_value: datetime |
     return file_value.date() == existing_value.date()
 
 
-def _changed_task_fields(existing: EstimateTaskRow, row: TaskFileRow) -> list[str]:
+def _changed_task_fields(
+    existing: EstimateTaskRow,
+    row: TaskFileRow,
+    resolved: ResolvedTaskDisplay | None,
+) -> list[str]:
+    """Compare an imported Tâches row to the same baseline the export wrote it from.
+
+    ``resolved`` is this row's live display (``resolve_live_task_display``,
+    keyed by ``EstimateTaskRow.id``) when the devis is a draft, ``None`` for a
+    validated devis -- exactly the same draft/validated branch
+    ``_write_tasks_sheet``/``to_estimate_task_row_read`` already apply (E12-08
+    Finding Haute #1, round 4 review). Comparing against ``existing``'s own
+    frozen stored columns instead -- as this used to do unconditionally --
+    made a draft devis's reconciliation export/reimport round-trip
+    desynchronized: renaming/moving a task live, exporting (which already
+    wrote the *live* value), then reimporting with no further edits produced
+    a spurious ``TASK_FIELD_CHANGE_IGNORED`` warning, since the file's
+    (unedited) live value never matched the still-frozen stored column.
+    ``is_milestone`` has no live counterpart (``resolve_live_task_display``
+    never derives it), so it is always compared against ``existing`` directly,
+    draft or not.
+    """
     candidate = {
         "task_name": row.task_name,
         "is_milestone": row.is_milestone,
@@ -725,10 +821,24 @@ def _changed_task_fields(existing: EstimateTaskRow, row: TaskFileRow) -> list[st
         "outline_number": row.outline_number,
         "outline_level": row.outline_level,
     }
+    baseline = {
+        "task_name": resolved.task_name if resolved is not None else existing.task_name,
+        "is_milestone": existing.is_milestone,
+        "parent_task_id": (
+            resolved.parent_task_id if resolved is not None else existing.parent_task_id
+        ),
+        "position": resolved.position if resolved is not None else existing.position,
+        "outline_number": (
+            resolved.outline_number if resolved is not None else existing.outline_number
+        ),
+        "outline_level": (
+            resolved.outline_level if resolved is not None else existing.outline_level
+        ),
+    }
     return [
         field
         for field in _TASK_FIELD_NAMES
-        if candidate[field] is not None and getattr(existing, field) != candidate[field]
+        if candidate[field] is not None and baseline[field] != candidate[field]
     ]
 
 
@@ -815,6 +925,7 @@ def _stage_task_sheet(
     project: MsProject,
     parsed_tasks: list[TaskFileRow],
     existing_task_rows: dict[int, EstimateTaskRow],
+    resolved_by_row_id: dict[int, ResolvedTaskDisplay],
     issues: list[ReconciliationIssue],
     warnings: list[ReconciliationIssue],
 ) -> tuple[list[_TaskCreateCandidate], list[int]]:
@@ -822,10 +933,22 @@ def _stage_task_sheet(
 
     An existing row (``id`` set) is never mutated: a difference on any of
     ``_TASK_FIELD_NAMES`` becomes a ``TASK_FIELD_CHANGE_IGNORED`` warning, not
-    an update (see #70's issue body -- there is no task-rename endpoint in
-    this repo, and moving a task in the tree must stay a Planning-screen
-    action). A row without an ``id`` is a creation candidate whose
-    ``parent_task_id`` must already resolve to an existing ``MsTask``.
+    an update -- unchanged since #70's issue body. Issue #290 (E12-08) later
+    added a real rename/move channel (``PATCH .../tasks/{task_uid}``, from
+    either the Planning screen or the devis grid), but this reconciliation
+    import still never writes ``task_name``/``outline_number``/
+    ``outline_level``/``position``/``parent_task_id`` for an existing row --
+    only that dedicated endpoint does, and only ``WfPlanningTaskSnapshot``/
+    ``MsTask`` themselves, never ``EstimateTaskRow``'s own stored columns
+    (which stay frozen at row-creation time on purpose, see
+    ``services.estimate_task_display``). A row without an ``id`` is a
+    creation candidate whose ``parent_task_id`` must already resolve to an
+    existing ``MsTask``.
+
+    ``resolved_by_row_id`` is compared against, not ``existing_row``'s own
+    stored columns, so that a difference is only ever reported against the
+    same baseline the export wrote the file from (see
+    ``_changed_task_fields``'s own docstring, E12-08 Finding Haute #1).
     """
     task_creates: list[_TaskCreateCandidate] = []
     seen_task_row_ids: set[int] = set()
@@ -843,7 +966,7 @@ def _stage_task_sheet(
                     )
                 )
                 continue
-            changed = _changed_task_fields(existing_row, row)
+            changed = _changed_task_fields(existing_row, row, resolved_by_row_id.get(row.id))
             if changed:
                 warnings.append(
                     ReconciliationIssue(
@@ -851,7 +974,8 @@ def _stage_task_sheet(
                         message=(
                             "Ignored change(s) to: "
                             f"{', '.join(changed)} (renaming/moving a task is not "
-                            "supported by this import; use the Planning screen)"
+                            "supported by this import; use the Planning screen or "
+                            "the devis grid instead)"
                         ),
                         sheet="Tâches",
                         row=row.row_number,
@@ -1935,6 +2059,16 @@ def _run_reconciliation(
         .filter(EstimateTaskRow.estimate_id == estimate.id)
         .all()
     }
+    # Same draft/validated branch as the export (_write_tasks_sheet) and the
+    # JSON read (list_estimate_task_rows): a draft devis's Tâches sheet was
+    # written from the *live* task display, so the reimport diff must be
+    # taken against that same baseline, not the frozen stored columns
+    # (E12-08 Finding Haute #1, round 4 review).
+    resolved_by_row_id = (
+        resolve_live_task_display(db, project, list(existing_task_rows.values()))
+        if estimate.status == "draft"
+        else {}
+    )
     existing_assignments: dict[int, EstimateRoleAssignment] = {}
     out_of_scope_assignment_ids: set[int] = set()
     for assignment, _task, _role, _category, hors_perimetre in _scoped_estimate_role_assignments(
@@ -1951,7 +2085,7 @@ def _run_reconciliation(
     }
 
     task_creates, tasks_to_delete_ids = _stage_task_sheet(
-        db, project, parsed.tasks, existing_task_rows, issues, warnings
+        db, project, parsed.tasks, existing_task_rows, resolved_by_row_id, issues, warnings
     )
     labor_creates, labor_updates, labor_to_delete_ids = _stage_labor_sheet(
         db,
@@ -2918,9 +3052,22 @@ def create_estimate_cost_line_milestones(
         db.add(planning)
         db.flush()
         # Capture the response while the row locks are still held so a concurrent
-        # writer cannot make us return a later transaction's state.
+        # writer cannot make us return a later transaction's state. Always a draft
+        # estimate here (get_draft_estimate_or_409 above), so every row is live --
+        # `resolved` always has an entry for each of them, so the task_uid fallback
+        # map is never actually consulted here.
+        # Finding Haute (round-5 review): resolve against every task row of the
+        # estimate, not just the newly created `rows` -- resolve_live_task_display
+        # renumbers `position` 1..N depth-first across only the rows it is given
+        # (see its own docstring), so passing only this batch's milestones here
+        # always reported positions 1..N among themselves instead of their true
+        # place in the full devis.
+        all_task_rows = (
+            db.query(EstimateTaskRow).filter(EstimateTaskRow.estimate_id == estimate_id).all()
+        )
+        resolved = resolve_live_task_display(db, project, all_task_rows)
         result = EstimateTaskRowListRead(
-            items=[to_estimate_task_row_read(row) for row in rows],
+            items=[to_estimate_task_row_read(row, resolved.get(row.id), {}) for row in rows],
             total=len(rows),
             limit=None,
             offset=0,

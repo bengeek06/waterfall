@@ -413,6 +413,419 @@ def test_patch_task_description_not_found() -> None:
         assert response.status_code == 404
 
 
+def test_patch_task_name_empty_returns_400_not_422() -> None:
+    """E12-08 Finding Haute #2 (round 4 review): `openapi/spec/paths/projects.yaml`
+    documents a 400 (`FastAPIErrorResponse`) for this endpoint's body validation
+    errors, but FastAPI's own default behaviour raises its undocumented 422
+    unless `_PlanningTaskBodyValidationRoute` converts it -- the same route class
+    `create_estimate_task` already uses.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        response: Response = client.patch(
+            f"/projects/{project_id}/tasks/1001",
+            json={"name": ""},
+            headers=headers,
+        )
+        assert response.status_code == 400
+
+
+def test_patch_task_name_too_long_returns_400_not_422() -> None:
+    """Same as above, for the other `TaskUpdate.name` validation failure mode."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        response: Response = client.patch(
+            f"/projects/{project_id}/tasks/1001",
+            json={"name": "x" * 513},
+            headers=headers,
+        )
+        assert response.status_code == 400
+
+
+def test_patch_task_name_without_displayed_planning_updates_legacy_task_only() -> None:
+    """Issue #290 (E12-08): no displayed planning -- `MsTask.name` is the only column
+    a rename touches, and a name-only request must not disturb the task's existing
+    description (partial-update semantics, checked via `model_fields_set`)."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        describe_response: Response = client.patch(
+            f"/projects/{project_id}/tasks/1001",
+            json={"description": "Pre-existing description"},
+            headers=headers,
+        )
+        assert describe_response.status_code == 200
+
+        rename_response: Response = client.patch(
+            f"/projects/{project_id}/tasks/1001",
+            json={"name": "Task One Renamed"},
+            headers=headers,
+        )
+        assert rename_response.status_code == 200
+        rename_payload = rename_response.json()
+        assert rename_payload["name"] == "Task One Renamed"
+        # A name-only request never sent "description" -- must not clear it.
+        assert rename_payload["description"] == "Pre-existing description"
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            task = (
+                session.query(MsTask)
+                .filter(MsTask.project_id == project_id, MsTask.uid == 1001)
+                .one()
+            )
+            assert task.name == "Task One Renamed"
+
+        tasks_response: Response = client.get(f"/projects/{project_id}/tasks", headers=headers)
+        task_by_uid = {task["uid"]: task for task in tasks_response.json()["items"]}
+        assert task_by_uid[1001]["name"] == "Task One Renamed"
+        assert task_by_uid[1002]["name"] == "Task Two"
+
+
+def test_patch_task_name_with_displayed_planning_updates_snapshot_twin_and_live_draft_rows() -> (
+    None
+):
+    """Issue #290 (E12-08): with a displayed planning, a rename updates
+    `WfPlanningTaskSnapshot.name` and its `MsTask` twin in the same transaction, and
+    is immediately visible on every draft estimate already referencing that task --
+    without rewriting `EstimateTaskRow`'s own stored columns or recreating anything.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        planning_response: Response = client.post(
+            f"/projects/{project_id}/plannings", json={}, headers=headers
+        )
+        assert planning_response.status_code == 201
+        planning_id = cast(int, planning_response.json()["id"])
+        display_response: Response = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/display", headers=headers
+        )
+        assert display_response.status_code == 200
+
+        estimate_ids = []
+        for _ in range(2):
+            estimate_response: Response = client.post(
+                f"/projects/{project_id}/estimates",
+                json={"kind": "initial", "currency_code": "EUR"},
+                headers=headers,
+            )
+            assert estimate_response.status_code == 201
+            estimate_ids.append(cast(int, estimate_response.json()["id"]))
+
+        row_ids_by_estimate: dict[int, int] = {}
+        for estimate_id in estimate_ids:
+            rows = cast(
+                list[dict[str, Any]],
+                client.get(
+                    f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
+                ).json()["items"],
+            )
+            row = next(item for item in rows if item["task_uid"] == 1001)
+            assert row["task_name"] == "Task One"
+            row_ids_by_estimate[estimate_id] = cast(int, row["id"])
+
+        rename_response: Response = client.patch(
+            f"/projects/{project_id}/tasks/1001",
+            json={"name": "Task One Renamed"},
+            headers=headers,
+        )
+        assert rename_response.status_code == 200
+        assert rename_response.json()["name"] == "Task One Renamed"
+        assert rename_response.json()["uid"] == 1001
+
+        # Planning tree itself.
+        tasks_response: Response = client.get(f"/projects/{project_id}/tasks", headers=headers)
+        task_by_uid = {task["uid"]: task for task in tasks_response.json()["items"]}
+        assert task_by_uid[1001]["name"] == "Task One Renamed"
+
+        # Legacy MsTask twin kept in sync in the same transaction.
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            twin = (
+                session.query(MsTask)
+                .filter(MsTask.project_id == project_id, MsTask.uid == 1001)
+                .one()
+            )
+            assert twin.name == "Task One Renamed"
+
+        # Both draft estimates already referencing the task see the new name, from
+        # this single PATCH call.
+        for estimate_id, row_id in row_ids_by_estimate.items():
+            rows_after = cast(
+                list[dict[str, Any]],
+                client.get(
+                    f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
+                ).json()["items"],
+            )
+            row_after = next(item for item in rows_after if item["id"] == row_id)
+            assert row_after["task_name"] == "Task One Renamed"
+            assert row_after["task_uid"] == 1001
+
+
+def test_list_estimate_task_rows_pagination_reports_global_position() -> None:
+    """Finding Haute (E12-08/#290, round 5 review): `resolve_live_task_display`
+    renumbers `position` 1..N depth-first across only the rows it is given
+    (see its own docstring) -- passing it the already-paginated *page*
+    (`result.rows`, sliced by SQL `limit`/`offset` before the call) instead of
+    the estimate's full task-row set made every page after the first report
+    `position` starting back at 1, instead of the row's true position in the
+    complete devis.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        estimate_response: Response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate_response.status_code == 201
+        estimate_id = cast(int, estimate_response.json()["id"])
+
+        page_response: Response = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/task-rows",
+            params={"limit": 1, "offset": 1, "sort": "position"},
+            headers=headers,
+        )
+        assert page_response.status_code == 200
+        body = cast(dict[str, Any], page_response.json())
+        items = cast(list[dict[str, Any]], body["items"])
+        assert len(items) == 1
+        assert items[0]["task_uid"] == 1002
+        assert items[0]["position"] == 2
+
+
+def test_patch_task_name_does_not_affect_already_validated_estimate_task_rows() -> None:
+    """Issue #290 (E12-08) acceptance criterion: a validated devis is a frozen
+    snapshot of the past -- it must not drift when a task is renamed afterwards."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        planning_response: Response = client.post(
+            f"/projects/{project_id}/plannings", json={}, headers=headers
+        )
+        assert planning_response.status_code == 201
+        planning_id = cast(int, planning_response.json()["id"])
+        display_response: Response = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/display", headers=headers
+        )
+        assert display_response.status_code == 200
+
+        estimate_response: Response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate_response.status_code == 201
+        estimate_id = cast(int, estimate_response.json()["id"])
+
+        validate_response: Response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/validate",
+            headers=headers,
+        )
+        assert validate_response.status_code == 200
+        assert validate_response.json()["status"] == "validated"
+
+        rename_response: Response = client.patch(
+            f"/projects/{project_id}/tasks/1001",
+            json={"name": "Task One Renamed"},
+            headers=headers,
+        )
+        assert rename_response.status_code == 200
+
+        rows_response: Response = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
+        )
+        assert rows_response.status_code == 200
+        rows = cast(list[dict[str, Any]], rows_response.json()["items"])
+        task_names = {row["task_name"] for row in rows}
+        assert "Task One" in task_names
+        assert "Task One Renamed" not in task_names
+
+        # The Planning tree itself is unaffected by this distinction -- it is always live.
+        tasks_response: Response = client.get(f"/projects/{project_id}/tasks", headers=headers)
+        task_by_uid = {task["uid"]: task for task in tasks_response.json()["items"]}
+        assert task_by_uid[1001]["name"] == "Task One Renamed"
+
+
+def test_estimate_task_row_freezes_to_last_live_name_seen_before_validation() -> None:
+    """E12-08 Finding Moyenne #3 (round 4 review): a task renamed live one or more
+    times while its devis is still a draft must validate with its *last-seen*
+    name, not the name the row was created with -- mirroring the same
+    "freeze at validation, not creation" rule already applied to a root labor
+    line's own pricing (`calculate_estimate_lines`). A rename occurring *after*
+    validation must still leave the now-frozen row untouched (see
+    `test_patch_task_name_does_not_affect_already_validated_estimate_task_rows`
+    above).
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        planning_response: Response = client.post(
+            f"/projects/{project_id}/plannings", json={}, headers=headers
+        )
+        assert planning_response.status_code == 201
+        planning_id = cast(int, planning_response.json()["id"])
+        display_response: Response = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/display", headers=headers
+        )
+        assert display_response.status_code == 200
+
+        estimate_response: Response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate_response.status_code == 201
+        estimate_id = cast(int, estimate_response.json()["id"])
+
+        for name in ("Task One Renamed Once", "Task One Renamed Twice"):
+            rename_response: Response = client.patch(
+                f"/projects/{project_id}/tasks/1001",
+                json={"name": name},
+                headers=headers,
+            )
+            assert rename_response.status_code == 200
+
+        validate_response: Response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/validate",
+            headers=headers,
+        )
+        assert validate_response.status_code == 200
+        assert validate_response.json()["status"] == "validated"
+
+        rows_response: Response = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
+        )
+        assert rows_response.status_code == 200
+        rows = cast(list[dict[str, Any]], rows_response.json()["items"])
+        row = next(item for item in rows if item["task_uid"] == 1001)
+        assert row["task_name"] == "Task One Renamed Twice"
+
+        # A rename occurring after validation must not disturb the now-frozen row.
+        rename_after_response: Response = client.patch(
+            f"/projects/{project_id}/tasks/1001",
+            json={"name": "Task One Renamed After Validation"},
+            headers=headers,
+        )
+        assert rename_after_response.status_code == 200
+        rows_after_response: Response = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
+        )
+        rows_after = cast(list[dict[str, Any]], rows_after_response.json()["items"])
+        row_after = next(item for item in rows_after if item["id"] == row["id"])
+        assert row_after["task_name"] == "Task One Renamed Twice"
+
+
+def test_validated_estimate_task_row_resolves_task_uid() -> None:
+    """E12-08 Finding Moyenne #4 (round 4 review): `task_uid` must still resolve
+    for a validated estimate's task rows -- unlike `task_name`/`position`/etc, a
+    task's `uid` is a stable identity, not live/derived state, so validation
+    must not leave it `None` just because the estimate stops reading its other
+    fields live.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        planning_response: Response = client.post(
+            f"/projects/{project_id}/plannings", json={}, headers=headers
+        )
+        assert planning_response.status_code == 201
+        planning_id = cast(int, planning_response.json()["id"])
+        display_response: Response = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/display", headers=headers
+        )
+        assert display_response.status_code == 200
+
+        estimate_response: Response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate_response.status_code == 201
+        estimate_id = cast(int, estimate_response.json()["id"])
+
+        draft_rows_response: Response = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
+        )
+        draft_rows = cast(list[dict[str, Any]], draft_rows_response.json()["items"])
+        assert {row["task_uid"] for row in draft_rows} == {1001, 1002}
+
+        validate_response: Response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/validate",
+            headers=headers,
+        )
+        assert validate_response.status_code == 200
+
+        validated_rows_response: Response = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
+        )
+        validated_rows = cast(list[dict[str, Any]], validated_rows_response.json()["items"])
+        assert {row["task_uid"] for row in validated_rows} == {1001, 1002}
+
+
+def test_estimate_task_row_position_follows_live_planning_move() -> None:
+    """Issue #290 (E12-08) acceptance criterion: moving a task in the Planning
+    (position/parent) is reflected immediately in a draft estimate's own task-row
+    `position`/`parent_task_id` values, without recreating the estimate."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        planning_response: Response = client.post(
+            f"/projects/{project_id}/plannings", json={}, headers=headers
+        )
+        assert planning_response.status_code == 201
+        planning_id = cast(int, planning_response.json()["id"])
+        display_response: Response = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/display", headers=headers
+        )
+        assert display_response.status_code == 200
+
+        estimate_response: Response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate_response.status_code == 201
+        estimate_id = cast(int, estimate_response.json()["id"])
+
+        rows_before = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
+        ).json()["items"]
+        position_by_uid_before = {row["task_uid"]: row["position"] for row in rows_before}
+        assert position_by_uid_before == {1001: 1, 1002: 2}
+
+        move_response: Response = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/tasks/move",
+            json={
+                "task_uids": [1002],
+                "target_parent_uid": None,
+                "position": 1,
+                "expected_revision": 0,
+            },
+            headers=headers,
+        )
+        assert move_response.status_code == 200
+
+        rows_after = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
+        ).json()["items"]
+        position_by_uid_after = {row["task_uid"]: row["position"] for row in rows_after}
+        assert position_by_uid_after == {1002: 1, 1001: 2}
+
+
 def test_delete_planning_task_referenced_by_cost_line_conflicts_without_mutation() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)
@@ -1575,7 +1988,7 @@ def test_creates_first_planning_from_legacy_project_preserves_task_enrichment_no
     # without carrying over the task's notes, unlike the sibling source_planning_id
     # branch and reopen_planning_structure. MsTask itself has no `notes` column --
     # legacy task notes live in WfTaskEnrichment, keyed by (project_id, task_uid), the
-    # same table update_task_description falls back to while no WfPlanning exists yet
+    # same table update_task falls back to while no WfPlanning exists yet
     # (see tasks.py). This covers both a task with an enrichment row (its description
     # must land in WfPlanningTaskSnapshot.notes) and a task with none (must clone with
     # notes=None, not raise).

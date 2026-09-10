@@ -46,7 +46,7 @@ from waterfall.schemas.projects import (
     TaskRead,
 )
 from waterfall.schemas.resources import CostTypeKind
-from waterfall.services import apply_pagination, get_project_setup_warnings
+from waterfall.services import ResolvedTaskDisplay, apply_pagination, get_project_setup_warnings
 from waterfall.services.project_lifecycle import (
     ensure_project_mutable,
     validate_project_status_transition,
@@ -106,16 +106,46 @@ def to_project_estimate_read(estimate: Estimate) -> ProjectEstimateRead:
     )
 
 
-def to_estimate_task_row_read(row: EstimateTaskRow) -> EstimateTaskRowRead:
+def to_estimate_task_row_read(
+    row: EstimateTaskRow,
+    resolved: ResolvedTaskDisplay | None,
+    task_uid_by_task_id: dict[int, int],
+) -> EstimateTaskRowRead:
+    """Build the response for a single ``EstimateTaskRow``.
+
+    ``resolved`` is the live-resolved counterpart from
+    ``services.estimate_task_display.resolve_live_task_display`` -- callers
+    only ever compute one for a *draft* estimate (see that module's
+    docstring), so ``None`` here falls back to ``row``'s own frozen, stored
+    columns for ``parent_task_id``/``position``/``task_name``/
+    ``outline_number``/``outline_level``: the correct behaviour both for a
+    validated estimate (which must never drift after a later task
+    rename/move) and for the pre-existing degenerate case of a row whose task
+    can no longer be resolved live.
+
+    ``task_uid``, unlike those fields, is always resolved when possible, even
+    when ``resolved`` is ``None``: a task's ``uid`` is a stable identity, not
+    derived/drifting state, so a validated estimate need not leave it ``None``
+    just because it keeps its other fields frozen (E12-08 Finding Moyenne #4,
+    round 4 review) -- ``task_uid_by_task_id`` (built by
+    ``services.estimate_task_display.resolve_task_uid_by_id``) is the fallback
+    lookup for that case.
+    """
+    task_uid = (
+        resolved.task_uid
+        if resolved is not None
+        else (task_uid_by_task_id.get(row.task_id) if row.task_id is not None else None)
+    )
     return EstimateTaskRowRead(
         id=row.id,
         estimate_id=row.estimate_id,
         task_id=row.task_id,
-        parent_task_id=row.parent_task_id,
-        position=row.position,
-        task_name=row.task_name,
-        outline_number=row.outline_number,
-        outline_level=row.outline_level,
+        task_uid=task_uid,
+        parent_task_id=resolved.parent_task_id if resolved is not None else row.parent_task_id,
+        position=resolved.position if resolved is not None else row.position,
+        task_name=resolved.task_name if resolved is not None else row.task_name,
+        outline_number=resolved.outline_number if resolved is not None else row.outline_number,
+        outline_level=resolved.outline_level if resolved is not None else row.outline_level,
         is_milestone=row.is_milestone,
     )
 

@@ -15,6 +15,9 @@ properties:
   task_id:
     type: [integer, "null"]
     minimum: 1
+  task_uid:
+    type: [integer, "null"]
+    minimum: 1
   parent_task_id:
     type: [integer, "null"]
     minimum: 1

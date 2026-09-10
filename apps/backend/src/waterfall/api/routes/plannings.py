@@ -215,7 +215,7 @@ def create_planning(
         tasks = db.query(MsTask).filter(MsTask.project_id == project_id).all()
         # MsTask carries no `notes` column of its own -- legacy task notes live in
         # WfTaskEnrichment, keyed by (project_id, task_uid), the same table
-        # update_task_description falls back to writing/reading while no WfPlanning
+        # update_task falls back to writing/reading while no WfPlanning
         # exists yet for the project (see tasks.py). Build a uid -> description lookup
         # up front so it can be reported onto WfPlanningTaskSnapshot.notes below.
         enrichments = (

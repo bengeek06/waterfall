@@ -289,8 +289,8 @@ components:
       $ref: ./components/schemas/PlanningTreeRead.yaml
     PlanningTaskTreeRead:
       $ref: ./components/schemas/PlanningTaskTreeRead.yaml
-    TaskDescriptionUpdate:
-      $ref: ./components/schemas/TaskDescriptionUpdate.yaml
+    TaskUpdate:
+      $ref: ./components/schemas/TaskUpdate.yaml
     EstimateRoleAssignmentCreate:
       $ref: ./components/schemas/EstimateRoleAssignmentCreate.yaml
     EstimateRoleAssignmentUpdate:

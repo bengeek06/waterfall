@@ -12,7 +12,7 @@ from waterfall.schemas.projects import (
     ProjectCreate,
     ProjectEstimateCreate,
     ProjectUpdate,
-    TaskDescriptionUpdate,
+    TaskUpdate,
 )
 from waterfall.schemas.resources import (
     CalendarCreate,
@@ -127,7 +127,7 @@ def test_project_schema_normalizes_and_rejects_blank_input() -> None:
         currency_code=" usd ",
         note="  Budget initial  ",
     )
-    description = TaskDescriptionUpdate(description="  Commentaire  ")
+    description = TaskUpdate(description="  Commentaire  ")
     line = EstimateCostLineCreate.model_validate(
         {
             "task_id": 1,

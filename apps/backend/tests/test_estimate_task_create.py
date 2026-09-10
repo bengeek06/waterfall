@@ -236,6 +236,37 @@ def test_create_estimate_task_rejects_unknown_parent_uid() -> None:
         assert response.status_code == 404
 
 
+def test_create_estimate_task_response_reports_full_tree_position() -> None:
+    """Finding Haute (E12-08/#290, round 5 review): `resolve_live_task_display`
+    renumbers `position` 1..N depth-first across only the rows it is given
+    (see its own docstring) -- passing it only the single freshly created
+    `row` made a `POST` response always announce `position: 1`, regardless of
+    the task's true place among the devis's existing tasks.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        _generate_structure(client, headers, project_id)
+        estimate_id = _create_estimate(client, headers, project_id)
+        deliverable_uid = _deliverable_uid(project_id)
+
+        # `_generate_structure` already seeds 4 tasks -- Design, Specification,
+        # Requirements (the `livrable` deliverable, still a leaf here), and the
+        # lot's auto-generated "Fin Specification" completion milestone --
+        # snapshotted into 4 EstimateTaskRow at positions 1-4. Targeting the
+        # (childless) deliverable as parent makes the new task its only child,
+        # so it is unambiguously visited right after it, depth-first, and
+        # before the lot's other existing child ("Fin Specification").
+        response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/tasks",
+            json={"name": "Chiffrage supplementaire", "target_parent_uid": deliverable_uid},
+            headers=headers,
+        )
+        assert response.status_code == 201
+        row = cast(dict[str, Any], response.json())
+        assert row["position"] == 4
+
+
 def _deliverable_uid(project_id: int) -> int:
     with get_session_factory()() as session:
         deliverable = (
