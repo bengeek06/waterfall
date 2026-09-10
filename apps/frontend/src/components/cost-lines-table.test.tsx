@@ -15,13 +15,15 @@ const line = {
 function renderTable(overrides: Partial<CostLinesTableProps> = {}) {
   const props: CostLinesTableProps = {
     costLines: [line],
+    estimateTaskRows: [],
     canEditEstimate: true,
     editingLineId: null,
-    editingLineDraft: { label: "", quantity: "", unitCost: "", plannedDate: "" },
+    editingLineDraft: { label: "", quantity: "", unitCost: "", plannedDate: "", taskId: "" },
     onEditLabelChange: vi.fn(),
     onEditQuantityChange: vi.fn(),
     onEditUnitCostChange: vi.fn(),
     onEditPlannedDateChange: vi.fn(),
+    onEditTaskIdChange: vi.fn(),
     estimateBusy: false,
     onStartEdit: vi.fn(),
     onSave: vi.fn(),
@@ -43,7 +45,7 @@ describe("CostLinesTable", () => {
     const onSave = vi.fn();
     renderTable({
       editingLineId: 1,
-      editingLineDraft: { label: "Achat licences", quantity: "3.00", unitCost: "150.00", plannedDate: "" },
+      editingLineDraft: { label: "Achat licences", quantity: "3.00", unitCost: "150.00", plannedDate: "", taskId: "" },
       onSave,
     });
 
@@ -59,7 +61,7 @@ describe("CostLinesTable", () => {
     const onSave = vi.fn();
     renderTable({
       editingLineId: 1,
-      editingLineDraft: { label: "Achat licences", quantity: "-2", unitCost: "150.00", plannedDate: "" },
+      editingLineDraft: { label: "Achat licences", quantity: "-2", unitCost: "150.00", plannedDate: "", taskId: "" },
       onSave,
     });
 
@@ -73,7 +75,7 @@ describe("CostLinesTable", () => {
     const onSave = vi.fn();
     renderTable({
       editingLineId: 1,
-      editingLineDraft: { label: "Achat licences", quantity: "2.00", unitCost: "-10", plannedDate: "" },
+      editingLineDraft: { label: "Achat licences", quantity: "2.00", unitCost: "-10", plannedDate: "", taskId: "" },
       onSave,
     });
 
@@ -91,7 +93,7 @@ describe("CostLinesTable", () => {
     const onSave = vi.fn();
     renderTable({
       editingLineId: 1,
-      editingLineDraft: { label: "Achat licences", quantity: "0", unitCost: "150.00", plannedDate: "" },
+      editingLineDraft: { label: "Achat licences", quantity: "0", unitCost: "150.00", plannedDate: "", taskId: "" },
       onSave,
     });
 
@@ -104,7 +106,7 @@ describe("CostLinesTable", () => {
     const onSave = vi.fn();
     renderTable({
       editingLineId: 1,
-      editingLineDraft: { label: "Achat licences", quantity: "2.00", unitCost: "0", plannedDate: "" },
+      editingLineDraft: { label: "Achat licences", quantity: "2.00", unitCost: "0", plannedDate: "", taskId: "" },
       onSave,
     });
 
@@ -122,7 +124,7 @@ describe("CostLinesTable", () => {
     const onSave = vi.fn();
     renderTable({
       editingLineId: 1,
-      editingLineDraft: { label: "Achat licences", quantity: "", unitCost: "150.00", plannedDate: "" },
+      editingLineDraft: { label: "Achat licences", quantity: "", unitCost: "150.00", plannedDate: "", taskId: "" },
       onSave,
     });
 
@@ -135,7 +137,7 @@ describe("CostLinesTable", () => {
     const onSave = vi.fn();
     renderTable({
       editingLineId: 1,
-      editingLineDraft: { label: "Achat licences", quantity: "2.00", unitCost: "", plannedDate: "" },
+      editingLineDraft: { label: "Achat licences", quantity: "2.00", unitCost: "", plannedDate: "", taskId: "" },
       onSave,
     });
 
@@ -150,7 +152,7 @@ describe("CostLinesTable", () => {
     const onSave = vi.fn();
     renderTable({
       editingLineId: 1,
-      editingLineDraft: { label: "", quantity: "2.00", unitCost: "150.00", plannedDate: "" },
+      editingLineDraft: { label: "", quantity: "2.00", unitCost: "150.00", plannedDate: "", taskId: "" },
       onSave,
     });
 
@@ -174,7 +176,7 @@ describe("CostLinesTable", () => {
       const onSave = vi.fn();
       renderTable({
         editingLineId: 1,
-        editingLineDraft: { label: "Achat licences", quantity: "2.00", unitCost: "150.00", plannedDate: "" },
+        editingLineDraft: { label: "Achat licences", quantity: "2.00", unitCost: "150.00", plannedDate: "", taskId: "" },
         onSave,
       });
 
@@ -187,7 +189,7 @@ describe("CostLinesTable", () => {
       const onEditPlannedDateChange = vi.fn();
       renderTable({
         editingLineId: 1,
-        editingLineDraft: { label: "Achat licences", quantity: "2.00", unitCost: "150.00", plannedDate: "" },
+        editingLineDraft: { label: "Achat licences", quantity: "2.00", unitCost: "150.00", plannedDate: "", taskId: "" },
         onEditPlannedDateChange,
       });
 
@@ -201,7 +203,7 @@ describe("CostLinesTable", () => {
     it("pre-fills the edited line's planned date input from editingLineDraft", () => {
       renderTable({
         editingLineId: 1,
-        editingLineDraft: { label: "Achat licences", quantity: "2.00", unitCost: "150.00", plannedDate: "2026-10-01" },
+        editingLineDraft: { label: "Achat licences", quantity: "2.00", unitCost: "150.00", plannedDate: "2026-10-01", taskId: "" },
       });
 
       expect(screen.getByLabelText("Date prévisionnelle de Achat licences")).toHaveValue("2026-10-01");
@@ -370,6 +372,252 @@ describe("CostLinesTable", () => {
       fireEvent.click(selectAll);
 
       expect(onSelectedCostLineIdsChange).toHaveBeenCalledWith(new Set());
+    });
+
+    // E12-04/#276 review finding: select-all/select-one must keep operating on `costLines` only,
+    // never on the merged grid's full-width task-row/"Lignes globales" entries, once those start
+    // interleaving with cost-line rows (see buildEstimateGridEntries in lib/estimate-grid.ts).
+    it("selects only cost lines, not task rows, when the grid mixes task rows and cost lines", () => {
+      const taskRow = {
+        id: 1,
+        estimate_id: 1,
+        task_id: 42,
+        parent_task_id: null,
+        position: 1,
+        task_name: "Terrassement",
+        outline_number: "1",
+        outline_level: 0,
+        is_milestone: false,
+      } as never;
+      const attachedLine = {
+        id: 2,
+        accounting_code: "6011",
+        label: "Béton",
+        quantity: "1",
+        unit_cost: "500",
+        purchase_cost: "500",
+        task_id: 42,
+      } as never;
+      const onSelectedCostLineIdsChange = vi.fn();
+      renderTable({
+        costLines: [line, attachedLine],
+        estimateTaskRows: [taskRow],
+        onSelectedCostLineIdsChange,
+      });
+
+      expect(screen.queryByRole("checkbox", { name: "Sélectionner Terrassement" })).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("checkbox", { name: "Tout sélectionner" }));
+
+      expect(onSelectedCostLineIdsChange).toHaveBeenCalledWith(new Set([1, 2]));
+    });
+
+    it("toggles a single cost line's selection when the grid mixes task rows and cost lines", () => {
+      const taskRow = {
+        id: 1,
+        estimate_id: 1,
+        task_id: 42,
+        parent_task_id: null,
+        position: 1,
+        task_name: "Terrassement",
+        outline_number: "1",
+        outline_level: 0,
+        is_milestone: false,
+      } as never;
+      const attachedLine = {
+        id: 2,
+        accounting_code: "6011",
+        label: "Béton",
+        quantity: "1",
+        unit_cost: "500",
+        purchase_cost: "500",
+        task_id: 42,
+      } as never;
+      const onSelectedCostLineIdsChange = vi.fn();
+      renderTable({
+        costLines: [line, attachedLine],
+        estimateTaskRows: [taskRow],
+        selectedCostLineIds: new Set([1]),
+        onSelectedCostLineIdsChange,
+      });
+
+      fireEvent.click(screen.getByRole("checkbox", { name: "Sélectionner Béton" }));
+
+      expect(onSelectedCostLineIdsChange).toHaveBeenCalledWith(new Set([1, 2]));
+    });
+  });
+
+  // E12-04/#276: the Devis grid now lists the estimate's own task rows, ordered by `position`
+  // (the planning's own depth-first order), each cost line grouped under the task it's attached
+  // to, and a trailing "Lignes globales" section for cost lines with no task attachment. See
+  // lib/estimate-grid.ts's buildEstimateGridEntries for the ordering rules this exercises.
+  describe("Devis grid (E12-04)", () => {
+    const rootTask = {
+      id: 1,
+      estimate_id: 1,
+      task_id: 42,
+      parent_task_id: null,
+      position: 1,
+      task_name: "Terrassement",
+      outline_number: "1",
+      outline_level: 0,
+      is_milestone: false,
+    };
+    const childTask = {
+      id: 2,
+      estimate_id: 1,
+      task_id: 43,
+      parent_task_id: 42,
+      position: 2,
+      task_name: "Coulage dalle",
+      outline_number: "1.1",
+      outline_level: 1,
+      is_milestone: true,
+    };
+    // A snapshot-only task row with no MsTask twin (`task_id: null`) -- can never receive a
+    // cost line, but still appears in the grid as a task row.
+    const orphanTask = {
+      id: 3,
+      estimate_id: 1,
+      task_id: null,
+      parent_task_id: null,
+      position: 3,
+      task_name: "Sous-tâche sans jumeau",
+      outline_number: "2",
+      outline_level: 0,
+      is_milestone: false,
+    };
+    // Deliberately out of position order, to exercise the sort.
+    const estimateTaskRows = [childTask, rootTask, orphanTask] as never;
+
+    function rowTexts() {
+      return screen.getAllByRole("row").map((row) => row.textContent ?? "");
+    }
+
+    it("lists every task row in position order, regardless of array order", () => {
+      renderTable({ costLines: [], estimateTaskRows });
+
+      const rows = rowTexts();
+      const terrassementIndex = rows.findIndex((text) => text.includes("Terrassement"));
+      const coulageIndex = rows.findIndex((text) => text.includes("Coulage dalle"));
+      const orphanIndex = rows.findIndex((text) => text.includes("Sous-tâche sans jumeau"));
+
+      expect(terrassementIndex).toBeGreaterThan(-1);
+      expect(terrassementIndex).toBeLessThan(coulageIndex);
+      expect(coulageIndex).toBeLessThan(orphanIndex);
+    });
+
+    it("marks a milestone task row with a 'Jalon' badge", () => {
+      renderTable({ costLines: [], estimateTaskRows });
+
+      expect(screen.getByText("Jalon")).toBeInTheDocument();
+    });
+
+    it("displays a cost line attached to a task right under that task", () => {
+      const attachedLine = {
+        id: 10,
+        accounting_code: "6011",
+        label: "Béton",
+        quantity: "1",
+        unit_cost: "500",
+        purchase_cost: "500",
+        task_id: 42,
+      } as never;
+      renderTable({ costLines: [attachedLine], estimateTaskRows });
+
+      const rows = rowTexts();
+      const terrassementIndex = rows.findIndex((text) => text.includes("Terrassement"));
+      const betonIndex = rows.findIndex((text) => text.includes("Béton"));
+
+      expect(terrassementIndex).toBeGreaterThan(-1);
+      expect(betonIndex).toBe(terrassementIndex + 1);
+    });
+
+    it("displays a cost line with no task attachment in a trailing 'Lignes globales' section", () => {
+      const globalLine = {
+        id: 11,
+        accounting_code: "6011",
+        label: "Frais généraux",
+        quantity: "1",
+        unit_cost: "100",
+        purchase_cost: "100",
+        task_id: null,
+      } as never;
+      renderTable({ costLines: [globalLine], estimateTaskRows });
+
+      const rows = rowTexts();
+      const orphanTaskIndex = rows.findIndex((text) => text.includes("Sous-tâche sans jumeau"));
+      const globalHeaderIndex = rows.findIndex((text) => text.includes("Lignes globales"));
+      const lineIndex = rows.findIndex((text) => text.includes("Frais généraux"));
+
+      expect(globalHeaderIndex).toBeGreaterThan(orphanTaskIndex);
+      expect(lineIndex).toBe(globalHeaderIndex + 1);
+    });
+  });
+
+  // E12-04/#276: the "Tâche" selector, shown when a cost line row is being edited, and the
+  // read-only attached-task name shown otherwise.
+  describe("task attachment selector (E12-04)", () => {
+    const estimateTaskRows = [
+      {
+        id: 1,
+        estimate_id: 1,
+        task_id: 42,
+        parent_task_id: null,
+        position: 1,
+        task_name: "Terrassement",
+        outline_number: "1",
+        outline_level: 0,
+        is_milestone: false,
+      },
+      {
+        id: 2,
+        estimate_id: 1,
+        task_id: null,
+        parent_task_id: null,
+        position: 2,
+        task_name: "Sous-tâche sans jumeau",
+        outline_number: "2",
+        outline_level: 0,
+        is_milestone: false,
+      },
+    ] as never;
+
+    it("displays the attached task's name when the line is not being edited", () => {
+      const attachedLine = {
+        id: 1,
+        accounting_code: "6011",
+        label: "Achat licences",
+        quantity: "2.00",
+        unit_cost: "100.00",
+        purchase_cost: "200.00",
+        task_id: 42,
+      } as never;
+      renderTable({ costLines: [attachedLine], estimateTaskRows, editingLineId: null });
+
+      expect(screen.getByText("Terrassement")).toBeInTheDocument();
+    });
+
+    it("displays a placeholder for a line with no attached task when not editing", () => {
+      renderTable({ costLines: [line], estimateTaskRows, editingLineId: null });
+
+      expect(screen.getAllByText("-").length).toBeGreaterThan(0);
+    });
+
+    it("offers every attachable task (task_id set) and excludes a task row with no task_id", () => {
+      renderTable({ estimateTaskRows, editingLineId: 1 });
+
+      expect(screen.getByRole("option", { name: "Terrassement" })).toBeInTheDocument();
+      expect(screen.queryByRole("option", { name: "Sous-tâche sans jumeau" })).not.toBeInTheDocument();
+    });
+
+    it("reports a change to the edited line's task attachment", () => {
+      const onEditTaskIdChange = vi.fn();
+      renderTable({ estimateTaskRows, editingLineId: 1, onEditTaskIdChange });
+
+      fireEvent.change(screen.getByLabelText("Tâche de Achat licences"), { target: { value: "42" } });
+
+      expect(onEditTaskIdChange).toHaveBeenCalledWith("42");
     });
   });
 });

@@ -20,6 +20,7 @@ import {
   createImportBatch,
   EstimateAggregates,
   EstimateCostLine,
+  EstimateTaskRow,
   exportProjectXml,
   getCostCategories,
   getCostTypes,
@@ -157,7 +158,7 @@ export default function ProjectDetailsPage() {
   const [importFeedback, setImportFeedback] = useState<string | null>(null);
   const [estimates, setEstimates] = useState<ProjectEstimate[]>([]);
   const [selectedEstimateId, setSelectedEstimateId] = useState<number | null>(null);
-  const [estimateTaskRowCount, setEstimateTaskRowCount] = useState(0);
+  const [estimateTaskRows, setEstimateTaskRows] = useState<EstimateTaskRow[]>([]);
   const [costLines, setCostLines] = useState<EstimateCostLine[]>([]);
   const [costCategories, setCostCategories] = useState<CostCategory[]>([]);
   const [aggregates, setAggregates] = useState<EstimateAggregates | null>(null);
@@ -277,7 +278,7 @@ export default function ProjectDetailsPage() {
 
     async function loadEstimateDetails() {
       if (!session || selectedEstimateId === null) {
-        setEstimateTaskRowCount(0);
+        setEstimateTaskRows([]);
         setCostLines([]);
         return;
       }
@@ -287,7 +288,7 @@ export default function ProjectDetailsPage() {
           listEstimateCostLines(projectId, selectedEstimateId, session, onSessionRefresh),
         ]);
         if (!cancelled) {
-          setEstimateTaskRowCount(taskRows.length);
+          setEstimateTaskRows(taskRows);
           setCostLines(lines);
         }
       } catch (cause) {
@@ -435,7 +436,7 @@ export default function ProjectDetailsPage() {
     setSelectedEstimateId,
     setActiveTab,
     setCostLines,
-    setEstimateTaskRowCount,
+    setEstimateTaskRows,
     selectedPlanningId,
     selectedPlanningIdRef,
     setPlanningDetail,
@@ -684,7 +685,7 @@ export default function ProjectDetailsPage() {
           onOpenValidation={estimateCostLines.openEstimateValidation}
           validationWarnings={estimateCostLines.validationWarnings}
           onDismissValidationWarnings={estimateCostLines.dismissValidationWarnings}
-          estimateTaskRowCount={estimateTaskRowCount}
+          estimateTaskRows={estimateTaskRows}
           costLines={costLines}
           costCategories={costCategories}
           costLineDraft={estimateCostLines.costLineDraft}
@@ -693,6 +694,7 @@ export default function ProjectDetailsPage() {
           onQuantityChange={estimateCostLines.updateCostLineDraftQuantity}
           onUnitCostChange={estimateCostLines.updateCostLineDraftUnitCost}
           onPlannedDateChange={estimateCostLines.updateCostLineDraftPlannedDate}
+          onTaskIdChange={estimateCostLines.updateCostLineDraftTaskId}
           onAddCostLine={() => void estimateCostLines.addCostLine()}
           editingLineId={estimateCostLines.editingLineId}
           editingLineDraft={estimateCostLines.editingLineDraft}
@@ -700,6 +702,7 @@ export default function ProjectDetailsPage() {
           onEditQuantityChange={estimateCostLines.updateEditingLineDraftQuantity}
           onEditUnitCostChange={estimateCostLines.updateEditingLineDraftUnitCost}
           onEditPlannedDateChange={estimateCostLines.updateEditingLineDraftPlannedDate}
+          onEditTaskIdChange={estimateCostLines.updateEditingLineDraftTaskId}
           onStartEditCostLine={estimateCostLines.startEditCostLine}
           onSaveCostLine={(line) => void estimateCostLines.saveCostLine(line)}
           onRequestDeleteCostLine={estimateCostLines.requestDeleteCostLine}

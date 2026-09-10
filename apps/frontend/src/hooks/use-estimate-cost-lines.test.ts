@@ -2,7 +2,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { useRef } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { EstimateCostLine, PlanningDetail, Project, ProjectCostCode, ProjectEstimate } from "@/lib/backend";
+import type { EstimateCostLine, EstimateTaskRow, PlanningDetail, Project, ProjectCostCode, ProjectEstimate } from "@/lib/backend";
 import { ApiError } from "@/lib/backend";
 
 const mocks = vi.hoisted(() => ({
@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   deleteEstimateCostLine: vi.fn(),
   getProjectCostCodes: vi.fn(),
   getPlanning: vi.fn(),
+  listEstimateTaskRows: vi.fn(),
   validateProjectEstimate: vi.fn(),
   clearSession: vi.fn(),
 }));
@@ -30,6 +31,7 @@ vi.mock("@/lib/backend", async () => {
     deleteEstimateCostLine: mocks.deleteEstimateCostLine,
     getProjectCostCodes: mocks.getProjectCostCodes,
     getPlanning: mocks.getPlanning,
+    listEstimateTaskRows: mocks.listEstimateTaskRows,
     validateProjectEstimate: mocks.validateProjectEstimate,
   };
 });
@@ -47,7 +49,7 @@ type SetCostLines = (updater: (previous: EstimateCostLine[]) => EstimateCostLine
 
 type SetEstimates = (updater: (previous: ProjectEstimate[]) => ProjectEstimate[]) => void;
 
-type SetEstimateTaskRowCount = (updater: (previous: number) => number) => void;
+type SetEstimateTaskRows = (rows: EstimateTaskRow[]) => void;
 
 function setup(
   overrides: { selectedEstimateId?: number | null; selectedPlanningId?: number | null } = {},
@@ -56,7 +58,7 @@ function setup(
   const setError = vi.fn();
   const setCostLines = vi.fn<SetCostLines>();
   const setEstimates = vi.fn<SetEstimates>();
-  const setEstimateTaskRowCount = vi.fn<SetEstimateTaskRowCount>();
+  const setEstimateTaskRows = vi.fn<SetEstimateTaskRows>();
   const setPlanningDetail = vi.fn<(detail: PlanningDetail | null) => void>();
   const { result, rerender } = renderHook(
     (props: { selectedEstimateId: number | null; selectedPlanningId?: number | null }) => {
@@ -73,7 +75,7 @@ function setup(
         setSelectedEstimateId: vi.fn(),
         setActiveTab: vi.fn(),
         setCostLines,
-        setEstimateTaskRowCount,
+        setEstimateTaskRows,
         selectedPlanningId,
         selectedPlanningIdRef,
         setPlanningDetail,
@@ -96,7 +98,7 @@ function setup(
     setError,
     setCostLines,
     setEstimates,
-    setEstimateTaskRowCount,
+    setEstimateTaskRows,
     setPlanningDetail,
   };
 }
@@ -388,6 +390,7 @@ describe("useEstimateCostLines saveCostLine planned date (E6-05)", () => {
         quantity: 2,
         unit_cost: 150,
         planned_date: "2026-11-15T00:00:00Z",
+        task_id: null,
       },
       session,
       expect.any(Function),
@@ -450,6 +453,133 @@ describe("useEstimateCostLines startEditCostLine planned date (E6-05)", () => {
     });
 
     expect(result.current.editingLineDraft.plannedDate).toBe("");
+  });
+});
+
+// E12-04/#276: task_id is optional, independent from every other field, and round-trips through
+// the same empty-string-means-null convention as planned_date above.
+describe("useEstimateCostLines task attachment (E12-04)", () => {
+  beforeEach(() => {
+    mocks.createEstimateCostLine.mockReset();
+    mocks.updateEstimateCostLine.mockReset();
+    mocks.clearSession.mockReset();
+    mocks.getProjectCostCodes.mockReset().mockResolvedValue([]);
+  });
+
+  function fillValidDraft(result: { current: ReturnType<typeof useEstimateCostLines> }) {
+    act(() => {
+      result.current.updateCostLineDraftCategory("3");
+      result.current.updateCostLineDraftLabel("Achat licences");
+      result.current.updateCostLineDraftQuantity("2");
+      result.current.updateCostLineDraftUnitCost("150");
+    });
+  }
+
+  it("sends the chosen task_id in the create payload", async () => {
+    mocks.createEstimateCostLine.mockResolvedValue(makeLine(1));
+    const { result } = setup({ selectedEstimateId: 1 });
+    fillValidDraft(result);
+    act(() => {
+      result.current.updateCostLineDraftTaskId("42");
+    });
+
+    await act(async () => {
+      await result.current.addCostLine();
+    });
+
+    expect(mocks.createEstimateCostLine).toHaveBeenCalledWith(
+      1,
+      1,
+      expect.objectContaining({ task_id: 42 }),
+      session,
+      expect.any(Function),
+    );
+  });
+
+  it("sends a null task_id, and does not block the add, when no task is chosen", async () => {
+    mocks.createEstimateCostLine.mockResolvedValue(makeLine(1));
+    const { result } = setup({ selectedEstimateId: 1 });
+    fillValidDraft(result);
+
+    await act(async () => {
+      await result.current.addCostLine();
+    });
+
+    expect(mocks.createEstimateCostLine).toHaveBeenCalledWith(
+      1,
+      1,
+      expect.objectContaining({ task_id: null }),
+      session,
+      expect.any(Function),
+    );
+  });
+
+  it("pre-fills the edited line's task selector from the line's existing task_id", () => {
+    const { result } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.startEditCostLine(makeLine(1, { task_id: 42 } as never));
+    });
+
+    expect(result.current.editingLineDraft.taskId).toBe("42");
+  });
+
+  it("pre-fills an empty task selector when the line has no attachment", () => {
+    const { result } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.startEditCostLine(makeLine(1, { task_id: null } as never));
+    });
+
+    expect(result.current.editingLineDraft.taskId).toBe("");
+  });
+
+  it("sends the newly chosen task_id in the update payload", async () => {
+    mocks.updateEstimateCostLine.mockResolvedValue(makeLine(1));
+    const { result } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.startEditCostLine(makeLine(1, { label: "Achat licences", quantity: 2, unit_cost: 150, task_id: null } as never));
+      result.current.updateEditingLineDraftTaskId("42");
+    });
+
+    await act(async () => {
+      await result.current.saveCostLine(makeLine(1));
+    });
+
+    expect(mocks.updateEstimateCostLine).toHaveBeenCalledWith(
+      1,
+      1,
+      1,
+      expect.objectContaining({ task_id: 42 }),
+      session,
+      expect.any(Function),
+    );
+  });
+
+  it("sends a null task_id in the update payload when the task attachment is removed", async () => {
+    mocks.updateEstimateCostLine.mockResolvedValue(makeLine(1));
+    const { result } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.startEditCostLine(
+        makeLine(1, { label: "Achat licences", quantity: 2, unit_cost: 150, task_id: 42 } as never),
+      );
+      result.current.updateEditingLineDraftTaskId("");
+    });
+
+    await act(async () => {
+      await result.current.saveCostLine(makeLine(1));
+    });
+
+    expect(mocks.updateEstimateCostLine).toHaveBeenCalledWith(
+      1,
+      1,
+      1,
+      expect.objectContaining({ task_id: null }),
+      session,
+      expect.any(Function),
+    );
   });
 });
 
@@ -606,6 +736,7 @@ describe("useEstimateCostLines submitCreateTask", () => {
     mocks.clearSession.mockReset();
     mocks.getProjectCostCodes.mockReset().mockResolvedValue([]);
     mocks.getPlanning.mockReset();
+    mocks.listEstimateTaskRows.mockReset().mockResolvedValue([]);
   });
 
   it("requires a non-empty name and never calls the backend for a blank one", async () => {
@@ -622,9 +753,14 @@ describe("useEstimateCostLines submitCreateTask", () => {
     expect(result.current.taskCreateError).toBe("Le nom de la tâche est obligatoire.");
   });
 
-  it("creates the task, bumps the task-row count, and closes the dialog on success", async () => {
+  // E12-04/#276: this used to bump an approximate `estimateTaskRowCount` by 1 -- it now refetches
+  // the exact task-row list instead, which the Devis grid needs in full (names/hierarchy/
+  // position), not just a count.
+  it("creates the task, refetches the task-row list, and closes the dialog on success", async () => {
     mocks.createEstimateTask.mockResolvedValue(makeTaskRow());
-    const { result, setEstimateTaskRowCount } = setup({ selectedEstimateId: 1 });
+    const freshTaskRows = [makeTaskRow(), makeTaskRow({ id: 2 })];
+    mocks.listEstimateTaskRows.mockResolvedValue(freshTaskRows);
+    const { result, setEstimateTaskRows } = setup({ selectedEstimateId: 1 });
 
     act(() => {
       result.current.openCreateTaskDialog();
@@ -644,14 +780,48 @@ describe("useEstimateCostLines submitCreateTask", () => {
       session,
       expect.any(Function),
     );
-    expect(setEstimateTaskRowCount).toHaveBeenCalled();
-    let count = 3;
-    for (const call of setEstimateTaskRowCount.mock.calls) {
-      const updater = call[0] as (previous: number) => number;
-      count = updater(count);
-    }
-    expect(count).toBe(4);
+    expect(mocks.listEstimateTaskRows).toHaveBeenCalledWith(1, 1, session, expect.any(Function));
+    expect(setEstimateTaskRows).toHaveBeenCalledWith(freshTaskRows);
     expect(result.current.taskDialogOpen).toBe(false);
+  });
+
+  // E12-04/#276: same stale-response guard as the planning refetch below, applied to the new
+  // task-row refetch -- the estimate version can switch while this request is in flight
+  // (nothing currently disables the version selector while busy), and a stale response must
+  // never overwrite whatever version's task rows are displayed once it resolves.
+  it("does not apply the task-row refetch if the estimate version changed while it was in flight", async () => {
+    mocks.createEstimateTask.mockResolvedValue(makeTaskRow());
+    let resolveListTaskRows!: (rows: ReturnType<typeof makeTaskRow>[]) => void;
+    mocks.listEstimateTaskRows.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveListTaskRows = resolve;
+        }),
+    );
+    const { result, rerender, setEstimateTaskRows } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.openCreateTaskDialog();
+      result.current.updateTaskDraftName("Terrassement");
+    });
+
+    let submitPromise!: Promise<void>;
+    act(() => {
+      submitPromise = result.current.submitCreateTask();
+    });
+
+    await waitFor(() => expect(mocks.listEstimateTaskRows).toHaveBeenCalled());
+
+    // The user switches to a different estimate version while the task-row refetch triggered
+    // by the task creation is still in flight.
+    rerender({ selectedEstimateId: 2, selectedPlanningId: null });
+
+    resolveListTaskRows([makeTaskRow()]);
+    await act(async () => {
+      await submitPromise;
+    });
+
+    expect(setEstimateTaskRows).not.toHaveBeenCalled();
   });
 
   // Haute review finding on #67: without this refetch, planningDetail (and therefore the
@@ -739,7 +909,7 @@ describe("useEstimateCostLines submitCreateTask", () => {
   it("does not treat a non-session planning refetch failure as a task-creation failure", async () => {
     mocks.createEstimateTask.mockResolvedValue(makeTaskRow());
     mocks.getPlanning.mockRejectedValue(new Error("network down"));
-    const { result, setEstimateTaskRowCount } = setup({ selectedEstimateId: 1, selectedPlanningId: 3 });
+    const { result, setEstimateTaskRows } = setup({ selectedEstimateId: 1, selectedPlanningId: 3 });
 
     act(() => {
       result.current.openCreateTaskDialog();
@@ -752,7 +922,7 @@ describe("useEstimateCostLines submitCreateTask", () => {
 
     // The task itself was created successfully -- a failed refresh must not resurrect the
     // dialog or report a creation error.
-    expect(setEstimateTaskRowCount).toHaveBeenCalled();
+    expect(setEstimateTaskRows).toHaveBeenCalled();
     expect(result.current.taskDialogOpen).toBe(false);
     expect(result.current.taskCreateError).toBeNull();
   });
@@ -830,7 +1000,7 @@ describe("useEstimateCostLines submitCreateTask", () => {
           resolveCreate = resolve;
         }),
     );
-    const { result, rerender, setEstimateTaskRowCount } = setup({ selectedEstimateId: 1 });
+    const { result, rerender, setEstimateTaskRows } = setup({ selectedEstimateId: 1 });
 
     act(() => {
       result.current.openCreateTaskDialog();
@@ -849,7 +1019,7 @@ describe("useEstimateCostLines submitCreateTask", () => {
       await submitPromise;
     });
 
-    expect(setEstimateTaskRowCount).not.toHaveBeenCalled();
+    expect(setEstimateTaskRows).not.toHaveBeenCalled();
     expect(result.current.taskDialogOpen).toBe(true);
   });
 });
@@ -865,11 +1035,17 @@ describe("useEstimateCostLines submitMilestoneTemplate", () => {
     mocks.clearSession.mockReset();
     mocks.getProjectCostCodes.mockReset().mockResolvedValue([]);
     mocks.getPlanning.mockReset();
+    mocks.listEstimateTaskRows.mockReset().mockResolvedValue([]);
   });
 
-  it("applies the fourniture template with the default zero intermediate count and lag", async () => {
+  // E12-04/#276: this used to bump an approximate `estimateTaskRowCount` by however many
+  // milestones were created -- it now refetches the exact task-row list instead, same as
+  // submitCreateTask above.
+  it("applies the fourniture template with the default zero intermediate count and lag, then refetches the task-row list", async () => {
     mocks.applyEstimateCostLineMilestoneTemplate.mockResolvedValue(makeMilestoneRows(2));
-    const { result, setEstimateTaskRowCount } = setup({ selectedEstimateId: 1 });
+    const freshTaskRows = makeMilestoneRows(5);
+    mocks.listEstimateTaskRows.mockResolvedValue(freshTaskRows);
+    const { result, setEstimateTaskRows } = setup({ selectedEstimateId: 1 });
 
     act(() => {
       result.current.openMilestoneDialog(makeLine(3, { label: "Ascenseur" }));
@@ -887,14 +1063,44 @@ describe("useEstimateCostLines submitMilestoneTemplate", () => {
       session,
       expect.any(Function),
     );
-    expect(setEstimateTaskRowCount).toHaveBeenCalled();
-    let count = 5;
-    for (const call of setEstimateTaskRowCount.mock.calls) {
-      const updater = call[0] as (previous: number) => number;
-      count = updater(count);
-    }
-    expect(count).toBe(7);
+    expect(mocks.listEstimateTaskRows).toHaveBeenCalledWith(1, 1, session, expect.any(Function));
+    expect(setEstimateTaskRows).toHaveBeenCalledWith(freshTaskRows);
     expect(result.current.milestoneDialogOpen).toBe(false);
+  });
+
+  // E12-04/#276: same stale-response guard as submitCreateTask's own task-row refetch above.
+  it("does not apply the task-row refetch if the estimate version changed while it was in flight", async () => {
+    mocks.applyEstimateCostLineMilestoneTemplate.mockResolvedValue(makeMilestoneRows(2));
+    let resolveListTaskRows!: (rows: ReturnType<typeof makeMilestoneRows>) => void;
+    mocks.listEstimateTaskRows.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveListTaskRows = resolve;
+        }),
+    );
+    const { result, rerender, setEstimateTaskRows } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.openMilestoneDialog(makeLine(3));
+    });
+
+    let submitPromise!: Promise<void>;
+    act(() => {
+      submitPromise = result.current.submitMilestoneTemplate();
+    });
+
+    await waitFor(() => expect(mocks.listEstimateTaskRows).toHaveBeenCalled());
+
+    // The user switches to a different estimate version while the task-row refetch triggered
+    // by the milestone template application is still in flight.
+    rerender({ selectedEstimateId: 2, selectedPlanningId: null });
+
+    resolveListTaskRows(makeMilestoneRows(1));
+    await act(async () => {
+      await submitPromise;
+    });
+
+    expect(setEstimateTaskRows).not.toHaveBeenCalled();
   });
 
   it("applies the sous_traitance template with the chosen intermediate count and lag", async () => {
@@ -1076,7 +1282,7 @@ describe("useEstimateCostLines submitMilestoneTemplate", () => {
           resolveApply = resolve;
         }),
     );
-    const { result, rerender, setEstimateTaskRowCount } = setup({ selectedEstimateId: 1 });
+    const { result, rerender, setEstimateTaskRows } = setup({ selectedEstimateId: 1 });
 
     act(() => {
       result.current.openMilestoneDialog(makeLine(3));
@@ -1094,7 +1300,7 @@ describe("useEstimateCostLines submitMilestoneTemplate", () => {
       await submitPromise;
     });
 
-    expect(setEstimateTaskRowCount).not.toHaveBeenCalled();
+    expect(setEstimateTaskRows).not.toHaveBeenCalled();
     expect(result.current.milestoneDialogOpen).toBe(true);
   });
 });
