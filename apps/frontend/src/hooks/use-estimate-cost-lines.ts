@@ -14,31 +14,37 @@ import {
   describeMissingRateCoverage,
   EstimateCostLine,
   EstimateCostLineMilestonesCreate,
+  type EstimateGridNodeMove,
   EstimateRoleAssignment,
   EstimateRoleAssignmentCreate,
   EstimateTaskRow,
   EstimateValidationWarning,
   exportEstimateExcel,
+  getCalendar,
+  getEstimateRevisionConflict,
   getMissingRateCoverage,
   getPlanning,
   getProjectCostCodes,
   getResourceRoles,
   isEstimateTaskCreateRequiresPlanningDraft,
+  listEstimateCostLines,
   listEstimateRoleAssignments,
   listEstimateTaskRows,
+  moveEstimateGridNodes,
   PlanningDetail,
   Project,
   ProjectCostCode,
   ProjectEstimate,
+  ResourceNode,
   ResourceRole,
   SessionExpiredError,
   updateEstimateCostLine,
   updateEstimateRoleAssignment,
+  updateTaskName,
   validateProjectEstimate,
 } from "@/lib/backend";
 import { clearSession, type SessionTokens } from "@/lib/session";
 import type { ProjectTab } from "@/components/project-tabs";
-import type { EditingRoleAssignmentDraft } from "@/components/cost-lines-table";
 
 type AppRouter = ReturnType<typeof useRouter>;
 
@@ -52,13 +58,6 @@ export type CostLineDraft = {
   // `task_id`. "" means "Aucune" (task_id: null) -- same empty-string-means-null convention as
   // `plannedDate` above, kept as a string throughout the draft since it round-trips through a
   // plain `<select>`.
-  taskId: string;
-};
-export type EditingLineDraft = {
-  label: string;
-  quantity: string;
-  unitCost: string;
-  plannedDate: string;
   taskId: string;
 };
 
@@ -75,22 +74,6 @@ export type EditingLineDraft = {
 // entirely at the client boundary, independently of server-side configuration.
 function plannedDateDraftToPayload(value: string): string | null {
   return value ? `${value}T00:00:00Z` : null;
-}
-
-// Converts the backend's ISO datetime string (always offset-bearing, see above) back to the
-// `yyyy-MM-dd` shape the `<input type="date">` expects. Reads the UTC calendar-date components
-// directly rather than the local ones, symmetric with the write side treating the plain date
-// string as UTC midnight.
-function plannedDatePayloadToDraft(value: string | null | undefined): string {
-  if (!value) {
-    return "";
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return "";
-  }
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;
 }
 
 interface UseEstimateCostLinesParams {
@@ -121,6 +104,11 @@ interface UseEstimateCostLinesParams {
   // E12-06/#278: same direct-setter/full-refetch convention as setEstimateTaskRows above --
   // every role-assignment mutation refetches the exact list rather than approximating it.
   setEstimateRoleAssignments: (assignments: EstimateRoleAssignment[]) => void;
+  // E12-10/#292: the organization referential, used by the "Ajouter une ligne MO" dialog's
+  // Dpt 1er niveau -> Dpt 2eme niveau cascade (root nodes / a chosen root's direct children) --
+  // already loaded once per project by page.tsx for CostLinesTable's own Dept column, reused
+  // here rather than fetched again.
+  resourceNodes: ResourceNode[];
   onSessionRefresh: (next: SessionTokens) => void;
   router: AppRouter;
   setError: (message: string | null) => void;
@@ -144,6 +132,7 @@ export function useEstimateCostLines({
   selectedPlanningIdRef,
   setPlanningDetail,
   setEstimateRoleAssignments,
+  resourceNodes,
   onSessionRefresh,
   router,
   setError,
@@ -153,14 +142,6 @@ export function useEstimateCostLines({
     label: "",
     quantity: "1",
     unitCost: "0",
-    plannedDate: "",
-    taskId: "",
-  });
-  const [editingLineId, setEditingLineId] = useState<number | null>(null);
-  const [editingLineDraft, setEditingLineDraft] = useState<EditingLineDraft>({
-    label: "",
-    quantity: "",
-    unitCost: "",
     plannedDate: "",
     taskId: "",
   });
@@ -213,20 +194,27 @@ export function useEstimateCostLines({
   // refetch-after-mutation helper of its own (refreshEstimateRoleAssignments below), rather than
   // duplicating either.
   const [roleAssignmentDialogOpen, setRoleAssignmentDialogOpen] = useState(false);
-  const [roleAssignmentNodeId, setRoleAssignmentNodeId] = useState("");
-  // Mirrors `roleAssignmentNodeId` synchronously (updated at every write site below, not via a
-  // `useEffect`, which would introduce exactly the race window this exists to close) so
-  // `updateRoleAssignmentNodeId`'s `getResourceRoles` continuation can check, once its response
-  // comes back, whether the node it was fetched for is still the one selected -- otherwise two
-  // requests fired in quick succession for two different nodes can resolve out of order (network
-  // latency isn't guaranteed to preserve request order), and the *first* node's roles would land
-  // in the selector after the user has already moved on to the second, letting them pick a role
-  // that actually belongs to the wrong department. Exact same guard shape as
-  // `selectedNodeIdRef`/`rolesPanelGenerationRef` in app/resources/page.tsx, which fixes the
-  // identical race for the identical "roles filtered by node" fetch.
-  const roleAssignmentNodeIdRef = useRef("");
+  // E12-10/#292: two-level department cascade (replaces the single "Nœud organisationnel"
+  // selector) -- "Dpt 1er niveau" only ever lists root nodes (`ResourceNode.parent_id === null`),
+  // "Dpt 2eme niveau" only that root's own direct children (empty when it has none, in which case
+  // dept1 itself is the effective node the role list below is fetched for).
+  const [roleAssignmentDept1Id, setRoleAssignmentDept1Id] = useState("");
+  const [roleAssignmentDept2Id, setRoleAssignmentDept2Id] = useState("");
+  // The node id the currently-loading/loaded `roleAssignmentRoles` request was actually fetched
+  // for -- updated synchronously at every write site below (not via a `useEffect`, which would
+  // introduce exactly the race window this exists to close), so a slower-resolving request for a
+  // department the user has since navigated away from can detect that once it comes back:
+  // network latency isn't guaranteed to preserve request order, so the *first* department's roles
+  // could otherwise land in the selector after the user has already moved on to the second,
+  // letting them pick a role that actually belongs to the wrong department. Exact same guard
+  // shape as `selectedNodeIdRef`/`rolesPanelGenerationRef` in app/resources/page.tsx, which fixes
+  // the identical race for the identical "roles filtered by node" fetch.
+  const roleAssignmentRolesRequestNodeIdRef = useRef("");
+  // Same race-guard shape as roleAssignmentRolesRequestNodeIdRef above, for the "Heures"
+  // calendar-prefill fetch triggered by picking a role (see updateRoleAssignmentRoleId).
+  const roleAssignmentHoursPrefillRoleIdRef = useRef("");
   // The roles of the node currently chosen in the dialog -- loaded on demand (never the whole
-  // referential up front), see updateRoleAssignmentNodeId below.
+  // referential up front), see loadRoleAssignmentRolesForNode below.
   const [roleAssignmentRoles, setRoleAssignmentRoles] = useState<ResourceRole[]>([]);
   const [roleAssignmentRolesLoading, setRoleAssignmentRolesLoading] = useState(false);
   const [roleAssignmentRoleId, setRoleAssignmentRoleId] = useState("");
@@ -236,15 +224,6 @@ export function useEstimateCostLines({
   const [roleAssignmentCostCodeId, setRoleAssignmentCostCodeId] = useState("");
   const [roleAssignmentComment, setRoleAssignmentComment] = useState("");
   const [roleAssignmentError, setRoleAssignmentError] = useState<string | null>(null);
-
-  // Inline editing of an existing role-assignment row's quantity/hours in CostLinesTable -- see
-  // EditingRoleAssignmentDraft's own doc comment in cost-lines-table.tsx for why cost_code_id/
-  // comment aren't editable this way.
-  const [editingRoleAssignmentId, setEditingRoleAssignmentId] = useState<number | null>(null);
-  const [editingRoleAssignmentDraft, setEditingRoleAssignmentDraft] = useState<EditingRoleAssignmentDraft>({
-    quantity: "",
-    hours: "",
-  });
 
   const selectedEstimate = estimates.find((estimate) => estimate.id === selectedEstimateId) ?? null;
 
@@ -310,22 +289,6 @@ export function useEstimateCostLines({
   function updateCostLineDraftTaskId(value: string) {
     setCostLineDraft((prev) => ({ ...prev, taskId: value }));
   }
-  function updateEditingLineDraftLabel(value: string) {
-    setEditingLineDraft((prev) => ({ ...prev, label: value }));
-  }
-  function updateEditingLineDraftQuantity(value: string) {
-    setEditingLineDraft((prev) => ({ ...prev, quantity: value }));
-  }
-  function updateEditingLineDraftUnitCost(value: string) {
-    setEditingLineDraft((prev) => ({ ...prev, unitCost: value }));
-  }
-  function updateEditingLineDraftPlannedDate(value: string) {
-    setEditingLineDraft((prev) => ({ ...prev, plannedDate: value }));
-  }
-  function updateEditingLineDraftTaskId(value: string) {
-    setEditingLineDraft((prev) => ({ ...prev, taskId: value }));
-  }
-
   function requestDeleteCostLine(line: EstimateCostLine) {
     setCostLinePendingDelete(line);
   }
@@ -450,8 +413,10 @@ export function useEstimateCostLines({
   }
 
   function openRoleAssignmentDialog() {
-    roleAssignmentNodeIdRef.current = "";
-    setRoleAssignmentNodeId("");
+    roleAssignmentRolesRequestNodeIdRef.current = "";
+    roleAssignmentHoursPrefillRoleIdRef.current = "";
+    setRoleAssignmentDept1Id("");
+    setRoleAssignmentDept2Id("");
     setRoleAssignmentRoles([]);
     setRoleAssignmentRoleId("");
     setRoleAssignmentTaskId("");
@@ -468,32 +433,26 @@ export function useEstimateCostLines({
     setRoleAssignmentError(null);
   }
 
-  // Loads the roles available for the chosen organizational node (E12-06/#278) -- deliberately on
-  // demand (not preloaded for the whole referential up front, unlike resourceNodes/resourceRoles/
-  // costRates in page.tsx): most Devis sessions never open this dialog at all.
-  // `include_descendants: true` matches the org-tree convention already used elsewhere in this
-  // codebase (getResourceRoles's own doc comment) -- a role attached anywhere under the chosen
-  // node is a legitimate candidate, not only one attached to the node itself.
-  async function updateRoleAssignmentNodeId(value: string) {
-    // Updated synchronously, before the `await` below, so a slower-resolving request for a
-    // node the user has since navigated away from can detect that once it comes back -- see
-    // `roleAssignmentNodeIdRef`'s own doc comment above for the exact race this closes.
-    roleAssignmentNodeIdRef.current = value;
-    setRoleAssignmentNodeId(value);
+  // Loads the roles available for `nodeId` (E12-06/#278, E12-10/#292's Dpt1/Dpt2 cascade above
+  // it) -- deliberately on demand (not preloaded for the whole referential up front, unlike
+  // resourceNodes/resourceRoles/costRates in page.tsx): most Devis sessions never open this
+  // dialog at all. `include_descendants: true` matches the org-tree convention already used
+  // elsewhere in this codebase (getResourceRoles's own doc comment) -- a role attached anywhere
+  // under `nodeId` is a legitimate candidate, not only one attached to it directly.
+  async function loadRoleAssignmentRolesForNode(nodeId: string) {
+    // Updated synchronously, before the `await` below -- see
+    // `roleAssignmentRolesRequestNodeIdRef`'s own doc comment above for the exact race this closes.
+    roleAssignmentRolesRequestNodeIdRef.current = nodeId;
     setRoleAssignmentRoleId("");
     setRoleAssignmentRoles([]);
-    if (!session || !value) {
+    if (!session || !nodeId) {
       return;
     }
     setRoleAssignmentRolesLoading(true);
     try {
-      const page = await getResourceRoles(session, onSessionRefresh, Number(value), true);
-      // Stale-response guard: if the user picked a different node while this request was in
-      // flight, `roleAssignmentNodeIdRef.current` no longer equals `value` -- applying `page`
-      // now would silently populate the selector with the wrong node's roles even though the
-      // dropdown already shows the new node, letting a role from the wrong department be
-      // assigned by mistake.
-      if (roleAssignmentNodeIdRef.current === value) {
+      const page = await getResourceRoles(session, onSessionRefresh, Number(nodeId), true);
+      // Stale-response guard: see roleAssignmentRolesRequestNodeIdRef's own doc comment.
+      if (roleAssignmentRolesRequestNodeIdRef.current === nodeId) {
         setRoleAssignmentRoles(page.items);
       }
     } catch (cause) {
@@ -507,15 +466,70 @@ export function useEstimateCostLines({
     } finally {
       // Same guard as above: a stale request's `finally` must not clear the loading indicator
       // for the (still in-flight) current node's own request.
-      if (roleAssignmentNodeIdRef.current === value) {
+      if (roleAssignmentRolesRequestNodeIdRef.current === nodeId) {
         setRoleAssignmentRolesLoading(false);
       }
     }
   }
 
-  function updateRoleAssignmentRoleId(value: string) {
-    setRoleAssignmentRoleId(value);
+  // E12-10/#292: "Dpt 1er niveau" only ever lists root nodes (see roleAssignmentDept1Id's own
+  // doc comment) -- picking one resets "Dpt 2eme niveau"/the role list, and, when that root has
+  // no children at all, fetches roles directly against it (there is no more granular department
+  // left to pick, matching this issue's own spec: "liste vide si aucun enfant").
+  async function updateRoleAssignmentDept1Id(value: string) {
+    setRoleAssignmentDept1Id(value);
+    setRoleAssignmentDept2Id("");
+    const hasChildren = resourceNodes.some((node) => String(node.parent_id ?? "") === value);
+    if (!hasChildren) {
+      await loadRoleAssignmentRolesForNode(value);
+      return;
+    }
+    roleAssignmentRolesRequestNodeIdRef.current = "";
+    setRoleAssignmentRoleId("");
+    setRoleAssignmentRoles([]);
   }
+
+  async function updateRoleAssignmentDept2Id(value: string) {
+    setRoleAssignmentDept2Id(value);
+    await loadRoleAssignmentRolesForNode(value);
+  }
+
+  // E12-10/#292: prefills "Heures" from the selected role's own calendar (the maximum
+  // `hours_per_day` among its `CalendarWeekday`s with `hours_per_day > 0`) -- a role with no
+  // `calendar_id`, or whose calendar has no such weekday, leaves the field untouched rather than
+  // clearing it, matching this issue's own spec ("le champ reste vide" only ever means "never
+  // force-prefilled", not "force-cleared").
+  async function updateRoleAssignmentRoleId(value: string) {
+    roleAssignmentHoursPrefillRoleIdRef.current = value;
+    setRoleAssignmentRoleId(value);
+    if (!session || !value) {
+      return;
+    }
+    const role = roleAssignmentRoles.find((candidate) => String(candidate.id) === value);
+    if (!role?.calendar_id) {
+      return;
+    }
+    try {
+      const calendar = await getCalendar(role.calendar_id, session, onSessionRefresh);
+      if (roleAssignmentHoursPrefillRoleIdRef.current !== value) {
+        return;
+      }
+      const maxHoursPerDay = Math.max(
+        0,
+        ...(calendar.weekdays ?? []).map((weekday) => Number(weekday.hours_per_day)).filter((hours) => hours > 0),
+      );
+      if (maxHoursPerDay > 0) {
+        setRoleAssignmentHours(String(maxHoursPerDay));
+      }
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
+        clearSession();
+        router.push("/login");
+      }
+      // Non-blocking otherwise: "Heures" simply stays whatever it already was.
+    }
+  }
+
   function updateRoleAssignmentTaskId(value: string) {
     setRoleAssignmentTaskId(value);
   }
@@ -611,57 +625,38 @@ export function useEstimateCostLines({
     }
   }
 
-  function startEditRoleAssignment(assignment: EstimateRoleAssignment) {
-    setEditingRoleAssignmentId(assignment.id);
-    setEditingRoleAssignmentDraft({ quantity: String(assignment.quantity), hours: String(assignment.hours) });
-  }
-
-  function updateEditingRoleAssignmentQuantity(value: string) {
-    setEditingRoleAssignmentDraft((prev) => ({ ...prev, quantity: value }));
-  }
-  function updateEditingRoleAssignmentHours(value: string) {
-    setEditingRoleAssignmentDraft((prev) => ({ ...prev, hours: value }));
-  }
-
-  // Inline update of an existing role assignment's quantity/hours (E12-06/#278) -- same
-  // stale-response guard as saveCostLine's own non-labor sibling.
-  async function saveRoleAssignment(assignment: EstimateRoleAssignment) {
+  // E12-10/#292: inline, per-cell update of an existing role assignment's Qté/Heures from the
+  // Devis grid (use-estimate-grid-drafts.ts's blur-commit) -- same
+  // "PATCH, then refetch the full list" convention as every other role-assignment mutation in
+  // this file (refreshEstimateRoleAssignments), rather than approximating the patched row
+  // locally. Reports whether the update actually persisted, so the caller's draft is only
+  // discarded on confirmed success.
+  async function updateRoleAssignmentField(
+    id: number,
+    payload: { quantity?: number; hours?: number },
+  ): Promise<boolean> {
     if (!session || selectedEstimateId === null) {
-      return;
+      return false;
     }
-    const quantity = Number(editingRoleAssignmentDraft.quantity);
-    const hours = Number(editingRoleAssignmentDraft.hours);
-    if (!(quantity > 0) || !(hours >= 0)) {
-      setError("Quantité et heures doivent être valides.");
-      return;
-    }
-
     const launchedEstimateId = selectedEstimateId;
     setEstimateBusy(true);
     setError(null);
     try {
-      await updateEstimateRoleAssignment(
-        projectId,
-        launchedEstimateId,
-        assignment.id,
-        { quantity, hours },
-        session,
-        onSessionRefresh,
-      );
+      await updateEstimateRoleAssignment(projectId, launchedEstimateId, id, payload, session, onSessionRefresh);
       if (selectedEstimateIdRef.current === launchedEstimateId) {
         await refreshEstimateRoleAssignments(launchedEstimateId, session);
-        setEditingRoleAssignmentId(null);
       }
+      return true;
     } catch (cause) {
       if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
         clearSession();
         router.push("/login");
-        return;
+        return false;
       }
-      if (selectedEstimateIdRef.current !== launchedEstimateId) {
-        return;
+      if (selectedEstimateIdRef.current === launchedEstimateId) {
+        setError(describeRoleAssignmentError(cause, "Impossible de modifier la ligne de main d'œuvre."));
       }
-      setError(describeRoleAssignmentError(cause, "Impossible de modifier la ligne de main d'œuvre."));
+      return false;
     } finally {
       setEstimateBusy(false);
     }
@@ -1112,52 +1107,121 @@ export function useEstimateCostLines({
     }
   }
 
-  function startEditCostLine(line: EstimateCostLine) {
-    setEditingLineId(line.id);
-    setEditingLineDraft({
-      label: line.label,
-      quantity: String(line.quantity),
-      unitCost: String(line.unit_cost),
-      plannedDate: plannedDatePayloadToDraft(line.planned_date),
-      taskId: line.task_id != null ? String(line.task_id) : "",
-    });
-  }
-
-  async function saveCostLine(line: EstimateCostLine) {
+  // E12-10/#292: inline, per-cell update of an existing cost line's Libellé/Qté/Débours/Type
+  // from the Devis grid (use-estimate-grid-drafts.ts's blur-commit, or the "Type" `<select>`'s
+  // own immediate onChange) -- patches `costLines` in place from the PATCH response itself, same
+  // convention as addCostLine's own success path. Reports whether the update actually persisted,
+  // so the caller's draft is only discarded on confirmed success.
+  async function updateCostLineField(
+    lineId: number,
+    payload: { label?: string; quantity?: number; unit_cost?: number; cost_category_id?: number },
+  ): Promise<boolean> {
     if (!session || selectedEstimateId === null) {
-      return;
+      return false;
     }
-    const quantity = Number(editingLineDraft.quantity);
-    const unitCost = Number(editingLineDraft.unitCost);
-    if (!editingLineDraft.label.trim() || !(quantity > 0) || unitCost < 0) {
-      setError("Libellé, quantité et coût unitaire doivent être valides.");
-      return;
-    }
-
     const launchedEstimateId = selectedEstimateId;
-
     setEstimateBusy(true);
     setError(null);
     try {
-      const updated = await updateEstimateCostLine(
+      const updated = await updateEstimateCostLine(projectId, launchedEstimateId, lineId, payload, session, onSessionRefresh);
+      if (selectedEstimateIdRef.current === launchedEstimateId) {
+        setCostLines((previous) => previous.map((item) => (item.id === updated.id ? updated : item)));
+      }
+      return true;
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
+        clearSession();
+        router.push("/login");
+        return false;
+      }
+      if (selectedEstimateIdRef.current === launchedEstimateId) {
+        setError(cause instanceof ApiError ? cause.message : "Impossible de modifier la ligne de coût.");
+      }
+      return false;
+    } finally {
+      setEstimateBusy(false);
+    }
+  }
+
+  // E12-08/#290 + E12-10/#292: renames a task straight from the Devis grid's Libellé column (a
+  // task row only, see use-estimate-grid-drafts.ts's own doc comment) -- the backend resolves
+  // `EstimateTaskRow.task_name` live for a draft estimate (see updateTaskName's own doc comment
+  // in lib/backend.ts), so a full task-row refetch (mirroring
+  // refreshEstimateTaskRowsAfterTaskCreation's own "PATCH, then refetch" shape) is what actually
+  // surfaces the new name in this grid, not the raw `TaskRead` response itself (a different shape
+  // entirely from `EstimateTaskRow`). Also refreshes `planningDetail` on success, same as
+  // applyCreateTaskSuccess/applyMilestoneTemplateSuccess above -- the task's new name must show up
+  // immediately in the Planning tab/parent-task selector too, not just this grid.
+  async function renameGridTask(taskUid: number, name: string): Promise<boolean> {
+    if (!session || selectedEstimateId === null) {
+      return false;
+    }
+    const launchedEstimateId = selectedEstimateId;
+    setEstimateBusy(true);
+    setError(null);
+    try {
+      await updateTaskName(projectId, taskUid, name, session, onSessionRefresh);
+      if (selectedEstimateIdRef.current === launchedEstimateId) {
+        await refreshEstimateTaskRowsAfterTaskCreation(launchedEstimateId, session);
+      }
+      if (selectedPlanningId !== null) {
+        await refreshPlanningDetailAfterTaskCreation(selectedPlanningId, session);
+      }
+      return true;
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
+        clearSession();
+        router.push("/login");
+        return false;
+      }
+      if (selectedEstimateIdRef.current === launchedEstimateId) {
+        setError(cause instanceof ApiError ? cause.message : "Impossible de renommer la tâche.");
+      }
+      return false;
+    } finally {
+      setEstimateBusy(false);
+    }
+  }
+
+  // E12-07/#289 + E12-10/#292: moves/reorders a selection of the Devis grid's cost-line/role
+  // -assignment rows (EstimateGridTreeTable's Indenter/Désindenter/Monter/Descendre toolbar).
+  // `expected_revision` is the selected estimate's own `revision` (bumped by every grid-node
+  // move, mirroring a planning's own revision-conflict guard) -- resolved here, not accepted as
+  // a caller-supplied argument, so the toolbar's command builders (lib/estimate-grid-move.ts)
+  // never need to know about it at all. The move endpoint's own response is only the estimate's
+  // updated metadata, not the moved rows themselves (see moveEstimateGridNodes's own doc comment
+  // in lib/backend.ts) -- a full task-row/cost-line/role-assignment refetch afterward is what
+  // actually shows the tree's new row_number/position, never a client-side recomputation of
+  // either.
+  async function moveGridSelection(command: Omit<EstimateGridNodeMove, "expected_revision">) {
+    if (!session || selectedEstimateId === null || !selectedEstimate) {
+      return;
+    }
+    const launchedEstimateId = selectedEstimateId;
+    const expectedRevision = selectedEstimate.revision;
+    setEstimateBusy(true);
+    setError(null);
+    try {
+      const updatedEstimate = await moveEstimateGridNodes(
         projectId,
         launchedEstimateId,
-        line.id,
-        {
-          label: editingLineDraft.label.trim(),
-          quantity,
-          unit_cost: unitCost,
-          planned_date: plannedDateDraftToPayload(editingLineDraft.plannedDate),
-          // E12-04/#276: same empty-string-means-null convention as addCostLine above.
-          task_id: editingLineDraft.taskId ? Number(editingLineDraft.taskId) : null,
-        },
+        { ...command, expected_revision: expectedRevision },
         session,
         onSessionRefresh,
       );
-      // Same stale-response guard as addCostLine above.
+      if (selectedEstimateIdRef.current !== launchedEstimateId) {
+        return;
+      }
+      setEstimates((previous) => previous.map((item) => (item.id === updatedEstimate.id ? updatedEstimate : item)));
+      const [freshTaskRows, freshCostLines, freshRoleAssignments] = await Promise.all([
+        listEstimateTaskRows(projectId, launchedEstimateId, session, onSessionRefresh),
+        listEstimateCostLines(projectId, launchedEstimateId, session, onSessionRefresh),
+        listEstimateRoleAssignments(projectId, launchedEstimateId, session, onSessionRefresh),
+      ]);
       if (selectedEstimateIdRef.current === launchedEstimateId) {
-        setCostLines((previous) => previous.map((item) => (item.id === updated.id ? updated : item)));
-        setEditingLineId(null);
+        setEstimateTaskRows(freshTaskRows);
+        setCostLines(() => freshCostLines);
+        setEstimateRoleAssignments(freshRoleAssignments);
       }
     } catch (cause) {
       if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
@@ -1165,9 +1229,14 @@ export function useEstimateCostLines({
         router.push("/login");
         return;
       }
-      if (selectedEstimateIdRef.current === launchedEstimateId) {
-        setError(cause instanceof ApiError ? cause.message : "Impossible de modifier la ligne de coût.");
+      if (selectedEstimateIdRef.current !== launchedEstimateId) {
+        return;
       }
+      if (getEstimateRevisionConflict(cause)) {
+        setError("Ce devis a été modifié entre-temps : recharge-le avant de continuer.");
+        return;
+      }
+      setError(cause instanceof ApiError ? cause.message : "Impossible de déplacer la sélection.");
     } finally {
       setEstimateBusy(false);
     }
@@ -1242,8 +1311,6 @@ export function useEstimateCostLines({
 
   return {
     costLineDraft,
-    editingLineId,
-    editingLineDraft,
     costLinePendingDelete,
     estimateValidationOpen,
     setEstimateValidationOpen,
@@ -1264,19 +1331,12 @@ export function useEstimateCostLines({
     updateCostLineDraftUnitCost,
     updateCostLineDraftPlannedDate,
     updateCostLineDraftTaskId,
-    updateEditingLineDraftLabel,
-    updateEditingLineDraftQuantity,
-    updateEditingLineDraftUnitCost,
-    updateEditingLineDraftPlannedDate,
-    updateEditingLineDraftTaskId,
     requestDeleteCostLine,
     cancelDeleteCostLine,
     openEstimateValidation,
     exportExcel,
     createDraftEstimate,
     addCostLine,
-    startEditCostLine,
-    saveCostLine,
     removeCostLine,
     validateEstimate,
     taskDialogOpen,
@@ -1305,7 +1365,8 @@ export function useEstimateCostLines({
     updateMilestoneLagMinutes,
     submitMilestoneTemplate,
     roleAssignmentDialogOpen,
-    roleAssignmentNodeId,
+    roleAssignmentDept1Id,
+    roleAssignmentDept2Id,
     roleAssignmentRoles,
     roleAssignmentRolesLoading,
     roleAssignmentRoleId,
@@ -1317,7 +1378,8 @@ export function useEstimateCostLines({
     roleAssignmentError,
     openRoleAssignmentDialog,
     closeRoleAssignmentDialog,
-    updateRoleAssignmentNodeId,
+    updateRoleAssignmentDept1Id,
+    updateRoleAssignmentDept2Id,
     updateRoleAssignmentRoleId,
     updateRoleAssignmentTaskId,
     updateRoleAssignmentQuantity,
@@ -1325,15 +1387,13 @@ export function useEstimateCostLines({
     updateRoleAssignmentCostCodeId,
     updateRoleAssignmentComment,
     submitCreateRoleAssignment,
-    editingRoleAssignmentId,
-    editingRoleAssignmentDraft,
-    updateEditingRoleAssignmentQuantity,
-    updateEditingRoleAssignmentHours,
-    startEditRoleAssignment,
-    saveRoleAssignment,
     roleAssignmentPendingDelete,
     requestDeleteRoleAssignment,
     cancelDeleteRoleAssignment,
     removeRoleAssignment,
+    updateCostLineField,
+    updateRoleAssignmentField,
+    renameGridTask,
+    moveGridSelection,
   };
 }

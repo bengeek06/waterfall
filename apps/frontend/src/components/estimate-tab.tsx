@@ -4,8 +4,8 @@ import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { BulkCostCodeAssignmentBar } from "@/components/bulk-cost-code-assignment-bar";
 import { CostLineForm, type CostLineDraft } from "@/components/cost-line-form";
-import { CostLinesTable, type EditingLineDraft, type EditingRoleAssignmentDraft } from "@/components/cost-lines-table";
 import { EstimateCreateTaskDialog } from "@/components/estimate-create-task-dialog";
+import { EstimateGridTreeTable } from "@/components/estimate-grid-tree-table";
 import {
   EstimateMilestoneTemplateDialog,
   type MilestoneTemplateValue,
@@ -25,6 +25,7 @@ import type {
   ResourceRole,
   Task,
 } from "@/lib/backend";
+import type { EstimateGridMoveCommand } from "@/lib/estimate-grid-move";
 
 export type EstimateTabProps = {
   active: boolean;
@@ -47,9 +48,10 @@ export type EstimateTabProps = {
   costLines: EstimateCostLine[];
   costCategories: CostCategory[];
   // E12-05/#277: the full (including inactive) cost-category referential, threaded straight
-  // through to CostLinesTable for its "Catégorie" column's name resolution -- see that prop's own
-  // doc comment on why it's a separate list from `costCategories` above (that one stays
-  // active-only, since it feeds CostLineForm's create-line `<select>`).
+  // through to EstimateGridTreeTable for its "Type" column's category-name resolution -- see
+  // that prop's own doc comment on why it's a separate list from `costCategories` above (that one
+  // stays active-only, since it feeds CostLineForm's create-line `<select>` and the grid's own
+  // "Type" `<select>` for an existing non-MO row).
   allCostCategories: CostCategory[];
   costLineDraft: CostLineDraft;
   onCategoryChange: (value: string) => void;
@@ -59,15 +61,14 @@ export type EstimateTabProps = {
   onPlannedDateChange: (value: string) => void;
   onTaskIdChange: (value: string) => void;
   onAddCostLine: () => void;
-  editingLineId: number | null;
-  editingLineDraft: EditingLineDraft;
-  onEditLabelChange: (value: string) => void;
-  onEditQuantityChange: (value: string) => void;
-  onEditUnitCostChange: (value: string) => void;
-  onEditPlannedDateChange: (value: string) => void;
-  onEditTaskIdChange: (value: string) => void;
-  onStartEditCostLine: (line: EstimateCostLine) => void;
-  onSaveCostLine: (line: EstimateCostLine) => void;
+  mutationBusy: boolean;
+  onMoveGridSelection: (command: EstimateGridMoveCommand) => void;
+  onRenameTask: (taskUid: number, name: string) => Promise<boolean>;
+  onUpdateCostLine: (
+    lineId: number,
+    payload: { label?: string; quantity?: number; unit_cost?: number; cost_category_id?: number },
+  ) => Promise<boolean>;
+  onUpdateRoleAssignment: (id: number, payload: { quantity?: number; hours?: number }) => Promise<boolean>;
   onRequestDeleteCostLine: (line: EstimateCostLine) => void;
   selectedCostLineIds: Set<number>;
   onSelectedCostLineIdsChange: (next: Set<number>) => void;
@@ -109,24 +110,20 @@ export type EstimateTabProps = {
   onSubmitMilestoneTemplate: () => void;
   onReopenStructureForMilestone: () => void;
   // E12-06/#278: role-assignment ("MO") referentials, threaded straight through to
-  // CostLinesTable's own Dept/Type/Catégorie/Cat/Taux horaire/MO column resolution -- see that
+  // EstimateGridTreeTable's own Dept/Rôle/Taux horaire/PRU column resolution -- see that
   // component's own prop doc comments.
   estimateRoleAssignments: EstimateRoleAssignment[];
   resourceNodes: ResourceNode[];
   resourceRoles: ResourceRole[];
   costRates: CostRate[];
-  editingRoleAssignmentId: number | null;
-  editingRoleAssignmentDraft: EditingRoleAssignmentDraft;
-  onEditRoleAssignmentQuantityChange: (value: string) => void;
-  onEditRoleAssignmentHoursChange: (value: string) => void;
-  onStartEditRoleAssignment: (assignment: EstimateRoleAssignment) => void;
-  onSaveRoleAssignment: (assignment: EstimateRoleAssignment) => void;
   onRequestDeleteRoleAssignment: (assignment: EstimateRoleAssignment) => void;
-  // "Ajouter une ligne MO" dialog (create-only -- editing an existing row happens inline in
-  // CostLinesTable instead, see that component's EditingRoleAssignmentDraft doc comment).
+  // "Ajouter une ligne MO" dialog (create-only -- editing an existing row's Qté/Heures happens
+  // inline in the grid instead, see EstimateGridTreeTable's onUpdateRoleAssignment).
   roleAssignmentDialogOpen: boolean;
-  roleAssignmentNodeId: string;
-  onRoleAssignmentNodeIdChange: (value: string) => void;
+  roleAssignmentDept1Id: string;
+  onRoleAssignmentDept1IdChange: (value: string) => void;
+  roleAssignmentDept2Id: string;
+  onRoleAssignmentDept2IdChange: (value: string) => void;
   roleAssignmentRoles: ResourceRole[];
   roleAssignmentRolesLoading: boolean;
   roleAssignmentRoleId: string;
@@ -178,15 +175,11 @@ export function EstimateTab({
   onPlannedDateChange,
   onTaskIdChange,
   onAddCostLine,
-  editingLineId,
-  editingLineDraft,
-  onEditLabelChange,
-  onEditQuantityChange,
-  onEditUnitCostChange,
-  onEditPlannedDateChange,
-  onEditTaskIdChange,
-  onStartEditCostLine,
-  onSaveCostLine,
+  mutationBusy,
+  onMoveGridSelection,
+  onRenameTask,
+  onUpdateCostLine,
+  onUpdateRoleAssignment,
   onRequestDeleteCostLine,
   selectedCostLineIds,
   onSelectedCostLineIdsChange,
@@ -229,16 +222,12 @@ export function EstimateTab({
   resourceNodes,
   resourceRoles,
   costRates,
-  editingRoleAssignmentId,
-  editingRoleAssignmentDraft,
-  onEditRoleAssignmentQuantityChange,
-  onEditRoleAssignmentHoursChange,
-  onStartEditRoleAssignment,
-  onSaveRoleAssignment,
   onRequestDeleteRoleAssignment,
   roleAssignmentDialogOpen,
-  roleAssignmentNodeId,
-  onRoleAssignmentNodeIdChange,
+  roleAssignmentDept1Id,
+  onRoleAssignmentDept1IdChange,
+  roleAssignmentDept2Id,
+  onRoleAssignmentDept2IdChange,
   roleAssignmentRoles,
   roleAssignmentRolesLoading,
   roleAssignmentRoleId,
@@ -270,7 +259,7 @@ export function EstimateTab({
 
   // Haute review finding on #68: a cost line whose `task_id` points at a milestone task can never
   // accept the milestone-template action -- `create_planning_task` unconditionally rejects
-  // attaching children to a milestone with a 409 (see cost-lines-table.tsx's milestoneTaskIds
+  // attaching children to a milestone with a 409 (see EstimateGridTreeTable's milestoneTaskIds
   // prop doc comment) -- so it's resolved here from the same `parentTaskOptions` (`Task[]`,
   // `planningDetail.tasks`) this tab already threads to EstimateCreateTaskDialog, mirroring that
   // dialog's own `.filter((task) => !task.is_milestone)` parent-task guard.
@@ -373,38 +362,29 @@ export function EstimateTab({
             />
           ) : null}
 
-          <CostLinesTable
+          <EstimateGridTreeTable
+            taskRows={estimateTaskRows}
             costLines={costLines}
-            estimateTaskRows={estimateTaskRows}
-            allCostCategories={allCostCategories}
+            roleAssignments={estimateRoleAssignments}
+            versionKey={selectedEstimateId}
             canEditEstimate={canEditEstimate}
-            editingLineId={editingLineId}
-            editingLineDraft={editingLineDraft}
-            onEditLabelChange={onEditLabelChange}
-            onEditQuantityChange={onEditQuantityChange}
-            onEditUnitCostChange={onEditUnitCostChange}
-            onEditPlannedDateChange={onEditPlannedDateChange}
-            onEditTaskIdChange={onEditTaskIdChange}
-            estimateBusy={estimateBusy}
-            onStartEdit={onStartEditCostLine}
-            onSave={onSaveCostLine}
-            onRequestDelete={onRequestDeleteCostLine}
+            mutationBusy={mutationBusy}
+            costCategories={costCategories}
+            allCostCategories={allCostCategories}
+            resourceNodes={resourceNodes}
+            resourceRoles={resourceRoles}
+            costRates={costRates}
+            planningTasks={parentTaskOptions}
+            onMove={onMoveGridSelection}
+            onRenameTask={onRenameTask}
+            onUpdateCostLine={onUpdateCostLine}
+            onUpdateRoleAssignment={onUpdateRoleAssignment}
             selectedCostLineIds={selectedCostLineIds}
             onSelectedCostLineIdsChange={onSelectedCostLineIdsChange}
             bulkAssignBusy={bulkAssignBusy}
             onOpenMilestoneDialog={onOpenMilestoneDialog}
             milestoneTaskIds={milestoneTaskIds}
-            estimateRoleAssignments={estimateRoleAssignments}
-            resourceNodes={resourceNodes}
-            resourceRoles={resourceRoles}
-            costRates={costRates}
-            planningTasks={parentTaskOptions}
-            editingRoleAssignmentId={editingRoleAssignmentId}
-            editingRoleAssignmentDraft={editingRoleAssignmentDraft}
-            onEditRoleAssignmentQuantityChange={onEditRoleAssignmentQuantityChange}
-            onEditRoleAssignmentHoursChange={onEditRoleAssignmentHoursChange}
-            onStartEditRoleAssignment={onStartEditRoleAssignment}
-            onSaveRoleAssignment={onSaveRoleAssignment}
+            onRequestDeleteCostLine={onRequestDeleteCostLine}
             onRequestDeleteRoleAssignment={onRequestDeleteRoleAssignment}
           />
         </div>
@@ -447,8 +427,10 @@ export function EstimateTab({
       <EstimateRoleAssignmentDialog
         open={roleAssignmentDialogOpen}
         resourceNodes={resourceNodes}
-        nodeId={roleAssignmentNodeId}
-        onNodeIdChange={onRoleAssignmentNodeIdChange}
+        dept1Id={roleAssignmentDept1Id}
+        onDept1IdChange={onRoleAssignmentDept1IdChange}
+        dept2Id={roleAssignmentDept2Id}
+        onDept2IdChange={onRoleAssignmentDept2IdChange}
         roles={roleAssignmentRoles}
         rolesLoading={roleAssignmentRolesLoading}
         roleId={roleAssignmentRoleId}
