@@ -102,6 +102,7 @@ function renderTab(overrides: Partial<EstimateTabProps> = {}) {
     roleAssignmentBusy: false,
     roleAssignmentError: null,
     onOpenRoleAssignmentDialog: vi.fn(),
+    onOpenRoleAssignmentDialogForRow: vi.fn(),
     onCloseRoleAssignmentDialog: vi.fn(),
     onSubmitRoleAssignment: vi.fn(),
     ...overrides,
@@ -149,6 +150,10 @@ describe("EstimateTab validation warnings banner", () => {
 // Haute review finding on #68: parentTaskOptions (planningDetail.tasks) is the source this tab
 // resolves milestoneTaskIds from before handing it to CostLinesTable -- see estimate-tab.tsx's
 // own doc comment on that computation.
+//
+// E12-11/#293 moved this action from a dedicated button to the grid row's right-click context
+// menu -- these tests were updated accordingly (contextmenu + "menuitem" instead of "button"),
+// same gating logic/assertions otherwise.
 describe("EstimateTab milestone-template gating (E6-07 review finding)", () => {
   afterEach(() => cleanup());
 
@@ -161,7 +166,9 @@ describe("EstimateTab milestone-template gating (E6-07 review finding)", () => {
       parentTaskOptions: [{ id: 42, is_milestone: true }] as never,
     });
 
-    expect(screen.getByRole("button", { name: "Gabarit de jalons" })).toBeDisabled();
+    fireEvent.contextMenu(screen.getByLabelText("Libellé de Livraison lot 3").closest("tr")!);
+
+    expect(screen.getByRole("menuitem", { name: "Gabarit de jalons" })).toHaveAttribute("aria-disabled", "true");
   });
 
   it("keeps the milestone-template action enabled for a cost line attached to a non-milestone task", () => {
@@ -173,7 +180,31 @@ describe("EstimateTab milestone-template gating (E6-07 review finding)", () => {
       parentTaskOptions: [{ id: 42, is_milestone: true }] as never,
     });
 
-    expect(screen.getByRole("button", { name: "Gabarit de jalons" })).not.toBeDisabled();
+    fireEvent.contextMenu(screen.getByLabelText("Libellé de Fourniture lot 2").closest("tr")!);
+
+    expect(screen.getByRole("menuitem", { name: "Gabarit de jalons" })).not.toHaveAttribute("aria-disabled", "true");
+  });
+});
+
+// E12-11/#293: the grid row's "Ajouter ressource" context-menu action is wired to this tab's own
+// onOpenRoleAssignmentDialogForRow prop, distinct from the toolbar's blank-dialog
+// onOpenRoleAssignmentDialog above.
+describe("EstimateTab 'Ajouter ressource' context-menu wiring (E12-11/#293)", () => {
+  afterEach(() => cleanup());
+
+  it("calls onOpenRoleAssignmentDialogForRow with the right-clicked labor row's own assignment", () => {
+    const onOpenRoleAssignmentDialogForRow = vi.fn();
+    const assignment = { id: 9, role_name: "Développeur", task_id: 42, uid: -3, parent_uid: 42 } as never;
+    renderTab({
+      canEditEstimate: true,
+      estimateRoleAssignments: [assignment],
+      onOpenRoleAssignmentDialogForRow,
+    });
+
+    fireEvent.contextMenu(screen.getByLabelText("Heures de Développeur").closest("tr")!);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Ajouter ressource" }));
+
+    expect(onOpenRoleAssignmentDialogForRow).toHaveBeenCalledWith(assignment);
   });
 });
 

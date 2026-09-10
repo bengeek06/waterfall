@@ -224,6 +224,15 @@ export function useEstimateCostLines({
   const [roleAssignmentCostCodeId, setRoleAssignmentCostCodeId] = useState("");
   const [roleAssignmentComment, setRoleAssignmentComment] = useState("");
   const [roleAssignmentError, setRoleAssignmentError] = useState<string | null>(null);
+  // E12-11/#293: grid position (target_parent_uid/insert_after_uid, E12-07/#289) the next
+  // created role assignment should land at -- only ever set by openRoleAssignmentDialogForRow
+  // below (the grid's per-row "Ajouter ressource" context-menu action), null for the toolbar's
+  // own blank "Ajouter une ligne MO" dialog (openRoleAssignmentDialog), which has no origin row
+  // to position the new one next to. Cleared as soon as the user touches the task selector
+  // themselves (updateRoleAssignmentTaskId) -- a manually retargeted task invalidates whatever
+  // sibling position was inherited from the row the context menu was opened from.
+  const [roleAssignmentTargetParentUid, setRoleAssignmentTargetParentUid] = useState<number | null>(null);
+  const [roleAssignmentInsertAfterUid, setRoleAssignmentInsertAfterUid] = useState<number | null>(null);
 
   const selectedEstimate = estimates.find((estimate) => estimate.id === selectedEstimateId) ?? null;
 
@@ -412,19 +421,54 @@ export function useEstimateCostLines({
     }
   }
 
-  function openRoleAssignmentDialog() {
+  // E12-11/#293: reset shared by both ways of opening this dialog below -- every field the user
+  // must still fill in themselves (Dpt1/Dpt2/Rôle/Qté/Heures/Code d'imputation/Commentaire)
+  // always starts blank in both cases; only the task/grid-position preselection differs, so each
+  // caller sets those itself right after calling this.
+  function resetRoleAssignmentDraftFields() {
     roleAssignmentRolesRequestNodeIdRef.current = "";
     roleAssignmentHoursPrefillRoleIdRef.current = "";
     setRoleAssignmentDept1Id("");
     setRoleAssignmentDept2Id("");
     setRoleAssignmentRoles([]);
     setRoleAssignmentRoleId("");
-    setRoleAssignmentTaskId("");
     setRoleAssignmentQuantity("1");
     setRoleAssignmentHours("0");
     setRoleAssignmentCostCodeId("");
     setRoleAssignmentComment("");
     setRoleAssignmentError(null);
+  }
+
+  function openRoleAssignmentDialog() {
+    resetRoleAssignmentDraftFields();
+    setRoleAssignmentTaskId("");
+    setRoleAssignmentTargetParentUid(null);
+    setRoleAssignmentInsertAfterUid(null);
+    setRoleAssignmentDialogOpen(true);
+  }
+
+  // E12-11/#293: "Ajouter ressource" on an existing labor row's context menu (EstimateGridTreeTable)
+  // -- opens the exact same dialog as openRoleAssignmentDialog above (never a parallel
+  // implementation), pre-selecting the *same task* as `assignment` and carrying its grid position
+  // (`target_parent_uid`/`insert_after_uid`, E12-07/#289) so the new row lands right next to the
+  // original one instead of at the end of the task's children -- see submitCreateRoleAssignment's
+  // own payload for where these two get consumed. Role/Qté/Heures/... are left blank exactly like
+  // the toolbar's own dialog: nothing is ever copied from `assignment`'s own values.
+  //
+  // A labor row with no task ancestor (`task_id: null`, the root case E12-07 introduced) can't be
+  // duplicated this way -- EstimateRoleAssignmentCreate.task_id is required, so there is no
+  // payload this dialog could ever submit successfully for it. The grid disables this menu item
+  // entirely for that case (see EstimateGridTreeTable's own context-menu rendering) rather than
+  // opening a dialog doomed to fail on submit; this early return is a defensive second guard, not
+  // the primary one.
+  function openRoleAssignmentDialogForRow(assignment: EstimateRoleAssignment) {
+    if (assignment.task_id == null) {
+      return;
+    }
+    resetRoleAssignmentDraftFields();
+    setRoleAssignmentTaskId(String(assignment.task_id));
+    setRoleAssignmentTargetParentUid(assignment.parent_uid ?? null);
+    setRoleAssignmentInsertAfterUid(assignment.uid);
     setRoleAssignmentDialogOpen(true);
   }
 
@@ -532,6 +576,12 @@ export function useEstimateCostLines({
 
   function updateRoleAssignmentTaskId(value: string) {
     setRoleAssignmentTaskId(value);
+    // E12-11/#293: any manual change to the task selector invalidates whatever grid-position
+    // hint openRoleAssignmentDialogForRow may have set for the previously selected task -- the
+    // new row falls back to the default "last child of the resolved task" position instead of a
+    // stale sibling reference that may no longer even belong to the newly selected task.
+    setRoleAssignmentTargetParentUid(null);
+    setRoleAssignmentInsertAfterUid(null);
   }
   function updateRoleAssignmentQuantity(value: string) {
     setRoleAssignmentQuantity(value);
@@ -600,6 +650,12 @@ export function useEstimateCostLines({
       quantity: draft.quantity,
       hours: draft.hours,
       comment: roleAssignmentComment.trim() ? roleAssignmentComment.trim() : null,
+      // E12-11/#293: null in both cases for the toolbar's own blank "Ajouter une ligne MO"
+      // dialog (root of the devis / last child of the resolved task) -- only
+      // openRoleAssignmentDialogForRow ever sets these, to land the new row right next to the
+      // origin row it was opened from.
+      target_parent_uid: roleAssignmentTargetParentUid,
+      insert_after_uid: roleAssignmentInsertAfterUid,
     };
 
     setEstimateBusy(true);
@@ -1377,6 +1433,7 @@ export function useEstimateCostLines({
     roleAssignmentComment,
     roleAssignmentError,
     openRoleAssignmentDialog,
+    openRoleAssignmentDialogForRow,
     closeRoleAssignmentDialog,
     updateRoleAssignmentDept1Id,
     updateRoleAssignmentDept2Id,

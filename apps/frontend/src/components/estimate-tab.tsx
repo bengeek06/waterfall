@@ -141,6 +141,10 @@ export type EstimateTabProps = {
   roleAssignmentBusy: boolean;
   roleAssignmentError: string | null;
   onOpenRoleAssignmentDialog: () => void;
+  // E12-11/#293: same dialog, launched from a labor row's right-click context menu instead of
+  // the toolbar button above -- see EstimateGridTreeTable's own onAddRoleAssignmentForRow prop
+  // doc comment.
+  onOpenRoleAssignmentDialogForRow: (assignment: EstimateRoleAssignment) => void;
   onCloseRoleAssignmentDialog: () => void;
   onSubmitRoleAssignment: () => void;
 };
@@ -245,6 +249,7 @@ export function EstimateTab({
   roleAssignmentBusy,
   roleAssignmentError,
   onOpenRoleAssignmentDialog,
+  onOpenRoleAssignmentDialogForRow,
   onCloseRoleAssignmentDialog,
   onSubmitRoleAssignment,
 }: EstimateTabProps) {
@@ -386,6 +391,7 @@ export function EstimateTab({
             milestoneTaskIds={milestoneTaskIds}
             onRequestDeleteCostLine={onRequestDeleteCostLine}
             onRequestDeleteRoleAssignment={onRequestDeleteRoleAssignment}
+            onAddRoleAssignmentForRow={onOpenRoleAssignmentDialogForRow}
           />
         </div>
       ) : null}
