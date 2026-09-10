@@ -30,6 +30,17 @@ export type EditingLineDraft = {
   taskId: string;
 };
 
+// E12-06/#278: quantity/hours only -- `task_id`/`role_id` are immutable once an
+// EstimateRoleAssignment is created (see EstimateRoleAssignmentUpdate's own doc comment in
+// lib/backend.ts), and the fixed target column set (docs/devis-v0.1-specification.md's "Grille
+// de devis") has no "Code d'imputation"/"Commentaire" column to edit either of those fields
+// inline -- both stay create-time-only, set via EstimateRoleAssignmentDialog (a documented,
+// deliberate limitation for this iteration, not an oversight).
+export type EditingRoleAssignmentDraft = {
+  quantity: string;
+  hours: string;
+};
+
 export type CostLinesTableProps = {
   costLines: EstimateCostLine[];
   // E12-04/#276: the selected estimate's task rows -- drives both the grid's task
@@ -93,6 +104,12 @@ export type CostLinesTableProps = {
   // a role assignment's attached task's `start_at` for the indicative rate's year -- see
   // resolveRoleAssignmentYear.
   planningTasks: Task[];
+  editingRoleAssignmentId: number | null;
+  editingRoleAssignmentDraft: EditingRoleAssignmentDraft;
+  onEditRoleAssignmentQuantityChange: (value: string) => void;
+  onEditRoleAssignmentHoursChange: (value: string) => void;
+  onStartEditRoleAssignment: (assignment: EstimateRoleAssignment) => void;
+  onSaveRoleAssignment: (assignment: EstimateRoleAssignment) => void;
   onRequestDeleteRoleAssignment: (assignment: EstimateRoleAssignment) => void;
 };
 
@@ -191,6 +208,12 @@ export function CostLinesTable({
   resourceRoles,
   costRates,
   planningTasks,
+  editingRoleAssignmentId,
+  editingRoleAssignmentDraft,
+  onEditRoleAssignmentQuantityChange,
+  onEditRoleAssignmentHoursChange,
+  onStartEditRoleAssignment,
+  onSaveRoleAssignment,
   onRequestDeleteRoleAssignment,
 }: CostLinesTableProps) {
   // Live DOM refs for the two constrained fields (`min`/`step`, `quantity` also
@@ -215,6 +238,10 @@ export function CostLinesTable({
   // `capacity-table.tsx`'s `personCount`/`availableHours` (#194).
   const quantityRef = useRef<HTMLInputElement>(null);
   const unitCostRef = useRef<HTMLInputElement>(null);
+  // Same native-HTML5-validation-before-onSave pattern as the two refs above, applied to a labor
+  // ("MO") row's own two editable fields (E12-06/#278) -- see handleSaveRoleAssignment.
+  const roleAssignmentQuantityRef = useRef<HTMLInputElement>(null);
+  const roleAssignmentHoursRef = useRef<HTMLInputElement>(null);
 
   // "Select all" mirrors ProjectsTable's own header checkbox (E5): it only ever applies to the
   // rows currently rendered here, merging/subtracting their ids into `selectedCostLineIds` rather
@@ -256,6 +283,20 @@ export function CostLinesTable({
       return;
     }
     onSave(line);
+  }
+
+  function handleSaveRoleAssignment(assignment: EstimateRoleAssignment) {
+    // Same native-HTML5-validation-before-onSave fix as handleSave above (#201), applied to a
+    // labor row's own quantity/hours fields.
+    const fields = [roleAssignmentQuantityRef.current, roleAssignmentHoursRef.current].filter(
+      (field): field is HTMLInputElement => field !== null,
+    );
+    const firstInvalid = fields.find((field) => !field.checkValidity());
+    if (firstInvalid) {
+      firstInvalid.reportValidity();
+      return;
+    }
+    onSaveRoleAssignment(assignment);
   }
 
   // E12-04/#276: the "Tâche" selector's options (create-form's own sibling in
@@ -300,15 +341,15 @@ export function CostLinesTable({
   }
 
   // E12-06/#278: renders one EstimateRoleAssignment ("MO") row -- Cpt/Type/Catégorie/Cat/
-  // Libellé/Tâche/Qté/Heures resolved directly or via the referentials threaded in as props (see
-  // this table's own resolveAssignmentRole/resolveCategoryNameById/resolveCategoryCode above),
-  // Taux horaire/MO computed indicatively via lib/estimate-role-assignment.ts. Read-only:
-  // quantity/hours/role/task/cost code/comment are all set once at create time (via
-  // EstimateRoleAssignmentDialog) and never editable afterwards -- the only remaining action on
-  // an existing row is "Supprimer" (per-user request, inline editing removed). No "Gabarit de
-  // jalons" action here either: that action only ever applies to a non-labor EstimateCostLine (a
-  // milestone-template chain of tasks, not a role assignment).
+  // Libellé/Tâche resolved directly or via the referentials threaded in as props (see this
+  // table's own resolveAssignmentRole/resolveCategoryNameById/resolveCategoryCode above), Qté/
+  // Heures editable inline (task_id/role_id are immutable once created, see
+  // EditingRoleAssignmentDraft's own doc comment), Taux horaire/MO computed indicatively via
+  // lib/estimate-role-assignment.ts. No "Gabarit de jalons" action here: that action only ever
+  // applies to a non-labor EstimateCostLine (a milestone-template chain of tasks, not a role
+  // assignment).
   function renderLaborRow(assignment: EstimateRoleAssignment, indentLevel: number) {
+    const editing = editingRoleAssignmentId === assignment.id;
     const role = resolveAssignmentRole(assignment, resourceRoles);
     const deptPath = resolveOrganizationPath(role?.node_id, resourceNodes);
     const year = resolveRoleAssignmentYear(assignment.task_id, planningTasks);
@@ -326,8 +367,37 @@ export function CostLinesTable({
           <div style={{ paddingLeft: `${indentLevel * 1.25}rem` }}>{assignment.role_name}</div>
         </TableCell>
         <TableCell>{resolveAttachedTaskName(assignment.task_id, estimateTaskRows)}</TableCell>
-        <TableCell>{assignment.quantity}</TableCell>
-        <TableCell>{assignment.hours}</TableCell>
+        <TableCell>
+          {editing ? (
+            <Input
+              ref={roleAssignmentQuantityRef}
+              aria-label={`Qté de ${assignment.role_name}`}
+              type="number"
+              min="0.01"
+              step="0.01"
+              required
+              value={editingRoleAssignmentDraft.quantity}
+              onChange={(event) => onEditRoleAssignmentQuantityChange(event.target.value)}
+            />
+          ) : (
+            assignment.quantity
+          )}
+        </TableCell>
+        <TableCell>
+          {editing ? (
+            <Input
+              ref={roleAssignmentHoursRef}
+              aria-label={`Heures de ${assignment.role_name}`}
+              type="number"
+              min="0"
+              step="0.01"
+              value={editingRoleAssignmentDraft.hours}
+              onChange={(event) => onEditRoleAssignmentHoursChange(event.target.value)}
+            />
+          ) : (
+            assignment.hours
+          )}
+        </TableCell>
         <TableCell>{hourlyRate?.hourly_rate ?? "—"}</TableCell>
         <TableCell>-</TableCell>
         {/* Date prévisionnelle: EstimateRoleAssignmentRead has no planned_date-equivalent field. */}
@@ -341,6 +411,20 @@ export function CostLinesTable({
         {canEditEstimate ? (
           <TableCell>
             <div className="flex flex-wrap gap-2">
+              {editing ? (
+                <Button
+                  size="sm"
+                  type="button"
+                  disabled={estimateBusy}
+                  onClick={() => handleSaveRoleAssignment(assignment)}
+                >
+                  Sauver
+                </Button>
+              ) : (
+                <Button size="sm" variant="outline" type="button" onClick={() => onStartEditRoleAssignment(assignment)}>
+                  Modifier
+                </Button>
+              )}
               <Button
                 size="sm"
                 variant="destructive"

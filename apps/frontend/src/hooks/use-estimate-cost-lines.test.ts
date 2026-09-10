@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => ({
   validateProjectEstimate: vi.fn(),
   clearSession: vi.fn(),
   createEstimateRoleAssignment: vi.fn(),
+  updateEstimateRoleAssignment: vi.fn(),
   deleteEstimateRoleAssignment: vi.fn(),
   listEstimateRoleAssignments: vi.fn(),
   getResourceRoles: vi.fn(),
@@ -46,6 +47,7 @@ vi.mock("@/lib/backend", async () => {
     listEstimateTaskRows: mocks.listEstimateTaskRows,
     validateProjectEstimate: mocks.validateProjectEstimate,
     createEstimateRoleAssignment: mocks.createEstimateRoleAssignment,
+    updateEstimateRoleAssignment: mocks.updateEstimateRoleAssignment,
     deleteEstimateRoleAssignment: mocks.deleteEstimateRoleAssignment,
     listEstimateRoleAssignments: mocks.listEstimateRoleAssignments,
     getResourceRoles: mocks.getResourceRoles,
@@ -1665,11 +1667,85 @@ describe("useEstimateCostLines submitCreateRoleAssignment", () => {
   });
 });
 
-describe("useEstimateCostLines removeRoleAssignment", () => {
+describe("useEstimateCostLines saveRoleAssignment / removeRoleAssignment", () => {
   beforeEach(() => {
+    mocks.updateEstimateRoleAssignment.mockReset();
     mocks.deleteEstimateRoleAssignment.mockReset();
     mocks.listEstimateRoleAssignments.mockReset().mockResolvedValue([]);
     mocks.clearSession.mockReset();
+  });
+
+  it("starts editing with the assignment's current quantity/hours", () => {
+    const { result } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.startEditRoleAssignment(makeAssignment(1, { quantity: 3, hours: 12 }));
+    });
+
+    expect(result.current.editingRoleAssignmentId).toBe(1);
+    expect(result.current.editingRoleAssignmentDraft).toEqual({ quantity: "3", hours: "12" });
+  });
+
+  it("patches only quantity/hours, refetches the list, and stops editing on success", async () => {
+    const updated = makeAssignment(1, { quantity: 5, hours: 20 });
+    mocks.updateEstimateRoleAssignment.mockResolvedValue(updated);
+    const freshAssignments = [updated];
+    mocks.listEstimateRoleAssignments.mockResolvedValue(freshAssignments);
+    const { result, setEstimateRoleAssignments } = setup({ selectedEstimateId: 7 });
+
+    act(() => {
+      result.current.startEditRoleAssignment(makeAssignment(1));
+      result.current.updateEditingRoleAssignmentQuantity("5");
+      result.current.updateEditingRoleAssignmentHours("20");
+    });
+
+    await act(async () => {
+      await result.current.saveRoleAssignment(makeAssignment(1));
+    });
+
+    expect(mocks.updateEstimateRoleAssignment).toHaveBeenCalledWith(
+      1,
+      7,
+      1,
+      { quantity: 5, hours: 20 },
+      session,
+      expect.any(Function),
+    );
+    expect(setEstimateRoleAssignments).toHaveBeenCalledWith(freshAssignments);
+    expect(result.current.editingRoleAssignmentId).toBeNull();
+  });
+
+  // Same stale-response guard as saveCostLine's own sibling.
+  it("does not apply a stale update result if the estimate version changed while the request was in flight", async () => {
+    let resolveUpdate!: (assignment: EstimateRoleAssignment) => void;
+    mocks.updateEstimateRoleAssignment.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveUpdate = resolve;
+        }),
+    );
+    const { result, rerender, setEstimateRoleAssignments } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.startEditRoleAssignment(makeAssignment(1));
+      result.current.updateEditingRoleAssignmentQuantity("5");
+      result.current.updateEditingRoleAssignmentHours("20");
+    });
+
+    let savePromise!: Promise<void>;
+    act(() => {
+      savePromise = result.current.saveRoleAssignment(makeAssignment(1));
+    });
+
+    rerender({ selectedEstimateId: 2, selectedPlanningId: null });
+
+    resolveUpdate(makeAssignment(1, { quantity: 5, hours: 20 }));
+    await act(async () => {
+      await savePromise;
+    });
+
+    expect(setEstimateRoleAssignments).not.toHaveBeenCalled();
+    expect(result.current.editingRoleAssignmentId).toBe(1);
   });
 
   it("requests, then confirms, deletion via requestDeleteRoleAssignment/removeRoleAssignment", async () => {

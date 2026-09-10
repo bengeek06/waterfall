@@ -48,9 +48,10 @@ export type EstimateRoleAssignmentDialogProps = {
 
 // E12-06/#278: "Ajouter une ligne MO" dialog, launched from the Devis tab -- creates an
 // EstimateRoleAssignment attached to a task of the selected (draft) estimate. Modeled after
-// estimate-milestone-template-dialog.tsx for the modal/busy/error pattern. Every field is set
-// once here, at creation time: an existing row is never editable afterwards (per-user request,
-// the former inline quantity/hours edit in cost-lines-table.tsx was removed), only deletable.
+// estimate-milestone-template-dialog.tsx for the modal/busy/error pattern. `task_id`/`role_id`
+// are only ever set here: EstimateRoleAssignmentUpdate has no field for either (immutable once
+// created, see lib/backend.ts's own doc comment) -- editing an existing row happens inline in
+// cost-lines-table.tsx instead (quantity/hours only), not by reopening this dialog.
 export function EstimateRoleAssignmentDialog({
   open,
   resourceNodes,

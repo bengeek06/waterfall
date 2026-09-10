@@ -39,6 +39,12 @@ function renderTable(overrides: Partial<CostLinesTableProps> = {}) {
     resourceRoles: [],
     costRates: [],
     planningTasks: [],
+    editingRoleAssignmentId: null,
+    editingRoleAssignmentDraft: { quantity: "", hours: "" },
+    onEditRoleAssignmentQuantityChange: vi.fn(),
+    onEditRoleAssignmentHoursChange: vi.fn(),
+    onStartEditRoleAssignment: vi.fn(),
+    onSaveRoleAssignment: vi.fn(),
     onRequestDeleteRoleAssignment: vi.fn(),
     ...overrides,
   };
@@ -918,7 +924,7 @@ describe("CostLinesTable", () => {
       expect(cellTexts).toContain("0");
     });
 
-    it("hides Supprimer for a labor row when the estimate is not editable", () => {
+    it("hides Modifier/Supprimer for a labor row when the estimate is not editable", () => {
       renderTable({
         costLines: [],
         estimateTaskRows: [taskRow] as never,
@@ -929,10 +935,12 @@ describe("CostLinesTable", () => {
         canEditEstimate: false,
       });
 
+      expect(screen.queryByRole("button", { name: "Modifier" })).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Supprimer" })).not.toBeInTheDocument();
     });
 
-    it("shows Supprimer for a labor row when the estimate is editable, wired to its callback", () => {
+    it("shows Modifier/Supprimer for a labor row when the estimate is editable, wired to their callbacks", () => {
+      const onStartEditRoleAssignment = vi.fn();
       const onRequestDeleteRoleAssignment = vi.fn();
       renderTable({
         costLines: [],
@@ -942,16 +950,21 @@ describe("CostLinesTable", () => {
         resourceRoles: resourceRoles as never,
         allCostCategories: allCostCategories as never,
         canEditEstimate: true,
+        onStartEditRoleAssignment,
         onRequestDeleteRoleAssignment,
       });
+
+      fireEvent.click(screen.getByRole("button", { name: "Modifier" }));
+      expect(onStartEditRoleAssignment).toHaveBeenCalledWith(assignment);
 
       fireEvent.click(screen.getByRole("button", { name: "Supprimer" }));
       expect(onRequestDeleteRoleAssignment).toHaveBeenCalledWith(assignment);
     });
 
-    // Per-user request: inline editing of an existing labor row was removed -- "Modifier" must
-    // never appear on a labor row, editable or not, and quantity/hours are always read-only text.
-    it("never renders a 'Modifier' action on a labor row, and shows quantity/hours read-only", () => {
+    it("edits a labor row's quantity/hours inline, and saves via Sauver", () => {
+      const onSaveRoleAssignment = vi.fn();
+      const onEditRoleAssignmentQuantityChange = vi.fn();
+      const onEditRoleAssignmentHoursChange = vi.fn();
       renderTable({
         costLines: [],
         estimateTaskRows: [taskRow] as never,
@@ -960,14 +973,41 @@ describe("CostLinesTable", () => {
         resourceRoles: resourceRoles as never,
         allCostCategories: allCostCategories as never,
         canEditEstimate: true,
+        editingRoleAssignmentId: 1,
+        editingRoleAssignmentDraft: { quantity: "2", hours: "10" },
+        onEditRoleAssignmentQuantityChange,
+        onEditRoleAssignmentHoursChange,
+        onSaveRoleAssignment,
       });
 
-      expect(screen.queryByRole("button", { name: "Modifier" })).not.toBeInTheDocument();
-      expect(screen.queryByLabelText("Qté de Développeur")).not.toBeInTheDocument();
-      expect(screen.queryByLabelText("Heures de Développeur")).not.toBeInTheDocument();
-      const cellTexts = Array.from(laborRow()?.querySelectorAll("td") ?? []).map((cell) => cell.textContent);
-      expect(cellTexts).toContain(String(assignment.quantity));
-      expect(cellTexts).toContain(String(assignment.hours));
+      fireEvent.change(screen.getByLabelText("Qté de Développeur"), { target: { value: "3" } });
+      expect(onEditRoleAssignmentQuantityChange).toHaveBeenCalledWith("3");
+
+      fireEvent.change(screen.getByLabelText("Heures de Développeur"), { target: { value: "12" } });
+      expect(onEditRoleAssignmentHoursChange).toHaveBeenCalledWith("12");
+
+      fireEvent.click(screen.getByRole("button", { name: "Sauver" }));
+      expect(onSaveRoleAssignment).toHaveBeenCalledWith(assignment);
+    });
+
+    it("blocks Sauver on a labor row when the quantity is exactly 0", () => {
+      const onSaveRoleAssignment = vi.fn();
+      renderTable({
+        costLines: [],
+        estimateTaskRows: [taskRow] as never,
+        estimateRoleAssignments: [assignment] as never,
+        resourceNodes: resourceNodes as never,
+        resourceRoles: resourceRoles as never,
+        allCostCategories: allCostCategories as never,
+        canEditEstimate: true,
+        editingRoleAssignmentId: 1,
+        editingRoleAssignmentDraft: { quantity: "0", hours: "12" },
+        onSaveRoleAssignment,
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Sauver" }));
+
+      expect(onSaveRoleAssignment).not.toHaveBeenCalled();
     });
 
     it("does not render a 'Gabarit de jalons' action on a labor row", () => {
