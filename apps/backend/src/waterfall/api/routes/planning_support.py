@@ -1,6 +1,6 @@
 # pyright: reportUnusedClass=false, reportUnusedFunction=false
 
-from collections.abc import Callable, Coroutine, Iterable
+from collections.abc import Callable, Coroutine, Iterable, Mapping
 from typing import Any, cast
 
 from fastapi import HTTPException, Request, status
@@ -17,6 +17,7 @@ from waterfall.api.routes.project_access import (
 from waterfall.api.routes.projects import to_task_read
 from waterfall.models.ms_core import MsProject, MsTask, MsTaskLink
 from waterfall.models.planning import WfPlanning, WfPlanningLinkSnapshot, WfPlanningTaskSnapshot
+from waterfall.models.resources import EstimateGridNode
 from waterfall.models.wf_core import WfTaskEnrichment
 from waterfall.schemas.projects import (
     PlanningDetailRead,
@@ -328,6 +329,58 @@ def order_ms_tasks_depth_first(tasks: list[MsTask]) -> list[MsTask]:
         (task.uid, task.parent_uid, task.position, task.id) for task in tasks
     )
     return [by_uid[uid] for uid in ordered_uids]
+
+
+def order_estimate_grid_depth_first(
+    task_rows: Iterable[tuple[int, int | None, int, int]],
+    grid_nodes: Iterable[EstimateGridNode],
+    task_id_to_uid: Mapping[int, int],
+) -> list[int]:
+    """Depth-first order over a devis's *merged* tasks + grid-node tree (E12-09, #291).
+
+    Feeds a single ``_order_uids_depth_first`` pass with two already-normalized
+    streams sharing one uid space -- positive for a task, negative for a grid
+    node (``EstimateGridNode.uid``, see that model's own docstring) -- which
+    never collide by construction:
+
+    * ``task_rows``: caller-prepared ``(task_uid, parent_task_uid, position,
+      EstimateTaskRow.id)`` tuples. The caller has already resolved each row's
+      own business ``uid`` live for a draft estimate or from its frozen stored
+      columns for a validated one (``services.estimate_task_display``,
+      E12-08/#290), and translated its parent task's id into that same
+      ``task_uid`` space via ``task_id_to_uid``.
+    * ``grid_nodes``: raw ``EstimateGridNode`` rows, reused as-is for their own
+      ``uid``/``position``/``id`` -- but ``parent_uid``, when positive, is
+      still expressed as a ``MsTask.id`` (``EstimateGridNode``'s own storage
+      convention, matching ``EstimateGridNodeMove``'s wire contract), so it is
+      translated here through the same ``task_id_to_uid`` map before being
+      handed to the shared traversal, or the node would land as a spurious
+      root instead of that task's child.
+
+    A parent that cannot be translated (the referenced task id is not in
+    ``task_id_to_uid`` -- e.g. an ancestor task no longer resolves) becomes
+    ``None`` here, which ``_order_uids_depth_first``'s own "unknown parent ->
+    root" fallback already covers -- the same graceful degradation already
+    relied on for an out-of-scope planning ancestor, extended to this merged
+    tree without any extra logic.
+    """
+    translated_grid_rows = (
+        (
+            node.uid,
+            (
+                task_id_to_uid.get(node.parent_uid)
+                if node.parent_uid is not None and node.parent_uid > 0
+                else node.parent_uid
+            ),
+            node.position,
+            node.id,
+        )
+        for node in grid_nodes
+    )
+    combined: list[tuple[int, int | None, int | None, int]] = []
+    combined.extend(task_rows)
+    combined.extend(translated_grid_rows)
+    return _order_uids_depth_first(combined)
 
 
 def _planning_detail(

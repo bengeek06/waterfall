@@ -644,6 +644,12 @@ class EstimateTaskRowRead(BaseModel):
     # services.estimate_task_display) -- exposed for E12-09's future
     # tasks/cost-lines tree merge, not consumed by anything in this issue.
     task_uid: int | None = None
+    # Issue #291 (E12-09): this row's 1-based rank in the devis's merged
+    # tasks+grid-node tree (see order_estimate_grid_depth_first),
+    # recomputed on every read, never stored. `None` only in the same
+    # pre-existing degenerate case `task_uid` itself already falls back to
+    # `None` for (this row's task can no longer be resolved at all).
+    row_number: int | None = None
     parent_task_id: int | None = None
     position: int
     task_name: str
@@ -797,6 +803,19 @@ class EstimateCostLineRead(BaseModel):
     purchase_cost: Decimal
     supply_status: SupplyStatus | None
     planned_date: datetime | None
+    # Issue #289 (E12-07)/#291 (E12-09): this line's own EstimateGridNode,
+    # exposed as-is -- a positive `parent_uid` is a `MsTask.id` (see
+    # EstimateGridNode's own docstring), matching EstimateGridNodeMove's wire
+    # contract, so a value read here can be fed straight back into
+    # `target_parent_uid` on a later grid-nodes/move call without translation.
+    uid: int
+    parent_uid: int | None
+    position: int
+    # Issue #291 (E12-09): this line's 1-based rank in the devis's merged
+    # tasks+grid-node tree -- recomputed on every read, never stored. Always
+    # present (unlike EstimateTaskRowRead.row_number): every existing line
+    # owns exactly one grid node, always visited by the merged traversal.
+    row_number: int
 
 
 class EstimateCostLineListRead(PaginatedList[EstimateCostLineRead]):
@@ -875,6 +894,14 @@ class EstimateRoleAssignmentRead(BaseModel):
     comment: str | None
     created_at: datetime
     updated_at: datetime
+    # Issue #291 (E12-09): same EstimateGridNode-as-is contract as
+    # EstimateCostLineRead.uid/parent_uid/position above.
+    uid: int
+    parent_uid: int | None
+    position: int
+    # Issue #291 (E12-09): same always-present row_number contract as
+    # EstimateCostLineRead.row_number above.
+    row_number: int
 
 
 class EstimateRoleAssignmentListRead(PaginatedList[EstimateRoleAssignmentRead]):

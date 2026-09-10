@@ -46,7 +46,12 @@ from waterfall.schemas.projects import (
     TaskRead,
 )
 from waterfall.schemas.resources import CostTypeKind
-from waterfall.services import ResolvedTaskDisplay, apply_pagination, get_project_setup_warnings
+from waterfall.services import (
+    ResolvedTaskDisplay,
+    apply_pagination,
+    get_project_setup_warnings,
+    resolve_effective_task_uid,
+)
 from waterfall.services.project_lifecycle import (
     ensure_project_mutable,
     validate_project_status_transition,
@@ -110,6 +115,7 @@ def to_estimate_task_row_read(
     row: EstimateTaskRow,
     resolved: ResolvedTaskDisplay | None,
     task_uid_by_task_id: dict[int, int],
+    row_number_by_uid: dict[int, int] | None = None,
 ) -> EstimateTaskRowRead:
     """Build the response for a single ``EstimateTaskRow``.
 
@@ -130,17 +136,28 @@ def to_estimate_task_row_read(
     round 4 review) -- ``task_uid_by_task_id`` (built by
     ``services.estimate_task_display.resolve_task_uid_by_id``) is the fallback
     lookup for that case.
+
+    ``row_number_by_uid`` (E12-09/#291) is the devis's whole merged tasks+grid
+    -node rank map (``api.routes.estimates._load_estimate_grid_context``),
+    keyed by the same ``task_uid``/grid-node-``uid`` space
+    ``order_estimate_grid_depth_first`` produces -- absent (``None``) only for
+    the handful of pre-existing call sites that never had this field to begin
+    with, or when this row's own ``task_uid`` could not be resolved at all
+    (the pre-existing degenerate case above), in which case ``row_number`` is
+    ``None`` too rather than a misleading, arbitrarily-picked rank.
     """
-    task_uid = (
-        resolved.task_uid
-        if resolved is not None
-        else (task_uid_by_task_id.get(row.task_id) if row.task_id is not None else None)
+    task_uid = resolve_effective_task_uid(row, resolved, task_uid_by_task_id)
+    row_number = (
+        row_number_by_uid.get(task_uid)
+        if row_number_by_uid is not None and task_uid is not None
+        else None
     )
     return EstimateTaskRowRead(
         id=row.id,
         estimate_id=row.estimate_id,
         task_id=row.task_id,
         task_uid=task_uid,
+        row_number=row_number,
         parent_task_id=resolved.parent_task_id if resolved is not None else row.parent_task_id,
         position=resolved.position if resolved is not None else row.position,
         task_name=resolved.task_name if resolved is not None else row.task_name,
@@ -150,7 +167,26 @@ def to_estimate_task_row_read(
     )
 
 
-def to_estimate_cost_line_read(line: EstimateCostLine) -> EstimateCostLineRead:
+def to_estimate_cost_line_read(
+    line: EstimateCostLine,
+    node: EstimateGridNode,
+    row_number_by_uid: dict[int, int],
+) -> EstimateCostLineRead:
+    """Build the response for a single ``EstimateCostLine``.
+
+    ``node`` is this line's own ``EstimateGridNode`` (``line.node_id``,
+    NOT NULL/unique -- every line owns exactly one): ``uid``/``parent_uid``/
+    ``position`` are exposed as-is, unchanged from ``EstimateGridNode``'s own
+    storage convention (a positive ``parent_uid`` is a ``MsTask.id``, matching
+    ``EstimateGridNodeMove``'s own wire contract, so a caller can feed a
+    read's ``parent_uid`` straight back into ``grid-nodes/move`` without any
+    translation). ``row_number_by_uid`` is the devis's whole merged rank map
+    (E12-09/#291, see ``to_estimate_task_row_read``'s own docstring) --
+    ``node.uid`` is always present in it, since every existing grid node is
+    always visited by ``order_estimate_grid_depth_first``'s traversal (its own
+    orphan-cycle fallback guarantees this even for a node whose declared
+    ancestor chain is broken).
+    """
     return EstimateCostLineRead(
         id=line.id,
         estimate_id=line.estimate_id,
@@ -167,6 +203,10 @@ def to_estimate_cost_line_read(line: EstimateCostLine) -> EstimateCostLineRead:
         purchase_cost=line.purchase_cost,
         supply_status=cast(SupplyStatus | None, line.supply_status),
         planned_date=line.planned_date,
+        uid=node.uid,
+        parent_uid=node.parent_uid,
+        position=node.position,
+        row_number=row_number_by_uid[node.uid],
     )
 
 
@@ -263,7 +303,14 @@ def to_estimate_role_assignment_read(
     assignment: EstimateRoleAssignment,
     role: ResourceRole,
     category: CostCategory,
+    node: EstimateGridNode,
+    row_number_by_uid: dict[int, int],
 ) -> EstimateRoleAssignmentRead:
+    """Build the response for a single ``EstimateRoleAssignment``.
+
+    ``node``/``row_number_by_uid`` follow the exact same E12-09/#291
+    contract as ``to_estimate_cost_line_read`` above.
+    """
     return EstimateRoleAssignmentRead(
         id=assignment.id,
         estimate_id=assignment.estimate_id,
@@ -279,6 +326,10 @@ def to_estimate_role_assignment_read(
         comment=assignment.comment,
         created_at=assignment.created_at,
         updated_at=assignment.updated_at,
+        uid=node.uid,
+        parent_uid=node.parent_uid,
+        position=node.position,
+        row_number=row_number_by_uid[node.uid],
     )
 
 

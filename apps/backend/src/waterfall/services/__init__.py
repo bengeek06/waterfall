@@ -42,6 +42,7 @@ from waterfall.services.estimate_reconciliation_import import (
 )
 from waterfall.services.estimate_task_display import (
     ResolvedTaskDisplay,
+    resolve_effective_task_uid,
     resolve_live_task_display,
     resolve_task_uid_by_id,
 )
@@ -105,6 +106,7 @@ __all__ = [
     "TaskFileRow",
     "parse_estimate_reconciliation_workbook",
     "ResolvedTaskDisplay",
+    "resolve_effective_task_uid",
     "resolve_live_task_display",
     "resolve_task_uid_by_id",
     "PaginationResult",
