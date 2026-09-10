@@ -20,7 +20,6 @@ import {
   isEstimateTaskCreateRequiresPlanningDraft,
   listEstimateRoleAssignments,
   movePlanningTasks,
-  updateEstimateRoleAssignment,
   updateResourceRole,
 } from "./backend";
 
@@ -864,28 +863,6 @@ describe("EstimateRoleAssignment CRUD", () => {
     expect(String(url)).not.toContain("/projects/1/estimates/8/role-assignments");
     expect(init?.method).toBe("POST");
     expect(JSON.parse(String(init?.body))).toEqual({ task_id: 42, role_id: 3, quantity: 1, hours: 8 });
-  });
-
-  it("patches an existing role assignment by id", async () => {
-    const updated = { id: 5, estimate_id: 7, task_id: 42, role_id: 3, role_code: "DEV", role_name: "Développeur", cost_category_id: 1, accounting_code: "6410", quantity: 2, hours: 10, created_at: "2026-09-01T00:00:00Z", updated_at: "2026-09-02T00:00:00Z" };
-    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
-      async () => jsonResponse(updated),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    const result = await updateEstimateRoleAssignment(
-      1,
-      7,
-      5,
-      { quantity: 2, hours: 10 },
-      { accessToken: "token" },
-      vi.fn(),
-    );
-
-    expect(result).toEqual(updated);
-    const [url, init] = fetchMock.mock.calls[0];
-    expect(String(url)).toContain("/projects/1/estimates/7/role-assignments/5");
-    expect(init?.method).toBe("PATCH");
   });
 
   it("deletes a role assignment by id", async () => {

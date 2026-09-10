@@ -286,12 +286,9 @@ export function getPlanningRevisionConflict(cause: unknown): {
 export type MissingRateCoverageDetail = components["schemas"]["MissingRateCoverage"]["detail"];
 
 // Basse review finding #4 (E12-06/#278): the `409` branch below isn't dead code, even though
-// neither of this file's current callers (submitCreateRoleAssignment/saveRoleAssignment in
-// use-estimate-cost-lines.ts) ever actually gets a 409 with this code -- POST .../
-// role-assignments (create) only ever raises MISSING_RATE_COVERAGE as a 400, and PATCH .../
-// role-assignments/{id} (update) never raises it at all (task_id/role_id, the only fields the
-// rate-coverage check depends on, are immutable once created -- its own 409s are the generic
-// "estimate no longer a draft" conflict). It's kept because `validate_project_estimate`
+// this file's current caller (submitCreateRoleAssignment in use-estimate-cost-lines.ts) never
+// actually gets a 409 with this code -- POST .../role-assignments (create) only ever raises
+// MISSING_RATE_COVERAGE as a 400. It's kept because `validate_project_estimate`
 // (apps/backend/.../routes/estimates.py) *does* raise this exact structured detail as a 409
 // (see its own `responses` docstring: "au moins une (categorie de cout, annee) ... sans
 // CostRate/InflationRate (detail.code=MISSING_RATE_COVERAGE)") -- this helper is a small,
@@ -1102,13 +1099,12 @@ export function deleteEstimateCostLine(
   );
 }
 
-// E12-06/#278: CRUD for EstimateRoleAssignment ("MO"/labor) rows -- same shape as the
-// EstimateCostLine wrappers just above. `EstimateRoleAssignmentCreate`/`Update` distinguish
-// themselves from EstimateCostLine's own: `task_id`/`role_id` are only ever set at creation
-// (immutable afterward, see EstimateRoleAssignmentUpdate's own doc comment in the OpenAPI spec),
-// so `EstimateRoleAssignmentUpdate` doesn't carry either field at all.
+// E12-06/#278: create/list/delete for EstimateRoleAssignment ("MO"/labor) rows -- same shape as
+// the EstimateCostLine wrappers just above. There is deliberately no `updateEstimateRoleAssignment`
+// wrapper: the backend's `PATCH .../role-assignments/{id}` endpoint still exists, but inline
+// editing of an existing row was removed from the UI (per-user request -- the "Modifier" action
+// only ever exposed quantity/hours, not role/task/cost code/comment) with nothing left to call it.
 export type EstimateRoleAssignmentCreate = components["schemas"]["EstimateRoleAssignmentCreate"];
-export type EstimateRoleAssignmentUpdate = components["schemas"]["EstimateRoleAssignmentUpdate"];
 
 export async function listEstimateRoleAssignments(
   projectId: number,
@@ -1137,26 +1133,6 @@ export function createEstimateRoleAssignment(
     tokens,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    },
-    onSessionRefresh,
-  );
-}
-
-export function updateEstimateRoleAssignment(
-  projectId: number,
-  estimateId: number,
-  assignmentId: number,
-  payload: EstimateRoleAssignmentUpdate,
-  tokens: SessionTokens,
-  onSessionRefresh: (next: SessionTokens) => void,
-) {
-  return authRequest<EstimateRoleAssignment>(
-    `/projects/${projectId}/estimates/${estimateId}/role-assignments/${assignmentId}`,
-    tokens,
-    {
-      method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     },

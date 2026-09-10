@@ -824,12 +824,6 @@ export default function ProjectDetailsPage() {
           resourceNodes={resourceNodes}
           resourceRoles={resourceRoles}
           costRates={costRates}
-          editingRoleAssignmentId={estimateCostLines.editingRoleAssignmentId}
-          editingRoleAssignmentDraft={estimateCostLines.editingRoleAssignmentDraft}
-          onEditRoleAssignmentQuantityChange={estimateCostLines.updateEditingRoleAssignmentQuantity}
-          onEditRoleAssignmentHoursChange={estimateCostLines.updateEditingRoleAssignmentHours}
-          onStartEditRoleAssignment={estimateCostLines.startEditRoleAssignment}
-          onSaveRoleAssignment={(assignment) => void estimateCostLines.saveRoleAssignment(assignment)}
           onRequestDeleteRoleAssignment={estimateCostLines.requestDeleteRoleAssignment}
           roleAssignmentDialogOpen={estimateCostLines.roleAssignmentDialogOpen}
           roleAssignmentNodeId={estimateCostLines.roleAssignmentNodeId}
