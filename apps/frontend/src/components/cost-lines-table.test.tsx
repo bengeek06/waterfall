@@ -34,6 +34,18 @@ function renderTable(overrides: Partial<CostLinesTableProps> = {}) {
     bulkAssignBusy: false,
     onOpenMilestoneDialog: vi.fn(),
     milestoneTaskIds: new Set(),
+    estimateRoleAssignments: [],
+    resourceNodes: [],
+    resourceRoles: [],
+    costRates: [],
+    planningTasks: [],
+    editingRoleAssignmentId: null,
+    editingRoleAssignmentDraft: { quantity: "", hours: "" },
+    onEditRoleAssignmentQuantityChange: vi.fn(),
+    onEditRoleAssignmentHoursChange: vi.fn(),
+    onStartEditRoleAssignment: vi.fn(),
+    onSaveRoleAssignment: vi.fn(),
+    onRequestDeleteRoleAssignment: vi.fn(),
     ...overrides,
   };
   return render(<CostLinesTable {...props} />);
@@ -780,6 +792,237 @@ describe("CostLinesTable", () => {
       // Dept, Heures, Taux horaire, MO all render as "-" (this table's existing empty-cell
       // convention) -- at least 4 dashes must be present among this row's cells.
       expect(cellTexts.filter((text) => text === "-").length).toBeGreaterThanOrEqual(4);
+    });
+  });
+
+  // E12-06/#278: labor ("MO") rows, merged into the same grid as non-labor cost lines.
+  describe("labor rows (E12-06)", () => {
+    const taskRow = {
+      id: 1,
+      estimate_id: 1,
+      task_id: 42,
+      parent_task_id: null,
+      position: 1,
+      task_name: "Terrassement",
+      outline_number: "1",
+      outline_level: 0,
+      is_milestone: false,
+    };
+    const assignment = {
+      id: 1,
+      estimate_id: 1,
+      task_id: 42,
+      role_id: 5,
+      role_code: "DEV",
+      role_name: "Développeur",
+      cost_category_id: 9,
+      accounting_code: "6410",
+      quantity: 2,
+      hours: 10,
+    };
+    const resourceNodes = [
+      { id: 1, code: "A", name: "Direction", parent_id: null },
+      { id: 2, code: "A.1", name: "BE Structures", parent_id: 1 },
+    ];
+    const resourceRoles = [
+      { id: 5, name: "Développeur", node_id: 2, cost_category_id: 9, calendar_id: null, is_active: true },
+    ];
+    const allCostCategories = [
+      { id: 9, name: "Ingénierie", accounting_code: "6410", category_code: "ING", cost_type_id: 1, is_active: true },
+    ];
+
+    function laborRow() {
+      return screen.getByText("Développeur").closest("tr");
+    }
+
+    it("resolves Cpt/Dept/Type/Catégorie/Cat/Libellé/Tâche for a labor row", () => {
+      renderTable({
+        costLines: [],
+        estimateTaskRows: [taskRow] as never,
+        estimateRoleAssignments: [assignment] as never,
+        resourceNodes: resourceNodes as never,
+        resourceRoles: resourceRoles as never,
+        allCostCategories: allCostCategories as never,
+      });
+
+      const cellTexts = Array.from(laborRow()?.querySelectorAll("td") ?? []).map((cell) => cell.textContent);
+
+      expect(cellTexts).toContain("6410");
+      expect(cellTexts).toContain("Direction / BE Structures");
+      expect(cellTexts).toContain("MO");
+      expect(cellTexts).toContain("Ingénierie");
+      expect(cellTexts).toContain("ING");
+      expect(cellTexts).toContain("Terrassement");
+    });
+
+    it("still resolves the Dept path when the role or node is inactive (includeInactive: true resolution)", () => {
+      const inactiveResourceNodes = [
+        { id: 1, code: "A", name: "Direction", parent_id: null },
+        { id: 2, code: "A.1", name: "BE Structures (obsolète)", parent_id: 1 },
+      ];
+      const inactiveResourceRoles = [
+        { id: 5, name: "Développeur", node_id: 2, cost_category_id: 9, calendar_id: null, is_active: false },
+      ];
+      renderTable({
+        costLines: [],
+        estimateTaskRows: [taskRow] as never,
+        estimateRoleAssignments: [assignment] as never,
+        resourceNodes: inactiveResourceNodes as never,
+        resourceRoles: inactiveResourceRoles as never,
+        allCostCategories: allCostCategories as never,
+      });
+
+      const cellTexts = Array.from(laborRow()?.querySelectorAll("td") ?? []).map((cell) => cell.textContent);
+
+      expect(cellTexts).toContain("Direction / BE Structures (obsolète)");
+    });
+
+    it("computes MO as quantity x hours x the resolved indicative hourly rate", () => {
+      renderTable({
+        costLines: [],
+        estimateTaskRows: [taskRow] as never,
+        estimateRoleAssignments: [assignment] as never,
+        resourceNodes: resourceNodes as never,
+        resourceRoles: resourceRoles as never,
+        allCostCategories: allCostCategories as never,
+        costRates: [{ id: 1, cost_category_id: 9, year: new Date().getFullYear(), hourly_rate: 40, currency_code: "EUR" }] as never,
+      });
+
+      // quantity (2) x hours (10) x hourly_rate (40) = 800, shown in both MO and PRU non chargé
+      // (Achat is 0 for a labor row).
+      const cellTexts = Array.from(laborRow()?.querySelectorAll("td") ?? []).map((cell) => cell.textContent);
+      expect(cellTexts.filter((text) => text === "800")).toHaveLength(2);
+    });
+
+    it("shows an explicit '—' fallback (not 0) for MO/Taux horaire when no rate is configured", () => {
+      renderTable({
+        costLines: [],
+        estimateTaskRows: [taskRow] as never,
+        estimateRoleAssignments: [assignment] as never,
+        resourceNodes: resourceNodes as never,
+        resourceRoles: resourceRoles as never,
+        allCostCategories: allCostCategories as never,
+        costRates: [],
+      });
+
+      // Taux horaire, MO, and PRU non chargé (= MO) all fall back to "—" when no rate resolves.
+      const cellTexts = Array.from(laborRow()?.querySelectorAll("td") ?? []).map((cell) => cell.textContent);
+      expect(cellTexts.filter((text) => text === "—")).toHaveLength(3);
+    });
+
+    it("shows Achat as 0 for a labor row", () => {
+      renderTable({
+        costLines: [],
+        estimateTaskRows: [taskRow] as never,
+        estimateRoleAssignments: [assignment] as never,
+        resourceNodes: resourceNodes as never,
+        resourceRoles: resourceRoles as never,
+        allCostCategories: allCostCategories as never,
+      });
+
+      const cellTexts = Array.from(laborRow()?.querySelectorAll("td") ?? []).map((cell) => cell.textContent);
+      expect(cellTexts).toContain("0");
+    });
+
+    it("hides Modifier/Supprimer for a labor row when the estimate is not editable", () => {
+      renderTable({
+        costLines: [],
+        estimateTaskRows: [taskRow] as never,
+        estimateRoleAssignments: [assignment] as never,
+        resourceNodes: resourceNodes as never,
+        resourceRoles: resourceRoles as never,
+        allCostCategories: allCostCategories as never,
+        canEditEstimate: false,
+      });
+
+      expect(screen.queryByRole("button", { name: "Modifier" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Supprimer" })).not.toBeInTheDocument();
+    });
+
+    it("shows Modifier/Supprimer for a labor row when the estimate is editable, wired to their callbacks", () => {
+      const onStartEditRoleAssignment = vi.fn();
+      const onRequestDeleteRoleAssignment = vi.fn();
+      renderTable({
+        costLines: [],
+        estimateTaskRows: [taskRow] as never,
+        estimateRoleAssignments: [assignment] as never,
+        resourceNodes: resourceNodes as never,
+        resourceRoles: resourceRoles as never,
+        allCostCategories: allCostCategories as never,
+        canEditEstimate: true,
+        onStartEditRoleAssignment,
+        onRequestDeleteRoleAssignment,
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Modifier" }));
+      expect(onStartEditRoleAssignment).toHaveBeenCalledWith(assignment);
+
+      fireEvent.click(screen.getByRole("button", { name: "Supprimer" }));
+      expect(onRequestDeleteRoleAssignment).toHaveBeenCalledWith(assignment);
+    });
+
+    it("edits a labor row's quantity/hours inline, and saves via Sauver", () => {
+      const onSaveRoleAssignment = vi.fn();
+      const onEditRoleAssignmentQuantityChange = vi.fn();
+      const onEditRoleAssignmentHoursChange = vi.fn();
+      renderTable({
+        costLines: [],
+        estimateTaskRows: [taskRow] as never,
+        estimateRoleAssignments: [assignment] as never,
+        resourceNodes: resourceNodes as never,
+        resourceRoles: resourceRoles as never,
+        allCostCategories: allCostCategories as never,
+        canEditEstimate: true,
+        editingRoleAssignmentId: 1,
+        editingRoleAssignmentDraft: { quantity: "2", hours: "10" },
+        onEditRoleAssignmentQuantityChange,
+        onEditRoleAssignmentHoursChange,
+        onSaveRoleAssignment,
+      });
+
+      fireEvent.change(screen.getByLabelText("Qté de Développeur"), { target: { value: "3" } });
+      expect(onEditRoleAssignmentQuantityChange).toHaveBeenCalledWith("3");
+
+      fireEvent.change(screen.getByLabelText("Heures de Développeur"), { target: { value: "12" } });
+      expect(onEditRoleAssignmentHoursChange).toHaveBeenCalledWith("12");
+
+      fireEvent.click(screen.getByRole("button", { name: "Sauver" }));
+      expect(onSaveRoleAssignment).toHaveBeenCalledWith(assignment);
+    });
+
+    it("blocks Sauver on a labor row when the quantity is exactly 0", () => {
+      const onSaveRoleAssignment = vi.fn();
+      renderTable({
+        costLines: [],
+        estimateTaskRows: [taskRow] as never,
+        estimateRoleAssignments: [assignment] as never,
+        resourceNodes: resourceNodes as never,
+        resourceRoles: resourceRoles as never,
+        allCostCategories: allCostCategories as never,
+        canEditEstimate: true,
+        editingRoleAssignmentId: 1,
+        editingRoleAssignmentDraft: { quantity: "0", hours: "12" },
+        onSaveRoleAssignment,
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Sauver" }));
+
+      expect(onSaveRoleAssignment).not.toHaveBeenCalled();
+    });
+
+    it("does not render a 'Gabarit de jalons' action on a labor row", () => {
+      renderTable({
+        costLines: [],
+        estimateTaskRows: [taskRow] as never,
+        estimateRoleAssignments: [assignment] as never,
+        resourceNodes: resourceNodes as never,
+        resourceRoles: resourceRoles as never,
+        allCostCategories: allCostCategories as never,
+        canEditEstimate: true,
+      });
+
+      const buttons = Array.from(laborRow()?.querySelectorAll("button") ?? []).map((button) => button.textContent);
+      expect(buttons).not.toContain("Gabarit de jalons");
     });
   });
 });

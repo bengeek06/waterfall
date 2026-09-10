@@ -5021,7 +5021,9 @@ export interface operations {
     };
     listResourceNodes: {
         parameters: {
-            query?: never;
+            query?: {
+                include_inactive?: boolean;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -5153,6 +5155,7 @@ export interface operations {
             query?: {
                 node_id?: number;
                 include_descendants?: boolean;
+                include_inactive?: boolean;
                 /** @description Nombre maximum de lignes renvoyees. Absent, l'endpoint renvoie l'integralite des lignes du jeu filtre (voir PaginationMeta.yaml) : il n'y a pas de valeur par defaut qui tronquerait silencieusement une liste. */
                 limit?: components["parameters"]["Limit"];
                 /** @description Nombre de lignes a sauter avant le debut de la page. Requiert `limit` : fourni sans `limit`, il serait sous-specifie (voir la note "Regle offset/limit" dans PaginationMeta.yaml) et est donc rejete avec la reponse BadRequest.yaml. */

@@ -3,17 +3,24 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
   applyEstimateCostLineMilestoneTemplate,
+  createEstimateRoleAssignment,
   createEstimateTask,
+  deleteEstimateRoleAssignment,
   deletePlanningTasks,
+  describeMissingRateCoverage,
   getCalendars,
   getCostTypes,
+  getMissingRateCoverage,
   getPlanning,
   getPlanningTaskDeleteConflict,
   getProjects,
+  getResourceNodes,
   getResourceRoles,
   getUsers,
   isEstimateTaskCreateRequiresPlanningDraft,
+  listEstimateRoleAssignments,
   movePlanningTasks,
+  updateEstimateRoleAssignment,
   updateResourceRole,
 } from "./backend";
 
@@ -234,6 +241,50 @@ describe("getResourceRoles query building", () => {
     const page = await getResourceRoles({ accessToken: "token" }, vi.fn(), 1, false, { limit: 1, offset: 0 });
 
     expect(page).toEqual({ items, total: 7 });
+  });
+
+  it("sends include_inactive=true only when explicitly requested (E12-06/#278)", async () => {
+    const fetchMock = vi.fn<(input: RequestInfo | URL) => Promise<Response>>(async () => jsonResponse({ items: [], total: 0 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getResourceRoles({ accessToken: "token" }, vi.fn(), undefined, false, {}, true);
+
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain("include_inactive=true");
+  });
+
+  it("omits include_inactive by default, preserving the active-only on-demand dialog lookup", async () => {
+    const fetchMock = vi.fn<(input: RequestInfo | URL) => Promise<Response>>(async () => jsonResponse({ items: [], total: 0 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getResourceRoles({ accessToken: "token" }, vi.fn(), 3, true);
+
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).not.toContain("include_inactive");
+  });
+});
+
+describe("getResourceNodes query building", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("sends no query string at all by default", async () => {
+    const fetchMock = vi.fn<(input: RequestInfo | URL) => Promise<Response>>(async () => jsonResponse({ items: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getResourceNodes({ accessToken: "token" }, vi.fn());
+
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain("?");
+  });
+
+  it("sends include_inactive=true when explicitly requested (E12-06/#278)", async () => {
+    const fetchMock = vi.fn<(input: RequestInfo | URL) => Promise<Response>>(async () => jsonResponse({ items: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getResourceNodes({ accessToken: "token" }, vi.fn(), true);
+
+    expect(String(fetchMock.mock.calls[0][0])).toContain("include_inactive=true");
   });
 });
 
@@ -770,5 +821,139 @@ describe("applyEstimateCostLineMilestoneTemplate", () => {
 
     expect(thrown).toBeInstanceOf(ApiError);
     expect((thrown as ApiError).status).toBe(400);
+  });
+});
+
+// E12-06/#278: CRUD for EstimateRoleAssignment ("MO"/labor) rows.
+describe("EstimateRoleAssignment CRUD", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("lists role assignments scoped to the given project/estimate", async () => {
+    const items = [{ id: 1, estimate_id: 7, task_id: 42, role_id: 1, role_code: "DEV", role_name: "Développeur", cost_category_id: 1, accounting_code: "6410", quantity: 1, hours: 8, created_at: "2026-09-01T00:00:00Z", updated_at: "2026-09-01T00:00:00Z" }];
+    const fetchMock = vi.fn<(input: RequestInfo | URL) => Promise<Response>>(
+      async () => jsonResponse({ items, total: 1 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await listEstimateRoleAssignments(1, 7, { accessToken: "token" }, vi.fn());
+
+    expect(result).toEqual(items);
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/projects/1/estimates/7/role-assignments");
+  });
+
+  it("posts a new role assignment to the given estimate's own role-assignments endpoint", async () => {
+    const created = { id: 1, estimate_id: 7, task_id: 42, role_id: 3, role_code: "DEV", role_name: "Développeur", cost_category_id: 1, accounting_code: "6410", quantity: 1, hours: 8, created_at: "2026-09-01T00:00:00Z", updated_at: "2026-09-01T00:00:00Z" };
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+      async () => new Response(JSON.stringify(created), { status: 201, headers: { "Content-Type": "application/json" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await createEstimateRoleAssignment(
+      1,
+      7,
+      { task_id: 42, role_id: 3, quantity: 1, hours: 8 },
+      { accessToken: "token" },
+      vi.fn(),
+    );
+
+    expect(result).toEqual(created);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/projects/1/estimates/7/role-assignments");
+    expect(String(url)).not.toContain("/projects/1/estimates/8/role-assignments");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({ task_id: 42, role_id: 3, quantity: 1, hours: 8 });
+  });
+
+  it("patches an existing role assignment by id", async () => {
+    const updated = { id: 5, estimate_id: 7, task_id: 42, role_id: 3, role_code: "DEV", role_name: "Développeur", cost_category_id: 1, accounting_code: "6410", quantity: 2, hours: 10, created_at: "2026-09-01T00:00:00Z", updated_at: "2026-09-02T00:00:00Z" };
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+      async () => jsonResponse(updated),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await updateEstimateRoleAssignment(
+      1,
+      7,
+      5,
+      { quantity: 2, hours: 10 },
+      { accessToken: "token" },
+      vi.fn(),
+    );
+
+    expect(result).toEqual(updated);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/projects/1/estimates/7/role-assignments/5");
+    expect(init?.method).toBe("PATCH");
+  });
+
+  it("deletes a role assignment by id", async () => {
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+      async () => new Response(null, { status: 204 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await deleteEstimateRoleAssignment(1, 7, 5, { accessToken: "token" }, vi.fn());
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/projects/1/estimates/7/role-assignments/5");
+    expect(init?.method).toBe("DELETE");
+  });
+});
+
+// E6-11/#175: the structured MISSING_RATE_COVERAGE detail on createEstimateRoleAssignment's 400.
+describe("getMissingRateCoverage / describeMissingRateCoverage", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("extracts the structured detail from a 400 MISSING_RATE_COVERAGE response", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          detail: {
+            code: "MISSING_RATE_COVERAGE",
+            missing_cost_rates: [{ category_id: 1, category_name: "Ingénierie", accounting_code: "6410", year: 2027 }],
+            missing_inflation_years: [2028],
+          },
+        }),
+        { status: 400, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    let thrown: unknown;
+    try {
+      await createEstimateRoleAssignment(1, 7, { task_id: 42, role_id: 3, quantity: 1, hours: 8 }, { accessToken: "token" }, vi.fn());
+    } catch (cause) {
+      thrown = cause;
+    }
+
+    const detail = getMissingRateCoverage(thrown);
+    expect(detail).toEqual({
+      code: "MISSING_RATE_COVERAGE",
+      missing_cost_rates: [{ category_id: 1, category_name: "Ingénierie", accounting_code: "6410", year: 2027 }],
+      missing_inflation_years: [2028],
+    });
+    expect(describeMissingRateCoverage(detail!)).toContain("6410 Ingénierie (2027)");
+    expect(describeMissingRateCoverage(detail!)).toContain("taux d'inflation manquant pour 2028");
+  });
+
+  it("returns null for a 400 without a MISSING_RATE_COVERAGE structured detail, or an unrelated error", () => {
+    expect(getMissingRateCoverage(new ApiError(400, "Bad request"))).toBeNull();
+    expect(getMissingRateCoverage(new ApiError(404, "Not found", { code: "MISSING_RATE_COVERAGE" }))).toBeNull();
+    expect(getMissingRateCoverage(new Error("boom"))).toBeNull();
+  });
+
+  it("describes a detail missing only cost rates, without mentioning inflation", () => {
+    const message = describeMissingRateCoverage({
+      code: "MISSING_RATE_COVERAGE",
+      missing_cost_rates: [{ category_id: 1, category_name: "Ingénierie", accounting_code: "6410", year: 2027 }],
+      missing_inflation_years: [],
+    });
+
+    expect(message).toContain("6410 Ingénierie (2027)");
+    expect(message).not.toContain("inflation");
   });
 });

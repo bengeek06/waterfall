@@ -365,6 +365,34 @@ def test_resource_nodes_can_update_and_delete_leaf_nodes() -> None:
         assert "NEW" not in listed_codes
 
 
+def test_inactive_resource_node_hidden_unless_included() -> None:
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        node_id = cast(
+            dict[str, Any],
+            client.post(
+                "/resources/nodes",
+                json={"code": "NODE-I", "name": "Noeud inactif"},
+                headers=headers,
+            ).json(),
+        )["id"]
+
+        deactivate_response = client.delete(f"/resources/nodes/{node_id}", headers=headers)
+        assert deactivate_response.status_code == 204
+
+        active_only: Response = client.get("/resources/nodes", headers=headers)
+        active_payload = cast(list[dict[str, Any]], active_only.json()["items"])
+        assert all(item["id"] != node_id for item in active_payload)
+
+        with_inactive: Response = client.get(
+            "/resources/nodes?include_inactive=true", headers=headers
+        )
+        inactive_body = cast(dict[str, Any], with_inactive.json())
+        inactive_payload = cast(list[dict[str, Any]], inactive_body["items"])
+        assert any(item["id"] == node_id for item in inactive_payload)
+        assert inactive_body["total"] == len(inactive_payload)
+
+
 def _full_week(hours: str = "7.00") -> list[dict[str, Any]]:
     return [{"day_type": day_type, "hours_per_day": hours} for day_type in range(1, 8)]
 
@@ -1343,6 +1371,44 @@ def test_roles_pagination_sort_search_and_node_filter() -> None:
 
         invalid_sort = client.get("/resources/roles?sort=node_id", headers=headers)
         assert invalid_sort.status_code == 400
+
+
+def test_inactive_resource_role_hidden_unless_included() -> None:
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        context = _create_role_context(client, headers, "ROLE-I")
+        role_id = cast(
+            dict[str, Any],
+            client.post(
+                "/resources/roles",
+                json={
+                    "name": "Developpeur inactif",
+                    "node_id": context["node_id"],
+                    "cost_category_id": context["cost_category_id"],
+                },
+                headers=headers,
+            ).json(),
+        )["id"]
+
+        deactivate_response = client.patch(
+            f"/resources/roles/{role_id}",
+            json={"is_active": False},
+            headers=headers,
+        )
+        assert deactivate_response.status_code == 200
+        assert deactivate_response.json()["is_active"] is False
+
+        active_only: Response = client.get("/resources/roles", headers=headers)
+        active_payload = cast(list[dict[str, Any]], active_only.json()["items"])
+        assert all(item["id"] != role_id for item in active_payload)
+
+        with_inactive: Response = client.get(
+            "/resources/roles?include_inactive=true", headers=headers
+        )
+        inactive_body = cast(dict[str, Any], with_inactive.json())
+        inactive_payload = cast(list[dict[str, Any]], inactive_body["items"])
+        assert any(item["id"] == role_id for item in inactive_payload)
+        assert inactive_body["total"] == len(inactive_payload)
 
 
 def test_categories_pagination_sort_and_search() -> None:

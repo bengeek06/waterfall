@@ -7,6 +7,7 @@ import type { ChangeEvent } from "react";
 import { AnalyticsTab } from "@/components/analytics-tab";
 import { CommitmentsTabPlaceholder } from "@/components/commitments-tab-placeholder";
 import { CostLineDeleteDialog } from "@/components/cost-line-delete-dialog";
+import { EstimateRoleAssignmentDeleteDialog } from "@/components/estimate-role-assignment-delete-dialog";
 import { EstimateTab } from "@/components/estimate-tab";
 import { EstimateValidationDialog } from "@/components/estimate-validation-dialog";
 import { PlanningTab } from "@/components/planning-tab";
@@ -17,24 +18,32 @@ import { ProjectTabs, type ProjectTab } from "@/components/project-tabs";
 import {
   ApiError,
   CostCategory,
+  CostRate,
   createImportBatch,
   EstimateAggregates,
   EstimateCostLine,
+  EstimateRoleAssignment,
   EstimateTaskRow,
   exportProjectXml,
   getCostCategories,
+  getCostRates,
   getCostTypes,
   getEstimateAggregates,
   getImportBatchDiff,
   getProject,
+  getResourceNodes,
+  getResourceRoles,
   listPlannings,
   listEstimateCostLines,
+  listEstimateRoleAssignments,
   listEstimateTaskRows,
   listProjectEstimates,
   Project,
   Planning,
   PlanningDetail,
   ProjectEstimate,
+  ResourceNode,
+  ResourceRole,
   runImportBatch,
   SessionExpiredError,
   type ImportDiff,
@@ -166,6 +175,15 @@ export default function ProjectDetailsPage() {
   // resolve a historical cost line's category *name* even after that category was deactivated.
   // See loadCostCategories below and cost-lines-table.tsx's `allCostCategories` prop doc comment.
   const [allCostCategories, setAllCostCategories] = useState<CostCategory[]>([]);
+  // E12-06/#278: the organization/role/rate referentials feeding CostLinesTable's labor ("MO")
+  // row resolution (Dept/Type/Catégorie/Cat/Taux horaire/MO columns) -- loaded once per project,
+  // not per row. `resourceRoles` here is the *complete* (unfiltered by node) referential, unlike
+  // the dialog's own node-scoped `roleAssignmentRoles` (use-estimate-cost-lines.ts), which is
+  // loaded on demand only once a node is chosen in the "Ajouter une ligne MO" form.
+  const [resourceNodes, setResourceNodes] = useState<ResourceNode[]>([]);
+  const [resourceRoles, setResourceRoles] = useState<ResourceRole[]>([]);
+  const [costRates, setCostRates] = useState<CostRate[]>([]);
+  const [estimateRoleAssignments, setEstimateRoleAssignments] = useState<EstimateRoleAssignment[]>([]);
   const [aggregates, setAggregates] = useState<EstimateAggregates | null>(null);
   const [activeTab, setActiveTab] = useState<ProjectTab>("planning");
   const [busy, setBusy] = useState(true);
@@ -285,16 +303,21 @@ export default function ProjectDetailsPage() {
       if (!session || selectedEstimateId === null) {
         setEstimateTaskRows([]);
         setCostLines([]);
+        setEstimateRoleAssignments([]);
         return;
       }
       try {
-        const [taskRows, lines] = await Promise.all([
+        // E12-06/#278: role assignments are refetched here alongside task rows/cost lines, on
+        // the exact same "reload whenever the selected estimate version changes" model.
+        const [taskRows, lines, roleAssignments] = await Promise.all([
           listEstimateTaskRows(projectId, selectedEstimateId, session, onSessionRefresh),
           listEstimateCostLines(projectId, selectedEstimateId, session, onSessionRefresh),
+          listEstimateRoleAssignments(projectId, selectedEstimateId, session, onSessionRefresh),
         ]);
         if (!cancelled) {
           setEstimateTaskRows(taskRows);
           setCostLines(lines);
+          setEstimateRoleAssignments(roleAssignments);
         }
       } catch (cause) {
         if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
@@ -341,6 +364,39 @@ export default function ProjectDetailsPage() {
     }
 
     void loadCostCategories();
+  }, [onSessionRefresh, session]);
+
+  useEffect(() => {
+    async function loadRoleAssignmentReferentials() {
+      if (!session) {
+        return;
+      }
+      try {
+        // E12-06/#278: loaded once per project, not per Devis row -- `resourceRolesPage` here is
+        // the *complete* referential (no node_id filter), used only to resolve an existing
+        // EstimateRoleAssignment's `node_id`/`cost_category_id` from its `role_id` for display
+        // (CostLinesTable's Dept/Catégorie/Cat columns). The "Ajouter une ligne MO" dialog's own
+        // role selector is populated separately, on demand, once a node is chosen (see
+        // use-estimate-cost-lines.ts's updateRoleAssignmentNodeId), and deliberately stays
+        // active-only there (a disabled role/node must not be selectable for a *new* assignment).
+        // `includeInactive: true` here mirrors `allCostCategories` above -- an existing assignment
+        // referencing a role or node disabled after the fact must still resolve to a real Dept/
+        // name instead of the "-"/truncated-path fallback (E12-06's original "Haute" finding).
+        const [nodes, resourceRolesPage, rates] = await Promise.all([
+          getResourceNodes(session, onSessionRefresh, true),
+          getResourceRoles(session, onSessionRefresh, undefined, false, {}, true),
+          getCostRates(session, onSessionRefresh),
+        ]);
+        setResourceNodes(nodes);
+        setResourceRoles(resourceRolesPage.items);
+        setCostRates(rates);
+      } catch {
+        // Non-blocking: the Devis grid's Dept/Taux horaire/MO columns simply show their "-"/"—"
+        // fallbacks without these referentials, same convention as loadCostCategories above.
+      }
+    }
+
+    void loadRoleAssignmentReferentials();
   }, [onSessionRefresh, session]);
 
   useEffect(() => {
@@ -451,6 +507,7 @@ export default function ProjectDetailsPage() {
     selectedPlanningId,
     selectedPlanningIdRef,
     setPlanningDetail,
+    setEstimateRoleAssignments,
     onSessionRefresh,
     router,
     setError,
@@ -763,6 +820,39 @@ export default function ProjectDetailsPage() {
             setActiveTab("planning");
             void planningMutations.reopenStructure();
           }}
+          estimateRoleAssignments={estimateRoleAssignments}
+          resourceNodes={resourceNodes}
+          resourceRoles={resourceRoles}
+          costRates={costRates}
+          editingRoleAssignmentId={estimateCostLines.editingRoleAssignmentId}
+          editingRoleAssignmentDraft={estimateCostLines.editingRoleAssignmentDraft}
+          onEditRoleAssignmentQuantityChange={estimateCostLines.updateEditingRoleAssignmentQuantity}
+          onEditRoleAssignmentHoursChange={estimateCostLines.updateEditingRoleAssignmentHours}
+          onStartEditRoleAssignment={estimateCostLines.startEditRoleAssignment}
+          onSaveRoleAssignment={(assignment) => void estimateCostLines.saveRoleAssignment(assignment)}
+          onRequestDeleteRoleAssignment={estimateCostLines.requestDeleteRoleAssignment}
+          roleAssignmentDialogOpen={estimateCostLines.roleAssignmentDialogOpen}
+          roleAssignmentNodeId={estimateCostLines.roleAssignmentNodeId}
+          onRoleAssignmentNodeIdChange={(value) => void estimateCostLines.updateRoleAssignmentNodeId(value)}
+          roleAssignmentRoles={estimateCostLines.roleAssignmentRoles}
+          roleAssignmentRolesLoading={estimateCostLines.roleAssignmentRolesLoading}
+          roleAssignmentRoleId={estimateCostLines.roleAssignmentRoleId}
+          onRoleAssignmentRoleIdChange={estimateCostLines.updateRoleAssignmentRoleId}
+          roleAssignmentTaskId={estimateCostLines.roleAssignmentTaskId}
+          onRoleAssignmentTaskIdChange={estimateCostLines.updateRoleAssignmentTaskId}
+          roleAssignmentQuantity={estimateCostLines.roleAssignmentQuantity}
+          onRoleAssignmentQuantityChange={estimateCostLines.updateRoleAssignmentQuantity}
+          roleAssignmentHours={estimateCostLines.roleAssignmentHours}
+          onRoleAssignmentHoursChange={estimateCostLines.updateRoleAssignmentHours}
+          roleAssignmentCostCodeId={estimateCostLines.roleAssignmentCostCodeId}
+          onRoleAssignmentCostCodeIdChange={estimateCostLines.updateRoleAssignmentCostCodeId}
+          roleAssignmentComment={estimateCostLines.roleAssignmentComment}
+          onRoleAssignmentCommentChange={estimateCostLines.updateRoleAssignmentComment}
+          roleAssignmentBusy={estimateCostLines.estimateBusy}
+          roleAssignmentError={estimateCostLines.roleAssignmentError}
+          onOpenRoleAssignmentDialog={estimateCostLines.openRoleAssignmentDialog}
+          onCloseRoleAssignmentDialog={estimateCostLines.closeRoleAssignmentDialog}
+          onSubmitRoleAssignment={() => void estimateCostLines.submitCreateRoleAssignment()}
         />
 
         <CommitmentsTabPlaceholder active={activeTab === "commitments"} />
@@ -774,6 +864,12 @@ export default function ProjectDetailsPage() {
         pendingDelete={estimateCostLines.costLinePendingDelete}
         onCancel={estimateCostLines.cancelDeleteCostLine}
         onConfirm={(line) => void estimateCostLines.removeCostLine(line)}
+      />
+
+      <EstimateRoleAssignmentDeleteDialog
+        pendingDelete={estimateCostLines.roleAssignmentPendingDelete}
+        onCancel={estimateCostLines.cancelDeleteRoleAssignment}
+        onConfirm={(assignment) => void estimateCostLines.removeRoleAssignment(assignment)}
       />
 
       <EstimateValidationDialog

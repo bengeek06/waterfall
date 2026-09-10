@@ -2276,6 +2276,13 @@ paths:
       operationId: listResourceNodes
       security:
         - bearerAuth: []
+      parameters:
+        - name: include_inactive
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
       responses:
         '200':
           description: 'Arbre complet des noeuds de ressources actifs. Non paginable (EPIC E7) : l''arbre doit toujours etre renvoye en entier, jamais tronque, sous peine de laisser le client reconstruire un arbre incomplet. `limit` est donc toujours `null` et `total` egale `items.length`.'
@@ -2399,6 +2406,12 @@ paths:
             type: integer
             minimum: 1
         - name: include_descendants
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+        - name: include_inactive
           in: query
           required: false
           schema:

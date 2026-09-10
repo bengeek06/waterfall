@@ -6,28 +6,39 @@ import {
   ApiError,
   applyEstimateCostLineMilestoneTemplate,
   createEstimateCostLine,
+  createEstimateRoleAssignment,
   createEstimateTask,
   createProjectEstimate,
   deleteEstimateCostLine,
+  deleteEstimateRoleAssignment,
+  describeMissingRateCoverage,
   EstimateCostLine,
   EstimateCostLineMilestonesCreate,
+  EstimateRoleAssignment,
+  EstimateRoleAssignmentCreate,
   EstimateTaskRow,
   EstimateValidationWarning,
   exportEstimateExcel,
+  getMissingRateCoverage,
   getPlanning,
   getProjectCostCodes,
+  getResourceRoles,
   isEstimateTaskCreateRequiresPlanningDraft,
+  listEstimateRoleAssignments,
   listEstimateTaskRows,
   PlanningDetail,
   Project,
   ProjectCostCode,
   ProjectEstimate,
+  ResourceRole,
   SessionExpiredError,
   updateEstimateCostLine,
+  updateEstimateRoleAssignment,
   validateProjectEstimate,
 } from "@/lib/backend";
 import { clearSession, type SessionTokens } from "@/lib/session";
 import type { ProjectTab } from "@/components/project-tabs";
+import type { EditingRoleAssignmentDraft } from "@/components/cost-lines-table";
 
 type AppRouter = ReturnType<typeof useRouter>;
 
@@ -107,6 +118,9 @@ interface UseEstimateCostLinesParams {
   selectedPlanningId: number | null;
   selectedPlanningIdRef: RefObject<number | null>;
   setPlanningDetail: (detail: PlanningDetail | null) => void;
+  // E12-06/#278: same direct-setter/full-refetch convention as setEstimateTaskRows above --
+  // every role-assignment mutation refetches the exact list rather than approximating it.
+  setEstimateRoleAssignments: (assignments: EstimateRoleAssignment[]) => void;
   onSessionRefresh: (next: SessionTokens) => void;
   router: AppRouter;
   setError: (message: string | null) => void;
@@ -129,6 +143,7 @@ export function useEstimateCostLines({
   selectedPlanningId,
   selectedPlanningIdRef,
   setPlanningDetail,
+  setEstimateRoleAssignments,
   onSessionRefresh,
   router,
   setError,
@@ -150,6 +165,9 @@ export function useEstimateCostLines({
     taskId: "",
   });
   const [costLinePendingDelete, setCostLinePendingDelete] = useState<EstimateCostLine | null>(null);
+  // E12-06/#278: same AlertDialog pending-delete pattern as costLinePendingDelete above, for a
+  // role-assignment ("MO") row -- see EstimateRoleAssignmentDeleteDialog (page.tsx call site).
+  const [roleAssignmentPendingDelete, setRoleAssignmentPendingDelete] = useState<EstimateRoleAssignment | null>(null);
   const [estimateValidationOpen, setEstimateValidationOpen] = useState(false);
   const [estimateBusy, setEstimateBusy] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
@@ -188,6 +206,45 @@ export function useEstimateCostLines({
   // Same meaning as taskCreateRequiresPlanningDraft above -- both endpoints raise the exact same
   // structured 409 code.
   const [milestoneRequiresPlanningDraft, setMilestoneRequiresPlanningDraft] = useState(false);
+
+  // E12-06/#278: "Ajouter une ligne MO" dialog, launched from this tab -- creates an
+  // EstimateRoleAssignment. Kept alongside the task-creation/milestone-template dialogs' state
+  // above for the same reason: it reuses this hook's selectedEstimateIdRef guard and a
+  // refetch-after-mutation helper of its own (refreshEstimateRoleAssignments below), rather than
+  // duplicating either.
+  const [roleAssignmentDialogOpen, setRoleAssignmentDialogOpen] = useState(false);
+  const [roleAssignmentNodeId, setRoleAssignmentNodeId] = useState("");
+  // Mirrors `roleAssignmentNodeId` synchronously (updated at every write site below, not via a
+  // `useEffect`, which would introduce exactly the race window this exists to close) so
+  // `updateRoleAssignmentNodeId`'s `getResourceRoles` continuation can check, once its response
+  // comes back, whether the node it was fetched for is still the one selected -- otherwise two
+  // requests fired in quick succession for two different nodes can resolve out of order (network
+  // latency isn't guaranteed to preserve request order), and the *first* node's roles would land
+  // in the selector after the user has already moved on to the second, letting them pick a role
+  // that actually belongs to the wrong department. Exact same guard shape as
+  // `selectedNodeIdRef`/`rolesPanelGenerationRef` in app/resources/page.tsx, which fixes the
+  // identical race for the identical "roles filtered by node" fetch.
+  const roleAssignmentNodeIdRef = useRef("");
+  // The roles of the node currently chosen in the dialog -- loaded on demand (never the whole
+  // referential up front), see updateRoleAssignmentNodeId below.
+  const [roleAssignmentRoles, setRoleAssignmentRoles] = useState<ResourceRole[]>([]);
+  const [roleAssignmentRolesLoading, setRoleAssignmentRolesLoading] = useState(false);
+  const [roleAssignmentRoleId, setRoleAssignmentRoleId] = useState("");
+  const [roleAssignmentTaskId, setRoleAssignmentTaskId] = useState("");
+  const [roleAssignmentQuantity, setRoleAssignmentQuantity] = useState("1");
+  const [roleAssignmentHours, setRoleAssignmentHours] = useState("0");
+  const [roleAssignmentCostCodeId, setRoleAssignmentCostCodeId] = useState("");
+  const [roleAssignmentComment, setRoleAssignmentComment] = useState("");
+  const [roleAssignmentError, setRoleAssignmentError] = useState<string | null>(null);
+
+  // Inline editing of an existing role-assignment row's quantity/hours in CostLinesTable -- see
+  // EditingRoleAssignmentDraft's own doc comment in cost-lines-table.tsx for why cost_code_id/
+  // comment aren't editable this way.
+  const [editingRoleAssignmentId, setEditingRoleAssignmentId] = useState<number | null>(null);
+  const [editingRoleAssignmentDraft, setEditingRoleAssignmentDraft] = useState<EditingRoleAssignmentDraft>({
+    quantity: "",
+    hours: "",
+  });
 
   const selectedEstimate = estimates.find((estimate) => estimate.id === selectedEstimateId) ?? null;
 
@@ -274,6 +331,12 @@ export function useEstimateCostLines({
   }
   function cancelDeleteCostLine() {
     setCostLinePendingDelete(null);
+  }
+  function requestDeleteRoleAssignment(assignment: EstimateRoleAssignment) {
+    setRoleAssignmentPendingDelete(assignment);
+  }
+  function cancelDeleteRoleAssignment() {
+    setRoleAssignmentPendingDelete(null);
   }
   function openEstimateValidation() {
     setEstimateValidationOpen(true);
@@ -363,6 +426,274 @@ export function useEstimateCostLines({
       }
       // Otherwise non-blocking: a failed refresh only means the Devis grid shows a stale task
       // list until the next reload, not that the mutation itself failed.
+    }
+  }
+
+  // E12-06/#278: refetches this estimate's role-assignment ("MO") rows after a create/update/
+  // delete mutation, on the exact same shape/guard as refreshEstimateTaskRowsAfterTaskCreation
+  // above -- an exact refetch rather than a local patch, per the deliver-batch convention already
+  // established for this hook's other mutations.
+  async function refreshEstimateRoleAssignments(launchedEstimateId: number, tokens: SessionTokens) {
+    try {
+      const fresh = await listEstimateRoleAssignments(projectId, launchedEstimateId, tokens, onSessionRefresh);
+      if (selectedEstimateIdRef.current === launchedEstimateId) {
+        setEstimateRoleAssignments(fresh);
+      }
+    } catch (refetchCause) {
+      if (refetchCause instanceof SessionExpiredError || (refetchCause instanceof ApiError && refetchCause.status === 401)) {
+        clearSession();
+        router.push("/login");
+      }
+      // Otherwise non-blocking: a failed refresh only means the Devis grid shows a stale
+      // role-assignment list until the next reload, not that the mutation itself failed.
+    }
+  }
+
+  function openRoleAssignmentDialog() {
+    roleAssignmentNodeIdRef.current = "";
+    setRoleAssignmentNodeId("");
+    setRoleAssignmentRoles([]);
+    setRoleAssignmentRoleId("");
+    setRoleAssignmentTaskId("");
+    setRoleAssignmentQuantity("1");
+    setRoleAssignmentHours("0");
+    setRoleAssignmentCostCodeId("");
+    setRoleAssignmentComment("");
+    setRoleAssignmentError(null);
+    setRoleAssignmentDialogOpen(true);
+  }
+
+  function closeRoleAssignmentDialog() {
+    setRoleAssignmentDialogOpen(false);
+    setRoleAssignmentError(null);
+  }
+
+  // Loads the roles available for the chosen organizational node (E12-06/#278) -- deliberately on
+  // demand (not preloaded for the whole referential up front, unlike resourceNodes/resourceRoles/
+  // costRates in page.tsx): most Devis sessions never open this dialog at all.
+  // `include_descendants: true` matches the org-tree convention already used elsewhere in this
+  // codebase (getResourceRoles's own doc comment) -- a role attached anywhere under the chosen
+  // node is a legitimate candidate, not only one attached to the node itself.
+  async function updateRoleAssignmentNodeId(value: string) {
+    // Updated synchronously, before the `await` below, so a slower-resolving request for a
+    // node the user has since navigated away from can detect that once it comes back -- see
+    // `roleAssignmentNodeIdRef`'s own doc comment above for the exact race this closes.
+    roleAssignmentNodeIdRef.current = value;
+    setRoleAssignmentNodeId(value);
+    setRoleAssignmentRoleId("");
+    setRoleAssignmentRoles([]);
+    if (!session || !value) {
+      return;
+    }
+    setRoleAssignmentRolesLoading(true);
+    try {
+      const page = await getResourceRoles(session, onSessionRefresh, Number(value), true);
+      // Stale-response guard: if the user picked a different node while this request was in
+      // flight, `roleAssignmentNodeIdRef.current` no longer equals `value` -- applying `page`
+      // now would silently populate the selector with the wrong node's roles even though the
+      // dropdown already shows the new node, letting a role from the wrong department be
+      // assigned by mistake.
+      if (roleAssignmentNodeIdRef.current === value) {
+        setRoleAssignmentRoles(page.items);
+      }
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      // Non-blocking: the role selector simply stays empty, same convention as
+      // loadProjectCostCodes (page.tsx).
+    } finally {
+      // Same guard as above: a stale request's `finally` must not clear the loading indicator
+      // for the (still in-flight) current node's own request.
+      if (roleAssignmentNodeIdRef.current === value) {
+        setRoleAssignmentRolesLoading(false);
+      }
+    }
+  }
+
+  function updateRoleAssignmentRoleId(value: string) {
+    setRoleAssignmentRoleId(value);
+  }
+  function updateRoleAssignmentTaskId(value: string) {
+    setRoleAssignmentTaskId(value);
+  }
+  function updateRoleAssignmentQuantity(value: string) {
+    setRoleAssignmentQuantity(value);
+  }
+  function updateRoleAssignmentHours(value: string) {
+    setRoleAssignmentHours(value);
+  }
+  function updateRoleAssignmentCostCodeId(value: string) {
+    setRoleAssignmentCostCodeId(value);
+  }
+  function updateRoleAssignmentComment(value: string) {
+    setRoleAssignmentComment(value);
+  }
+
+  // Validates the dialog's numeric fields before any network call, mirroring the backend's own
+  // constraints (quantity strictly positive, hours >= 0 -- see EstimateRoleAssignmentCreate.yaml)
+  // -- extracted purely to keep submitCreateRoleAssignment under this file's complexity budget.
+  function parseRoleAssignmentDraft(): { taskId: number; roleId: number; quantity: number; hours: number } | { error: string } {
+    const taskId = Number(roleAssignmentTaskId);
+    const roleId = Number(roleAssignmentRoleId);
+    const quantity = Number(roleAssignmentQuantity);
+    const hours = Number(roleAssignmentHours);
+    if (!taskId || !roleId || !(quantity > 0) || !(hours >= 0)) {
+      return { error: "Renseigne une tâche, un rôle, une quantité et un nombre d'heures valides." };
+    }
+    return { taskId, roleId, quantity, hours };
+  }
+
+  // Translates a submitCreateRoleAssignment/saveRoleAssignment failure into a French message --
+  // extracted purely to keep those functions under this file's complexity budget. Callers must
+  // handle SessionExpiredError/a post-refresh 401 before reaching this. `getMissingRateCoverage`
+  // only ever matches createEstimateRoleAssignment's own 400 (E6-11/#175) -- harmless (returns
+  // null) when called on updateEstimateRoleAssignment's generic 400/409, so both callers can share
+  // this one helper.
+  function describeRoleAssignmentError(cause: unknown, genericMessage: string): string {
+    const missingRateCoverage = getMissingRateCoverage(cause);
+    if (missingRateCoverage) {
+      return describeMissingRateCoverage(missingRateCoverage);
+    }
+    if (cause instanceof ApiError && cause.status === 409) {
+      return "Ce devis n'est plus modifiable.";
+    }
+    return cause instanceof ApiError ? cause.message : genericMessage;
+  }
+
+  // E12-06/#278: creates an EstimateRoleAssignment attached to a task of the selected (draft)
+  // estimate. `selectedEstimateIdRef` guard mirrors submitCreateTask above: the user could switch
+  // estimate version while this request is in flight (nothing currently disables the version
+  // selector while busy), and a stale response must never be applied to whatever version is
+  // displayed once it resolves.
+  async function submitCreateRoleAssignment() {
+    if (!session || selectedEstimateId === null) {
+      return;
+    }
+    const draft = parseRoleAssignmentDraft();
+    if ("error" in draft) {
+      setRoleAssignmentError(draft.error);
+      return;
+    }
+
+    const launchedEstimateId = selectedEstimateId;
+    const payload: EstimateRoleAssignmentCreate = {
+      task_id: draft.taskId,
+      role_id: draft.roleId,
+      cost_code_id: roleAssignmentCostCodeId ? Number(roleAssignmentCostCodeId) : null,
+      quantity: draft.quantity,
+      hours: draft.hours,
+      comment: roleAssignmentComment.trim() ? roleAssignmentComment.trim() : null,
+    };
+
+    setEstimateBusy(true);
+    setRoleAssignmentError(null);
+    try {
+      await createEstimateRoleAssignment(projectId, launchedEstimateId, payload, session, onSessionRefresh);
+      if (selectedEstimateIdRef.current === launchedEstimateId) {
+        await refreshEstimateRoleAssignments(launchedEstimateId, session);
+        closeRoleAssignmentDialog();
+      }
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      if (selectedEstimateIdRef.current !== launchedEstimateId) {
+        return;
+      }
+      setRoleAssignmentError(describeRoleAssignmentError(cause, "Impossible d'ajouter la ligne de main d'œuvre."));
+    } finally {
+      setEstimateBusy(false);
+    }
+  }
+
+  function startEditRoleAssignment(assignment: EstimateRoleAssignment) {
+    setEditingRoleAssignmentId(assignment.id);
+    setEditingRoleAssignmentDraft({ quantity: String(assignment.quantity), hours: String(assignment.hours) });
+  }
+
+  function updateEditingRoleAssignmentQuantity(value: string) {
+    setEditingRoleAssignmentDraft((prev) => ({ ...prev, quantity: value }));
+  }
+  function updateEditingRoleAssignmentHours(value: string) {
+    setEditingRoleAssignmentDraft((prev) => ({ ...prev, hours: value }));
+  }
+
+  // Inline update of an existing role assignment's quantity/hours (E12-06/#278) -- same
+  // stale-response guard as saveCostLine's own non-labor sibling.
+  async function saveRoleAssignment(assignment: EstimateRoleAssignment) {
+    if (!session || selectedEstimateId === null) {
+      return;
+    }
+    const quantity = Number(editingRoleAssignmentDraft.quantity);
+    const hours = Number(editingRoleAssignmentDraft.hours);
+    if (!(quantity > 0) || !(hours >= 0)) {
+      setError("Quantité et heures doivent être valides.");
+      return;
+    }
+
+    const launchedEstimateId = selectedEstimateId;
+    setEstimateBusy(true);
+    setError(null);
+    try {
+      await updateEstimateRoleAssignment(
+        projectId,
+        launchedEstimateId,
+        assignment.id,
+        { quantity, hours },
+        session,
+        onSessionRefresh,
+      );
+      if (selectedEstimateIdRef.current === launchedEstimateId) {
+        await refreshEstimateRoleAssignments(launchedEstimateId, session);
+        setEditingRoleAssignmentId(null);
+      }
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      if (selectedEstimateIdRef.current !== launchedEstimateId) {
+        return;
+      }
+      setError(describeRoleAssignmentError(cause, "Impossible de modifier la ligne de main d'œuvre."));
+    } finally {
+      setEstimateBusy(false);
+    }
+  }
+
+  // Deletes a role assignment once confirmed via EstimateRoleAssignmentDeleteDialog (page.tsx
+  // call site) -- same requestDelete/cancelDelete/remove split as costLinePendingDelete's own
+  // non-labor sibling above.
+  async function removeRoleAssignment(assignment: EstimateRoleAssignment) {
+    if (!session || selectedEstimateId === null) {
+      return;
+    }
+    const launchedEstimateId = selectedEstimateId;
+    setEstimateBusy(true);
+    setError(null);
+    try {
+      await deleteEstimateRoleAssignment(projectId, launchedEstimateId, assignment.id, session, onSessionRefresh);
+      if (selectedEstimateIdRef.current === launchedEstimateId) {
+        await refreshEstimateRoleAssignments(launchedEstimateId, session);
+      }
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      if (selectedEstimateIdRef.current !== launchedEstimateId) {
+        return;
+      }
+      setError(cause instanceof ApiError ? cause.message : "Impossible de supprimer la ligne de main d'œuvre.");
+    } finally {
+      setEstimateBusy(false);
     }
   }
 
@@ -973,5 +1304,36 @@ export function useEstimateCostLines({
     updateMilestoneIntermediateCount,
     updateMilestoneLagMinutes,
     submitMilestoneTemplate,
+    roleAssignmentDialogOpen,
+    roleAssignmentNodeId,
+    roleAssignmentRoles,
+    roleAssignmentRolesLoading,
+    roleAssignmentRoleId,
+    roleAssignmentTaskId,
+    roleAssignmentQuantity,
+    roleAssignmentHours,
+    roleAssignmentCostCodeId,
+    roleAssignmentComment,
+    roleAssignmentError,
+    openRoleAssignmentDialog,
+    closeRoleAssignmentDialog,
+    updateRoleAssignmentNodeId,
+    updateRoleAssignmentRoleId,
+    updateRoleAssignmentTaskId,
+    updateRoleAssignmentQuantity,
+    updateRoleAssignmentHours,
+    updateRoleAssignmentCostCodeId,
+    updateRoleAssignmentComment,
+    submitCreateRoleAssignment,
+    editingRoleAssignmentId,
+    editingRoleAssignmentDraft,
+    updateEditingRoleAssignmentQuantity,
+    updateEditingRoleAssignmentHours,
+    startEditRoleAssignment,
+    saveRoleAssignment,
+    roleAssignmentPendingDelete,
+    requestDeleteRoleAssignment,
+    cancelDeleteRoleAssignment,
+    removeRoleAssignment,
   };
 }
