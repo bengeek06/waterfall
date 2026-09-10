@@ -1453,7 +1453,7 @@ describe("useEstimateCostLines submitCreateRoleAssignment", () => {
     expect(mocks.createEstimateRoleAssignment).toHaveBeenCalledWith(
       1,
       7,
-      { task_id: 42, role_id: 5, cost_code_id: null, quantity: 2, hours: 10, comment: null },
+      { task_id: 42, role_id: 5, cost_code_id: null, quantity: 2, hours: 10, comment: null, target_parent_uid: null, insert_after_uid: null },
       session,
       expect.any(Function),
     );
@@ -1623,6 +1623,156 @@ describe("useEstimateCostLines submitCreateRoleAssignment", () => {
     });
 
     expect(result.current.roleAssignmentError).toBe("Ce devis n'est plus modifiable.");
+  });
+});
+
+// E12-11/#293: the grid's per-row "Ajouter ressource" context-menu action -- opens the same
+// dialog/submit path as the toolbar's own "Ajouter une ligne MO" (submitCreateRoleAssignment),
+// never a parallel implementation, with the task/grid-position preselected from the origin row.
+describe("useEstimateCostLines openRoleAssignmentDialogForRow (E12-11/#293)", () => {
+  beforeEach(() => {
+    mocks.createEstimateRoleAssignment.mockReset();
+    mocks.listEstimateRoleAssignments.mockReset().mockResolvedValue([]);
+    mocks.clearSession.mockReset();
+  });
+
+  it("opens the dialog with the origin row's task preselected, and every other field left blank", async () => {
+    const { result } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.openRoleAssignmentDialogForRow(
+        makeAssignment(1, { task_id: 42, parent_uid: 42, uid: -9, quantity: 7, hours: 40, role_id: 99, cost_code_id: 3 }),
+      );
+    });
+
+    expect(result.current.roleAssignmentDialogOpen).toBe(true);
+    expect(result.current.roleAssignmentTaskId).toBe("42");
+    // Nothing from the origin assignment's own Rôle/Qté/Heures/Code d'imputation/Dpt is ever
+    // copied over -- only its task/grid position feeds the new draft.
+    expect(result.current.roleAssignmentRoleId).toBe("");
+    expect(result.current.roleAssignmentQuantity).toBe("1");
+    expect(result.current.roleAssignmentHours).toBe("0");
+    expect(result.current.roleAssignmentCostCodeId).toBe("");
+    expect(result.current.roleAssignmentDept1Id).toBe("");
+    expect(result.current.roleAssignmentDept2Id).toBe("");
+  });
+
+  it("submits with the origin row's own grid position (target_parent_uid/insert_after_uid), never that of a normal 'Ajouter une ligne MO' submit", async () => {
+    mocks.createEstimateRoleAssignment.mockResolvedValue(makeAssignment(1));
+    const { result } = setup({ selectedEstimateId: 7 });
+
+    act(() => {
+      result.current.openRoleAssignmentDialogForRow(makeAssignment(1, { task_id: 42, parent_uid: 42, uid: -9 }));
+      result.current.updateRoleAssignmentRoleId("5");
+      result.current.updateRoleAssignmentQuantity("2");
+      result.current.updateRoleAssignmentHours("10");
+    });
+
+    await act(async () => {
+      await result.current.submitCreateRoleAssignment();
+    });
+
+    expect(mocks.createEstimateRoleAssignment).toHaveBeenCalledWith(
+      1,
+      7,
+      { task_id: 42, role_id: 5, cost_code_id: null, quantity: 2, hours: 10, comment: null, target_parent_uid: 42, insert_after_uid: -9 },
+      session,
+      expect.any(Function),
+    );
+  });
+
+  it("falls back to a root labor row's own grid position (target_parent_uid: null)", async () => {
+    mocks.createEstimateRoleAssignment.mockResolvedValue(makeAssignment(1));
+    const { result } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.openRoleAssignmentDialogForRow(makeAssignment(1, { task_id: 42, parent_uid: null, uid: -9 }));
+      result.current.updateRoleAssignmentRoleId("5");
+      result.current.updateRoleAssignmentQuantity("2");
+      result.current.updateRoleAssignmentHours("10");
+    });
+
+    await act(async () => {
+      await result.current.submitCreateRoleAssignment();
+    });
+
+    expect(mocks.createEstimateRoleAssignment).toHaveBeenCalledWith(
+      1,
+      1,
+      expect.objectContaining({ target_parent_uid: null, insert_after_uid: -9 }),
+      session,
+      expect.any(Function),
+    );
+  });
+
+  // A labor row with no task ancestor at all (`task_id: null`, the E12-07 root case) can never
+  // be duplicated -- EstimateRoleAssignmentCreate.task_id is required, so there is no valid
+  // payload to submit for it. This never even opens the dialog (see the grid's own disabled
+  // menu item for the primary guard).
+  it("does nothing for a root labor row with no task ancestor (task_id: null)", () => {
+    const { result } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.openRoleAssignmentDialogForRow(makeAssignment(1, { task_id: null, parent_uid: null, uid: -9 }));
+    });
+
+    expect(result.current.roleAssignmentDialogOpen).toBe(false);
+  });
+
+  // Changing the task selector manually after opening from a context menu must drop the
+  // inherited grid-position hint -- it no longer describes a sensible position once the task
+  // itself has changed away from the one the context menu was opened for.
+  it("clears the inherited grid-position hint once the user manually changes the task selector", async () => {
+    mocks.createEstimateRoleAssignment.mockResolvedValue(makeAssignment(1));
+    const { result } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.openRoleAssignmentDialogForRow(makeAssignment(1, { task_id: 42, parent_uid: 42, uid: -9 }));
+      result.current.updateRoleAssignmentTaskId("77");
+      result.current.updateRoleAssignmentRoleId("5");
+      result.current.updateRoleAssignmentQuantity("2");
+      result.current.updateRoleAssignmentHours("10");
+    });
+
+    await act(async () => {
+      await result.current.submitCreateRoleAssignment();
+    });
+
+    expect(mocks.createEstimateRoleAssignment).toHaveBeenCalledWith(
+      1,
+      1,
+      expect.objectContaining({ task_id: 77, target_parent_uid: null, insert_after_uid: null }),
+      session,
+      expect.any(Function),
+    );
+  });
+
+  // The toolbar's own blank "Ajouter une ligne MO" dialog must never inherit a stale
+  // grid-position hint left over from a previous context-menu-driven open.
+  it("does not carry over a grid-position hint from a previous openRoleAssignmentDialogForRow into a later openRoleAssignmentDialog", async () => {
+    mocks.createEstimateRoleAssignment.mockResolvedValue(makeAssignment(1));
+    const { result } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.openRoleAssignmentDialogForRow(makeAssignment(1, { task_id: 42, parent_uid: 42, uid: -9 }));
+      result.current.openRoleAssignmentDialog();
+      result.current.updateRoleAssignmentTaskId("42");
+      result.current.updateRoleAssignmentRoleId("5");
+      result.current.updateRoleAssignmentQuantity("2");
+      result.current.updateRoleAssignmentHours("10");
+    });
+
+    await act(async () => {
+      await result.current.submitCreateRoleAssignment();
+    });
+
+    expect(mocks.createEstimateRoleAssignment).toHaveBeenCalledWith(
+      1,
+      1,
+      expect.objectContaining({ target_parent_uid: null, insert_after_uid: null }),
+      session,
+      expect.any(Function),
+    );
   });
 });
 

@@ -5,6 +5,7 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { PlanningTreeToolbar } from "@/components/planning-tree-toolbar";
@@ -24,6 +25,8 @@ import { computeIndicativeLaborCost, resolveIndicativeHourlyRate, resolveRoleAss
 import {
   buildEstimateGridTreeRows,
   computeEstimateGridRowTotals,
+  type EstimateGridLaborRow,
+  type EstimateGridLineRow,
   type EstimateGridTreeRow,
 } from "@/lib/estimate-grid-tree";
 import { computeGridIndentCommand, computeGridOutdentCommand, computeGridReorderCommand, type EstimateGridMoveCommand } from "@/lib/estimate-grid-move";
@@ -62,6 +65,11 @@ export type EstimateGridTreeTableProps = {
   milestoneTaskIds: Set<number>;
   onRequestDeleteCostLine: (line: EstimateCostLine) => void;
   onRequestDeleteRoleAssignment: (assignment: EstimateRoleAssignment) => void;
+  // E12-11/#293: right-click context menu's "Ajouter ressource" action on a labor row -- creates
+  // a new, entirely blank EstimateRoleAssignment attached to the same task as `assignment`
+  // (never a copy of its own values). Disabled by the grid itself for a root labor row
+  // (`assignment.task_id == null`, the E12-07 case) -- see renderContextMenuItems' own comment.
+  onAddRoleAssignmentForRow: (assignment: EstimateRoleAssignment) => void;
 };
 
 const COLUMN_HEADERS = [
@@ -136,6 +144,7 @@ export function EstimateGridTreeTable({
   milestoneTaskIds,
   onRequestDeleteCostLine,
   onRequestDeleteRoleAssignment,
+  onAddRoleAssignmentForRow,
 }: EstimateGridTreeTableProps) {
   const [renderedVersionKey, setRenderedVersionKey] = useState(versionKey);
 
@@ -362,29 +371,53 @@ export function EstimateGridTreeTable({
       return null;
     }
     if (row.kind === "line") {
-      const attachedToMilestoneTask = row.line.task_id != null && milestoneTaskIds.has(row.line.task_id);
+      // E12-11/#293: "Gabarit de jalons" used to be a dedicated button here -- it's now only
+      // reachable from this row's right-click context menu (see renderContextMenuItems below),
+      // which calls the exact same onOpenMilestoneDialog prop, never a parallel implementation.
       return (
-        <div className="flex flex-wrap gap-2">
-          <Button
-            size="sm"
-            variant="outline"
-            type="button"
-            disabled={mutationBusy || attachedToMilestoneTask}
-            title={attachedToMilestoneTask ? "Cette ligne est rattachée à une tâche-jalon, qui ne peut pas recevoir de sous-tâches." : undefined}
-            onClick={() => onOpenMilestoneDialog(row.line)}
-          >
-            Gabarit de jalons
-          </Button>
-          <Button size="sm" variant="destructive" type="button" disabled={mutationBusy} onClick={() => onRequestDeleteCostLine(row.line)}>
-            Supprimer
-          </Button>
-        </div>
+        <Button size="sm" variant="destructive" type="button" disabled={mutationBusy} onClick={() => onRequestDeleteCostLine(row.line)}>
+          Supprimer
+        </Button>
       );
     }
     return (
       <Button size="sm" variant="destructive" type="button" disabled={mutationBusy} onClick={() => onRequestDeleteRoleAssignment(row.assignment)}>
         Supprimer
       </Button>
+    );
+  }
+
+  // E12-11/#293: right-click context-menu items for a "line"/"labor" row -- a "task" row never
+  // gets a menu at all (see the row-mapping loop below, which only wraps these two kinds in a
+  // ContextMenu). "Ajouter ressource" only ever shows on a labor row, "Gabarit de jalons" only
+  // ever shows on a non-MO cost-line row -- never both, mirroring the acceptance criteria's own
+  // "the menu must not offer the other kind's action" requirement.
+  function renderContextMenuItems(row: EstimateGridLineRow | EstimateGridLaborRow) {
+    if (row.kind === "line") {
+      const attachedToMilestoneTask = row.line.task_id != null && milestoneTaskIds.has(row.line.task_id);
+      return (
+        <ContextMenuItem
+          disabled={mutationBusy || attachedToMilestoneTask}
+          title={attachedToMilestoneTask ? "Cette ligne est rattachée à une tâche-jalon, qui ne peut pas recevoir de sous-tâches." : undefined}
+          onClick={() => onOpenMilestoneDialog(row.line)}
+        >
+          Gabarit de jalons
+        </ContextMenuItem>
+      );
+    }
+    // A root labor row (no task ancestor, `task_id: null` -- the E12-07 case) can never be
+    // duplicated: EstimateRoleAssignmentCreate.task_id is required, so there is no task to attach
+    // a new blank row to. Disabled with an explanatory title rather than hidden outright, so the
+    // user understands why rather than wondering if the row was skipped by mistake.
+    const hasTaskAncestor = row.assignment.task_id != null;
+    return (
+      <ContextMenuItem
+        disabled={mutationBusy || !hasTaskAncestor}
+        title={!hasTaskAncestor ? "Cette ligne MO n'est rattachée à aucune tâche : impossible d'y ajouter une ressource." : undefined}
+        onClick={() => onAddRoleAssignmentForRow(row.assignment)}
+      >
+        Ajouter ressource
+      </ContextMenuItem>
     );
   }
 
@@ -425,7 +458,7 @@ export function EstimateGridTreeTable({
             const selected = row.uid != null && selection.selectedUids.has(row.uid);
             const [dept1, dept2] = renderDeptCells(row);
             const key = row.kind === "task" ? `task-${row.taskRow.id}` : row.kind === "line" ? `line-${row.line.id}` : `labor-${row.assignment.id}`;
-            return (
+            const rowElement = (
               <TableRow
                 key={key}
                 data-state={selected ? "selected" : undefined}
@@ -459,6 +492,20 @@ export function EstimateGridTreeTable({
                 {canEditEstimate ? <TableCell>{renderActionsCell(row)}</TableCell> : null}
               </TableRow>
             );
+
+            // E12-11/#293: right-click context menu -- only ever on a "line"/"labor" row (never
+            // a "task" row, see this issue's own spec) and only while the estimate is actually
+            // editable (mirrors the Action column itself, also `canEditEstimate`-gated above):
+            // there is nothing this menu could ever do on a read-only estimate version.
+            if (canEditEstimate && row.kind !== "task") {
+              return (
+                <ContextMenu key={key}>
+                  <ContextMenuTrigger render={rowElement} />
+                  <ContextMenuContent>{renderContextMenuItems(row)}</ContextMenuContent>
+                </ContextMenu>
+              );
+            }
+            return rowElement;
           })}
           {!selection.visibleRows.length ? (
             <TableRow>

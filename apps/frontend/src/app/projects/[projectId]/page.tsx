@@ -844,6 +844,7 @@ export default function ProjectDetailsPage() {
           roleAssignmentBusy={estimateCostLines.estimateBusy}
           roleAssignmentError={estimateCostLines.roleAssignmentError}
           onOpenRoleAssignmentDialog={estimateCostLines.openRoleAssignmentDialog}
+          onOpenRoleAssignmentDialogForRow={estimateCostLines.openRoleAssignmentDialogForRow}
           onCloseRoleAssignmentDialog={estimateCostLines.closeRoleAssignmentDialog}
           onSubmitRoleAssignment={() => void estimateCostLines.submitCreateRoleAssignment()}
         />
