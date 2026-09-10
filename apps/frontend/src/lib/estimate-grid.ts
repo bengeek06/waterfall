@@ -48,9 +48,10 @@ function splitCostLinesByAttachment(
 //      the task -- labor is listed first as a deliberate (not spec-mandated) choice: it is the
 //      base cost most devis build up from, with purchased-supply lines layered on top;
 //   3. a trailing "lignes globales" section for every EstimateCostLine with no task attachment.
-//      An EstimateRoleAssignment always carries a non-null task_id in normal operation (it is
-//      created directly against an MsTask.id, see EstimateRoleAssignmentCreate) -- there is no
-//      "global labor" concept by design. However, an assignment whose task_id doesn't match any
+//      An EstimateRoleAssignment is created directly against an MsTask.id in every flow the
+//      current UI exposes (see EstimateRoleAssignmentCreate) and so, in practice, always carries a
+//      task_id today -- there is no UI yet to create or move a labor line to the estimate's root
+//      (that lands with E12-10/#292). However, an assignment whose task_id doesn't match any
 //      EstimateTaskRow of *this* estimate version (an orphan, e.g. left behind by a planning
 //      change that removed/replaced the task after the assignment was created -- a data-integrity
 //      edge case, not something reachable from the current UI) must still be rendered somewhere:
@@ -59,6 +60,14 @@ function splitCostLinesByAttachment(
 //      "Lignes globales" section (Haute finding #2/E12-06/#278) -- they're visually indistinguishable
 //      from a global cost line there (same header, indentLevel 0), which is an acceptable tradeoff
 //      given how narrow the case is.
+//
+//      E12-07/#289: the backend's EstimateRoleAssignmentRead.task_id is now nullable (a "root"
+//      labor line with no attached task). The same orphan fallback above already applies here: a
+//      null task_id is treated exactly like an unmatched one and folded into "Lignes globales",
+//      rather than silently vanishing from the grid. This is not new product behavior -- it's the
+//      pre-existing orphan-fallback code path, just triggered by one more condition -- so it still
+//      renders with the same generic labor-row markup as any other row, ahead of E12-10's own
+//      dedicated "root" UI.
 //
 // A task row with `task_id: null` (a snapshot-only row with no MsTask twin, see EstimateTaskRow's
 // own doc comment in lib/backend.ts) can never have a cost line or a role assignment attached to
@@ -92,7 +101,11 @@ export function buildEstimateGridEntries(
       entries.push({ kind: "line", line, indentLevel });
     }
   }
-  const orphanAssignments = [...assignmentsByTaskId.values()].flat();
+  // A root assignment (task_id: null, E12-07/#289) was never inserted into assignmentsByTaskId
+  // (groupByTaskId skips null keys) and so can't be consumed by the task-row loop above -- fold it
+  // into the same orphan fallback rather than dropping it.
+  const rootAssignments = estimateRoleAssignments.filter((assignment) => assignment.task_id == null);
+  const orphanAssignments = [...rootAssignments, ...[...assignmentsByTaskId.values()].flat()];
   if (globalLines.length || orphanAssignments.length) {
     entries.push({ kind: "global-header" });
     for (const assignment of orphanAssignments) {

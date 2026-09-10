@@ -24,6 +24,7 @@ from waterfall.api.routes.project_access import (
     get_mutable_project_lock,
     get_planning_or_404,
     get_project_or_404,
+    raise_on_estimate_revision_conflict,
 )
 from waterfall.api.routes.project_cost_codes import resolve_cost_code_id
 from waterfall.api.routes.projects import (
@@ -45,6 +46,7 @@ from waterfall.models.resources import (
     CostType,
     Estimate,
     EstimateCostLine,
+    EstimateGridNode,
     EstimateLine,
     EstimateRoleAssignment,
     EstimateTaskRow,
@@ -60,6 +62,7 @@ from waterfall.schemas.projects import (
     EstimateCostLineMilestonesCreate,
     EstimateCostLineRead,
     EstimateCostLineUpdate,
+    EstimateGridNodeMove,
     EstimateRoleAssignmentCreate,
     EstimateRoleAssignmentListRead,
     EstimateRoleAssignmentRead,
@@ -85,6 +88,9 @@ from waterfall.schemas.projects import (
 from waterfall.schemas.resources import CostTypeKind
 from waterfall.services import (
     CostLineFileRow,
+    EstimateGridInvariantError,
+    EstimateGridMoveError,
+    EstimateGridMoveNotFoundError,
     EstimateReconciliationFormatError,
     LaborFileRow,
     MissingRateCoverageError,
@@ -104,10 +110,12 @@ from waterfall.services import (
     calculate_estimate_aggregates,
     calculate_estimate_lines,
     collect_missing_rate_coverage,
+    create_estimate_grid_node,
     create_planning_task,
     delete_planning_tasks,
     get_estimate_validation_warnings,
     missing_rate_coverage_detail,
+    move_estimate_grid_nodes,
     parse_estimate_reconciliation_workbook,
     replace_task_predecessor_links,
     sync_task_role_assignments_from_estimate,
@@ -1037,7 +1045,13 @@ def _stage_new_labor_row(
     project: MsProject,
     row: LaborFileRow,
     staged_pairs: set[tuple[int, int]],
-    retained_pairs: set[tuple[int, int]],
+    # Issue #289 (E12-07): EstimateRoleAssignment.task_id is now nullable (a
+    # root-detached assignment has no task), so retained_pairs -- built
+    # straight from live assignment rows -- can carry a None task_id. `pair`
+    # below is always a real (non-None) task_id from the imported file, so it
+    # can never match one of those; this is just a type widening, not a
+    # behaviour change.
+    retained_pairs: set[tuple[int | None, int]],
     issues: list[ReconciliationIssue],
 ) -> _LaborCreateCandidate | None:
     if row.task_id is None or row.role_id is None or row.quantity is None or row.hours is None:
@@ -1626,17 +1640,31 @@ def _precheck_task_deletions(
 def _apply_cost_line_deletes(
     db: Session, cost_line_ids: list[int], existing_cost_lines: dict[int, EstimateCostLine]
 ) -> None:
+    # Issue #289 (E12-07): same dangling-node rationale as delete_estimate_cost_line
+    # -- node_id is a NOT NULL, unique FK, so the owning grid node is collected
+    # before the line itself is deleted, then removed once nothing references it.
+    node_ids = [existing_cost_lines[cost_line_id].node_id for cost_line_id in cost_line_ids]
     for cost_line_id in cost_line_ids:
         db.delete(existing_cost_lines[cost_line_id])
     db.flush()
+    if node_ids:
+        db.query(EstimateGridNode).filter(EstimateGridNode.id.in_(node_ids)).delete(
+            synchronize_session=False
+        )
 
 
 def _apply_labor_deletes(
     db: Session, assignment_ids: list[int], existing_assignments: dict[int, EstimateRoleAssignment]
 ) -> None:
+    # Issue #289 (E12-07): same dangling-node rationale as delete_estimate_role_assignment.
+    node_ids = [existing_assignments[assignment_id].node_id for assignment_id in assignment_ids]
     for assignment_id in assignment_ids:
         db.delete(existing_assignments[assignment_id])
     db.flush()
+    if node_ids:
+        db.query(EstimateGridNode).filter(EstimateGridNode.id.in_(node_ids)).delete(
+            synchronize_session=False
+        )
 
 
 def _apply_task_deletes(
@@ -1704,6 +1732,12 @@ def _apply_labor_creates(
 ) -> None:
     for candidate in labor_creates:
         cost_code_id = resolve_cost_code_id(db, project.id, candidate.cost_code_id)
+        # Issue #289 (E12-07): last child of the devis root, same default as
+        # create_estimate_role_assignment's own EstimateRoleAssignmentCreate
+        # (this reconciliation import candidate has no explicit tree position).
+        node = create_estimate_grid_node(
+            db, estimate, kind="labor", target_parent_uid=None, insert_after_uid=None
+        )
         assignment = EstimateRoleAssignment(
             estimate_id=estimate.id,
             task_id=candidate.task_id,
@@ -1712,6 +1746,7 @@ def _apply_labor_creates(
             quantity=candidate.quantity,
             hours=candidate.hours,
             comment=candidate.comment,
+            node_id=node.id,
         )
         db.add(assignment)
     db.flush()
@@ -1734,6 +1769,12 @@ def _apply_cost_line_creates(
                     detail="Supply status is only valid for supplies",
                 )
             supply_status = candidate.supply_status
+        # Issue #289 (E12-07): last child of the devis root, same default as
+        # create_estimate_cost_line's own EstimateCostLineCreate (this
+        # reconciliation import candidate has no explicit tree position).
+        node = create_estimate_grid_node(
+            db, estimate, kind="cost_line", target_parent_uid=None, insert_after_uid=None
+        )
         line = EstimateCostLine(
             estimate_id=estimate.id,
             task_id=candidate.task_id,
@@ -1749,6 +1790,7 @@ def _apply_cost_line_creates(
             purchase_cost=candidate.quantity * candidate.unit_cost,
             supply_status=supply_status,
             planned_date=candidate.planned_date,
+            node_id=node.id,
         )
         db.add(line)
     db.flush()
@@ -1875,6 +1917,14 @@ def _run_reconciliation(
     *existing* task as its parent (via ``parent_task_id``), never another new
     row created in the same file -- there is no multi-level topological
     resolution of cascaded creations.
+
+    ``estimate.revision`` is bumped exactly once for the whole batch when any
+    MO/Non-MO row is created or deleted (Finding Haute, #289 review): every one
+    of those four mutates the devis grid node tree, exactly like
+    ``create_estimate_cost_line``/``create_estimate_role_assignment``/
+    ``delete_estimate_cost_line``/``delete_estimate_role_assignment`` -- a single
+    bump for the batch, not one per row, mirroring the ``planning_for_tasks.revision``
+    bump just above it.
     """
     issues: list[ReconciliationIssue] = []
     warnings: list[ReconciliationIssue] = []
@@ -1955,6 +2005,16 @@ def _run_reconciliation(
             db.flush()
         _apply_labor_creates(db, project, estimate, labor_creates)
         _apply_cost_line_creates(db, project, estimate, non_labor_creates)
+        if labor_to_delete_ids or non_labor_to_delete_ids or labor_creates or non_labor_creates:
+            # Finding Haute (#289 review): every one of the four applies above
+            # creates or deletes an EstimateGridNode, exactly like
+            # create_estimate_cost_line/create_estimate_role_assignment/
+            # delete_estimate_cost_line/delete_estimate_role_assignment -- same
+            # single bump for the whole batch as the planning.revision bump
+            # just above, not one per row.
+            estimate.revision += 1
+            db.add(estimate)
+            db.flush()
 
         # ---- Apply: updates (MO, then Non-MO) ----
         _apply_labor_updates(db, project, labor_updates, existing_assignments)
@@ -2228,7 +2288,7 @@ def create_estimate_cost_line(
     current_user: User = Depends(get_current_active_user),
 ) -> EstimateCostLineRead:
     get_mutable_project_lock(db, project_id, current_user.id)
-    get_draft_estimate_or_409(db, project_id, estimate_id)
+    estimate = get_draft_estimate_or_409(db, project_id, estimate_id)
     if payload.task_id is not None:
         task = db.query(MsTask).filter(MsTask.id == payload.task_id).first()
         if task is None or task.project_id != project_id:
@@ -2247,6 +2307,21 @@ def create_estimate_cost_line(
             )
         supply_status = payload.supply_status
 
+    # Issue #289 (E12-07): the line's own position in the devis grid tree --
+    # defaults to the last child of the devis root, independent of task_id.
+    try:
+        node = create_estimate_grid_node(
+            db,
+            estimate,
+            kind="cost_line",
+            target_parent_uid=payload.target_parent_uid,
+            insert_after_uid=payload.insert_after_uid,
+        )
+    except EstimateGridMoveNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except EstimateGridMoveError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
     line = EstimateCostLine(
         estimate_id=estimate_id,
         task_id=payload.task_id,
@@ -2262,11 +2337,23 @@ def create_estimate_cost_line(
         purchase_cost=payload.quantity * payload.unit_cost,
         supply_status=supply_status,
         planned_date=payload.planned_date,
+        node_id=node.id,
     )
     db.add(line)
+    # Issue #289 (E12-07) review finding (Finding Haute): creating a line adds a
+    # node to the grid tree, exactly like grid-nodes/move -- must bump revision
+    # the same way, or a concurrent move's optimistic-lock expected_revision
+    # check can pass against a tree that actually changed underneath it.
+    estimate.revision += 1
+    db.add(estimate)
+    # Flush (not commit) first, so the response can be built while the project
+    # lock is still held -- commit is last, matching create_estimate_task/
+    # create_estimate_role_assignment/create_estimate_cost_line_milestones,
+    # never the commit-then-refresh pattern (tech debt #262).
+    db.flush()
+    response = to_estimate_cost_line_read(line)
     db.commit()
-    db.refresh(line)
-    return to_estimate_cost_line_read(line)
+    return response
 
 
 @router.patch(
@@ -2352,7 +2439,7 @@ def delete_estimate_cost_line(
     current_user: User = Depends(get_current_active_user),
 ) -> None:
     get_mutable_project_lock(db, project_id, current_user.id)
-    get_draft_estimate_or_409(db, project_id, estimate_id)
+    estimate = get_draft_estimate_or_409(db, project_id, estimate_id)
     line = (
         db.query(EstimateCostLine)
         .filter(EstimateCostLine.id == line_id)
@@ -2364,7 +2451,20 @@ def delete_estimate_cost_line(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Estimate cost line not found",
         )
+    # Issue #289 (E12-07): node_id is a NOT NULL, unique FK -- every line owns
+    # exactly one grid node, so deleting the line without its node would leave
+    # a dangling, unreferenced node behind.
+    node = db.query(EstimateGridNode).filter(EstimateGridNode.id == line.node_id).one()
     db.delete(line)
+    # Flushed before deleting node: EstimateCostLine.node_id has no declared ORM
+    # relationship() to EstimateGridNode (a plain FK column only), so the unit of
+    # work has no dependency info to order these two deletes correctly on its own.
+    db.flush()
+    db.delete(node)
+    # Finding Haute (#289 review): removing a line removes a grid node too --
+    # same revision-bump obligation as create_estimate_cost_line/grid-nodes/move.
+    estimate.revision += 1
+    db.add(estimate)
     db.commit()
 
 
@@ -2445,7 +2545,7 @@ def create_estimate_role_assignment(
     is not a draft (new in this issue, mirroring ``EstimateCostLine``'s own rule).
     """
     get_mutable_project_lock(db, project_id, current_user.id)
-    get_draft_estimate_or_409(db, project_id, estimate_id)
+    estimate = get_draft_estimate_or_409(db, project_id, estimate_id)
 
     task = (
         db.query(MsTask)
@@ -2494,6 +2594,22 @@ def create_estimate_role_assignment(
                 detail=missing_rate_coverage_detail(missing_cost_rates, missing_inflation_years),
             )
 
+    # Issue #289 (E12-07): the assignment's own position in the devis grid
+    # tree -- defaults to the last child of the devis root, independent of
+    # task_id.
+    try:
+        node = create_estimate_grid_node(
+            db,
+            estimate,
+            kind="labor",
+            target_parent_uid=payload.target_parent_uid,
+            insert_after_uid=payload.insert_after_uid,
+        )
+    except EstimateGridMoveNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except EstimateGridMoveError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
     assignment = EstimateRoleAssignment(
         estimate_id=estimate_id,
         task_id=task.id,
@@ -2502,8 +2618,14 @@ def create_estimate_role_assignment(
         quantity=payload.quantity,
         hours=payload.hours,
         comment=payload.comment,
+        node_id=node.id,
     )
     db.add(assignment)
+    # Issue #289 (E12-07) review finding (Finding Haute): same revision-bump
+    # obligation as create_estimate_cost_line -- adding a node to the grid tree
+    # must not go unnoticed by a concurrent grid-nodes/move's optimistic lock.
+    estimate.revision += 1
+    db.add(estimate)
     try:
         # Flush (not commit) first, so the response can be built while the project
         # lock is still held -- commit is last, matching create_estimate_task/
@@ -2580,7 +2702,7 @@ def delete_estimate_role_assignment(
     current_user: User = Depends(get_current_active_user),
 ) -> None:
     get_mutable_project_lock(db, project_id, current_user.id)
-    get_draft_estimate_or_409(db, project_id, estimate_id)
+    estimate = get_draft_estimate_or_409(db, project_id, estimate_id)
     assignment = (
         db.query(EstimateRoleAssignment)
         .filter(EstimateRoleAssignment.id == assignment_id)
@@ -2592,8 +2714,78 @@ def delete_estimate_role_assignment(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Role assignment not found",
         )
+    # Issue #289 (E12-07): same dangling-node rationale (and flush-before-delete
+    # ordering need) as delete_estimate_cost_line.
+    node = db.query(EstimateGridNode).filter(EstimateGridNode.id == assignment.node_id).one()
     db.delete(assignment)
+    db.flush()
+    db.delete(node)
+    # Finding Haute (#289 review): same revision-bump obligation as
+    # delete_estimate_cost_line.
+    estimate.revision += 1
+    db.add(estimate)
     db.commit()
+
+
+@router.post(
+    "/{project_id}/estimates/{estimate_id}/grid-nodes/move",
+    response_model=ProjectEstimateRead,
+    responses={
+        status.HTTP_400_BAD_REQUEST: {
+            "model": FastAPIErrorResponse,
+            "description": "Requete de deplacement invalide",
+        },
+        status.HTTP_404_NOT_FOUND: {
+            "model": FastAPIErrorResponse,
+            "description": "Projet, devis, tache ou noeud introuvable pendant le deplacement",
+        },
+        status.HTTP_409_CONFLICT: {
+            "model": FastAPIErrorResponse,
+            "description": (
+                "Le deplacement entre en conflit avec l'arbre du devis, ou "
+                "expected_revision ne correspond plus a la revision persistee "
+                "(code ESTIMATE_REVISION_CONFLICT)"
+            ),
+        },
+    },
+)
+def move_estimate_grid_nodes_route(
+    project_id: int,
+    estimate_id: int,
+    payload: EstimateGridNodeMove,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> ProjectEstimateRead:
+    """Move/reorder a selection of a draft devis grid's cost-line/role-assignment
+    nodes (E12-07, issue #289) -- mirrors ``move_planning_tasks_route``.
+    """
+    get_mutable_project_lock(db, project_id, current_user.id)
+    estimate = get_draft_estimate_or_409(db, project_id, estimate_id)
+    raise_on_estimate_revision_conflict(project_id, estimate, payload.expected_revision)
+    try:
+        move_estimate_grid_nodes(db, estimate, payload)
+        estimate.revision += 1
+        db.add(estimate)
+        # Capture the response while the project lock is still held so a concurrent
+        # writer cannot make us return a later transaction's state.
+        response = to_project_estimate_read(estimate)
+        db.commit()
+    except EstimateGridMoveNotFoundError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except EstimateGridInvariantError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except EstimateGridMoveError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Grid node hierarchy conflicts with existing estimate data",
+        ) from exc
+    return response
 
 
 def _milestone_template_names(payload: EstimateCostLineMilestonesCreate) -> list[str]:

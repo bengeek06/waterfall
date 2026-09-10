@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from waterfall.models.ms_core import MsProject
 from waterfall.models.planning import WfPlanning
+from waterfall.models.resources import Estimate
 from waterfall.services.project_lifecycle import ensure_project_mutable
 
 
@@ -123,6 +124,24 @@ def raise_on_planning_revision_conflict(
                 "planning_id": planning.id,
                 "expected_revision": expected_revision,
                 "current_revision": planning.revision,
+            },
+        )
+
+
+def raise_on_estimate_revision_conflict(
+    project_id: int, estimate: Estimate, expected_revision: int
+) -> None:
+    """Compare a mutation's expected_revision to the persisted one, mirroring
+    raise_on_planning_revision_conflict above (issue #289/E12-07)."""
+    if estimate.revision != expected_revision:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "ESTIMATE_REVISION_CONFLICT",
+                "project_id": project_id,
+                "estimate_id": estimate.id,
+                "expected_revision": expected_revision,
+                "current_revision": estimate.revision,
             },
         )
 

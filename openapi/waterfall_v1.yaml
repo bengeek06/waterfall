@@ -1791,6 +1791,39 @@ paths:
           $ref: '#/components/responses/ProjectNotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+  /projects/{projectId}/estimates/{estimateId}/grid-nodes/move:
+    post:
+      tags:
+        - projects
+      summary: Deplacer ou reordonner des noeuds de la grille d'un devis brouillon
+      description: 'Deplace une selection de lignes de coût/main-d''oeuvre (E12-07, #289) : `node_uids` (toujours negatifs) sont normalises a leurs racines selectionnees, puis inseres sous `target_parent_uid` a `position`. Le `task_id` de chaque ligne affectee (et de ses descendants) est recalcule a partir de la tache ancetre la plus proche.'
+      operationId: moveEstimateGridNodes
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/EstimateId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EstimateGridNodeMove'
+      responses:
+        '200':
+          description: Devis mis a jour (revision incrementee)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectEstimateRead'
+        '400':
+          $ref: '#/components/responses/MoveEstimateGridNodesBadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/MoveEstimateGridNodesNotFound'
+        '409':
+          $ref: '#/components/responses/MoveEstimateGridNodesConflict'
   /projects/{projectId}/estimates/{estimateId}/validate:
     post:
       tags:
@@ -4152,6 +4185,26 @@ components:
             - string
             - 'null'
           maxLength: 10000
+        target_parent_uid:
+          type:
+            - integer
+            - 'null'
+          not:
+            enum:
+              - 0
+          description: |-
+            Position de la nouvelle ligne dans l'arbre du devis (E12-07/#289) :
+            positif = tache de ce devis (`EstimateTaskRow`), negatif = un autre
+            noeud de grille de ce devis, absent/null = racine du devis. Independant
+            de `task_id`.
+        insert_after_uid:
+          type:
+            - integer
+            - 'null'
+          maximum: -1
+          description: |-
+            Noeud de grille frere apres lequel inserer la nouvelle ligne ; absent =
+            dernier enfant du parent resolu.
     EstimateRoleAssignmentUpdate:
       type: object
       properties:
@@ -4194,7 +4247,9 @@ components:
           type: integer
           minimum: 1
         task_id:
-          type: integer
+          type:
+            - integer
+            - 'null'
           minimum: 1
         role_id:
           type: integer
@@ -4263,6 +4318,7 @@ components:
         - kind
         - status
         - currency_code
+        - revision
         - created_at
       properties:
         id:
@@ -4299,6 +4355,9 @@ components:
             - archived
         currency_code:
           type: string
+        revision:
+          type: integer
+          minimum: 0
         created_at:
           type: string
           format: date-time
@@ -4398,6 +4457,26 @@ components:
             - string
             - 'null'
           format: date-time
+        target_parent_uid:
+          type:
+            - integer
+            - 'null'
+          not:
+            enum:
+              - 0
+          description: |-
+            Position de la nouvelle ligne dans l'arbre du devis (E12-07/#289) :
+            positif = tache de ce devis (`EstimateTaskRow`), negatif = un autre
+            noeud de grille de ce devis, absent/null = racine du devis. Independant
+            de `task_id`.
+        insert_after_uid:
+          type:
+            - integer
+            - 'null'
+          maximum: -1
+          description: |-
+            Noeud de grille frere apres lequel inserer la nouvelle ligne ; absent =
+            dernier enfant du parent resolu.
     EstimateCostLineUpdate:
       type: object
       properties:
@@ -5491,6 +5570,38 @@ components:
               items:
                 type: integer
       description: 'Corps 400/409 structure pour `POST .../role-assignments` et `POST .../validate` quand une affectation de main-d''oeuvre couvre une (categorie de cout, annee) sans `CostRate`, ou une annee sans `InflationRate` (E6-11, #175). Liste chaque combinaison manquante trouvee, pas seulement la premiere.'
+    EstimateGridNodeMove:
+      type: object
+      required:
+        - node_uids
+        - position
+        - expected_revision
+      properties:
+        node_uids:
+          type: array
+          minItems: 1
+          items:
+            type: integer
+            maximum: -1
+        target_parent_uid:
+          type:
+            - integer
+            - 'null'
+          not:
+            enum:
+              - 0
+          description: |-
+            Positif = tache de ce devis (`EstimateTaskRow`), negatif = un autre
+            noeud de grille de ce devis, absent/null = racine du devis.
+        position:
+          type: integer
+          minimum: 1
+        expected_revision:
+          type: integer
+          minimum: 0
+          description: |-
+            Revision du devis sur laquelle cette mutation a ete calculee. Comparee a
+            la revision persistee ; un ecart renvoie un 409 ESTIMATE_REVISION_CONFLICT.
     EstimateValidationWarning:
       type: object
       required:
@@ -6055,6 +6166,26 @@ components:
             oneOf:
               - $ref: '#/components/schemas/MissingRateCoverage'
               - $ref: '#/components/schemas/FastAPIErrorResponse'
+    MoveEstimateGridNodesBadRequest:
+      description: Requete de deplacement invalide
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/FastAPIErrorResponse'
+    MoveEstimateGridNodesNotFound:
+      description: Projet, devis, tache ou noeud introuvable pendant le deplacement
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/FastAPIErrorResponse'
+    MoveEstimateGridNodesConflict:
+      description: |-
+        Le deplacement entre en conflit avec l'arbre du devis, ou `expected_revision`
+        ne correspond plus a la revision persistee (code `ESTIMATE_REVISION_CONFLICT`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/FastAPIErrorResponse'
     ValidateProjectEstimateConflict:
       description: 'Le devis n''est pas un brouillon (detail generique FastAPIErrorResponse), ou au moins une (categorie de cout, annee) couverte par une affectation de main-d''oeuvre n''a pas de CostRate/InflationRate (detail.code= MISSING_RATE_COVERAGE, E6-11, #175) -- dans ce dernier cas, aucune EstimateLine n''est generee ni persistee et le devis reste un brouillon.'
       content:

@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from httpx import Response
 from openpyxl import load_workbook
 
+from _estimate_grid_support import seed_root_grid_node
 from waterfall.db.session import get_session_factory
 from waterfall.main import app
 from waterfall.models.ms_core import MsProject, MsTask
@@ -240,6 +241,7 @@ def _seed_estimate_role_assignment(
             .filter(MsTask.project_id == project_id, MsTask.uid == task_uid)
             .one()
         )
+        node_id = seed_root_grid_node(session, estimate_id, "labor")
         assignment = EstimateRoleAssignment(
             estimate_id=estimate_id,
             task_id=task.id,
@@ -248,6 +250,7 @@ def _seed_estimate_role_assignment(
             quantity=Decimal(str(quantity)),
             hours=Decimal(str(hours)),
             comment=comment,
+            node_id=node_id,
         )
         session.add(assignment)
         session.commit()
@@ -877,6 +880,60 @@ def test_estimate_reconciliation_export_without_source_planning_does_not_crash()
         assert labor_records[0]["hors_perimetre_planning"] is False
 
 
+def test_estimate_reconciliation_export_includes_devis_root_labor_line() -> None:
+    """Issue #289 (E12-07) review finding (Finding Critique): a labor (MO) line
+    detached from every task (`EstimateRoleAssignment.task_id IS NULL`, a
+    devis-root line -- e.g. after `POST .../grid-nodes/move` unindents it all
+    the way to the root) must still appear on the `MO` sheet -- never silently
+    dropped by an INNER JOIN on `MsTask` inside `_scoped_estimate_role_assignments`,
+    which also backs the reconciliation import staging (`_run_reconciliation`)."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        role_id, _ = _seed_roles()
+
+        estimate_response: Response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate_response.status_code == 201
+        estimate_id = cast(int, estimate_response.json()["id"])
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            node_id = seed_root_grid_node(session, estimate_id, "labor")
+            assignment = EstimateRoleAssignment(
+                estimate_id=estimate_id,
+                task_id=None,
+                role_id=role_id,
+                cost_code_id=None,
+                quantity=Decimal("1"),
+                hours=Decimal("10"),
+                comment="Ligne MO racine",
+                node_id=node_id,
+            )
+            session.add(assignment)
+            session.commit()
+            assignment_id = assignment.id
+
+        response: Response = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/export-reconciliation.xlsx",
+            headers=headers,
+        )
+        assert response.status_code == 200
+
+        workbook = load_workbook(BytesIO(cast(bytes, response.content)))
+        labor_records = _sheet_records(workbook["MO"])
+        assert len(labor_records) == 1
+        record = labor_records[0]
+        assert record["id"] == assignment_id
+        assert record["task_id"] is None
+        assert record["task_name"] is None
+        # No task at all: "outside the planning snapshot" doesn't apply here.
+        assert record["hors_perimetre_planning"] is False
+
+
 def test_estimate_reconciliation_export_excludes_labor_cost_line_defensively() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)
@@ -904,6 +961,7 @@ def test_estimate_reconciliation_export_excludes_labor_cost_line_defensively() -
             # Direct ORM insert: the API (get_non_labor_category_or_400) never lets a
             # labor cost type through create_estimate_cost_line, so this defensive
             # scenario can only be reproduced by bypassing the route layer.
+            node_id = seed_root_grid_node(session, estimate_id, "cost_line")
             stray_line = EstimateCostLine(
                 estimate_id=estimate_id,
                 task_id=None,
@@ -919,6 +977,7 @@ def test_estimate_reconciliation_export_excludes_labor_cost_line_defensively() -
                 purchase_cost=Decimal("100"),
                 supply_status=None,
                 planned_date=None,
+                node_id=node_id,
             )
             session.add(stray_line)
             session.commit()

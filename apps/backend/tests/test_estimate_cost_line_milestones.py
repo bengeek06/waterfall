@@ -16,6 +16,7 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 from httpx import Response
 
+from _estimate_grid_support import seed_root_grid_node
 from waterfall.db.session import get_session_factory
 from waterfall.main import app
 from waterfall.models.ms_core import MsProject, MsTask
@@ -159,6 +160,7 @@ def _seed_labor_cost_line(project_id: int, estimate_id: int) -> int:
         )
         session.add(category)
         session.flush()
+        node_id = seed_root_grid_node(session, estimate_id, "cost_line")
         line = EstimateCostLine(
             estimate_id=estimate_id,
             cost_type_id=cost_type.id,
@@ -170,6 +172,7 @@ def _seed_labor_cost_line(project_id: int, estimate_id: int) -> int:
             quantity=Decimal("1.00"),
             unit_cost=Decimal("100.00"),
             purchase_cost=Decimal("100.00"),
+            node_id=node_id,
         )
         session.add(line)
         session.commit()

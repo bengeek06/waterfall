@@ -43,15 +43,21 @@ Sheets
     that the assigned task is actually a node of *this* estimate's own source
     planning snapshot, only that it belongs to the project -- so a row can
     still exist entirely outside that snapshot. On reimport (E6-09), a flagged
-    row is not expected to be reprised without explicit user action. Columns: ``id``
-    (stable id), ``task_id``, ``task_name`` (via ``MsTask.name``), ``role_id``,
+    row is not expected to be reprised without explicit user action. A row whose
+    ``task_id`` is ``NULL`` (a devis-root MO line, detached from every task --
+    issue #289/E12-07) is likewise always included, never dropped: ``task_name``
+    is blank and ``hors_perimetre_planning`` is ``False`` for it, since "outside
+    the planning snapshot" presupposes a task to begin with. Columns: ``id``
+    (stable id), ``task_id``, ``task_name`` (via ``MsTask.name``, blank when
+    ``task_id`` is null), ``role_id``,
     ``role_name`` (via ``ResourceRole.name`` -- ``ResourceRole`` carries no
     separate ``code`` field), ``cost_category_id`` (via
     ``role.cost_category_id``), ``cost_category_name`` (via
     ``CostCategory.name``), ``cost_code_id``, ``quantity``, ``hours``,
     ``comment``, ``hors_perimetre_planning`` (``True`` when the task falls
     outside the estimate's source planning snapshot, ``False`` when the
-    estimate has no source planning or the task is within it).
+    estimate has no source planning, the task is within it, or there is no task
+    at all).
 
 ``Non-MO``
     One row per ``EstimateCostLine`` (``wf_estimate_cost_line``, scoped to the
@@ -143,7 +149,7 @@ COST_LINE_HEADERS = [
     "planned_date",
 ]
 
-_LaborAssignmentRow = tuple[EstimateRoleAssignment, MsTask, ResourceRole, CostCategory, bool]
+_LaborAssignmentRow = tuple[EstimateRoleAssignment, MsTask | None, ResourceRole, CostCategory, bool]
 _CostLineRow = tuple[EstimateCostLine, CostType]
 # openpyxl's `Cell.value` accepts this exact union (see `openpyxl.cell._CellSetValue`);
 # `int` isn't itself part of it but is accepted at both runtime and by pyright's numeric
@@ -175,10 +181,19 @@ def _scoped_estimate_role_assignments(
     still reachable today since `create_estimate_role_assignment` only checks
     that the task belongs to the project, not that it is a node of this
     estimate's own source planning snapshot.
+
+    ``task_id`` is nullable (issue #289/E12-07: a devis-root MO line, detached
+    from every task) -- this reads ``MsTask`` via a LEFT JOIN, not an INNER JOIN,
+    so such a row is never silently excluded (review finding: an INNER JOIN used
+    to drop it from this export -- and from the import staging that reads this
+    same helper -- exactly like it used to drop it from `calculate_estimate_lines`).
+    ``task`` is ``None`` in the returned row for these; ``hors_perimetre_planning``
+    is always ``False`` for them since "outside the planning snapshot" doesn't
+    apply to a line with no task at all.
     """
     assignments = (
         db.query(EstimateRoleAssignment, MsTask, ResourceRole, CostCategory)
-        .join(MsTask, EstimateRoleAssignment.task_id == MsTask.id)
+        .outerjoin(MsTask, EstimateRoleAssignment.task_id == MsTask.id)
         .join(ResourceRole, EstimateRoleAssignment.role_id == ResourceRole.id)
         .join(CostCategory, ResourceRole.cost_category_id == CostCategory.id)
         .filter(EstimateRoleAssignment.estimate_id == estimate.id)
@@ -198,7 +213,7 @@ def _scoped_estimate_role_assignments(
         .all()
     }
     return [
-        (assignment, task, role, category, task.uid not in source_uids)
+        (assignment, task, role, category, task is not None and task.uid not in source_uids)
         for assignment, task, role, category in assignments
     ]
 
@@ -245,7 +260,7 @@ def _write_labor_sheet(sheet: Worksheet, assignments: list[_LaborAssignmentRow])
         values: list[_CellValue] = [
             assignment.id,
             assignment.task_id,
-            task.name,
+            task.name if task is not None else None,
             assignment.role_id,
             role.name,
             role.cost_category_id,

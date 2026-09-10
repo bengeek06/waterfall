@@ -21,6 +21,14 @@ from waterfall.services.estimate_calculation import (
     sync_task_role_assignments_from_estimate,
 )
 from waterfall.services.estimate_export import build_estimate_workbook
+from waterfall.services.estimate_grid import (
+    EstimateGridInvariantError,
+    EstimateGridMoveError,
+    EstimateGridMoveNotFoundError,
+    create_estimate_grid_node,
+    move_estimate_grid_nodes,
+    next_estimate_grid_node_uid,
+)
 from waterfall.services.estimate_reconciliation_export import (
     build_estimate_reconciliation_workbook,
 )
@@ -78,6 +86,12 @@ __all__ = [
     "missing_rate_coverage_detail",
     "sync_task_role_assignments_from_estimate",
     "build_estimate_workbook",
+    "EstimateGridInvariantError",
+    "EstimateGridMoveError",
+    "EstimateGridMoveNotFoundError",
+    "create_estimate_grid_node",
+    "move_estimate_grid_nodes",
+    "next_estimate_grid_node_uid",
     "build_estimate_reconciliation_workbook",
     "CostLineFileRow",
     "EstimateReconciliationFormatError",

@@ -204,7 +204,7 @@ def test_migration_upgrade_creates_expected_schema() -> None:
 
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260909_0012"
+                == "20260910_0013"
             )
 
 
@@ -476,7 +476,7 @@ def test_calendar_default_flag_migration_backfills_standard_and_enforces_uniquen
 
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260909_0012"
+                == "20260910_0013"
             )
 
         # STANDARD is already backfilled to is_default=1 above, so a second row
@@ -959,7 +959,7 @@ def _assert_create_all_schema_can_be_stamped_by_migrate_up(database_url: str) ->
     _run_alembic(database_url, "head")
 
     with _disposable_engine(database_url) as engine, engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260909_0012"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260910_0013"
         standard = connection.execute(
             text("SELECT id, is_active, is_default FROM wf_calendar WHERE code = 'STANDARD'")
         ).one()
@@ -1079,7 +1079,7 @@ def test_legacy_prepare_reuses_empty_alembic_version_table() -> None:
         with _disposable_engine(database_url) as engine, engine.connect() as connection:
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260909_0012"
+                == "20260910_0013"
             )
 
 
@@ -1107,7 +1107,7 @@ def test_create_all_schema_before_planning_revision_is_repaired_then_migrated() 
         with _disposable_engine(database_url) as engine, engine.connect() as connection:
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260909_0012"
+                == "20260910_0013"
             )
             planning_columns = {
                 column["name"] for column in inspect(connection).get_columns("wf_planning")
@@ -1214,7 +1214,7 @@ def test_schema_revision_check_rejects_database_behind_head() -> None:
             assert_database_schema_current(engine)
 
     assert error.value.current_revision == "20260901_0005"
-    assert error.value.expected_revision == "20260909_0012"
+    assert error.value.expected_revision == "20260910_0013"
     assert "Run `make migrate-up`" in str(error.value)
 
 
@@ -1260,7 +1260,7 @@ def test_postgres_migration_upgrade_head_succeeds(postgres_database_url: str) ->
             "wf_estimate",
             "wf_estimate_task_row",
         }.issubset(table_names)
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260909_0012"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260910_0013"
 
 
 def test_postgres_project_external_uid_accepts_canonical_guid(
@@ -1397,7 +1397,7 @@ def test_project_cost_code_migration_backfills_root_from_code_and_prj_fallback()
 
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260909_0012"
+                == "20260910_0013"
             )
 
 
@@ -1526,7 +1526,9 @@ def _seed_project_root_and_cost_lines_at_revision(
     which already declare that column and would otherwise emit an INSERT referencing
     a column this pre-migration schema does not have yet -- the same technique
     `_seed_estimate_line` and the 20260909_0009 migration itself use elsewhere in
-    this file for schema-shape-sensitive seeding.
+    this file for schema-shape-sensitive seeding. `wf_estimate` itself is seeded the
+    same way (issue #289/E12-07 added its own `revision` column, not yet present at
+    this `revision` either) rather than via the `Estimate` ORM model.
     """
     from sqlalchemy.orm import Session
 
@@ -1534,7 +1536,6 @@ def _seed_project_root_and_cost_lines_at_revision(
     from waterfall.models.resources import (
         CostCategory,
         CostType,
-        Estimate,
         ProjectCostCode,
         ResourceNode,
         ResourceRole,
@@ -1580,11 +1581,29 @@ def _seed_project_root_and_cost_lines_at_revision(
         session.add(task)
         session.flush()
 
-        estimate = Estimate(
-            project_id=project.id, version_number=1, kind="initial", currency_code="EUR"
+        now_for_estimate = datetime.now(UTC)
+        estimate_table = sa.table(
+            "wf_estimate",
+            sa.column("id", sa.Integer),
+            sa.column("project_id", sa.Integer),
+            sa.column("version_number", sa.Integer),
+            sa.column("kind", sa.String),
+            sa.column("status", sa.String),
+            sa.column("currency_code", sa.String),
+            sa.column("created_at", sa.DateTime(timezone=True)),
         )
-        session.add(estimate)
-        session.flush()
+        estimate_id = session.execute(
+            sa.insert(estimate_table)
+            .values(
+                project_id=project.id,
+                version_number=1,
+                kind="initial",
+                status="draft",
+                currency_code="EUR",
+                created_at=now_for_estimate,
+            )
+            .returning(estimate_table.c.id)
+        ).scalar_one()
 
         session.commit()
         project_id = project.id
@@ -1593,7 +1612,6 @@ def _seed_project_root_and_cost_lines_at_revision(
         cost_category_id = cost_category.id
         role_id = role.id
         task_id = task.id
-        estimate_id = estimate.id
 
     now = datetime.now(UTC)
     task_role_assignment_table = sa.table(
@@ -1923,9 +1941,10 @@ def _seed_project_with_estimates_and_role_assignment_at_revision(
 
     Runs every insert through the ORM models rather than schema-shape-sensitive
     `sa.table()` Core proxies (unlike `_seed_project_root_and_cost_lines_at_revision`
-    above): none of these tables' columns change between `revision` and head, only a
-    brand new table (`wf_estimate_role_assignment`) is added, so the current ORM
-    models already match `revision`'s schema exactly.
+    above), except for `wf_estimate` itself: issue #289 (E12-07) added its own
+    `revision` column, not yet present at this `revision`, so -- like that other
+    helper -- it is seeded via a `sa.table()` Core proxy scoped to the columns
+    that exist here instead of the current `Estimate` ORM model.
     """
     from sqlalchemy.orm import Session
 
@@ -1933,7 +1952,6 @@ def _seed_project_with_estimates_and_role_assignment_at_revision(
     from waterfall.models.resources import (
         CostCategory,
         CostType,
-        Estimate,
         ProjectCostCode,
         ResourceNode,
         ResourceRole,
@@ -1980,25 +1998,55 @@ def _seed_project_with_estimates_and_role_assignment_at_revision(
         session.add(task)
         session.flush()
 
-        draft_one = Estimate(
-            project_id=project.id, version_number=1, kind="initial", currency_code="EUR"
+        estimate_table = sa.table(
+            "wf_estimate",
+            sa.column("id", sa.Integer),
+            sa.column("project_id", sa.Integer),
+            sa.column("version_number", sa.Integer),
+            sa.column("kind", sa.String),
+            sa.column("status", sa.String),
+            sa.column("currency_code", sa.String),
+            sa.column("created_at", sa.DateTime(timezone=True)),
+            sa.column("validated_at", sa.DateTime(timezone=True)),
         )
-        draft_two = Estimate(
-            project_id=project.id,
-            version_number=2,
-            kind="forecast_remaining",
-            currency_code="EUR",
-        )
-        validated = Estimate(
-            project_id=project.id,
-            version_number=3,
-            kind="contract_reference",
-            status="validated",
-            currency_code="EUR",
-            validated_at=datetime.now(UTC),
-        )
-        session.add_all([draft_one, draft_two, validated])
-        session.flush()
+        now_for_estimate = datetime.now(UTC)
+        draft_one_id = session.execute(
+            sa.insert(estimate_table)
+            .values(
+                project_id=project.id,
+                version_number=1,
+                kind="initial",
+                status="draft",
+                currency_code="EUR",
+                created_at=now_for_estimate,
+            )
+            .returning(estimate_table.c.id)
+        ).scalar_one()
+        draft_two_id = session.execute(
+            sa.insert(estimate_table)
+            .values(
+                project_id=project.id,
+                version_number=2,
+                kind="forecast_remaining",
+                status="draft",
+                currency_code="EUR",
+                created_at=now_for_estimate,
+            )
+            .returning(estimate_table.c.id)
+        ).scalar_one()
+        validated_id = session.execute(
+            sa.insert(estimate_table)
+            .values(
+                project_id=project.id,
+                version_number=3,
+                kind="contract_reference",
+                status="validated",
+                currency_code="EUR",
+                created_at=now_for_estimate,
+                validated_at=now_for_estimate,
+            )
+            .returning(estimate_table.c.id)
+        ).scalar_one()
 
         assignment = TaskRoleAssignment(
             task_id=task.id,
@@ -2018,9 +2066,9 @@ def _seed_project_with_estimates_and_role_assignment_at_revision(
             "role_id": role.id,
             "root_cost_code_id": root.id,
             "assignment_id": assignment.id,
-            "draft_one_id": draft_one.id,
-            "draft_two_id": draft_two.id,
-            "validated_id": validated.id,
+            "draft_one_id": draft_one_id,
+            "draft_two_id": draft_two_id,
+            "validated_id": validated_id,
         }
 
 
@@ -2187,3 +2235,281 @@ def test_postgres_estimate_role_assignment_migration_backfill_and_downgrade(
     with _disposable_engine(postgres_database_url) as engine, engine.connect() as connection:
         table_names = set(inspect(connection).get_table_names())
         assert "wf_estimate_role_assignment" in table_names
+
+
+def _seed_project_with_cost_line_and_role_assignment_at_revision(
+    database_url: str, revision: str, *, project_name: str
+) -> dict[str, int]:
+    """Seed a project (with its root cost code) with a draft estimate carrying one
+    root `wf_estimate_cost_line` (`task_id` NULL) and one task-attached
+    `wf_estimate_role_assignment` -- fixture for the 20260910_0013 grid node
+    backfill migration (E12-07, issue #289).
+
+    Every insert goes through `sa.table()` Core proxies scoped to the columns
+    that exist at `revision` (deliberately excluding `wf_estimate.revision` and
+    both tables' `node_id`, none of which exist yet at `20260909_0012`) rather
+    than the current ORM models -- same technique as
+    `_seed_project_with_estimates_and_role_assignment_at_revision` above.
+    """
+    from sqlalchemy.orm import Session
+
+    from waterfall.models.ms_core import MsProject, MsTask
+    from waterfall.models.resources import (
+        CostCategory,
+        CostType,
+        ProjectCostCode,
+        ResourceNode,
+        ResourceRole,
+    )
+
+    _run_alembic(database_url, revision)
+    with _disposable_engine(database_url) as engine, Session(engine) as session:
+        project = MsProject(
+            source_version=2016,
+            save_version_out=16,
+            name=project_name,
+            schedule_from_start=True,
+            start_date=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        session.add(project)
+        session.flush()
+
+        root = ProjectCostCode(
+            project_id=project.id, parent_id=None, code=f"PRJ-{project.id}", name=project_name
+        )
+        session.add(root)
+        session.flush()
+
+        cost_type = CostType(code=f"MO-{project.id}", name="Main d'oeuvre", kind="labor")
+        session.add(cost_type)
+        session.flush()
+        cost_category = CostCategory(
+            cost_type_id=cost_type.id, accounting_code=f"DEV-{project.id}", name="Developpement"
+        )
+        session.add(cost_category)
+        session.flush()
+        node = ResourceNode(code=f"IT-{project.id}", name="Informatique")
+        session.add(node)
+        session.flush()
+        role = ResourceRole(node_id=node.id, cost_category_id=cost_category.id, name="Dev")
+        session.add(role)
+        session.flush()
+
+        task = MsTask(project_id=project.id, uid=1, name="Task")
+        session.add(task)
+        session.flush()
+
+        estimate_table = sa.table(
+            "wf_estimate",
+            sa.column("id", sa.Integer),
+            sa.column("project_id", sa.Integer),
+            sa.column("version_number", sa.Integer),
+            sa.column("kind", sa.String),
+            sa.column("status", sa.String),
+            sa.column("currency_code", sa.String),
+            sa.column("created_at", sa.DateTime(timezone=True)),
+        )
+        now = datetime.now(UTC)
+        estimate_id = session.execute(
+            sa.insert(estimate_table)
+            .values(
+                project_id=project.id,
+                version_number=1,
+                kind="initial",
+                status="draft",
+                currency_code="EUR",
+                created_at=now,
+            )
+            .returning(estimate_table.c.id)
+        ).scalar_one()
+
+        cost_line_table = sa.table(
+            "wf_estimate_cost_line",
+            sa.column("id", sa.Integer),
+            sa.column("estimate_id", sa.Integer),
+            sa.column("task_id", sa.Integer),
+            sa.column("cost_type_id", sa.Integer),
+            sa.column("cost_category_id", sa.Integer),
+            sa.column("cost_type_code", sa.String),
+            sa.column("accounting_code", sa.String),
+            sa.column("label", sa.String),
+            sa.column("quantity", sa.Numeric(14, 2)),
+            sa.column("unit_cost", sa.Numeric(16, 2)),
+            sa.column("purchase_cost", sa.Numeric(16, 2)),
+            sa.column("created_at", sa.DateTime(timezone=True)),
+            sa.column("updated_at", sa.DateTime(timezone=True)),
+        )
+        cost_line_id = session.execute(
+            sa.insert(cost_line_table)
+            .values(
+                estimate_id=estimate_id,
+                task_id=None,
+                cost_type_id=cost_type.id,
+                cost_category_id=cost_category.id,
+                cost_type_code=cost_type.code,
+                accounting_code=cost_category.accounting_code,
+                label="Ligne racine",
+                quantity=Decimal("3"),
+                unit_cost=Decimal("10"),
+                purchase_cost=Decimal("30"),
+                created_at=now,
+                updated_at=now,
+            )
+            .returning(cost_line_table.c.id)
+        ).scalar_one()
+
+        role_assignment_table = sa.table(
+            "wf_estimate_role_assignment",
+            sa.column("id", sa.Integer),
+            sa.column("estimate_id", sa.Integer),
+            sa.column("task_id", sa.Integer),
+            sa.column("role_id", sa.Integer),
+            sa.column("quantity", sa.Numeric(10, 2)),
+            sa.column("hours", sa.Numeric(14, 2)),
+            sa.column("created_at", sa.DateTime(timezone=True)),
+            sa.column("updated_at", sa.DateTime(timezone=True)),
+        )
+        assignment_id = session.execute(
+            sa.insert(role_assignment_table)
+            .values(
+                estimate_id=estimate_id,
+                task_id=task.id,
+                role_id=role.id,
+                quantity=Decimal("2"),
+                hours=Decimal("5"),
+                created_at=now,
+                updated_at=now,
+            )
+            .returning(role_assignment_table.c.id)
+        ).scalar_one()
+
+        session.commit()
+        return {
+            "project_id": project.id,
+            "task_id": task.id,
+            "estimate_id": estimate_id,
+            "cost_line_id": cost_line_id,
+            "assignment_id": assignment_id,
+        }
+
+
+def test_estimate_grid_node_migration_backfills_existing_lines_without_data_loss() -> None:
+    """E12-07 (#289): the 20260910_0013 migration attributes a valid grid node to
+    every pre-existing `wf_estimate_cost_line`/`wf_estimate_role_assignment` row,
+    with no data loss -- a root (`task_id` NULL) line gets a root node
+    (`parent_uid` NULL), a task-attached row gets a node attached under that
+    same task (`parent_uid` = the row's own `task_id`)."""
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "migration.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        ids = _seed_project_with_cost_line_and_role_assignment_at_revision(
+            database_url, "20260909_0012", project_name="Projet Backfill Grid Node"
+        )
+
+        _run_alembic(database_url, "head")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            node_count = connection.scalar(
+                text("SELECT COUNT(*) FROM wf_estimate_grid_node WHERE estimate_id = :estimate_id"),
+                {"estimate_id": ids["estimate_id"]},
+            )
+            assert node_count == 2
+
+            cost_line_row = connection.execute(
+                text(
+                    "SELECT cl.node_id, cl.label, cl.quantity, n.parent_uid, n.kind, n.uid "
+                    "FROM wf_estimate_cost_line AS cl "
+                    "JOIN wf_estimate_grid_node AS n ON n.id = cl.node_id "
+                    "WHERE cl.id = :cost_line_id"
+                ),
+                {"cost_line_id": ids["cost_line_id"]},
+            ).one()
+            assert cost_line_row.parent_uid is None
+            assert cost_line_row.kind == "cost_line"
+            assert cost_line_row.uid < 0
+            # No data loss: the pre-existing row's own business data is untouched.
+            assert cost_line_row.label == "Ligne racine"
+            assert cost_line_row.quantity == Decimal("3.00")
+
+            assignment_row = connection.execute(
+                text(
+                    "SELECT ra.node_id, ra.quantity, ra.hours, n.parent_uid, n.kind, n.uid "
+                    "FROM wf_estimate_role_assignment AS ra "
+                    "JOIN wf_estimate_grid_node AS n ON n.id = ra.node_id "
+                    "WHERE ra.id = :assignment_id"
+                ),
+                {"assignment_id": ids["assignment_id"]},
+            ).one()
+            assert assignment_row.parent_uid == ids["task_id"]
+            assert assignment_row.kind == "labor"
+            assert assignment_row.uid < 0
+            assert assignment_row.quantity == Decimal("2.00")
+            assert assignment_row.hours == Decimal("5.00")
+
+            assert (
+                connection.scalar(
+                    text("SELECT revision FROM wf_estimate WHERE id = :estimate_id"),
+                    {"estimate_id": ids["estimate_id"]},
+                )
+                == 0
+            )
+
+
+def test_estimate_grid_node_migration_is_reversible() -> None:
+    with TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "migration.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        _seed_project_with_cost_line_and_role_assignment_at_revision(
+            database_url, "20260909_0012", project_name="Projet Reversible Grid Node"
+        )
+
+        _run_alembic(database_url, "head")
+        _downgrade_alembic(database_url, "20260909_0012")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            table_names = set(inspect(connection).get_table_names())
+            assert "wf_estimate_grid_node" not in table_names
+            cost_line_columns = {
+                column["name"]
+                for column in inspect(connection).get_columns("wf_estimate_cost_line")
+            }
+            assert "node_id" not in cost_line_columns
+            assert connection.scalar(text("SELECT COUNT(*) FROM wf_estimate_cost_line")) == 1
+
+        _run_alembic(database_url, "head")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            table_names = set(inspect(connection).get_table_names())
+            assert "wf_estimate_grid_node" in table_names
+            assert connection.scalar(text("SELECT COUNT(*) FROM wf_estimate_grid_node")) == 2
+
+
+def test_postgres_estimate_grid_node_migration_backfill_and_downgrade(
+    postgres_database_url: str,
+) -> None:
+    """PostgreSQL variant of the grid node backfill migration round trip
+    (E12-07, #289): backfill, then downgrade, then re-upgrade."""
+    ids = _seed_project_with_cost_line_and_role_assignment_at_revision(
+        postgres_database_url, "20260909_0012", project_name="Projet PG Backfill Grid Node"
+    )
+
+    _run_alembic(postgres_database_url, "head")
+
+    with _disposable_engine(postgres_database_url) as engine, engine.connect() as connection:
+        node_count = connection.scalar(
+            text("SELECT COUNT(*) FROM wf_estimate_grid_node WHERE estimate_id = :estimate_id"),
+            {"estimate_id": ids["estimate_id"]},
+        )
+        assert node_count == 2
+
+    _downgrade_alembic(postgres_database_url, "20260909_0012")
+
+    with _disposable_engine(postgres_database_url) as engine, engine.connect() as connection:
+        table_names = set(inspect(connection).get_table_names())
+        assert "wf_estimate_grid_node" not in table_names
+
+    _run_alembic(postgres_database_url, "head")
+
+    with _disposable_engine(postgres_database_url) as engine, engine.connect() as connection:
+        table_names = set(inspect(connection).get_table_names())
+        assert "wf_estimate_grid_node" in table_names

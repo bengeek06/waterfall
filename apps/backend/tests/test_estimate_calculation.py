@@ -11,6 +11,7 @@ from httpx import Response
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
+from _estimate_grid_support import seed_root_grid_node
 from waterfall.db.session import get_session_factory
 from waterfall.main import app
 from waterfall.models.ms_core import MsProject, MsTask
@@ -21,6 +22,7 @@ from waterfall.models.resources import (
     CostRate,
     CostType,
     Estimate,
+    EstimateGridNode,
     EstimateLine,
     EstimateRoleAssignment,
     InflationRate,
@@ -205,6 +207,7 @@ def _seed_estimate_role_assignment(
             .filter(MsTask.project_id == project_id, MsTask.uid == task_uid)
             .one()
         )
+        node_id = seed_root_grid_node(session, estimate_id, "labor")
         assignment = EstimateRoleAssignment(
             estimate_id=estimate_id,
             task_id=task.id,
@@ -213,6 +216,7 @@ def _seed_estimate_role_assignment(
             hours=Decimal(hours),
             cost_code_id=cost_code_id,
             comment=comment,
+            node_id=node_id,
         )
         session.add(assignment)
         session.commit()
@@ -488,6 +492,144 @@ def test_calculate_labor_lines_across_two_years() -> None:
             assert line_2027.hourly_rate == Decimal("110.00")
             assert line_2027.inflation_coefficient == Decimal("1.05")
             assert line_2027.budget_cost == Decimal("57750.00")
+
+
+def test_root_labor_line_unindented_to_devis_root_stays_counted_after_validate() -> None:
+    """Issue #289 (E12-07) review finding (Finding Critique): a labor (MO) line
+    unindented all the way to the devis root (its `task_id` set back to `NULL` by
+    `POST .../grid-nodes/move`) must stay counted by `calculate_estimate_lines`/
+    `calculate_estimate_aggregates` and `POST .../validate` -- never silently
+    vanish from `total_labor_cost` because of an `INNER JOIN` on `MsTask`."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        owner_id = _current_user_id(client, headers)
+        labor_role_id, _ = _seed_resources_with_rates()
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            project = MsProject(
+                owner_id=owner_id,
+                external_uid=None,
+                source_version=2016,
+                save_version_out=16,
+                name="Root MO Line Test",
+                schedule_from_start=True,
+                start_date=datetime(2026, 1, 1, 8, 0, tzinfo=UTC),
+                finish_date=datetime(2026, 12, 31, 18, 0, tzinfo=UTC),
+                calendar_uid=1,
+                minutes_per_day=480,
+                minutes_per_week=2400,
+                days_per_month=20,
+                currency_code="EUR",
+            )
+            session.add(project)
+            session.flush()
+
+            task = MsTask(
+                project_id=project.id,
+                uid=1001,
+                name="Dev Task",
+                task_type=0,
+                outline_number="1",
+                outline_level=1,
+                wbs="1",
+                start_at=datetime(2026, 1, 1, 8, 0, tzinfo=UTC),
+                finish_at=datetime(2026, 12, 31, 18, 0, tzinfo=UTC),
+                is_summary=False,
+                is_milestone=False,
+                calendar_uid=1,
+            )
+            session.add(task)
+            session.commit()
+            project_id = project.id
+            task_id = task.id
+            project_name = project.name
+
+        _seed_root_cost_code(session_factory, project_id, project_name)
+
+        create_response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert create_response.status_code == 201
+        estimate_id = cast(int, create_response.json()["id"])
+
+        assignment_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/role-assignments",
+            json={
+                "task_id": task_id,
+                "role_id": labor_role_id,
+                "quantity": "1",
+                "hours": "100",
+                "target_parent_uid": task_id,
+            },
+            headers=headers,
+        )
+        assert assignment_response.status_code == 201, assignment_response.text
+        assignment_id = cast(int, assignment_response.json()["id"])
+
+        with session_factory() as session:
+            assignment = (
+                session.query(EstimateRoleAssignment)
+                .filter(EstimateRoleAssignment.id == assignment_id)
+                .one()
+            )
+            node_uid = (
+                session.query(EstimateGridNode.uid)
+                .filter(EstimateGridNode.id == assignment.node_id)
+                .scalar()
+            )
+            revision_before_move = (
+                session.query(Estimate.revision).filter(Estimate.id == estimate_id).scalar()
+            )
+
+        # Unindent the line all the way to the devis root, exactly like the
+        # frontend's own "outdent" action -- this clears task_id back to NULL.
+        move_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/grid-nodes/move",
+            json={
+                "node_uids": [node_uid],
+                "target_parent_uid": None,
+                "position": 1,
+                "expected_revision": revision_before_move,
+            },
+            headers=headers,
+        )
+        assert move_response.status_code == 200, move_response.text
+
+        with session_factory() as session:
+            assignment = (
+                session.query(EstimateRoleAssignment)
+                .filter(EstimateRoleAssignment.id == assignment_id)
+                .one()
+            )
+            assert assignment.task_id is None
+
+        validate_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/validate",
+            headers=headers,
+        )
+        assert validate_response.status_code == 200, validate_response.text
+
+        with session_factory() as session:
+            lines = (
+                session.query(EstimateLine).filter(EstimateLine.estimate_id == estimate_id).all()
+            )
+            assert len(lines) == 1
+            line = lines[0]
+            assert line.task_id is None
+            assert line.role_id == labor_role_id
+            # 1 * 100 hours * 100.00 hourly rate (2026) * 1.0 inflation (2026) = 10000.00
+            assert line.budget_cost == Decimal("10000.00")
+
+        aggregates_response = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/aggregates",
+            headers=headers,
+        )
+        assert aggregates_response.status_code == 200
+        aggregates = cast(dict[str, Any], aggregates_response.json())
+        assert Decimal(aggregates["total_labor_cost"]) == Decimal("10000.00")
 
 
 def test_non_labor_cost_lines_create_single_snapshot() -> None:
@@ -879,6 +1021,7 @@ def test_calculate_estimate_lines_lists_every_missing_rate_combination() -> None
             session.add(estimate)
             session.flush()
 
+            node_id = seed_root_grid_node(session, estimate.id, "labor")
             assignment = EstimateRoleAssignment(
                 estimate_id=estimate.id,
                 task_id=task.id,
@@ -886,6 +1029,7 @@ def test_calculate_estimate_lines_lists_every_missing_rate_combination() -> None
                 cost_code_id=None,
                 quantity=Decimal("1"),
                 hours=Decimal("2000"),
+                node_id=node_id,
             )
             session.add(assignment)
             session.commit()

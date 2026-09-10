@@ -7,6 +7,7 @@ from typing import Any, cast
 
 from openpyxl import load_workbook
 
+from _estimate_grid_support import seed_root_grid_node
 from waterfall.db.session import get_session_factory
 from waterfall.models.ms_core import MsProject
 from waterfall.models.resources import (
@@ -103,6 +104,9 @@ def _seed_estimate_with_cost_codes() -> int:
         session.add(estimate)
         session.flush()
 
+        cable_node_id = seed_root_grid_node(session, estimate.id, "cost_line")
+        divers_node_id = seed_root_grid_node(session, estimate.id, "cost_line")
+
         session.add_all(
             [
                 EstimateLine(
@@ -134,6 +138,7 @@ def _seed_estimate_with_cost_codes() -> int:
                     quantity=Decimal("5"),
                     unit_cost=Decimal("25.00"),
                     purchase_cost=Decimal("125.00"),
+                    node_id=cable_node_id,
                 ),
                 EstimateCostLine(
                     estimate_id=estimate.id,
@@ -148,6 +153,7 @@ def _seed_estimate_with_cost_codes() -> int:
                     quantity=Decimal("2"),
                     unit_cost=Decimal("10.00"),
                     purchase_cost=Decimal("20.00"),
+                    node_id=divers_node_id,
                 ),
                 # A real `POST .../validate` (see `calculate_estimate_lines`'s non-labor
                 # step) snapshots one `EstimateLine` per non-labor `EstimateCostLine` too,
