@@ -16,6 +16,7 @@ function renderTable(overrides: Partial<CostLinesTableProps> = {}) {
   const props: CostLinesTableProps = {
     costLines: [line],
     estimateTaskRows: [],
+    allCostCategories: [],
     canEditEstimate: true,
     editingLineId: null,
     editingLineDraft: { label: "", quantity: "", unitCost: "", plannedDate: "", taskId: "" },
@@ -167,6 +168,29 @@ describe("CostLinesTable", () => {
     expect(screen.getByText("Achat licences")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Sauver" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Modifier" })).toBeInTheDocument();
+  });
+
+  // E12-05/#277 review finding: the quantity/unit-cost inline `<Input>`s' aria-labels must stay in
+  // sync with their (E12-05-renamed) column headers ("Qté", "Débours"), not the older "Quantité"/
+  // "Coût unitaire" wording that no longer appears anywhere in the visible UI.
+  it("labels the edited line's quantity input after the current 'Qté' column header", () => {
+    renderTable({
+      editingLineId: 1,
+      editingLineDraft: { label: "Achat licences", quantity: "2.00", unitCost: "150.00", plannedDate: "", taskId: "" },
+    });
+
+    expect(screen.getByLabelText("Qté de Achat licences")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Quantité de Achat licences")).not.toBeInTheDocument();
+  });
+
+  it("labels the edited line's unit cost input after the current 'Débours' column header", () => {
+    renderTable({
+      editingLineId: 1,
+      editingLineDraft: { label: "Achat licences", quantity: "2.00", unitCost: "150.00", plannedDate: "", taskId: "" },
+    });
+
+    expect(screen.getByLabelText("Débours de Achat licences")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Coût unitaire de Achat licences")).not.toBeInTheDocument();
   });
 
   // #66 (E6-05): planned_date is optional, independent from task_id -- an empty value must never
@@ -618,6 +642,144 @@ describe("CostLinesTable", () => {
       fireEvent.change(screen.getByLabelText("Tâche de Achat licences"), { target: { value: "42" } });
 
       expect(onEditTaskIdChange).toHaveBeenCalledWith("42");
+    });
+  });
+
+  // E12-05/#277: realigns the grid's column set on docs/devis-v0.1-specification.md's "Grille de
+  // devis" target (Cpt, Dept, Type, Catégorie, Cat, Libellé, Qté, Heures, Taux horaire, Débours,
+  // MO, Achat, PRU non chargé), plus Tâche/Date prévisionnelle/Action at their chosen positions.
+  describe("target column set (E12-05)", () => {
+    it("renders every target column, in the spec's order, plus Tâche and Date prévisionnelle at their chosen positions", () => {
+      renderTable();
+
+      const headerRow = screen.getAllByRole("row")[0];
+      const headerTexts = Array.from(headerRow.querySelectorAll("th")).map((cell) => cell.textContent);
+
+      expect(headerTexts).toEqual([
+        "", // select-all checkbox column
+        "Cpt",
+        "Dept",
+        "Type",
+        "Catégorie",
+        "Cat",
+        "Libellé",
+        "Tâche",
+        "Qté",
+        "Heures",
+        "Taux horaire",
+        "Débours",
+        "Date prévisionnelle",
+        "MO",
+        "Achat",
+        "PRU non chargé",
+        "Action",
+      ]);
+    });
+
+    // Regression test for the exact bug documented by this issue: the "Catégorie" column used to
+    // display `accounting_code` (meant for "Cpt") instead of the category's own name.
+    it("displays a non-labor line's category by its name, not its accounting_code or category_code", () => {
+      const categoryLine = {
+        id: 1,
+        accounting_code: "6011",
+        category_code: "CAT-01",
+        cost_category_id: 99,
+        label: "Achat licences",
+        quantity: "2.00",
+        unit_cost: "100.00",
+        purchase_cost: "200.00",
+      } as never;
+      const category = {
+        id: 99,
+        name: "Fournitures informatiques",
+        accounting_code: "6011",
+        category_code: "CAT-01",
+        cost_type_id: 1,
+        is_active: true,
+      } as never;
+      renderTable({ costLines: [categoryLine], allCostCategories: [category] });
+
+      expect(screen.getByText("Fournitures informatiques")).toBeInTheDocument();
+      // "6011" (accounting_code) and "CAT-01" (category_code) are still legitimately shown in
+      // their own "Cpt"/"Cat" columns -- what this regression test guards against is the
+      // "Catégorie" column itself ever showing either of those codes instead of the name, so it
+      // asserts on the count of matches rather than their absence.
+      expect(screen.getAllByText("6011")).toHaveLength(1);
+      expect(screen.getAllByText("CAT-01")).toHaveLength(1);
+    });
+
+    it("still displays the category's name when the category is inactive (includeInactive: true resolution)", () => {
+      const categoryLine = {
+        id: 1,
+        accounting_code: "6011",
+        category_code: "CAT-01",
+        cost_category_id: 99,
+        label: "Achat licences",
+        quantity: "2.00",
+        unit_cost: "100.00",
+        purchase_cost: "200.00",
+      } as never;
+      const inactiveCategory = {
+        id: 99,
+        name: "Fournitures informatiques (obsolète)",
+        accounting_code: "6011",
+        category_code: "CAT-01",
+        cost_type_id: 1,
+        is_active: false,
+      } as never;
+      renderTable({ costLines: [categoryLine], allCostCategories: [inactiveCategory] });
+
+      expect(screen.getByText("Fournitures informatiques (obsolète)")).toBeInTheDocument();
+    });
+
+    it("falls back to the category_code when the category can't be resolved at all", () => {
+      const categoryLine = {
+        id: 1,
+        accounting_code: "6011",
+        category_code: "CAT-01",
+        cost_category_id: 404,
+        label: "Achat licences",
+        quantity: "2.00",
+        unit_cost: "100.00",
+        purchase_cost: "200.00",
+      } as never;
+      renderTable({ costLines: [categoryLine], allCostCategories: [] });
+
+      // Both the "Catégorie" (falling back) and "Cat" columns show "CAT-01" here.
+      expect(screen.getAllByText("CAT-01")).toHaveLength(2);
+    });
+
+    it("shows a non-labor line's PRU non chargé equal to purchase_cost (Achat)", () => {
+      const costLine = {
+        id: 1,
+        accounting_code: "6011",
+        category_code: "CAT-01",
+        cost_category_id: 99,
+        label: "Achat licences",
+        quantity: "2.00",
+        unit_cost: "100.00",
+        purchase_cost: "321.50",
+      } as never;
+      renderTable({ costLines: [costLine], allCostCategories: [] });
+
+      // Located via the line's own label rather than a fixed row index -- with no
+      // estimateTaskRows, this line falls into the "Lignes globales" section, which adds its own
+      // header row ahead of the line's own row (see buildEstimateGridEntries).
+      const dataRow = screen.getByText("Achat licences").closest("tr");
+      const cellTexts = Array.from(dataRow?.querySelectorAll("td") ?? []).map((cell) => cell.textContent);
+
+      expect(cellTexts.filter((text) => text === "321.50")).toHaveLength(2);
+    });
+
+    it("leaves Dept/Heures/Taux horaire/MO empty for a displayed line", () => {
+      renderTable();
+
+      const dataRow = screen.getByText("Achat licences").closest("tr");
+      const cellTexts = Array.from(dataRow?.querySelectorAll("td") ?? []).map((cell) => cell.textContent);
+
+      // Dept, Heures, Taux horaire, MO all render as "-" (this table's existing empty-cell
+      // convention) -- at least 4 dashes must be present among this row's cells.
+      expect(cellTexts.filter((text) => text === "-").length).toBeGreaterThanOrEqual(4);
     });
   });
 });

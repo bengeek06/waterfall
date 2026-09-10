@@ -161,6 +161,11 @@ export default function ProjectDetailsPage() {
   const [estimateTaskRows, setEstimateTaskRows] = useState<EstimateTaskRow[]>([]);
   const [costLines, setCostLines] = useState<EstimateCostLine[]>([]);
   const [costCategories, setCostCategories] = useState<CostCategory[]>([]);
+  // E12-05/#277: the full (including inactive) cost-category referential -- distinct from
+  // `costCategories` above (active-only, feeds CostLineForm's create-line `<select>`) -- used to
+  // resolve a historical cost line's category *name* even after that category was deactivated.
+  // See loadCostCategories below and cost-lines-table.tsx's `allCostCategories` prop doc comment.
+  const [allCostCategories, setAllCostCategories] = useState<CostCategory[]>([]);
   const [aggregates, setAggregates] = useState<EstimateAggregates | null>(null);
   const [activeTab, setActiveTab] = useState<ProjectTab>("planning");
   const [busy, setBusy] = useState(true);
@@ -316,14 +321,20 @@ export default function ProjectDetailsPage() {
         return;
       }
       try {
-        const [categoriesPage, typesPage] = await Promise.all([
+        // E12-05/#277: `allCategoriesPage` (includeInactive: true) is fetched alongside the
+        // existing active-only `categoriesPage` rather than replacing it -- the two feed different
+        // consumers with different requirements (see the `allCostCategories` state's own doc
+        // comment above and cost-lines-table.tsx's `allCostCategories` prop doc comment).
+        const [categoriesPage, typesPage, allCategoriesPage] = await Promise.all([
           getCostCategories(session, onSessionRefresh),
           getCostTypes(session, onSessionRefresh),
+          getCostCategories(session, onSessionRefresh, true),
         ]);
         const laborTypeIds = new Set(
           typesPage.items.filter((type) => type.kind === "labor").map((type) => type.id),
         );
         setCostCategories(categoriesPage.items.filter((category) => !laborTypeIds.has(category.cost_type_id)));
+        setAllCostCategories(allCategoriesPage.items);
       } catch {
         // Non-blocking: the add-line form simply stays disabled without categories.
       }
@@ -688,6 +699,7 @@ export default function ProjectDetailsPage() {
           estimateTaskRows={estimateTaskRows}
           costLines={costLines}
           costCategories={costCategories}
+          allCostCategories={allCostCategories}
           costLineDraft={estimateCostLines.costLineDraft}
           onCategoryChange={estimateCostLines.updateCostLineDraftCategory}
           onLabelChange={estimateCostLines.updateCostLineDraftLabel}

@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import type { EstimateCostLine, EstimateTaskRow } from "@/lib/backend";
+import type { CostCategory, EstimateCostLine, EstimateTaskRow } from "@/lib/backend";
 import { buildEstimateGridEntries } from "@/lib/estimate-grid";
 import { buildAttachableTaskOptions } from "@/lib/estimate-task-options";
 
@@ -25,6 +25,15 @@ export type CostLinesTableProps = {
   // hierarchy/grouping (see buildEstimateGridEntries) and the "Tâche" selector's options when a
   // row is being edited (buildAttachableTaskOptions).
   estimateTaskRows: EstimateTaskRow[];
+  // E12-05/#277: the *full* (including inactive) cost-category referential, used only to resolve
+  // a cost line's "Catégorie" column to the category's `name` -- deliberately a separate list from
+  // page.tsx's own `costCategories` state threaded to CostLineForm's `<select>` (that one stays
+  // active-only, since it populates a create-form picker where offering an inactive category would
+  // be wrong). A cost line created while its category was still active can keep referencing it
+  // after the category is deactivated (`EstimateCostLineRead` only exposes `cost_category_id`, not
+  // the category's `name`), so resolving display names from an active-only list would silently
+  // fall back to a code instead of the name for perfectly ordinary historical lines.
+  allCostCategories: CostCategory[];
   canEditEstimate: boolean;
   editingLineId: number | null;
   editingLineDraft: EditingLineDraft;
@@ -85,6 +94,19 @@ function resolveAttachedTaskName(taskId: number | null | undefined, estimateTask
   return estimateTaskRows.find((row) => row.task_id === taskId)?.task_name ?? "-";
 }
 
+// E12-05/#277: resolves a non-labor cost line's "Catégorie" column to the category's *name*
+// (fixing the bug this issue documents -- the column previously showed `accounting_code`, which
+// belongs in the "Cpt" column instead). Looked up in `allCostCategories` (includeInactive: true,
+// see that prop's own doc comment) rather than the label already sitting on the line, since
+// `EstimateCostLineRead` doesn't expose the category's `name` at all. Falls back to whichever
+// referential code the line already carries -- `category_code`, then `accounting_code` (always
+// present) -- in the (in practice unreachable, since every category a line can reference is loaded
+// here) case the category can't be found at all.
+function resolveCategoryName(line: EstimateCostLine, allCostCategories: CostCategory[]): string {
+  const category = allCostCategories.find((candidate) => candidate.id === line.cost_category_id);
+  return category?.name ?? line.category_code ?? line.accounting_code;
+}
+
 // Extracted from ProjectDetailsPage (E4-11 / #151): the cost lines table with inline editing.
 // The row-rendering `.map` callback below is already its own function scope (and was already
 // under the complexity threshold before this extraction) -- the extraction here is purely for
@@ -93,6 +115,7 @@ function resolveAttachedTaskName(taskId: number | null | undefined, estimateTask
 export function CostLinesTable({
   costLines,
   estimateTaskRows,
+  allCostCategories,
   canEditEstimate,
   editingLineId,
   editingLineDraft,
@@ -182,9 +205,14 @@ export function CostLinesTable({
   // (docs/devis-v0.1-specification.md's "Grille de devis").
   const taskOptions = buildAttachableTaskOptions(estimateTaskRows);
   const gridEntries = buildEstimateGridEntries(costLines, estimateTaskRows);
-  // Column realignment across task/line/global-lines rows is explicitly out of scope here (see
-  // E12-05/#277) -- a task-header/"lignes globales" row simply spans every column instead.
-  const columnCount = canEditEstimate ? 9 : 7;
+  // E12-05/#277: target column set from docs/devis-v0.1-specification.md's "Grille de devis"
+  // (Cpt, Dept, Type, Catégorie, Cat, Libellé, Qté, Heures, Taux horaire, Débours, MO, Achat, PRU
+  // non chargé -- 13 columns) plus Tâche (E12-04, inserted right after Libellé, its most natural
+  // neighbor since both describe "what/where this line is") and Date prévisionnelle (#66/E6-05,
+  // kept right after Débours, grouping the line's own cost-and-timing fields together) -- 15
+  // columns total, plus the optional checkbox/Action columns. A task-header/"lignes globales" row
+  // simply spans every column instead of individually filling them (see renderTaskRow).
+  const columnCount = canEditEstimate ? 17 : 15;
 
   function renderTaskRow(taskRow: EstimateTaskRow) {
     return (
@@ -228,7 +256,16 @@ export function CostLinesTable({
             />
           </TableCell>
         ) : null}
+        {/* Cpt: accounting code, resolved from the category -- not editable on any line here (only
+            MO lines, not yet displayed in this grid per E12-06, editable "sur une ligne MO" per
+            spec). */}
         <TableCell>{line.accounting_code}</TableCell>
+        {/* Dept: an org-unit path resolved from a role, meaningless for a non-labor line -- stays
+            empty for every line displayed at this stage (E12-06 introduces MO lines). */}
+        <TableCell>-</TableCell>
+        <TableCell>{line.cost_type_code}</TableCell>
+        <TableCell>{resolveCategoryName(line, allCostCategories)}</TableCell>
+        <TableCell>{line.category_code ?? "-"}</TableCell>
         <TableCell>
           <div style={{ paddingLeft: `${indentLevel * 1.25}rem` }}>
             {editing ? (
@@ -261,7 +298,7 @@ export function CostLinesTable({
           {editing ? (
             <Input
               ref={quantityRef}
-              aria-label={`Quantité de ${line.label}`}
+              aria-label={`Qté de ${line.label}`}
               type="number"
               min="0.01"
               step="0.01"
@@ -273,11 +310,14 @@ export function CostLinesTable({
             line.quantity
           )}
         </TableCell>
+        {/* Heures/Taux horaire: MO-only fields, no MO line displayed in this grid yet (E12-06). */}
+        <TableCell>-</TableCell>
+        <TableCell>-</TableCell>
         <TableCell>
           {editing ? (
             <Input
               ref={unitCostRef}
-              aria-label={`Coût unitaire de ${line.label}`}
+              aria-label={`Débours de ${line.label}`}
               type="number"
               min="0"
               step="0.01"
@@ -300,6 +340,13 @@ export function CostLinesTable({
             formatPlannedDate(line.planned_date)
           )}
         </TableCell>
+        {/* MO: computed labor cost, always 0 for a non-labor line (E12-06 introduces MO lines and
+            their computation) -- shown as "-" like every other empty column here, not "0", per
+            this table's existing empty-cell convention (resolveAttachedTaskName/formatPlannedDate
+            above). */}
+        <TableCell>-</TableCell>
+        <TableCell>{line.purchase_cost}</TableCell>
+        {/* PRU non chargé = MO + Achat; MO is 0 for a non-labor line, so this is exactly Achat. */}
         <TableCell>{line.purchase_cost}</TableCell>
         {canEditEstimate ? (
           <TableCell>
@@ -357,13 +404,21 @@ export function CostLinesTable({
               />
             </TableHead>
           ) : null}
+          <TableHead>Cpt</TableHead>
+          <TableHead>Dept</TableHead>
+          <TableHead>Type</TableHead>
           <TableHead>Catégorie</TableHead>
+          <TableHead>Cat</TableHead>
           <TableHead>Libellé</TableHead>
           <TableHead>Tâche</TableHead>
-          <TableHead>Quantité</TableHead>
-          <TableHead>Coût unitaire</TableHead>
+          <TableHead>Qté</TableHead>
+          <TableHead>Heures</TableHead>
+          <TableHead>Taux horaire</TableHead>
+          <TableHead>Débours</TableHead>
           <TableHead>Date prévisionnelle</TableHead>
-          <TableHead>Montant</TableHead>
+          <TableHead>MO</TableHead>
+          <TableHead>Achat</TableHead>
+          <TableHead>PRU non chargé</TableHead>
           {canEditEstimate ? <TableHead>Action</TableHead> : null}
         </TableRow>
       </TableHeader>
