@@ -20,7 +20,7 @@ properties:
     type: integer
     minimum: 1
   task_id:
-    type: integer
+    type: [integer, "null"]
     minimum: 1
   role_id:
     type: integer

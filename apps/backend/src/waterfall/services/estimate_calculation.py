@@ -173,6 +173,15 @@ def calculate_estimate_lines(db: Session, estimate_id: int) -> list[EstimateLine
       every such year must have an `InflationRate` -- validation is refused outright
       (via `MissingRateCoverageError`, see below) rather than silently emitting a
       zero-rate/neutral-inflation line (E6-11/#175).
+    - A labor assignment detached from every task (`EstimateRoleAssignment.task_id IS
+      NULL` -- a devis-root MO line, see issue #289/E12-07) is never dropped: it has no
+      task dates to derive a multi-year split from, so it produces exactly one
+      `EstimateLine` snapshotted at the current calendar year, mirroring how a
+      task-less non-labor `EstimateCostLine` (section "2." below) already snapshots at
+      `datetime.now(UTC).year` rather than being silently excluded from every total
+      (review finding on #289: an `INNER JOIN` on `MsTask` here used to make such a
+      line vanish from `assignments`, and therefore from `total_labor_cost`, with no
+      signal at all).
 
     Raises:
         ValueError: assignments reference a task outside the estimate's planning
@@ -195,9 +204,14 @@ def calculate_estimate_lines(db: Session, estimate_id: int) -> list[EstimateLine
     # 1. Process labor (MO) lines from this estimate's own role assignments
     # (E12-02/#274: EstimateRoleAssignment is devis-version-scoped, unlike the
     # legacy project-wide TaskRoleAssignment it replaces here).
+    # Issue #289 (E12-07) review finding: `task_id` is nullable (a devis-root MO
+    # line, detached from every task) -- an INNER JOIN here would silently drop
+    # such a row from `assignments`, and therefore from every total below, with
+    # no signal at all. LEFT JOIN keeps it, with `task=None` handled explicitly
+    # everywhere below (see `_generate_labor_lines`).
     assignments = (
         db.query(EstimateRoleAssignment, MsTask, ResourceRole, CostCategory)
-        .join(MsTask, EstimateRoleAssignment.task_id == MsTask.id)
+        .outerjoin(MsTask, EstimateRoleAssignment.task_id == MsTask.id)
         .join(ResourceRole, EstimateRoleAssignment.role_id == ResourceRole.id)
         .join(CostCategory, ResourceRole.cost_category_id == CostCategory.id)
         .filter(EstimateRoleAssignment.estimate_id == estimate_id)
@@ -212,7 +226,11 @@ def calculate_estimate_lines(db: Session, estimate_id: int) -> list[EstimateLine
             .filter(WfPlanningTaskSnapshot.planning_id == estimate.planning_id)
             .all()
         }
-        outside_source = [task.uid for _, task, _, _ in assignments if task.uid not in source_tasks]
+        outside_source = [
+            task.uid
+            for _, task, _, _ in assignments
+            if task is not None and task.uid not in source_tasks
+        ]
         if outside_source:
             raise ValueError(
                 "Estimate has role assignments outside its planning snapshot: "
@@ -222,9 +240,16 @@ def calculate_estimate_lines(db: Session, estimate_id: int) -> list[EstimateLine
     # E6-11/#175: collect every (category, year) a dated assignment needs *before*
     # generating a single EstimateLine, so a gap anywhere blocks the whole
     # validation -- never a partial devis with some lines silently priced at a
-    # zero rate/neutral inflation.
+    # zero rate/neutral inflation. A root assignment (task is None) has no task
+    # dates to derive years from, so it needs the current calendar year's
+    # coverage instead -- the same year `_generate_labor_lines` prices it at
+    # (E12-07/#289 review finding).
+    snapshot_year = datetime.now(UTC).year
     category_years: list[tuple[CostCategory, int]] = []
     for _assignment, task, _role, category in assignments:
+        if task is None:
+            category_years.append((category, snapshot_year))
+            continue
         schedule_task = source_tasks.get(task.uid) or task
         if not schedule_task.start_at or not schedule_task.finish_at:
             continue
@@ -238,7 +263,13 @@ def calculate_estimate_lines(db: Session, estimate_id: int) -> list[EstimateLine
 
     for assignment, task, role, category in assignments:
         labor_lines = _generate_labor_lines(
-            db, estimate_id, assignment, task, role, category, source_tasks.get(task.uid)
+            db,
+            estimate_id,
+            assignment,
+            task,
+            role,
+            category,
+            source_tasks.get(task.uid) if task is not None else None,
         )
         lines.extend(labor_lines)
 
@@ -281,11 +312,63 @@ def calculate_estimate_lines(db: Session, estimate_id: int) -> list[EstimateLine
     return lines
 
 
+def _single_year_labor_line(
+    db: Session,
+    estimate_id: int,
+    assignment: EstimateRoleAssignment,
+    role: ResourceRole,
+    category: CostCategory,
+) -> EstimateLine:
+    """Price a devis-root MO line (``task_id IS NULL``, issue #289/E12-07) as a
+    single `EstimateLine` at the current calendar year, mirroring how a task-less
+    non-labor `EstimateCostLine` is already snapshotted at ``datetime.now(UTC).year``
+    in ``calculate_estimate_lines``'s own "2." section -- the same "no task to date
+    it from" situation, already solved there.
+
+    Rate/inflation coverage for (``category``, this year) is guaranteed by
+    ``calculate_estimate_lines``'s own `collect_missing_rate_coverage` call before
+    this is ever reached, exactly like the year-split case in
+    `_generate_labor_lines` below -- the ``is None`` branches here are the same
+    defensive-in-depth fallback, never expected to trigger.
+    """
+    year = datetime.now(UTC).year
+    rate_record = (
+        db.query(CostRate)
+        .filter(CostRate.cost_category_id == role.cost_category_id)
+        .filter(CostRate.year == year)
+        .first()
+    )
+    hourly_rate = rate_record.hourly_rate if rate_record else Decimal("0")
+    inflation_record = db.query(InflationRate).filter(InflationRate.year == year).first()
+    inflation_coefficient = inflation_record.coefficient if inflation_record else Decimal("1")
+    budget_cost = assignment.quantity * assignment.hours * hourly_rate * inflation_coefficient
+
+    return EstimateLine(
+        estimate_id=estimate_id,
+        task_id=None,
+        role_id=role.id,
+        # Mirrors the non-labor root cost line's own role_code=""/role_name=""
+        # symmetry (calculate_estimate_lines, section "2."): here it is task_name
+        # that has no source to snapshot, since this line has no ancestor task.
+        task_name="",
+        role_code=role.name,
+        role_name=role.name,
+        accounting_code=category.accounting_code,
+        cost_code_id=assignment.cost_code_id,
+        year=year,
+        quantity=assignment.quantity,
+        hours=assignment.hours,
+        hourly_rate=hourly_rate,
+        inflation_coefficient=inflation_coefficient,
+        budget_cost=budget_cost,
+    )
+
+
 def _generate_labor_lines(
     db: Session,
     estimate_id: int,
     assignment: EstimateRoleAssignment,
-    task: MsTask,
+    task: MsTask | None,
     role: ResourceRole,
     category: CostCategory,
     source_task: WfPlanningTaskSnapshot | None = None,
@@ -295,7 +378,16 @@ def _generate_labor_lines(
 
     If task spans multiple years (start_year != end_year), distribute hours uniformly
     across years. Apply year-specific rates and inflation coefficients.
+
+    ``task`` is ``None`` for a devis-root MO line (``EstimateRoleAssignment.task_id
+    IS NULL``, issue #289/E12-07): with no task to derive dates from, it produces a
+    single `EstimateLine` at the current calendar year instead of a per-year split
+    -- see ``_single_year_labor_line`` -- rather than being silently dropped (review
+    finding: this case must never omit the line from any total).
     """
+    if task is None:
+        return [_single_year_labor_line(db, estimate_id, assignment, role, category)]
+
     lines: list[EstimateLine] = []
 
     schedule_task = source_task or task
@@ -389,8 +481,18 @@ def sync_task_role_assignments_from_estimate(
         .filter(EstimateRoleAssignment.estimate_id == estimate_id)
         .all()
     )
+    # Issue #289 (E12-07): task_id is nullable (a grid node unindented all the way
+    # to the devis root has no ancestor task) -- such an assignment has nothing
+    # for TaskRoleAssignment (task_id NOT NULL, project-wide) to key off, so it
+    # is excluded here explicitly. Unlike calculate_estimate_lines above (which
+    # keeps this same row via a LEFT JOIN, priced as a single-year line since a
+    # review finding on #289), TaskRoleAssignment genuinely has no column to
+    # store a task-less row in -- this exclusion is a structural necessity, not
+    # a silent-drop bug.
     assignment_by_pair = {
-        (assignment.task_id, assignment.role_id): assignment for assignment in assignments
+        (assignment.task_id, assignment.role_id): assignment
+        for assignment in assignments
+        if assignment.task_id is not None
     }
 
     existing_assignments = (

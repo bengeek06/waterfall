@@ -132,6 +132,8 @@ paths:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1role-assignments
   /projects/{projectId}/estimates/{estimateId}/role-assignments/{assignmentId}:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1role-assignments~1{assignmentId}
+  /projects/{projectId}/estimates/{estimateId}/grid-nodes/move:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1grid-nodes~1move
   /projects/{projectId}/estimates/{estimateId}/validate:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1validate
   /projects/{projectId}/estimates/{estimateId}/aggregates:

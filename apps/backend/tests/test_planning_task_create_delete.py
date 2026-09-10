@@ -17,6 +17,7 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 from sqlalchemy import event
 
+from _estimate_grid_support import seed_root_grid_node
 from waterfall.db.session import get_engine, get_session_factory
 from waterfall.main import app
 from waterfall.models.ms_core import MsProject, MsTask
@@ -682,6 +683,7 @@ def test_delete_task_referenced_by_estimate_role_assignment_conflicts_without_mu
             )
             session.add(estimate)
             session.flush()
+            node_id = seed_root_grid_node(session, estimate.id, "labor")
             session.add(
                 EstimateRoleAssignment(
                     estimate_id=estimate.id,
@@ -689,6 +691,7 @@ def test_delete_task_referenced_by_estimate_role_assignment_conflicts_without_mu
                     role_id=role.id,
                     quantity=Decimal("1.00"),
                     hours=Decimal("10.00"),
+                    node_id=node_id,
                 )
             )
             session.commit()

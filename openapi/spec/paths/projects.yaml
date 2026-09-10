@@ -1239,6 +1239,44 @@
         $ref: ../components/responses/ProjectNotFound.yaml
       '409':
         $ref: ../components/responses/Conflict.yaml
+/projects/{projectId}/estimates/{estimateId}/grid-nodes/move:
+  post:
+    tags:
+    - projects
+    summary: Deplacer ou reordonner des noeuds de la grille d'un devis brouillon
+    description: >-
+      Deplace une selection de lignes de coût/main-d'oeuvre (E12-07, #289) :
+      `node_uids` (toujours negatifs) sont normalises a leurs racines
+      selectionnees, puis inseres sous `target_parent_uid` a `position`. Le
+      `task_id` de chaque ligne affectee (et de ses descendants) est
+      recalcule a partir de la tache ancetre la plus proche.
+    operationId: moveEstimateGridNodes
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/EstimateId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/EstimateGridNodeMove.yaml
+    responses:
+      '200':
+        description: Devis mis a jour (revision incrementee)
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ProjectEstimateRead.yaml
+      '400':
+        $ref: ../components/responses/MoveEstimateGridNodesBadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/MoveEstimateGridNodesNotFound.yaml
+      '409':
+        $ref: ../components/responses/MoveEstimateGridNodesConflict.yaml
 /projects/{projectId}/estimates/{estimateId}/validate:
   post:
     tags:

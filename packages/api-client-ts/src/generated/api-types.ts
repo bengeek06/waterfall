@@ -929,6 +929,26 @@ export interface paths {
         patch: operations["updateEstimateRoleAssignment"];
         trace?: never;
     };
+    "/projects/{projectId}/estimates/{estimateId}/grid-nodes/move": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Deplacer ou reordonner des noeuds de la grille d'un devis brouillon
+         * @description Deplace une selection de lignes de coût/main-d'oeuvre (E12-07, #289) : `node_uids` (toujours negatifs) sont normalises a leurs racines selectionnees, puis inseres sous `target_parent_uid` a `position`. Le `task_id` de chaque ligne affectee (et de ses descendants) est recalcule a partir de la tache ancetre la plus proche.
+         */
+        post: operations["moveEstimateGridNodes"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/projects/{projectId}/estimates/{estimateId}/validate": {
         parameters: {
             query?: never;
@@ -1770,6 +1790,18 @@ export interface components {
             quantity: number;
             hours: number;
             comment?: string | null;
+            /**
+             * @description Position de la nouvelle ligne dans l'arbre du devis (E12-07/#289) :
+             *     positif = tache de ce devis (`EstimateTaskRow`), negatif = un autre
+             *     noeud de grille de ce devis, absent/null = racine du devis. Independant
+             *     de `task_id`.
+             */
+            target_parent_uid?: number | null;
+            /**
+             * @description Noeud de grille frere apres lequel inserer la nouvelle ligne ; absent =
+             *     dernier enfant du parent resolu.
+             */
+            insert_after_uid?: number | null;
         };
         EstimateRoleAssignmentUpdate: {
             cost_code_id?: number | null;
@@ -1780,7 +1812,7 @@ export interface components {
         EstimateRoleAssignmentRead: {
             id: number;
             estimate_id: number;
-            task_id: number;
+            task_id: number | null;
             role_id: number;
             role_code: string;
             role_name: string;
@@ -1813,6 +1845,7 @@ export interface components {
             /** @enum {string} */
             status: "draft" | "validated" | "superseded" | "archived";
             currency_code: string;
+            revision: number;
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
@@ -1842,6 +1875,18 @@ export interface components {
             supply_status?: components["schemas"]["SupplyStatus"] | null;
             /** Format: date-time */
             planned_date?: string | null;
+            /**
+             * @description Position de la nouvelle ligne dans l'arbre du devis (E12-07/#289) :
+             *     positif = tache de ce devis (`EstimateTaskRow`), negatif = un autre
+             *     noeud de grille de ce devis, absent/null = racine du devis. Independant
+             *     de `task_id`.
+             */
+            target_parent_uid?: number | null;
+            /**
+             * @description Noeud de grille frere apres lequel inserer la nouvelle ligne ; absent =
+             *     dernier enfant du parent resolu.
+             */
+            insert_after_uid?: number | null;
         };
         EstimateCostLineUpdate: {
             task_id?: number | null;
@@ -2222,6 +2267,20 @@ export interface components {
                 missing_inflation_years: number[];
             };
         };
+        EstimateGridNodeMove: {
+            node_uids: number[];
+            /**
+             * @description Positif = tache de ce devis (`EstimateTaskRow`), negatif = un autre
+             *     noeud de grille de ce devis, absent/null = racine du devis.
+             */
+            target_parent_uid?: number | null;
+            position: number;
+            /**
+             * @description Revision du devis sur laquelle cette mutation a ete calculee. Comparee a
+             *     la revision persistee ; un ecart renvoie un 409 ESTIMATE_REVISION_CONFLICT.
+             */
+            expected_revision: number;
+        };
         /**
          * @description Issue #65 (E6-04) : une tache "reelle" du planning (ni recapitulative ni
          *     jalon) qui n'a ni affectation de role de ce devis (`EstimateRoleAssignment`,
@@ -2597,6 +2656,36 @@ export interface components {
             };
             content: {
                 "application/json": components["schemas"]["MissingRateCoverage"] | components["schemas"]["FastAPIErrorResponse"];
+            };
+        };
+        /** @description Requete de deplacement invalide */
+        MoveEstimateGridNodesBadRequest: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
+            };
+        };
+        /** @description Projet, devis, tache ou noeud introuvable pendant le deplacement */
+        MoveEstimateGridNodesNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
+            };
+        };
+        /**
+         * @description Le deplacement entre en conflit avec l'arbre du devis, ou `expected_revision`
+         *     ne correspond plus a la revision persistee (code `ESTIMATE_REVISION_CONFLICT`).
+         */
+        MoveEstimateGridNodesConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
         /** @description Le devis n'est pas un brouillon (detail generique FastAPIErrorResponse), ou au moins une (categorie de cout, annee) couverte par une affectation de main-d'oeuvre n'a pas de CostRate/InflationRate (detail.code= MISSING_RATE_COVERAGE, E6-11, #175) -- dans ce dernier cas, aucune EstimateLine n'est generee ni persistee et le devis reste un brouillon. */
@@ -4503,6 +4592,39 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["ProjectNotFound"];
             409: components["responses"]["Conflict"];
+        };
+    };
+    moveEstimateGridNodes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de devis */
+                estimateId: components["parameters"]["EstimateId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EstimateGridNodeMove"];
+            };
+        };
+        responses: {
+            /** @description Devis mis a jour (revision incrementee) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectEstimateRead"];
+                };
+            };
+            400: components["responses"]["MoveEstimateGridNodesBadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["MoveEstimateGridNodesNotFound"];
+            409: components["responses"]["MoveEstimateGridNodesConflict"];
         };
     };
     validateProjectEstimate: {

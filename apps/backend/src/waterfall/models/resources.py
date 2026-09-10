@@ -362,6 +362,14 @@ class EstimateRoleAssignment(Base):
 
     __tablename__ = "wf_estimate_role_assignment"
     __table_args__ = (
+        # Issue #289 (E12-07) review finding (Finding Moyenne): task_id is
+        # nullable (see below), so two root-level assignments (task_id IS
+        # NULL, detached from any task) with the same role_id do NOT collide
+        # on this constraint -- SQL unique constraints treat NULL as distinct
+        # from any other NULL. This is intentional, not an oversight: a root
+        # role assignment behaves like a free-floating EstimateCostLine (which
+        # itself has never had a uniqueness constraint), so allowing duplicate
+        # (estimate_id, NULL, role_id) rows keeps the two node kinds symmetric.
         UniqueConstraint(
             "estimate_id", "task_id", "role_id", name="uq_wf_estimate_role_assignment"
         ),
@@ -374,7 +382,10 @@ class EstimateRoleAssignment(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     estimate_id: Mapped[int] = mapped_column(ForeignKey("wf_estimate.id"), nullable=False)
-    task_id: Mapped[int] = mapped_column(ForeignKey("ms_task.id"), nullable=False)
+    # Nullable since issue #289 (E12-07): a role assignment detached from every
+    # task (its grid node unindented all the way to the devis root, see
+    # move_estimate_grid_nodes) has no ancestor task left to reference.
+    task_id: Mapped[int | None] = mapped_column(ForeignKey("ms_task.id"), nullable=True)
     role_id: Mapped[int] = mapped_column(ForeignKey("wf_resource_role.id"), nullable=False)
     # Same rationale as TaskRoleAssignment.cost_code_id/EstimateCostLine.cost_code_id
     # (issue #63/E6-02): nullable at the column level only to allow a future backfill
@@ -386,6 +397,11 @@ class EstimateRoleAssignment(Base):
     quantity: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     hours: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Issue #289 (E12-07): this row's own position in the devis-scoped grid
+    # node tree -- see EstimateGridNode.
+    node_id: Mapped[int] = mapped_column(
+        ForeignKey("wf_estimate_grid_node.id"), nullable=False, unique=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
     )
@@ -428,11 +444,50 @@ class Estimate(Base):
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft")
     currency_code: Mapped[str] = mapped_column(String(3), nullable=False)
+    # Issue #289 (E12-07): optimistic-concurrency counter for the devis's grid
+    # node tree, mirroring WfPlanning.revision -- see
+    # raise_on_estimate_revision_conflict (api/routes/project_access.py) and
+    # move_estimate_grid_nodes (services/estimate_grid.py).
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
     )
     validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class EstimateGridNode(Base):
+    """One position in a devis-scoped, freely reorderable tree of cost lines and
+    role assignments (E12-07, issue #289).
+
+    Structurally mirrors `WfPlanningTaskSnapshot`: `uid` is this node's own
+    stable identity within its `estimate_id`, allocated downward from -1 (see
+    `next_estimate_grid_node_uid`, services/estimate_grid.py) -- deliberately
+    negative so it can never collide with a positive `MsTask.id`, the same
+    integer space `parent_uid` also draws from when a node is attached
+    directly under a task of this estimate's own `EstimateTaskRow`s. Every
+    `parent_uid` is therefore exactly one of: positive (a task, `MsTask.id`),
+    negative (another `EstimateGridNode.uid` of the same estimate), or NULL
+    (root of the devis).
+
+    Carries no cost/labor data itself -- `kind` only discriminates which of
+    `EstimateCostLine`/`EstimateRoleAssignment` owns this node through its own
+    `node_id` FK back here.
+    """
+
+    __tablename__ = "wf_estimate_grid_node"
+    __table_args__ = (
+        UniqueConstraint("estimate_id", "uid", name="uq_wf_estimate_grid_node_uid"),
+        CheckConstraint("kind IN ('cost_line', 'labor')", name="ck_wf_estimate_grid_node_kind"),
+        Index("idx_wf_estimate_grid_node_estimate_parent", "estimate_id", "parent_uid"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    estimate_id: Mapped[int] = mapped_column(ForeignKey("wf_estimate.id"), nullable=False)
+    uid: Mapped[int] = mapped_column(Integer, nullable=False)
+    parent_uid: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
 
 
 class EstimateTaskRow(Base):
@@ -527,6 +582,11 @@ class EstimateCostLine(Base):
     # Issue #66 (E6-05): a forecast date for future cashflow curves, entirely
     # independent from task_id -- either, both, or neither may be set.
     planned_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Issue #289 (E12-07): this row's own position in the devis-scoped grid
+    # node tree -- see EstimateGridNode.
+    node_id: Mapped[int] = mapped_column(
+        ForeignKey("wf_estimate_grid_node.id"), nullable=False, unique=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
     )

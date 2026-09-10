@@ -18,6 +18,7 @@ from waterfall.models.resources import (
     CostType,
     Estimate,
     EstimateCostLine,
+    EstimateGridNode,
     EstimateLine,
     EstimateRoleAssignment,
     EstimateTaskRow,
@@ -98,6 +99,7 @@ def to_project_estimate_read(estimate: Estimate) -> ProjectEstimateRead:
         kind=estimate.kind,
         status=estimate.status,
         currency_code=estimate.currency_code,
+        revision=estimate.revision,
         created_at=estimate.created_at,
         validated_at=estimate.validated_at,
         note=estimate.note,
@@ -455,6 +457,13 @@ def delete_project(
         db.query(EstimateRoleAssignment).filter(
             EstimateRoleAssignment.estimate_id.in_(estimate_ids)
         ).delete(synchronize_session=False)
+        # Issue #289 (E12-07): every cost line/role assignment above owned exactly
+        # one grid node (node_id, NOT NULL unique FK) -- deleted only now that
+        # nothing references them, still before the wf_estimate rows they
+        # themselves reference.
+        db.query(EstimateGridNode).filter(EstimateGridNode.estimate_id.in_(estimate_ids)).delete(
+            synchronize_session=False
+        )
         db.query(EstimateLine).filter(EstimateLine.estimate_id.in_(estimate_ids)).delete(
             synchronize_session=False
         )

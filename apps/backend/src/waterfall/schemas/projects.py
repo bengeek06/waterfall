@@ -559,6 +559,10 @@ class ProjectEstimateRead(BaseModel):
     kind: str
     status: str
     currency_code: str
+    # Issue #289 (E12-07): optimistic-concurrency counter for the devis's grid
+    # node tree, mirroring PlanningRead.revision -- see
+    # EstimateGridNodeMove/move_estimate_grid_nodes.
+    revision: int
     created_at: datetime
     validated_at: datetime | None
     note: str | None
@@ -684,6 +688,15 @@ class EstimateCostLineMilestonesCreate(BaseModel):
 SupplyStatus = Literal["planned", "ordered", "received", "cancelled"]
 
 
+def _nonzero_or_none(value: int | None) -> int | None:
+    """Shared `target_parent_uid` validator: 0 is never a valid grid node/task uid
+    (positive uids are `MsTask.id`, negative uids are `EstimateGridNode.uid` --
+    see EstimateGridNodeMove), unlike `None` (the devis root)."""
+    if value == 0:
+        raise ValueError("must not be 0")
+    return value
+
+
 class EstimateCostLineCreate(BaseModel):
     task_id: int | None = Field(default=None, gt=0)
     cost_category_id: int = Field(gt=0)
@@ -697,6 +710,14 @@ class EstimateCostLineCreate(BaseModel):
     # Issue #66 (E6-05): forecast date for future cashflow curves, independent
     # from task_id -- either, both, or neither may be set.
     planned_date: datetime | None = None
+    # Issue #289 (E12-07): the new grid node's position, same semantics as
+    # PlanningTaskCreate.target_parent_uid/insert_after_uid -- positive
+    # references a task of this estimate's own task-rows, negative another
+    # grid node of this estimate. Both absent places the new line as the last
+    # child of the devis root (unlike PlanningTaskCreate, which defaults to
+    # the first child -- see create_estimate_grid_node/move_estimate_grid_nodes).
+    target_parent_uid: int | None = Field(default=None)
+    insert_after_uid: int | None = Field(default=None, lt=0)
 
     @field_validator("supply_status", mode="before")
     @classmethod
@@ -709,6 +730,8 @@ class EstimateCostLineCreate(BaseModel):
     @classmethod
     def normalize_label(cls, value: str) -> str:
         return _required_text(value)
+
+    _validate_target_parent_uid = field_validator("target_parent_uid")(_nonzero_or_none)
 
 
 class EstimateCostLineUpdate(BaseModel):
@@ -775,6 +798,13 @@ class EstimateRoleAssignmentCreate(BaseModel):
     quantity: Decimal = Field(gt=0, max_digits=10, decimal_places=2)
     hours: Decimal = Field(ge=0, max_digits=14, decimal_places=2)
     comment: str | None = Field(default=None, max_length=10000)
+    # Issue #289 (E12-07): same grid-node positioning semantics as
+    # EstimateCostLineCreate.target_parent_uid/insert_after_uid above --
+    # entirely independent of `task_id`. Left unset, the new node lands at the
+    # devis root, regardless of `task_id`; a later move (move_estimate_grid_nodes)
+    # is what keeps `task_id` in sync with the node's actual tree position.
+    target_parent_uid: int | None = Field(default=None)
+    insert_after_uid: int | None = Field(default=None, lt=0)
 
     @field_validator("comment", mode="before")
     @classmethod
@@ -783,6 +813,8 @@ class EstimateRoleAssignmentCreate(BaseModel):
             return None
         normalized = value.strip()
         return normalized or None
+
+    _validate_target_parent_uid = field_validator("target_parent_uid")(_nonzero_or_none)
 
 
 class EstimateRoleAssignmentUpdate(BaseModel):
@@ -806,7 +838,10 @@ class EstimateRoleAssignmentUpdate(BaseModel):
 class EstimateRoleAssignmentRead(BaseModel):
     id: int
     estimate_id: int
-    task_id: int
+    # Nullable since issue #289 (E12-07): a role assignment unindented all the
+    # way to the devis root (see move_estimate_grid_nodes) has no ancestor
+    # task left to reference.
+    task_id: int | None
     role_id: int
     role_code: str
     role_name: str
@@ -822,6 +857,24 @@ class EstimateRoleAssignmentRead(BaseModel):
 
 class EstimateRoleAssignmentListRead(PaginatedList[EstimateRoleAssignmentRead]):
     pass
+
+
+class EstimateGridNodeMove(BaseModel):
+    """Move/reorder a selection of a devis grid's cost-line/role-assignment nodes
+    (E12-07, issue #289) -- structurally mirrors `PlanningTaskMove`.
+
+    `node_uids` addresses `EstimateGridNode.uid` values only (always negative,
+    see `EstimateGridNode`) -- never a task. `target_parent_uid` is one of:
+    positive (an existing task of this estimate's own task-rows), negative (an
+    existing grid node of this estimate), or `None` (the devis root).
+    """
+
+    node_uids: list[Annotated[int, Field(lt=0)]] = Field(min_length=1)
+    target_parent_uid: int | None = Field(default=None)
+    position: int = Field(ge=1)
+    expected_revision: int = Field(ge=0)
+
+    _validate_target_parent_uid = field_validator("target_parent_uid")(_nonzero_or_none)
 
 
 class EstimateAggregatesRead(BaseModel):

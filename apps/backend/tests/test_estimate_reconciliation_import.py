@@ -23,6 +23,7 @@ from httpx import Response
 from openpyxl import Workbook, load_workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
+from _estimate_grid_support import seed_root_grid_node
 from waterfall.core.config import get_settings
 from waterfall.db.session import get_session_factory
 from waterfall.main import app
@@ -305,6 +306,7 @@ def _create_estimate_role_assignment(
             .filter(MsTask.project_id == project_id, MsTask.uid == task_uid)
             .one()
         )
+        node_id = seed_root_grid_node(session, estimate_id, "labor")
         assignment = EstimateRoleAssignment(
             estimate_id=estimate_id,
             task_id=task.id,
@@ -313,6 +315,7 @@ def _create_estimate_role_assignment(
             quantity=Decimal(quantity),
             hours=Decimal(hours),
             comment=comment,
+            node_id=node_id,
         )
         session.add(assignment)
         session.commit()
@@ -725,6 +728,61 @@ def test_reconciliation_import_creates_task_labor_and_non_labor_rows() -> None:
             headers,
         )
         assert any(item["label"] == "Nouvelle ligne" for item in _items(cost_lines.json()))
+
+
+def test_reconciliation_import_confirm_bumps_estimate_revision_on_new_rows() -> None:
+    """Finding Haute (#289 review): ``_apply_labor_creates``/``_apply_cost_line_creates``
+    mutate the devis grid node tree exactly like the real ``POST .../cost-lines``/
+    ``POST .../role-assignments`` routes -- ``confirm`` must bump ``estimate.revision``
+    too, or a concurrent ``grid-nodes/move``'s optimistic lock can pass against a tree
+    that already changed underneath it."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        fixture = _seed_fixture(client, headers)
+        second_role_id = _seed_labor_role()
+        content = _export_workbook(client, headers, fixture["project_id"], fixture["estimate_id"])
+
+        revision_before = cast(
+            dict[str, Any],
+            _get(
+                client,
+                f"/projects/{fixture['project_id']}/estimates/{fixture['estimate_id']}",
+                headers,
+            ).json(),
+        )["revision"]
+
+        workbook = load_workbook(BytesIO(content))
+        workbook["MO"].append(
+            [
+                None,
+                fixture["deliverable_id"],
+                None,
+                second_role_id,
+                None,
+                None,
+                None,
+                None,
+                1,
+                3,
+                None,
+                False,
+            ]
+        )
+        edited = _dump_workbook(workbook)
+
+        confirm = _confirm(client, headers, fixture["project_id"], fixture["estimate_id"], edited)
+        assert confirm.status_code == 200
+        assert _plan(confirm.json())["applied"] is True
+
+        revision_after = cast(
+            dict[str, Any],
+            _get(
+                client,
+                f"/projects/{fixture['project_id']}/estimates/{fixture['estimate_id']}",
+                headers,
+            ).json(),
+        )["revision"]
+        assert revision_after == revision_before + 1
 
 
 def test_reconciliation_import_unknown_id_is_blocking_and_nothing_applied() -> None:
