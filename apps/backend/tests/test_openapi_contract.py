@@ -524,6 +524,67 @@ def test_import_and_estimate_contracts_match_runtime_nullability_and_aliases() -
         {"type": "null"},
     ]
 
+    # #291 review finding Moyenne #2: EstimateCostLineRead/EstimateRoleAssignmentRead
+    # (E12-09) declare every nullable field as `X | None` with no `= None` default
+    # (see their own class docstrings in schemas/projects.py) -- unlike
+    # EstimateTaskRowRead above, FastAPI/Pydantic therefore marks *every* field
+    # required at runtime for these two (the JSON key is always present in the
+    # response, only its value may be null). The static spec keeps its own,
+    # narrower, pre-existing convention here instead, listing only the fields
+    # actually chosen as non-nullable -- so `required` is expected to diverge
+    # between static and runtime for this schema shape, while `properties` still
+    # has to match exactly, same as every other schema checked in this test.
+    for schema_name in ("EstimateCostLineRead", "EstimateRoleAssignmentRead"):
+        assert set(static_schemas[schema_name]["properties"]) == set(
+            runtime_schemas[schema_name]["properties"]
+        )
+        assert set(runtime_schemas[schema_name].get("required", [])) == set(
+            runtime_schemas[schema_name]["properties"]
+        )
+    assert set(static_schemas["EstimateCostLineRead"].get("required", [])) == {
+        "id",
+        "estimate_id",
+        "cost_type_id",
+        "cost_category_id",
+        "cost_type_code",
+        "accounting_code",
+        "label",
+        "quantity",
+        "unit_cost",
+        "purchase_cost",
+        "uid",
+        "position",
+        "row_number",
+    }
+    assert set(static_schemas["EstimateRoleAssignmentRead"].get("required", [])) == {
+        "id",
+        "estimate_id",
+        "task_id",
+        "role_id",
+        "role_code",
+        "role_name",
+        "cost_category_id",
+        "accounting_code",
+        "quantity",
+        "hours",
+        "created_at",
+        "updated_at",
+        "uid",
+        "position",
+        "row_number",
+    }
+    # `parent_uid` (E12-09/#291) is nullable and, per the narrower static
+    # convention pinned above, deliberately excluded from the static spec's
+    # `required` (it is still present in runtime `required`, like every other
+    # field of these two schemas -- checked in the loop above). Spot-check its
+    # anyOf/null shape the same way the EstimateTaskRowRead.task_id check does.
+    for schema_name in ("EstimateCostLineRead", "EstimateRoleAssignmentRead"):
+        assert "parent_uid" not in static_schemas[schema_name].get("required", [])
+        assert runtime_schemas[schema_name]["properties"]["parent_uid"]["anyOf"] == [
+            {"type": "integer"},
+            {"type": "null"},
+        ]
+
 
 def _auth_headers(client: TestClient) -> dict[str, str]:
     email = f"openapi.contract.{uuid4().hex}@example.com"

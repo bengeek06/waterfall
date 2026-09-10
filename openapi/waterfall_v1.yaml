@@ -4246,6 +4246,9 @@ components:
         - hours
         - created_at
         - updated_at
+        - uid
+        - position
+        - row_number
       properties:
         id:
           type: integer
@@ -4289,6 +4292,27 @@ components:
         updated_at:
           type: string
           format: date-time
+        uid:
+          type: integer
+          maximum: -1
+          description: 'This assignment''s own EstimateGridNode uid (E12-07, #289), always negative.'
+        parent_uid:
+          type:
+            - integer
+            - 'null'
+          not:
+            enum:
+              - 0
+          description: 'This assignment''s grid-node parent_uid, exposed as-is (E12-09, #291): positif = tache de ce devis (`MsTask.id`), negatif = un autre noeud de grille de ce devis, absent/null = racine du devis -- meme convention que `EstimateGridNodeMove.target_parent_uid`, reutilisable telle quelle dans un appel ulterieur a grid-nodes/move.'
+        position:
+          type: integer
+          minimum: 1
+          description: This assignment's local sibling position within its grid-node parent.
+        row_number:
+          type: integer
+          minimum: 1
+          readOnly: true
+          description: '1-based rank of this assignment in the devis''s merged tasks+grid-node tree (E12-09, #291), recomputed on every read, never stored.'
     ProjectEstimateCreate:
       type: object
       required:
@@ -4402,6 +4426,13 @@ components:
             - integer
             - 'null'
           minimum: 1
+        row_number:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
+          readOnly: true
+          description: '1-based rank of this row in the devis''s merged tasks+grid-node tree (E12-09, #291), recomputed on every read, never stored. `null` only in the same pre-existing degenerate case `task_uid` itself already falls back to `null` for (this row''s task can no longer be resolved at all).'
         parent_task_id:
           type:
             - integer
@@ -4537,6 +4568,9 @@ components:
         - quantity
         - unit_cost
         - purchase_cost
+        - uid
+        - position
+        - row_number
       properties:
         id:
           type: integer
@@ -4585,6 +4619,27 @@ components:
             - string
             - 'null'
           format: date-time
+        uid:
+          type: integer
+          maximum: -1
+          description: 'This line''s own EstimateGridNode uid (E12-07, #289), always negative.'
+        parent_uid:
+          type:
+            - integer
+            - 'null'
+          not:
+            enum:
+              - 0
+          description: 'This line''s grid-node parent_uid, exposed as-is (E12-09, #291): positif = tache de ce devis (`MsTask.id`), negatif = un autre noeud de grille de ce devis, absent/null = racine du devis -- meme convention que `EstimateGridNodeMove.target_parent_uid`, reutilisable telle quelle dans un appel ulterieur a grid-nodes/move.'
+        position:
+          type: integer
+          minimum: 1
+          description: This line's local sibling position within its grid-node parent.
+        row_number:
+          type: integer
+          minimum: 1
+          readOnly: true
+          description: '1-based rank of this line in the devis''s merged tasks+grid-node tree (E12-09, #291), recomputed on every read, never stored.'
     EstimateAggregatesRead:
       type: object
       required:

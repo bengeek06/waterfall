@@ -17,6 +17,7 @@ from waterfall.api.dependencies import get_current_active_user
 from waterfall.api.pagination import ListParams, list_params
 from waterfall.api.routes.planning_support import (
     _PlanningTaskBodyValidationRoute,
+    order_estimate_grid_depth_first,
     order_snapshots_depth_first,
 )
 from waterfall.api.routes.project_access import (
@@ -119,6 +120,7 @@ from waterfall.services import (
     move_estimate_grid_nodes,
     parse_estimate_reconciliation_workbook,
     replace_task_predecessor_links,
+    resolve_effective_task_uid,
     resolve_live_task_display,
     resolve_task_uid_by_id,
     sync_task_role_assignments_from_estimate,
@@ -127,6 +129,80 @@ from waterfall.services.estimate_reconciliation_export import _scoped_estimate_r
 from waterfall.services.project_lifecycle import ensure_project_mutable
 
 router = APIRouter(prefix="/projects", tags=["projects"])
+
+
+@dataclass(frozen=True)
+class _EstimateGridReadContext:
+    """Everything a `to_estimate_*_read` builder needs beyond its own row to
+    expose `row_number` (E12-09/#291) and, for cost-lines/role-assignments,
+    their owning `EstimateGridNode` -- see `_load_estimate_grid_context`."""
+
+    row_number_by_uid: dict[int, int]
+    nodes_by_id: dict[int, EstimateGridNode]
+    resolved: dict[int, ResolvedTaskDisplay]
+    task_id_to_uid: dict[int, int]
+
+
+def _load_estimate_grid_context(
+    db: Session, project: MsProject, estimate: Estimate
+) -> _EstimateGridReadContext:
+    """Compute `row_number` (and the grid-node lookups it needs) over
+    `estimate`'s *entire* task-row + grid-node set (E12-09/#291) -- never a
+    paginated slice.
+
+    `list_estimate_task_rows`/`list_estimate_cost_lines`/
+    `list_estimate_role_assignments` each still apply `apply_pagination` to
+    their own SQL query for `items`, but must extract every page's
+    `row_number` from this full-set map afterwards -- exactly the same
+    "compute on the complete set, only then materialize a page" rule
+    `resolve_live_task_display` already imposes on `position`/`task_name`
+    (E12-08 Finding Haute, round 5 review): computing this map from only a
+    page's rows would make every page's ranks restart at 1 instead of
+    reflecting the whole devis. The single-row cost-line/role-assignment
+    create/update endpoints call this the same way for the same reason: a
+    freshly created/edited line's `row_number` depends on the whole tree
+    around it, not just itself -- and this whole function only ever runs
+    once per HTTP request, never once per row.
+
+    Covers a *validated* estimate exactly like a draft one, deliberately
+    without a validated-only `None` fallback: unlike `resolve_live_task_display`
+    (whose *live* re-resolution is meaningless once a devis is validated and
+    is never invoked here for a validated estimate), the grid node tree and
+    every `EstimateTaskRow`'s own frozen columns remain a complete, valid tree
+    shape after validation -- exactly the one the devis was priced against --
+    so `row_number`/`uid`/`parent_uid`/`position` keep being computed from
+    that frozen shape rather than silently disappearing from a validated
+    devis's grid.
+    """
+    task_rows = db.query(EstimateTaskRow).filter(EstimateTaskRow.estimate_id == estimate.id).all()
+    grid_nodes = (
+        db.query(EstimateGridNode).filter(EstimateGridNode.estimate_id == estimate.id).all()
+    )
+    task_id_to_uid = resolve_task_uid_by_id(db, project)
+    resolved = (
+        resolve_live_task_display(db, project, task_rows) if estimate.status == "draft" else {}
+    )
+
+    task_order_rows: list[tuple[int, int | None, int, int]] = []
+    for row in task_rows:
+        display = resolved.get(row.id)
+        task_uid = resolve_effective_task_uid(row, display, task_id_to_uid)
+        if task_uid is None:
+            continue
+        parent_task_id = display.parent_task_id if display is not None else row.parent_task_id
+        parent_task_uid = task_id_to_uid.get(parent_task_id) if parent_task_id is not None else None
+        position = display.position if display is not None else row.position
+        task_order_rows.append((task_uid, parent_task_uid, position, row.id))
+
+    ordered_uids = order_estimate_grid_depth_first(task_order_rows, grid_nodes, task_id_to_uid)
+    row_number_by_uid = {uid: rank for rank, uid in enumerate(ordered_uids, start=1)}
+    nodes_by_id = {node.id: node for node in grid_nodes}
+    return _EstimateGridReadContext(
+        row_number_by_uid=row_number_by_uid,
+        nodes_by_id=nodes_by_id,
+        resolved=resolved,
+        task_id_to_uid=task_id_to_uid,
+    )
 
 
 @router.get("/{project_id}/estimates", response_model=ProjectEstimateListRead)
@@ -423,25 +499,19 @@ def list_estimate_task_rows(
     # docstring). `result.rows` is already the paginated page (limit/offset
     # applied in SQL by apply_pagination above), so passing it directly here
     # would make every page report `position` starting back at 1 instead of
-    # the row's true position in the full devis. Resolve against every task
-    # row of the estimate, then only materialize the current page's entries
-    # into the response below.
-    resolved = (
-        resolve_live_task_display(
-            db,
-            project,
-            db.query(EstimateTaskRow).filter(EstimateTaskRow.estimate_id == estimate_id).all(),
-        )
-        if estimate.status == "draft"
-        else {}
-    )
-    # task_uid, unlike the fields above, is resolved regardless of draft/validated
-    # status (Finding Moyenne #4, round 4 review) -- see to_estimate_task_row_read's
-    # own docstring.
-    task_uid_by_task_id = resolve_task_uid_by_id(db, project)
+    # the row's true position in the full devis. `_load_estimate_grid_context`
+    # (E12-09/#291) resolves against every task row of the estimate (and
+    # computes `row_number` the same complete-set-first way) -- only the
+    # current page's entries are then materialized into the response below.
+    context = _load_estimate_grid_context(db, project, estimate)
     return EstimateTaskRowListRead(
         items=[
-            to_estimate_task_row_read(row, resolved.get(row.id), task_uid_by_task_id)
+            to_estimate_task_row_read(
+                row,
+                context.resolved.get(row.id),
+                context.task_id_to_uid,
+                context.row_number_by_uid,
+            )
             for row in result.rows
         ],
         total=result.total,
@@ -580,7 +650,7 @@ def create_estimate_task(
     """
     project = get_mutable_project_lock(db, project_id, current_user.id)
     planning = get_displayed_draft_planning_lock_or_409(db, project)
-    get_draft_estimate_or_409(db, project_id, estimate_id)
+    estimate = get_draft_estimate_or_409(db, project_id, estimate_id)
 
     try:
         _, row = _create_estimate_planning_task(
@@ -606,11 +676,15 @@ def create_estimate_task(
         # renumbers `position` 1..N depth-first across only the rows it is given
         # (see its own docstring), so passing a single-row list here always
         # reported `position: 1` regardless of the task's true place in the tree.
-        all_task_rows = (
-            db.query(EstimateTaskRow).filter(EstimateTaskRow.estimate_id == estimate_id).all()
+        # `_load_estimate_grid_context` (E12-09/#291) does the same full-set
+        # resolution, plus the merged `row_number` map.
+        context = _load_estimate_grid_context(db, project, estimate)
+        result = to_estimate_task_row_read(
+            row,
+            context.resolved.get(row.id),
+            context.task_id_to_uid,
+            context.row_number_by_uid,
         )
-        resolved = resolve_live_task_display(db, project, all_task_rows)
-        result = to_estimate_task_row_read(row, resolved.get(row.id), {})
         db.commit()
     except PlanningTreeMoveNotFoundError as exc:
         db.rollback()
@@ -2385,8 +2459,8 @@ def list_estimate_cost_lines(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> EstimateCostLineListRead:
-    get_project_or_404(db, project_id, current_user.id)
-    get_estimate_or_404(db, project_id, estimate_id)
+    project = get_project_or_404(db, project_id, current_user.id)
+    estimate = get_estimate_or_404(db, project_id, estimate_id)
     query = db.query(EstimateCostLine).filter(EstimateCostLine.estimate_id == estimate_id)
     result = apply_pagination(
         query,
@@ -2401,8 +2475,17 @@ def list_estimate_cost_lines(
         tiebreaker=EstimateCostLine.id,
         searchable=[EstimateCostLine.label],
     )
+    # E12-09/#291: `row_number`/grid-node lookups are computed once, over the
+    # estimate's *complete* grid, not once per row of this page (see
+    # `_load_estimate_grid_context`'s own docstring).
+    context = _load_estimate_grid_context(db, project, estimate)
     return EstimateCostLineListRead(
-        items=[to_estimate_cost_line_read(line) for line in result.rows],
+        items=[
+            to_estimate_cost_line_read(
+                line, context.nodes_by_id[line.node_id], context.row_number_by_uid
+            )
+            for line in result.rows
+        ],
         total=result.total,
         limit=result.limit,
         offset=result.offset,
@@ -2421,7 +2504,7 @@ def create_estimate_cost_line(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> EstimateCostLineRead:
-    get_mutable_project_lock(db, project_id, current_user.id)
+    project = get_mutable_project_lock(db, project_id, current_user.id)
     estimate = get_draft_estimate_or_409(db, project_id, estimate_id)
     if payload.task_id is not None:
         task = db.query(MsTask).filter(MsTask.id == payload.task_id).first()
@@ -2485,7 +2568,10 @@ def create_estimate_cost_line(
     # create_estimate_role_assignment/create_estimate_cost_line_milestones,
     # never the commit-then-refresh pattern (tech debt #262).
     db.flush()
-    response = to_estimate_cost_line_read(line)
+    # E12-09/#291: row_number depends on the estimate's whole tree, not just
+    # this new line -- see _load_estimate_grid_context.
+    context = _load_estimate_grid_context(db, project, estimate)
+    response = to_estimate_cost_line_read(line, node, context.row_number_by_uid)
     db.commit()
     return response
 
@@ -2502,8 +2588,8 @@ def update_estimate_cost_line(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> EstimateCostLineRead:
-    get_mutable_project_lock(db, project_id, current_user.id)
-    get_draft_estimate_or_409(db, project_id, estimate_id)
+    project = get_mutable_project_lock(db, project_id, current_user.id)
+    estimate = get_draft_estimate_or_409(db, project_id, estimate_id)
     line = (
         db.query(EstimateCostLine)
         .filter(EstimateCostLine.id == line_id)
@@ -2556,9 +2642,17 @@ def update_estimate_cost_line(
     line.supply_status = supply_status
     line.purchase_cost = line.quantity * line.unit_cost
     db.add(line)
+    db.flush()
+    # E12-09/#291: row_number depends on the estimate's whole tree -- editing a
+    # line's own fields never moves it in the grid, but every read still
+    # recomputes this the same way (see _load_estimate_grid_context). The
+    # context's own nodes_by_id already covers line.node_id -- no need for a
+    # second, standalone query for it (#291 review finding Basse).
+    context = _load_estimate_grid_context(db, project, estimate)
+    node = context.nodes_by_id[line.node_id]
+    response = to_estimate_cost_line_read(line, node, context.row_number_by_uid)
     db.commit()
-    db.refresh(line)
-    return to_estimate_cost_line_read(line)
+    return response
 
 
 @router.delete(
@@ -2613,8 +2707,8 @@ def list_estimate_role_assignments(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> EstimateRoleAssignmentListRead:
-    get_project_or_404(db, project_id, current_user.id)
-    get_estimate_or_404(db, project_id, estimate_id)
+    project = get_project_or_404(db, project_id, current_user.id)
+    estimate = get_estimate_or_404(db, project_id, estimate_id)
     query = (
         db.query(EstimateRoleAssignment, ResourceRole, CostCategory)
         .join(ResourceRole, EstimateRoleAssignment.role_id == ResourceRole.id)
@@ -2633,9 +2727,18 @@ def list_estimate_role_assignments(
         tiebreaker=EstimateRoleAssignment.id,
         searchable=(ResourceRole.name,),
     )
+    # E12-09/#291: same complete-grid, once-per-request computation as
+    # list_estimate_cost_lines above.
+    context = _load_estimate_grid_context(db, project, estimate)
     return EstimateRoleAssignmentListRead(
         items=[
-            to_estimate_role_assignment_read(assignment, role, category)
+            to_estimate_role_assignment_read(
+                assignment,
+                role,
+                category,
+                context.nodes_by_id[assignment.node_id],
+                context.row_number_by_uid,
+            )
             for assignment, role, category in result.rows
         ],
         total=result.total,
@@ -2678,7 +2781,7 @@ def create_estimate_role_assignment(
     a caller could reference here at all. Refuses with 409 if ``estimate_id``
     is not a draft (new in this issue, mirroring ``EstimateCostLine``'s own rule).
     """
-    get_mutable_project_lock(db, project_id, current_user.id)
+    project = get_mutable_project_lock(db, project_id, current_user.id)
     estimate = get_draft_estimate_or_409(db, project_id, estimate_id)
 
     task = (
@@ -2766,7 +2869,12 @@ def create_estimate_role_assignment(
         # create_estimate_cost_line_milestones, never the commit-then-refresh
         # pattern (tech debt #262) the removed create_task_role_assignment used.
         db.flush()
-        response = to_estimate_role_assignment_read(assignment, role, category)
+        # E12-09/#291: row_number depends on the estimate's whole tree, not just
+        # this new assignment -- see _load_estimate_grid_context.
+        context = _load_estimate_grid_context(db, project, estimate)
+        response = to_estimate_role_assignment_read(
+            assignment, role, category, node, context.row_number_by_uid
+        )
         db.commit()
     except IntegrityError as exc:
         db.rollback()
@@ -2792,8 +2900,8 @@ def update_estimate_role_assignment(
     """``task_id``/``role_id`` are immutable once created, so unlike ``create``
     above, no rate-coverage recheck is needed here -- only ``cost_code_id``/
     ``quantity``/``hours``/``comment`` may change."""
-    get_mutable_project_lock(db, project_id, current_user.id)
-    get_draft_estimate_or_409(db, project_id, estimate_id)
+    project = get_mutable_project_lock(db, project_id, current_user.id)
+    estimate = get_draft_estimate_or_409(db, project_id, estimate_id)
     row = (
         db.query(EstimateRoleAssignment, ResourceRole, CostCategory)
         .join(ResourceRole, EstimateRoleAssignment.role_id == ResourceRole.id)
@@ -2819,7 +2927,15 @@ def update_estimate_role_assignment(
     db.add(assignment)
     # Same before-commit response construction as create_estimate_role_assignment.
     db.flush()
-    response = to_estimate_role_assignment_read(assignment, role, category)
+    # E12-09/#291: editing an assignment's own fields never moves it in the
+    # grid, but row_number is still recomputed the same way at every read. The
+    # context's own nodes_by_id already covers assignment.node_id -- no need
+    # for a second, standalone query for it (#291 review finding Basse).
+    context = _load_estimate_grid_context(db, project, estimate)
+    node = context.nodes_by_id[assignment.node_id]
+    response = to_estimate_role_assignment_read(
+        assignment, role, category, node, context.row_number_by_uid
+    )
     db.commit()
     return response
 
@@ -2968,7 +3084,7 @@ def create_estimate_cost_line_milestones(
     """
     project = get_mutable_project_lock(db, project_id, current_user.id)
     planning = get_displayed_draft_planning_lock_or_409(db, project)
-    get_draft_estimate_or_409(db, project_id, estimate_id)
+    estimate = get_draft_estimate_or_409(db, project_id, estimate_id)
 
     line = (
         db.query(EstimateCostLine)
@@ -3062,12 +3178,19 @@ def create_estimate_cost_line_milestones(
         # (see its own docstring), so passing only this batch's milestones here
         # always reported positions 1..N among themselves instead of their true
         # place in the full devis.
-        all_task_rows = (
-            db.query(EstimateTaskRow).filter(EstimateTaskRow.estimate_id == estimate_id).all()
-        )
-        resolved = resolve_live_task_display(db, project, all_task_rows)
+        # `_load_estimate_grid_context` (E12-09/#291) does the same full-set
+        # resolution, plus the merged `row_number` map.
+        context = _load_estimate_grid_context(db, project, estimate)
         result = EstimateTaskRowListRead(
-            items=[to_estimate_task_row_read(row, resolved.get(row.id), {}) for row in rows],
+            items=[
+                to_estimate_task_row_read(
+                    row,
+                    context.resolved.get(row.id),
+                    context.task_id_to_uid,
+                    context.row_number_by_uid,
+                )
+                for row in rows
+            ],
             total=len(rows),
             limit=None,
             offset=0,

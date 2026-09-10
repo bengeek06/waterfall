@@ -1830,6 +1830,14 @@ export interface components {
             created_at: string;
             /** Format: date-time */
             updated_at: string;
+            /** @description This assignment's own EstimateGridNode uid (E12-07, #289), always negative. */
+            uid: number;
+            /** @description This assignment's grid-node parent_uid, exposed as-is (E12-09, #291): positif = tache de ce devis (`MsTask.id`), negatif = un autre noeud de grille de ce devis, absent/null = racine du devis -- meme convention que `EstimateGridNodeMove.target_parent_uid`, reutilisable telle quelle dans un appel ulterieur a grid-nodes/move. */
+            parent_uid?: number | null;
+            /** @description This assignment's local sibling position within its grid-node parent. */
+            position: number;
+            /** @description 1-based rank of this assignment in the devis's merged tasks+grid-node tree (E12-09, #291), recomputed on every read, never stored. */
+            readonly row_number: number;
         };
         ProjectEstimateCreate: {
             /** @enum {string} */
@@ -1861,6 +1869,8 @@ export interface components {
             estimate_id: number;
             task_id?: number | null;
             task_uid?: number | null;
+            /** @description 1-based rank of this row in the devis's merged tasks+grid-node tree (E12-09, #291), recomputed on every read, never stored. `null` only in the same pre-existing degenerate case `task_uid` itself already falls back to `null` for (this row's task can no longer be resolved at all). */
+            readonly row_number?: number | null;
             parent_task_id?: number | null;
             position: number;
             task_name: string;
@@ -1921,6 +1931,14 @@ export interface components {
             supply_status?: components["schemas"]["SupplyStatus"] | null;
             /** Format: date-time */
             planned_date?: string | null;
+            /** @description This line's own EstimateGridNode uid (E12-07, #289), always negative. */
+            uid: number;
+            /** @description This line's grid-node parent_uid, exposed as-is (E12-09, #291): positif = tache de ce devis (`MsTask.id`), negatif = un autre noeud de grille de ce devis, absent/null = racine du devis -- meme convention que `EstimateGridNodeMove.target_parent_uid`, reutilisable telle quelle dans un appel ulterieur a grid-nodes/move. */
+            parent_uid?: number | null;
+            /** @description This line's local sibling position within its grid-node parent. */
+            position: number;
+            /** @description 1-based rank of this line in the devis's merged tasks+grid-node tree (E12-09, #291), recomputed on every read, never stored. */
+            readonly row_number: number;
         };
         EstimateAggregatesRead: {
             total_labor_cost: number;

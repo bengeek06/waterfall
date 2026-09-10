@@ -131,6 +131,29 @@ def _depth_first_uids(rows: Iterable[tuple[int, int | None, int | None, int]]) -
     return ordered
 
 
+def resolve_effective_task_uid(
+    row: EstimateTaskRow,
+    resolved: ResolvedTaskDisplay | None,
+    task_uid_by_task_id: dict[int, int],
+) -> int | None:
+    """Shared ``task_uid`` fallback: ``resolved`` (live, draft-only) when present,
+    else ``task_uid_by_task_id`` (``resolve_task_uid_by_id``, safe regardless of
+    draft/validated status -- see that function's own docstring).
+
+    Factored out so `to_estimate_task_row_read` (`api/routes/projects.py`) and
+    the devis grid's merged ``row_number`` computation
+    (`api/routes/estimates.py`'s `_load_estimate_grid_context`, E12-09/#291)
+    compute a task row's `task_uid` the exact same way, rather than two
+    independent implementations drifting apart -- the same rationale
+    `_index_task_uids` above already documents (E12-08 Finding Moyenne #4).
+    """
+    return (
+        resolved.task_uid
+        if resolved is not None
+        else (task_uid_by_task_id.get(row.task_id) if row.task_id is not None else None)
+    )
+
+
 def resolve_live_task_display(
     db: Session,
     project: MsProject,
