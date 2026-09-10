@@ -4,7 +4,7 @@ import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { BulkCostCodeAssignmentBar } from "@/components/bulk-cost-code-assignment-bar";
 import { CostLineForm, type CostLineDraft } from "@/components/cost-line-form";
-import { CostLinesTable, type EditingLineDraft, type EditingRoleAssignmentDraft } from "@/components/cost-lines-table";
+import { CostLinesTable, type EditingLineDraft } from "@/components/cost-lines-table";
 import { EstimateCreateTaskDialog } from "@/components/estimate-create-task-dialog";
 import {
   EstimateMilestoneTemplateDialog,
@@ -115,15 +115,10 @@ export type EstimateTabProps = {
   resourceNodes: ResourceNode[];
   resourceRoles: ResourceRole[];
   costRates: CostRate[];
-  editingRoleAssignmentId: number | null;
-  editingRoleAssignmentDraft: EditingRoleAssignmentDraft;
-  onEditRoleAssignmentQuantityChange: (value: string) => void;
-  onEditRoleAssignmentHoursChange: (value: string) => void;
-  onStartEditRoleAssignment: (assignment: EstimateRoleAssignment) => void;
-  onSaveRoleAssignment: (assignment: EstimateRoleAssignment) => void;
   onRequestDeleteRoleAssignment: (assignment: EstimateRoleAssignment) => void;
-  // "Ajouter une ligne MO" dialog (create-only -- editing an existing row happens inline in
-  // CostLinesTable instead, see that component's EditingRoleAssignmentDraft doc comment).
+  // "Ajouter une ligne MO" dialog -- the only mutations available on an existing role-assignment
+  // row are creating a new one via this dialog and deleting it (onRequestDeleteRoleAssignment
+  // above); inline editing was removed per user request (Modifier hidden).
   roleAssignmentDialogOpen: boolean;
   roleAssignmentNodeId: string;
   onRoleAssignmentNodeIdChange: (value: string) => void;
@@ -229,12 +224,6 @@ export function EstimateTab({
   resourceNodes,
   resourceRoles,
   costRates,
-  editingRoleAssignmentId,
-  editingRoleAssignmentDraft,
-  onEditRoleAssignmentQuantityChange,
-  onEditRoleAssignmentHoursChange,
-  onStartEditRoleAssignment,
-  onSaveRoleAssignment,
   onRequestDeleteRoleAssignment,
   roleAssignmentDialogOpen,
   roleAssignmentNodeId,
@@ -399,12 +388,6 @@ export function EstimateTab({
             resourceRoles={resourceRoles}
             costRates={costRates}
             planningTasks={parentTaskOptions}
-            editingRoleAssignmentId={editingRoleAssignmentId}
-            editingRoleAssignmentDraft={editingRoleAssignmentDraft}
-            onEditRoleAssignmentQuantityChange={onEditRoleAssignmentQuantityChange}
-            onEditRoleAssignmentHoursChange={onEditRoleAssignmentHoursChange}
-            onStartEditRoleAssignment={onStartEditRoleAssignment}
-            onSaveRoleAssignment={onSaveRoleAssignment}
             onRequestDeleteRoleAssignment={onRequestDeleteRoleAssignment}
           />
         </div>
