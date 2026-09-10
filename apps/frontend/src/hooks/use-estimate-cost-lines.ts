@@ -33,10 +33,12 @@ import {
   ResourceRole,
   SessionExpiredError,
   updateEstimateCostLine,
+  updateEstimateRoleAssignment,
   validateProjectEstimate,
 } from "@/lib/backend";
 import { clearSession, type SessionTokens } from "@/lib/session";
 import type { ProjectTab } from "@/components/project-tabs";
+import type { EditingRoleAssignmentDraft } from "@/components/cost-lines-table";
 
 type AppRouter = ReturnType<typeof useRouter>;
 
@@ -234,6 +236,15 @@ export function useEstimateCostLines({
   const [roleAssignmentCostCodeId, setRoleAssignmentCostCodeId] = useState("");
   const [roleAssignmentComment, setRoleAssignmentComment] = useState("");
   const [roleAssignmentError, setRoleAssignmentError] = useState<string | null>(null);
+
+  // Inline editing of an existing role-assignment row's quantity/hours in CostLinesTable -- see
+  // EditingRoleAssignmentDraft's own doc comment in cost-lines-table.tsx for why cost_code_id/
+  // comment aren't editable this way.
+  const [editingRoleAssignmentId, setEditingRoleAssignmentId] = useState<number | null>(null);
+  const [editingRoleAssignmentDraft, setEditingRoleAssignmentDraft] = useState<EditingRoleAssignmentDraft>({
+    quantity: "",
+    hours: "",
+  });
 
   const selectedEstimate = estimates.find((estimate) => estimate.id === selectedEstimateId) ?? null;
 
@@ -535,10 +546,12 @@ export function useEstimateCostLines({
     return { taskId, roleId, quantity, hours };
   }
 
-  // Translates a submitCreateRoleAssignment failure into a French message -- extracted purely to
-  // keep that function under this file's complexity budget. Callers must handle
-  // SessionExpiredError/a post-refresh 401 before reaching this. `getMissingRateCoverage` only
-  // ever matches createEstimateRoleAssignment's own 400 (E6-11/#175).
+  // Translates a submitCreateRoleAssignment/saveRoleAssignment failure into a French message --
+  // extracted purely to keep those functions under this file's complexity budget. Callers must
+  // handle SessionExpiredError/a post-refresh 401 before reaching this. `getMissingRateCoverage`
+  // only ever matches createEstimateRoleAssignment's own 400 (E6-11/#175) -- harmless (returns
+  // null) when called on updateEstimateRoleAssignment's generic 400/409, so both callers can share
+  // this one helper.
   function describeRoleAssignmentError(cause: unknown, genericMessage: string): string {
     const missingRateCoverage = getMissingRateCoverage(cause);
     if (missingRateCoverage) {
@@ -593,6 +606,62 @@ export function useEstimateCostLines({
         return;
       }
       setRoleAssignmentError(describeRoleAssignmentError(cause, "Impossible d'ajouter la ligne de main d'œuvre."));
+    } finally {
+      setEstimateBusy(false);
+    }
+  }
+
+  function startEditRoleAssignment(assignment: EstimateRoleAssignment) {
+    setEditingRoleAssignmentId(assignment.id);
+    setEditingRoleAssignmentDraft({ quantity: String(assignment.quantity), hours: String(assignment.hours) });
+  }
+
+  function updateEditingRoleAssignmentQuantity(value: string) {
+    setEditingRoleAssignmentDraft((prev) => ({ ...prev, quantity: value }));
+  }
+  function updateEditingRoleAssignmentHours(value: string) {
+    setEditingRoleAssignmentDraft((prev) => ({ ...prev, hours: value }));
+  }
+
+  // Inline update of an existing role assignment's quantity/hours (E12-06/#278) -- same
+  // stale-response guard as saveCostLine's own non-labor sibling.
+  async function saveRoleAssignment(assignment: EstimateRoleAssignment) {
+    if (!session || selectedEstimateId === null) {
+      return;
+    }
+    const quantity = Number(editingRoleAssignmentDraft.quantity);
+    const hours = Number(editingRoleAssignmentDraft.hours);
+    if (!(quantity > 0) || !(hours >= 0)) {
+      setError("Quantité et heures doivent être valides.");
+      return;
+    }
+
+    const launchedEstimateId = selectedEstimateId;
+    setEstimateBusy(true);
+    setError(null);
+    try {
+      await updateEstimateRoleAssignment(
+        projectId,
+        launchedEstimateId,
+        assignment.id,
+        { quantity, hours },
+        session,
+        onSessionRefresh,
+      );
+      if (selectedEstimateIdRef.current === launchedEstimateId) {
+        await refreshEstimateRoleAssignments(launchedEstimateId, session);
+        setEditingRoleAssignmentId(null);
+      }
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      if (selectedEstimateIdRef.current !== launchedEstimateId) {
+        return;
+      }
+      setError(describeRoleAssignmentError(cause, "Impossible de modifier la ligne de main d'œuvre."));
     } finally {
       setEstimateBusy(false);
     }
@@ -1256,6 +1325,12 @@ export function useEstimateCostLines({
     updateRoleAssignmentCostCodeId,
     updateRoleAssignmentComment,
     submitCreateRoleAssignment,
+    editingRoleAssignmentId,
+    editingRoleAssignmentDraft,
+    updateEditingRoleAssignmentQuantity,
+    updateEditingRoleAssignmentHours,
+    startEditRoleAssignment,
+    saveRoleAssignment,
     roleAssignmentPendingDelete,
     requestDeleteRoleAssignment,
     cancelDeleteRoleAssignment,
