@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import type { CostCategory } from "@/lib/backend";
+import type { CostCategory, EstimateTaskRow } from "@/lib/backend";
+import { buildAttachableTaskOptions } from "@/lib/estimate-task-options";
 
 export type CostLineDraft = {
   categoryId: string;
@@ -14,16 +15,22 @@ export type CostLineDraft = {
   quantity: string;
   unitCost: string;
   plannedDate: string;
+  taskId: string;
 };
 
 export type CostLineFormProps = {
   costCategories: CostCategory[];
+  // E12-04/#276: the selected estimate's task rows, used to populate the "Tâche" selector below.
+  // Filtered down to rows carrying a `task_id` (a snapshot-only row with none has no `MsTask`
+  // twin and can never receive a cost line) -- see buildAttachableTaskOptions.
+  estimateTaskRows: EstimateTaskRow[];
   costLineDraft: CostLineDraft;
   onCategoryChange: (value: string) => void;
   onLabelChange: (value: string) => void;
   onQuantityChange: (value: string) => void;
   onUnitCostChange: (value: string) => void;
   onPlannedDateChange: (value: string) => void;
+  onTaskIdChange: (value: string) => void;
   estimateBusy: boolean;
   onAdd: () => void;
 };
@@ -33,15 +40,19 @@ export type CostLineFormProps = {
 // Verbatim JSX move -- see page.tsx call site for wiring.
 export function CostLineForm({
   costCategories,
+  estimateTaskRows,
   costLineDraft,
   onCategoryChange,
   onLabelChange,
   onQuantityChange,
   onUnitCostChange,
   onPlannedDateChange,
+  onTaskIdChange,
   estimateBusy,
   onAdd,
 }: CostLineFormProps) {
+  const taskOptions = buildAttachableTaskOptions(estimateTaskRows);
+
   // Live DOM refs for the two constrained fields, so "Ajouter la ligne" can
   // run native HTML5 validation on them before calling `onAdd` -- same fix as
   // `cost-lines-table.tsx`'s "Sauver" (#201), extended here to this pinned
@@ -69,7 +80,7 @@ export function CostLineForm({
 
   return (
     <Card>
-      <CardContent className="grid gap-4 pt-6 md:grid-cols-6">
+      <CardContent className="grid gap-4 pt-6 md:grid-cols-7">
         <div className="grid gap-2">
           <Label htmlFor="cost-line-category">Catégorie</Label>
           <select
@@ -93,6 +104,23 @@ export function CostLineForm({
             value={costLineDraft.label}
             onChange={(event) => onLabelChange(event.target.value)}
           />
+        </div>
+        <div className="grid gap-2">
+          <Label htmlFor="cost-line-task">Tâche</Label>
+          <select
+            id="cost-line-task"
+            aria-label="Tâche"
+            className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+            value={costLineDraft.taskId}
+            onChange={(event) => onTaskIdChange(event.target.value)}
+          >
+            <option value="">Aucune</option>
+            {taskOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
         </div>
         <div className="grid gap-2">
           <Label htmlFor="cost-line-quantity">Quantité</Label>

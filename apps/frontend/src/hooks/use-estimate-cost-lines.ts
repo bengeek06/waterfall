@@ -11,11 +11,13 @@ import {
   deleteEstimateCostLine,
   EstimateCostLine,
   EstimateCostLineMilestonesCreate,
+  EstimateTaskRow,
   EstimateValidationWarning,
   exportEstimateExcel,
   getPlanning,
   getProjectCostCodes,
   isEstimateTaskCreateRequiresPlanningDraft,
+  listEstimateTaskRows,
   PlanningDetail,
   Project,
   ProjectCostCode,
@@ -35,8 +37,19 @@ export type CostLineDraft = {
   quantity: string;
   unitCost: string;
   plannedDate: string;
+  // E12-04/#276: optional task attachment, wired straight to EstimateCostLineCreate/Update's own
+  // `task_id`. "" means "Aucune" (task_id: null) -- same empty-string-means-null convention as
+  // `plannedDate` above, kept as a string throughout the draft since it round-trips through a
+  // plain `<select>`.
+  taskId: string;
 };
-export type EditingLineDraft = { label: string; quantity: string; unitCost: string; plannedDate: string };
+export type EditingLineDraft = {
+  label: string;
+  quantity: string;
+  unitCost: string;
+  plannedDate: string;
+  taskId: string;
+};
 
 // `planned_date` (#66 / E6-05) round-trips through a plain `<input type="date">`, so the draft
 // state is always a `yyyy-MM-dd` string (or "" for "no date"), converted to/from the backend's
@@ -79,7 +92,11 @@ interface UseEstimateCostLinesParams {
   setSelectedEstimateId: (id: number) => void;
   setActiveTab: (tab: ProjectTab) => void;
   setCostLines: (updater: (previous: EstimateCostLine[]) => EstimateCostLine[]) => void;
-  setEstimateTaskRowCount: (updater: (previous: number) => number) => void;
+  // E12-04/#276: a direct setter (not an updater), since every writer below now refetches the
+  // full list rather than approximating it via an increment -- see
+  // refreshEstimateTaskRowsAfterTaskCreation's doc comment for why an exact refetch replaced the
+  // former `setEstimateTaskRowCount((previous) => previous + n)` bumps.
+  setEstimateTaskRows: (rows: EstimateTaskRow[]) => void;
   // Wiring for the post-creation planning refetch below (Haute review finding on E6-06/#67):
   // submitCreateTask attaches the new task to the project's *displayed* planning, so
   // `planningDetail` -- otherwise only loaded by usePlanningDetailEffect -- must be refreshed
@@ -108,7 +125,7 @@ export function useEstimateCostLines({
   setSelectedEstimateId,
   setActiveTab,
   setCostLines,
-  setEstimateTaskRowCount,
+  setEstimateTaskRows,
   selectedPlanningId,
   selectedPlanningIdRef,
   setPlanningDetail,
@@ -122,6 +139,7 @@ export function useEstimateCostLines({
     quantity: "1",
     unitCost: "0",
     plannedDate: "",
+    taskId: "",
   });
   const [editingLineId, setEditingLineId] = useState<number | null>(null);
   const [editingLineDraft, setEditingLineDraft] = useState<EditingLineDraft>({
@@ -129,6 +147,7 @@ export function useEstimateCostLines({
     quantity: "",
     unitCost: "",
     plannedDate: "",
+    taskId: "",
   });
   const [costLinePendingDelete, setCostLinePendingDelete] = useState<EstimateCostLine | null>(null);
   const [estimateValidationOpen, setEstimateValidationOpen] = useState(false);
@@ -231,6 +250,9 @@ export function useEstimateCostLines({
   function updateCostLineDraftPlannedDate(value: string) {
     setCostLineDraft((prev) => ({ ...prev, plannedDate: value }));
   }
+  function updateCostLineDraftTaskId(value: string) {
+    setCostLineDraft((prev) => ({ ...prev, taskId: value }));
+  }
   function updateEditingLineDraftLabel(value: string) {
     setEditingLineDraft((prev) => ({ ...prev, label: value }));
   }
@@ -242,6 +264,9 @@ export function useEstimateCostLines({
   }
   function updateEditingLineDraftPlannedDate(value: string) {
     setEditingLineDraft((prev) => ({ ...prev, plannedDate: value }));
+  }
+  function updateEditingLineDraftTaskId(value: string) {
+    setEditingLineDraft((prev) => ({ ...prev, taskId: value }));
   }
 
   function requestDeleteCostLine(line: EstimateCostLine) {
@@ -314,7 +339,34 @@ export function useEstimateCostLines({
     }
   }
 
-  // Applies a successful createEstimateTask response: bumps the task-row count, closes the
+  // E12-04/#276: refetches this estimate's task rows after a task-creating operation (task
+  // creation #67 below, milestone template application #68 further down) -- replaces the
+  // former approximate `setEstimateTaskRowCount((previous) => previous + n)` bumps with the
+  // exact list, which the Devis grid now needs in full (task names/hierarchy/position), not
+  // just a count. Same shape/guard as refreshPlanningDetailAfterTaskCreation just above:
+  // `selectedEstimateIdRef` (not `selectedPlanningIdRef` -- task rows belong to the estimate,
+  // not the planning) is read *after* the `await` since the estimate version can switch while
+  // this request is in flight (nothing currently disables the version selector while busy), and
+  // a stale response must never overwrite whatever version's task rows are displayed once it
+  // resolves. Session-expiry-first catch shape, applied to a call whose own failure must never
+  // be reported as the triggering mutation's failure (that mutation already succeeded).
+  async function refreshEstimateTaskRowsAfterTaskCreation(launchedEstimateId: number, tokens: SessionTokens) {
+    try {
+      const freshTaskRows = await listEstimateTaskRows(projectId, launchedEstimateId, tokens, onSessionRefresh);
+      if (selectedEstimateIdRef.current === launchedEstimateId) {
+        setEstimateTaskRows(freshTaskRows);
+      }
+    } catch (refetchCause) {
+      if (refetchCause instanceof SessionExpiredError || (refetchCause instanceof ApiError && refetchCause.status === 401)) {
+        clearSession();
+        router.push("/login");
+      }
+      // Otherwise non-blocking: a failed refresh only means the Devis grid shows a stale task
+      // list until the next reload, not that the mutation itself failed.
+    }
+  }
+
+  // Applies a successful createEstimateTask response: refetches the task-row list, closes the
   // dialog, and triggers the planning refetch above -- but only if the estimate version hasn't
   // since changed (same stale-response guard as every other handler in this file). Extracted out
   // of submitCreateTask purely to keep that function under this file's complexity budget.
@@ -322,7 +374,7 @@ export function useEstimateCostLines({
     if (selectedEstimateIdRef.current !== launchedEstimateId) {
       return;
     }
-    setEstimateTaskRowCount((previous) => previous + 1);
+    await refreshEstimateTaskRowsAfterTaskCreation(launchedEstimateId, tokens);
     closeCreateTaskDialog();
     if (selectedPlanningId !== null) {
       await refreshPlanningDetailAfterTaskCreation(selectedPlanningId, tokens);
@@ -427,15 +479,17 @@ export function useEstimateCostLines({
     setMilestoneLagMinutes(value);
   }
 
-  // Applies a successful applyEstimateCostLineMilestoneTemplate response: bumps the task-row
-  // count by however many milestones were created, closes the dialog, and triggers the same
-  // planning refetch as applyCreateTaskSuccess above -- but only if the estimate version hasn't
-  // since changed (same stale-response guard as every other handler in this file).
-  async function applyMilestoneTemplateSuccess(launchedEstimateId: number, createdCount: number, tokens: SessionTokens) {
+  // Applies a successful applyEstimateCostLineMilestoneTemplate response: refetches the
+  // task-row list (E12-04/#276 -- see refreshEstimateTaskRowsAfterTaskCreation's doc comment for
+  // why an exact refetch replaced the former count-bump-by-however-many-milestones-were-created),
+  // closes the dialog, and triggers the same planning refetch as applyCreateTaskSuccess above --
+  // but only if the estimate version hasn't since changed (same stale-response guard as every
+  // other handler in this file).
+  async function applyMilestoneTemplateSuccess(launchedEstimateId: number, tokens: SessionTokens) {
     if (selectedEstimateIdRef.current !== launchedEstimateId) {
       return;
     }
-    setEstimateTaskRowCount((previous) => previous + createdCount);
+    await refreshEstimateTaskRowsAfterTaskCreation(launchedEstimateId, tokens);
     closeMilestoneDialog();
     if (selectedPlanningId !== null) {
       await refreshPlanningDetailAfterTaskCreation(selectedPlanningId, tokens);
@@ -520,7 +574,7 @@ export function useEstimateCostLines({
     setMilestoneError(null);
     setMilestoneRequiresPlanningDraft(false);
     try {
-      const rows = await applyEstimateCostLineMilestoneTemplate(
+      await applyEstimateCostLineMilestoneTemplate(
         projectId,
         launchedEstimateId,
         lineId,
@@ -532,7 +586,7 @@ export function useEstimateCostLines({
         session,
         onSessionRefresh,
       );
-      await applyMilestoneTemplateSuccess(launchedEstimateId, rows.length, session);
+      await applyMilestoneTemplateSuccess(launchedEstimateId, session);
     } catch (cause) {
       if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
         clearSession();
@@ -698,6 +752,9 @@ export function useEstimateCostLines({
           quantity,
           unit_cost: unitCost,
           planned_date: plannedDateDraftToPayload(costLineDraft.plannedDate),
+          // E12-04/#276: "" (the "Aucune" option) means task_id: null, same empty-string-means-
+          // null convention as plannedDateDraftToPayload above.
+          task_id: costLineDraft.taskId ? Number(costLineDraft.taskId) : null,
         },
         session,
         onSessionRefresh,
@@ -708,7 +765,7 @@ export function useEstimateCostLines({
       // version is displayed now.
       if (selectedEstimateIdRef.current === launchedEstimateId) {
         setCostLines((previous) => [...previous, line]);
-        setCostLineDraft({ categoryId: "", label: "", quantity: "1", unitCost: "0", plannedDate: "" });
+        setCostLineDraft({ categoryId: "", label: "", quantity: "1", unitCost: "0", plannedDate: "", taskId: "" });
       }
     } catch (cause) {
       if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
@@ -731,6 +788,7 @@ export function useEstimateCostLines({
       quantity: String(line.quantity),
       unitCost: String(line.unit_cost),
       plannedDate: plannedDatePayloadToDraft(line.planned_date),
+      taskId: line.task_id != null ? String(line.task_id) : "",
     });
   }
 
@@ -759,6 +817,8 @@ export function useEstimateCostLines({
           quantity,
           unit_cost: unitCost,
           planned_date: plannedDateDraftToPayload(editingLineDraft.plannedDate),
+          // E12-04/#276: same empty-string-means-null convention as addCostLine above.
+          task_id: editingLineDraft.taskId ? Number(editingLineDraft.taskId) : null,
         },
         session,
         onSessionRefresh,
@@ -872,10 +932,12 @@ export function useEstimateCostLines({
     updateCostLineDraftQuantity,
     updateCostLineDraftUnitCost,
     updateCostLineDraftPlannedDate,
+    updateCostLineDraftTaskId,
     updateEditingLineDraftLabel,
     updateEditingLineDraftQuantity,
     updateEditingLineDraftUnitCost,
     updateEditingLineDraftPlannedDate,
+    updateEditingLineDraftTaskId,
     requestDeleteCostLine,
     cancelDeleteCostLine,
     openEstimateValidation,

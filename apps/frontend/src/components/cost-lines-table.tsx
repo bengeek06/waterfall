@@ -2,16 +2,29 @@
 
 import { useRef } from "react";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import type { EstimateCostLine } from "@/lib/backend";
+import type { EstimateCostLine, EstimateTaskRow } from "@/lib/backend";
+import { buildEstimateGridEntries } from "@/lib/estimate-grid";
+import { buildAttachableTaskOptions } from "@/lib/estimate-task-options";
 
-export type EditingLineDraft = { label: string; quantity: string; unitCost: string; plannedDate: string };
+export type EditingLineDraft = {
+  label: string;
+  quantity: string;
+  unitCost: string;
+  plannedDate: string;
+  taskId: string;
+};
 
 export type CostLinesTableProps = {
   costLines: EstimateCostLine[];
+  // E12-04/#276: the selected estimate's task rows -- drives both the grid's task
+  // hierarchy/grouping (see buildEstimateGridEntries) and the "Tâche" selector's options when a
+  // row is being edited (buildAttachableTaskOptions).
+  estimateTaskRows: EstimateTaskRow[];
   canEditEstimate: boolean;
   editingLineId: number | null;
   editingLineDraft: EditingLineDraft;
@@ -19,6 +32,7 @@ export type CostLinesTableProps = {
   onEditQuantityChange: (value: string) => void;
   onEditUnitCostChange: (value: string) => void;
   onEditPlannedDateChange: (value: string) => void;
+  onEditTaskIdChange: (value: string) => void;
   estimateBusy: boolean;
   onStartEdit: (line: EstimateCostLine) => void;
   onSave: (line: EstimateCostLine) => void;
@@ -60,6 +74,17 @@ function formatPlannedDate(value: string | null | undefined): string {
   return date.toLocaleDateString("fr-FR", { timeZone: "UTC" });
 }
 
+// E12-04/#276: resolves the display name of the task a cost line is attached to, from this
+// estimate's own task rows -- "-" for a line with no attachment (`task_id: null`) or, in
+// practice never, one whose `task_id` doesn't match any row of this estimate (see
+// buildEstimateGridEntries's own doc comment on why that can't happen from the UI).
+function resolveAttachedTaskName(taskId: number | null | undefined, estimateTaskRows: EstimateTaskRow[]): string {
+  if (taskId == null) {
+    return "-";
+  }
+  return estimateTaskRows.find((row) => row.task_id === taskId)?.task_name ?? "-";
+}
+
 // Extracted from ProjectDetailsPage (E4-11 / #151): the cost lines table with inline editing.
 // The row-rendering `.map` callback below is already its own function scope (and was already
 // under the complexity threshold before this extraction) -- the extraction here is purely for
@@ -67,6 +92,7 @@ function formatPlannedDate(value: string | null | undefined): string {
 // site for wiring.
 export function CostLinesTable({
   costLines,
+  estimateTaskRows,
   canEditEstimate,
   editingLineId,
   editingLineDraft,
@@ -74,6 +100,7 @@ export function CostLinesTable({
   onEditQuantityChange,
   onEditUnitCostChange,
   onEditPlannedDateChange,
+  onEditTaskIdChange,
   estimateBusy,
   onStartEdit,
   onSave,
@@ -149,6 +176,173 @@ export function CostLinesTable({
     onSave(line);
   }
 
+  // E12-04/#276: the "Tâche" selector's options (create-form's own sibling in
+  // cost-line-form.tsx), and the grid's task/cost-line/global-lines row order -- see
+  // buildEstimateGridEntries's doc comment for the exact ordering rules
+  // (docs/devis-v0.1-specification.md's "Grille de devis").
+  const taskOptions = buildAttachableTaskOptions(estimateTaskRows);
+  const gridEntries = buildEstimateGridEntries(costLines, estimateTaskRows);
+  // Column realignment across task/line/global-lines rows is explicitly out of scope here (see
+  // E12-05/#277) -- a task-header/"lignes globales" row simply spans every column instead.
+  const columnCount = canEditEstimate ? 9 : 7;
+
+  function renderTaskRow(taskRow: EstimateTaskRow) {
+    return (
+      <TableRow key={`task-${taskRow.id}`} className="bg-muted/30">
+        <TableCell colSpan={columnCount}>
+          <div
+            className="flex items-center gap-2 font-medium"
+            style={{ paddingLeft: `${(taskRow.outline_level ?? 0) * 1.25}rem` }}
+          >
+            <span>{taskRow.outline_number ? `${taskRow.outline_number} — ${taskRow.task_name}` : taskRow.task_name}</span>
+            {taskRow.is_milestone ? <Badge variant="outline">Jalon</Badge> : null}
+          </div>
+        </TableCell>
+      </TableRow>
+    );
+  }
+
+  function renderGlobalHeaderRow() {
+    return (
+      <TableRow key="global-header" className="bg-muted/30">
+        <TableCell colSpan={columnCount} className="font-medium">
+          Lignes globales
+        </TableCell>
+      </TableRow>
+    );
+  }
+
+  function renderLineRow(line: EstimateCostLine, indentLevel: number) {
+    const editing = editingLineId === line.id;
+    // Haute review finding on #68 -- see the milestoneTaskIds prop doc comment above.
+    const attachedToMilestoneTask = line.task_id != null && milestoneTaskIds.has(line.task_id);
+    return (
+      <TableRow key={`line-${line.id}`}>
+        {canEditEstimate ? (
+          <TableCell>
+            <Checkbox
+              aria-label={`Sélectionner ${line.label}`}
+              checked={selectedCostLineIds.has(line.id)}
+              disabled={bulkAssignBusy}
+              onCheckedChange={(checked) => toggleCostLine(line.id, Boolean(checked))}
+            />
+          </TableCell>
+        ) : null}
+        <TableCell>{line.accounting_code}</TableCell>
+        <TableCell>
+          <div style={{ paddingLeft: `${indentLevel * 1.25}rem` }}>
+            {editing ? (
+              <Input value={editingLineDraft.label} onChange={(event) => onEditLabelChange(event.target.value)} />
+            ) : (
+              line.label
+            )}
+          </div>
+        </TableCell>
+        <TableCell>
+          {editing ? (
+            <select
+              aria-label={`Tâche de ${line.label}`}
+              className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+              value={editingLineDraft.taskId}
+              onChange={(event) => onEditTaskIdChange(event.target.value)}
+            >
+              <option value="">Aucune</option>
+              {taskOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          ) : (
+            resolveAttachedTaskName(line.task_id, estimateTaskRows)
+          )}
+        </TableCell>
+        <TableCell>
+          {editing ? (
+            <Input
+              ref={quantityRef}
+              aria-label={`Quantité de ${line.label}`}
+              type="number"
+              min="0.01"
+              step="0.01"
+              required
+              value={editingLineDraft.quantity}
+              onChange={(event) => onEditQuantityChange(event.target.value)}
+            />
+          ) : (
+            line.quantity
+          )}
+        </TableCell>
+        <TableCell>
+          {editing ? (
+            <Input
+              ref={unitCostRef}
+              aria-label={`Coût unitaire de ${line.label}`}
+              type="number"
+              min="0"
+              step="0.01"
+              value={editingLineDraft.unitCost}
+              onChange={(event) => onEditUnitCostChange(event.target.value)}
+            />
+          ) : (
+            line.unit_cost
+          )}
+        </TableCell>
+        <TableCell>
+          {editing ? (
+            <Input
+              aria-label={`Date prévisionnelle de ${line.label}`}
+              type="date"
+              value={editingLineDraft.plannedDate}
+              onChange={(event) => onEditPlannedDateChange(event.target.value)}
+            />
+          ) : (
+            formatPlannedDate(line.planned_date)
+          )}
+        </TableCell>
+        <TableCell>{line.purchase_cost}</TableCell>
+        {canEditEstimate ? (
+          <TableCell>
+            <div className="flex flex-wrap gap-2">
+              {editing ? (
+                <Button size="sm" type="button" disabled={estimateBusy} onClick={() => handleSave(line)}>
+                  Sauver
+                </Button>
+              ) : (
+                <Button size="sm" variant="outline" type="button" onClick={() => onStartEdit(line)}>
+                  Modifier
+                </Button>
+              )}
+              <Button
+                size="sm"
+                variant="outline"
+                type="button"
+                disabled={estimateBusy || attachedToMilestoneTask}
+                title={
+                  attachedToMilestoneTask
+                    ? "Cette ligne est rattachée à une tâche-jalon, qui ne peut pas recevoir de sous-tâches."
+                    : undefined
+                }
+                onClick={() => onOpenMilestoneDialog(line)}
+              >
+                Gabarit de jalons
+              </Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                type="button"
+                disabled={estimateBusy}
+                onClick={() => onRequestDelete(line)}
+              >
+                Supprimer
+              </Button>
+            </div>
+          </TableCell>
+        ) : null}
+      </TableRow>
+    );
+  }
+
   return (
     <Table>
       <TableHeader>
@@ -165,6 +359,7 @@ export function CostLinesTable({
           ) : null}
           <TableHead>Catégorie</TableHead>
           <TableHead>Libellé</TableHead>
+          <TableHead>Tâche</TableHead>
           <TableHead>Quantité</TableHead>
           <TableHead>Coût unitaire</TableHead>
           <TableHead>Date prévisionnelle</TableHead>
@@ -173,118 +368,18 @@ export function CostLinesTable({
         </TableRow>
       </TableHeader>
       <TableBody>
-        {costLines.map((line) => {
-          const editing = editingLineId === line.id;
-          // Haute review finding on #68 -- see the milestoneTaskIds prop doc comment above.
-          const attachedToMilestoneTask = line.task_id != null && milestoneTaskIds.has(line.task_id);
-          return (
-            <TableRow key={line.id}>
-              {canEditEstimate ? (
-                <TableCell>
-                  <Checkbox
-                    aria-label={`Sélectionner ${line.label}`}
-                    checked={selectedCostLineIds.has(line.id)}
-                    disabled={bulkAssignBusy}
-                    onCheckedChange={(checked) => toggleCostLine(line.id, Boolean(checked))}
-                  />
-                </TableCell>
-              ) : null}
-              <TableCell>{line.accounting_code}</TableCell>
-              <TableCell>
-                {editing ? (
-                  <Input value={editingLineDraft.label} onChange={(event) => onEditLabelChange(event.target.value)} />
-                ) : (
-                  line.label
-                )}
-              </TableCell>
-              <TableCell>
-                {editing ? (
-                  <Input
-                    ref={quantityRef}
-                    aria-label={`Quantité de ${line.label}`}
-                    type="number"
-                    min="0.01"
-                    step="0.01"
-                    required
-                    value={editingLineDraft.quantity}
-                    onChange={(event) => onEditQuantityChange(event.target.value)}
-                  />
-                ) : (
-                  line.quantity
-                )}
-              </TableCell>
-              <TableCell>
-                {editing ? (
-                  <Input
-                    ref={unitCostRef}
-                    aria-label={`Coût unitaire de ${line.label}`}
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={editingLineDraft.unitCost}
-                    onChange={(event) => onEditUnitCostChange(event.target.value)}
-                  />
-                ) : (
-                  line.unit_cost
-                )}
-              </TableCell>
-              <TableCell>
-                {editing ? (
-                  <Input
-                    aria-label={`Date prévisionnelle de ${line.label}`}
-                    type="date"
-                    value={editingLineDraft.plannedDate}
-                    onChange={(event) => onEditPlannedDateChange(event.target.value)}
-                  />
-                ) : (
-                  formatPlannedDate(line.planned_date)
-                )}
-              </TableCell>
-              <TableCell>{line.purchase_cost}</TableCell>
-              {canEditEstimate ? (
-                <TableCell>
-                  <div className="flex flex-wrap gap-2">
-                    {editing ? (
-                      <Button size="sm" type="button" disabled={estimateBusy} onClick={() => handleSave(line)}>
-                        Sauver
-                      </Button>
-                    ) : (
-                      <Button size="sm" variant="outline" type="button" onClick={() => onStartEdit(line)}>
-                        Modifier
-                      </Button>
-                    )}
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      type="button"
-                      disabled={estimateBusy || attachedToMilestoneTask}
-                      title={
-                        attachedToMilestoneTask
-                          ? "Cette ligne est rattachée à une tâche-jalon, qui ne peut pas recevoir de sous-tâches."
-                          : undefined
-                      }
-                      onClick={() => onOpenMilestoneDialog(line)}
-                    >
-                      Gabarit de jalons
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      type="button"
-                      disabled={estimateBusy}
-                      onClick={() => onRequestDelete(line)}
-                    >
-                      Supprimer
-                    </Button>
-                  </div>
-                </TableCell>
-              ) : null}
-            </TableRow>
-          );
+        {gridEntries.map((entry) => {
+          if (entry.kind === "task") {
+            return renderTaskRow(entry.taskRow);
+          }
+          if (entry.kind === "global-header") {
+            return renderGlobalHeaderRow();
+          }
+          return renderLineRow(entry.line, entry.indentLevel);
         })}
-        {!costLines.length ? (
+        {!gridEntries.length ? (
           <TableRow>
-            <TableCell colSpan={canEditEstimate ? 8 : 6} className="text-muted-foreground">
+            <TableCell colSpan={columnCount} className="text-muted-foreground">
               Aucune ligne de coût.
             </TableCell>
           </TableRow>

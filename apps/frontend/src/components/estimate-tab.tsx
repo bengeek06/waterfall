@@ -14,6 +14,7 @@ import { EstimateVersionControls } from "@/components/estimate-version-controls"
 import type {
   CostCategory,
   EstimateCostLine,
+  EstimateTaskRow,
   EstimateValidationWarning,
   ProjectCostCode,
   ProjectEstimate,
@@ -34,7 +35,10 @@ export type EstimateTabProps = {
   onOpenValidation: () => void;
   validationWarnings: EstimateValidationWarning[];
   onDismissValidationWarnings: () => void;
-  estimateTaskRowCount: number;
+  // E12-04/#276: the full task-row list backs both the "tâches snapshotées" count (derived below
+  // via `.length`, kept as a small computation rather than a separate `estimateTaskRowCount`
+  // prop, so callers can't let the two drift out of sync) and the Devis grid's task hierarchy.
+  estimateTaskRows: EstimateTaskRow[];
   costLines: EstimateCostLine[];
   costCategories: CostCategory[];
   costLineDraft: CostLineDraft;
@@ -43,6 +47,7 @@ export type EstimateTabProps = {
   onQuantityChange: (value: string) => void;
   onUnitCostChange: (value: string) => void;
   onPlannedDateChange: (value: string) => void;
+  onTaskIdChange: (value: string) => void;
   onAddCostLine: () => void;
   editingLineId: number | null;
   editingLineDraft: EditingLineDraft;
@@ -50,6 +55,7 @@ export type EstimateTabProps = {
   onEditQuantityChange: (value: string) => void;
   onEditUnitCostChange: (value: string) => void;
   onEditPlannedDateChange: (value: string) => void;
+  onEditTaskIdChange: (value: string) => void;
   onStartEditCostLine: (line: EstimateCostLine) => void;
   onSaveCostLine: (line: EstimateCostLine) => void;
   onRequestDeleteCostLine: (line: EstimateCostLine) => void;
@@ -112,7 +118,7 @@ export function EstimateTab({
   onOpenValidation,
   validationWarnings,
   onDismissValidationWarnings,
-  estimateTaskRowCount,
+  estimateTaskRows,
   costLines,
   costCategories,
   costLineDraft,
@@ -121,6 +127,7 @@ export function EstimateTab({
   onQuantityChange,
   onUnitCostChange,
   onPlannedDateChange,
+  onTaskIdChange,
   onAddCostLine,
   editingLineId,
   editingLineDraft,
@@ -128,6 +135,7 @@ export function EstimateTab({
   onEditQuantityChange,
   onEditUnitCostChange,
   onEditPlannedDateChange,
+  onEditTaskIdChange,
   onStartEditCostLine,
   onSaveCostLine,
   onRequestDeleteCostLine,
@@ -237,7 +245,7 @@ export function EstimateTab({
       {estimates.length ? (
         <div className="grid gap-4">
           <div className="grid min-w-37.5 w-fit gap-0.5 rounded-lg border bg-muted/40 px-4 py-3">
-            <strong>{estimateTaskRowCount}</strong>
+            <strong>{estimateTaskRows.length}</strong>
             <span>tâches snapshotées</span>
           </div>
           <div className="grid min-w-37.5 w-fit gap-0.5 rounded-lg border bg-muted/40 px-4 py-3">
@@ -256,12 +264,14 @@ export function EstimateTab({
           {canEditEstimate ? (
             <CostLineForm
               costCategories={costCategories}
+              estimateTaskRows={estimateTaskRows}
               costLineDraft={costLineDraft}
               onCategoryChange={onCategoryChange}
               onLabelChange={onLabelChange}
               onQuantityChange={onQuantityChange}
               onUnitCostChange={onUnitCostChange}
               onPlannedDateChange={onPlannedDateChange}
+              onTaskIdChange={onTaskIdChange}
               estimateBusy={estimateBusy}
               onAdd={onAddCostLine}
             />
@@ -280,6 +290,7 @@ export function EstimateTab({
 
           <CostLinesTable
             costLines={costLines}
+            estimateTaskRows={estimateTaskRows}
             canEditEstimate={canEditEstimate}
             editingLineId={editingLineId}
             editingLineDraft={editingLineDraft}
@@ -287,6 +298,7 @@ export function EstimateTab({
             onEditQuantityChange={onEditQuantityChange}
             onEditUnitCostChange={onEditUnitCostChange}
             onEditPlannedDateChange={onEditPlannedDateChange}
+            onEditTaskIdChange={onEditTaskIdChange}
             estimateBusy={estimateBusy}
             onStartEdit={onStartEditCostLine}
             onSave={onSaveCostLine}
