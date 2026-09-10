@@ -508,6 +508,7 @@ export default function ProjectDetailsPage() {
     selectedPlanningIdRef,
     setPlanningDetail,
     setEstimateRoleAssignments,
+    resourceNodes,
     onSessionRefresh,
     router,
     setError,
@@ -765,15 +766,11 @@ export default function ProjectDetailsPage() {
           onPlannedDateChange={estimateCostLines.updateCostLineDraftPlannedDate}
           onTaskIdChange={estimateCostLines.updateCostLineDraftTaskId}
           onAddCostLine={() => void estimateCostLines.addCostLine()}
-          editingLineId={estimateCostLines.editingLineId}
-          editingLineDraft={estimateCostLines.editingLineDraft}
-          onEditLabelChange={estimateCostLines.updateEditingLineDraftLabel}
-          onEditQuantityChange={estimateCostLines.updateEditingLineDraftQuantity}
-          onEditUnitCostChange={estimateCostLines.updateEditingLineDraftUnitCost}
-          onEditPlannedDateChange={estimateCostLines.updateEditingLineDraftPlannedDate}
-          onEditTaskIdChange={estimateCostLines.updateEditingLineDraftTaskId}
-          onStartEditCostLine={estimateCostLines.startEditCostLine}
-          onSaveCostLine={(line) => void estimateCostLines.saveCostLine(line)}
+          mutationBusy={estimateCostLines.estimateBusy}
+          onMoveGridSelection={(command) => void estimateCostLines.moveGridSelection(command)}
+          onRenameTask={(taskUid, name) => estimateCostLines.renameGridTask(taskUid, name)}
+          onUpdateCostLine={(lineId, payload) => estimateCostLines.updateCostLineField(lineId, payload)}
+          onUpdateRoleAssignment={(id, payload) => estimateCostLines.updateRoleAssignmentField(id, payload)}
           onRequestDeleteCostLine={estimateCostLines.requestDeleteCostLine}
           selectedCostLineIds={estimateCostLines.selectedCostLineIds}
           onSelectedCostLineIdsChange={estimateCostLines.setSelectedCostLineIds}
@@ -824,20 +821,16 @@ export default function ProjectDetailsPage() {
           resourceNodes={resourceNodes}
           resourceRoles={resourceRoles}
           costRates={costRates}
-          editingRoleAssignmentId={estimateCostLines.editingRoleAssignmentId}
-          editingRoleAssignmentDraft={estimateCostLines.editingRoleAssignmentDraft}
-          onEditRoleAssignmentQuantityChange={estimateCostLines.updateEditingRoleAssignmentQuantity}
-          onEditRoleAssignmentHoursChange={estimateCostLines.updateEditingRoleAssignmentHours}
-          onStartEditRoleAssignment={estimateCostLines.startEditRoleAssignment}
-          onSaveRoleAssignment={(assignment) => void estimateCostLines.saveRoleAssignment(assignment)}
           onRequestDeleteRoleAssignment={estimateCostLines.requestDeleteRoleAssignment}
           roleAssignmentDialogOpen={estimateCostLines.roleAssignmentDialogOpen}
-          roleAssignmentNodeId={estimateCostLines.roleAssignmentNodeId}
-          onRoleAssignmentNodeIdChange={(value) => void estimateCostLines.updateRoleAssignmentNodeId(value)}
+          roleAssignmentDept1Id={estimateCostLines.roleAssignmentDept1Id}
+          onRoleAssignmentDept1IdChange={estimateCostLines.updateRoleAssignmentDept1Id}
+          roleAssignmentDept2Id={estimateCostLines.roleAssignmentDept2Id}
+          onRoleAssignmentDept2IdChange={estimateCostLines.updateRoleAssignmentDept2Id}
           roleAssignmentRoles={estimateCostLines.roleAssignmentRoles}
           roleAssignmentRolesLoading={estimateCostLines.roleAssignmentRolesLoading}
           roleAssignmentRoleId={estimateCostLines.roleAssignmentRoleId}
-          onRoleAssignmentRoleIdChange={estimateCostLines.updateRoleAssignmentRoleId}
+          onRoleAssignmentRoleIdChange={(value) => void estimateCostLines.updateRoleAssignmentRoleId(value)}
           roleAssignmentTaskId={estimateCostLines.roleAssignmentTaskId}
           onRoleAssignmentTaskIdChange={estimateCostLines.updateRoleAssignmentTaskId}
           roleAssignmentQuantity={estimateCostLines.roleAssignmentQuantity}

@@ -615,6 +615,24 @@ export async function getCalendars(
   return { items: page.items, total: page.total };
 }
 
+// E12-10/#292: fetches a single calendar (with its `weekdays`, `CalendarRead` embeds them
+// inline -- no separate weekday-listing endpoint) so the "Ajouter une ligne MO" dialog can
+// prefill "Heures" from the selected role's own calendar once `getResourceRoles` has resolved
+// its `calendar_id`. Deliberately a single-resource GET, not folded into `getCalendars` above:
+// this is fetched on demand per role selection, not as part of the calendar referential list.
+export function getCalendar(
+  calendarId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+): Promise<Calendar> {
+  return authRequest<Calendar>(
+    `/resources/calendars/${calendarId}`,
+    tokens,
+    { method: "GET" },
+    onSessionRefresh,
+  );
+}
+
 export function createCalendar(
   payload: { code: string; name: string; weeks_per_year: number; weekdays: { day_type: number; hours_per_day: string }[] },
   tokens: SessionTokens,
@@ -1232,6 +1250,66 @@ export function validateProjectEstimate(
   );
 }
 
+// E12-07/#289: moves/reorders a selection of a draft devis grid's cost-line/role-assignment
+// nodes (E12-10/#292's tree table toolbar) -- mirrors movePlanningTasks. Unlike that endpoint,
+// the response here is only the estimate's own metadata (`ProjectEstimateRead`, revision
+// incremented) -- not the moved rows themselves -- so a caller must follow a successful move
+// with a fresh `listEstimateCostLines`/`listEstimateRoleAssignments`/`listEstimateTaskRows` to
+// see the tree's new `row_number`/`position`/`parent_uid` (see this issue's own review note:
+// never recompute those client-side after a move).
+export type EstimateGridNodeMove = components["schemas"]["EstimateGridNodeMove"];
+
+export function moveEstimateGridNodes(
+  projectId: number,
+  estimateId: number,
+  payload: EstimateGridNodeMove,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<ProjectEstimate>(
+    `/projects/${projectId}/estimates/${estimateId}/grid-nodes/move`,
+    tokens,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    onSessionRefresh,
+  );
+}
+
+// Inspects an error thrown by moveEstimateGridNodes for the structured ESTIMATE_REVISION_CONFLICT
+// 409 body -- mirrors getPlanningRevisionConflict above, one level up (an estimate's own
+// `revision`, not a planning's).
+export function getEstimateRevisionConflict(cause: unknown): {
+  projectId: number;
+  estimateId: number;
+  expectedRevision: number;
+  currentRevision: number;
+} | null {
+  if (!(cause instanceof ApiError) || cause.status !== 409) {
+    return null;
+  }
+  const detail = cause.detail as
+    | {
+        code?: string;
+        project_id?: number;
+        estimate_id?: number;
+        expected_revision?: number;
+        current_revision?: number;
+      }
+    | undefined;
+  if (!detail || detail.code !== "ESTIMATE_REVISION_CONFLICT") {
+    return null;
+  }
+  return {
+    projectId: detail.project_id ?? 0,
+    estimateId: detail.estimate_id ?? 0,
+    expectedRevision: detail.expected_revision ?? 0,
+    currentRevision: detail.current_revision ?? 0,
+  };
+}
+
 export async function getProjectCostCodes(
   projectId: number,
   tokens: SessionTokens,
@@ -1808,6 +1886,33 @@ export function updateTaskDescription(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ description }),
+    },
+    onSessionRefresh,
+  );
+}
+
+// E12-08/#290: renames a task straight from a Devis grid row (E12-10/#292) -- the same
+// `PATCH .../tasks/{taskUid}` endpoint as updateTaskDescription just above, generalized (the
+// backend's own `TaskUpdate` schema now carries an optional `name` alongside `description`), but
+// kept as its own function rather than a shared `{description, name}` signature: every existing
+// caller of updateTaskDescription only ever sends `description`, and a single combined function
+// would force those call sites to also pass a meaningless `name: undefined`.
+export function updateTaskName(
+  projectId: number,
+  taskUid: number,
+  name: string,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<Task>(
+    `/projects/${projectId}/tasks/${taskUid}`,
+    tokens,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ name }),
     },
     onSessionRefresh,
   );

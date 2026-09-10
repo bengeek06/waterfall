@@ -11,17 +11,23 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import type { EstimateTaskRow, ProjectCostCode, ResourceNode, ResourceRole } from "@/lib/backend";
-import { buildOrganizationNodeOptions } from "@/lib/organization-tree";
 import { buildAttachableTaskOptions } from "@/lib/estimate-task-options";
 
 export type EstimateRoleAssignmentDialogProps = {
   open: boolean;
   resourceNodes: ResourceNode[];
-  nodeId: string;
-  onNodeIdChange: (value: string) => void;
-  // E12-06/#278: only the roles of the chosen node (and its descendants) -- loaded on demand by
-  // the caller (use-estimate-cost-lines.ts's updateRoleAssignmentNodeId) once a node is picked,
-  // never the whole referential up front. Empty and disabled until a node is chosen.
+  // E12-10/#292: two-level department cascade (replaces the single "Nœud organisationnel"
+  // selector) -- "Dpt 1er niveau" only ever lists root nodes (`parent_id === null`), "Dpt 2eme
+  // niveau" only that root's own direct children (empty when it has none). The role list below is
+  // fetched against whichever of the two is the effective/deepest one chosen so far -- see
+  // use-estimate-cost-lines.ts's updateRoleAssignmentDept1Id/updateRoleAssignmentDept2Id.
+  dept1Id: string;
+  onDept1IdChange: (value: string) => void;
+  dept2Id: string;
+  onDept2IdChange: (value: string) => void;
+  // E12-06/#278: only the roles of the chosen department (and its descendants) -- loaded on
+  // demand by the caller once a department is picked, never the whole referential up front.
+  // Empty and disabled until a department is chosen.
   roles: ResourceRole[];
   rolesLoading: boolean;
   roleId: string;
@@ -55,8 +61,10 @@ export type EstimateRoleAssignmentDialogProps = {
 export function EstimateRoleAssignmentDialog({
   open,
   resourceNodes,
-  nodeId,
-  onNodeIdChange,
+  dept1Id,
+  onDept1IdChange,
+  dept2Id,
+  onDept2IdChange,
   roles,
   rolesLoading,
   roleId,
@@ -78,8 +86,9 @@ export function EstimateRoleAssignmentDialog({
   onClose,
   onSubmit,
 }: EstimateRoleAssignmentDialogProps) {
-  const nodeOptions = buildOrganizationNodeOptions(resourceNodes);
   const taskOptions = buildAttachableTaskOptions(estimateTaskRows);
+  const dept1Options = resourceNodes.filter((node) => node.parent_id == null);
+  const dept2Options = resourceNodes.filter((node) => dept1Id !== "" && String(node.parent_id) === dept1Id);
 
   return (
     <Dialog
@@ -97,21 +106,40 @@ export function EstimateRoleAssignmentDialog({
         </DialogHeader>
         <div className="flex flex-col gap-3">
           <div className="flex flex-col gap-1">
-            <label htmlFor="role-assignment-node" className="text-sm font-medium">
-              Nœud organisationnel
+            <label htmlFor="role-assignment-dept1" className="text-sm font-medium">
+              Dpt 1er niveau
             </label>
             <select
-              id="role-assignment-node"
-              aria-label="Nœud organisationnel"
+              id="role-assignment-dept1"
+              aria-label="Dpt 1er niveau"
               className="h-8 rounded-md border border-input bg-background px-2 text-sm"
-              value={nodeId}
-              onChange={(event) => onNodeIdChange(event.target.value)}
+              value={dept1Id}
+              onChange={(event) => onDept1IdChange(event.target.value)}
             >
               <option value="">Choisir...</option>
-              {nodeOptions.map((option) => (
-                <option key={option.id} value={option.id}>
-                  {"  ".repeat(option.depth)}
-                  {option.code} - {option.name}
+              {dept1Options.map((node) => (
+                <option key={node.id} value={node.id}>
+                  {node.code} - {node.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex flex-col gap-1">
+            <label htmlFor="role-assignment-dept2" className="text-sm font-medium">
+              Dpt 2eme niveau
+            </label>
+            <select
+              id="role-assignment-dept2"
+              aria-label="Dpt 2eme niveau"
+              className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+              value={dept2Id}
+              disabled={!dept1Id || dept2Options.length === 0}
+              onChange={(event) => onDept2IdChange(event.target.value)}
+            >
+              <option value="">Choisir...</option>
+              {dept2Options.map((node) => (
+                <option key={node.id} value={node.id}>
+                  {node.code} - {node.name}
                 </option>
               ))}
             </select>
@@ -125,7 +153,7 @@ export function EstimateRoleAssignmentDialog({
               aria-label="Rôle"
               className="h-8 rounded-md border border-input bg-background px-2 text-sm"
               value={roleId}
-              disabled={!nodeId || rolesLoading}
+              disabled={!dept1Id || rolesLoading}
               onChange={(event) => onRoleIdChange(event.target.value)}
             >
               <option value="">{rolesLoading ? "Chargement..." : "Choisir..."}</option>

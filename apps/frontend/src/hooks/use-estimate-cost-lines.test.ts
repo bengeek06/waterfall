@@ -4,12 +4,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
   EstimateCostLine,
+  EstimateGridNodeMove,
   EstimateRoleAssignment,
   EstimateTaskRow,
   PlanningDetail,
   Project,
   ProjectCostCode,
   ProjectEstimate,
+  ResourceNode,
 } from "@/lib/backend";
 import { ApiError } from "@/lib/backend";
 
@@ -23,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   getProjectCostCodes: vi.fn(),
   getPlanning: vi.fn(),
   listEstimateTaskRows: vi.fn(),
+  listEstimateCostLines: vi.fn(),
   validateProjectEstimate: vi.fn(),
   clearSession: vi.fn(),
   createEstimateRoleAssignment: vi.fn(),
@@ -30,6 +33,9 @@ const mocks = vi.hoisted(() => ({
   deleteEstimateRoleAssignment: vi.fn(),
   listEstimateRoleAssignments: vi.fn(),
   getResourceRoles: vi.fn(),
+  getCalendar: vi.fn(),
+  moveEstimateGridNodes: vi.fn(),
+  updateTaskName: vi.fn(),
 }));
 
 vi.mock("@/lib/backend", async () => {
@@ -45,12 +51,16 @@ vi.mock("@/lib/backend", async () => {
     getProjectCostCodes: mocks.getProjectCostCodes,
     getPlanning: mocks.getPlanning,
     listEstimateTaskRows: mocks.listEstimateTaskRows,
+    listEstimateCostLines: mocks.listEstimateCostLines,
     validateProjectEstimate: mocks.validateProjectEstimate,
     createEstimateRoleAssignment: mocks.createEstimateRoleAssignment,
     updateEstimateRoleAssignment: mocks.updateEstimateRoleAssignment,
     deleteEstimateRoleAssignment: mocks.deleteEstimateRoleAssignment,
     listEstimateRoleAssignments: mocks.listEstimateRoleAssignments,
     getResourceRoles: mocks.getResourceRoles,
+    getCalendar: mocks.getCalendar,
+    moveEstimateGridNodes: mocks.moveEstimateGridNodes,
+    updateTaskName: mocks.updateTaskName,
   };
 });
 
@@ -70,7 +80,12 @@ type SetEstimates = (updater: (previous: ProjectEstimate[]) => ProjectEstimate[]
 type SetEstimateTaskRows = (rows: EstimateTaskRow[]) => void;
 
 function setup(
-  overrides: { selectedEstimateId?: number | null; selectedPlanningId?: number | null } = {},
+  overrides: {
+    selectedEstimateId?: number | null;
+    selectedPlanningId?: number | null;
+    resourceNodes?: ResourceNode[];
+    estimates?: ProjectEstimate[];
+  } = {},
 ) {
   const router = { push: vi.fn() };
   const setError = vi.fn();
@@ -89,7 +104,7 @@ function setup(
         project,
         projectId: 1,
         selectedEstimateId: props.selectedEstimateId,
-        estimates: [] as ProjectEstimate[],
+        estimates: (overrides.estimates ?? []) as ProjectEstimate[],
         setEstimates,
         setSelectedEstimateId: vi.fn(),
         setActiveTab: vi.fn(),
@@ -99,6 +114,7 @@ function setup(
         selectedPlanningIdRef,
         setPlanningDetail,
         setEstimateRoleAssignments,
+        resourceNodes: (overrides.resourceNodes ?? []) as ResourceNode[],
         onSessionRefresh: vi.fn(),
         router: router as never,
         setError,
@@ -193,7 +209,7 @@ describe("useEstimateCostLines bulkAssignCostCode", () => {
     expect(mocks.updateEstimateCostLine).toHaveBeenCalledWith(1, 1, 2, { cost_code_id: 10 }, session, expect.any(Function));
 
     // Every successful update is folded into `costLines` via the same
-    // `setCostLines((previous) => ...)` updater pattern as `saveCostLine`.
+    // `setCostLines((previous) => ...)` updater pattern as `updateCostLineField`.
     let lines = [makeLine(1), makeLine(2), makeLine(3)];
     for (const call of setCostLines.mock.calls) {
       const updater = call[0] as (previous: EstimateCostLine[]) => EstimateCostLine[];
@@ -382,100 +398,13 @@ describe("useEstimateCostLines addCostLine planned date (E6-05)", () => {
   });
 });
 
-describe("useEstimateCostLines saveCostLine planned date (E6-05)", () => {
-  beforeEach(() => {
-    mocks.updateEstimateCostLine.mockReset();
-    mocks.clearSession.mockReset();
-    mocks.getProjectCostCodes.mockReset().mockResolvedValue([]);
-  });
-
-  it("updates only the planned date while leaving the other fields intact", async () => {
-    mocks.updateEstimateCostLine.mockResolvedValue(makeLine(1));
-    const { result } = setup({ selectedEstimateId: 1 });
-
-    act(() => {
-      result.current.startEditCostLine(makeLine(1, { label: "Achat licences", quantity: 2, unit_cost: 150 } as never));
-      result.current.updateEditingLineDraftPlannedDate("2026-11-15");
-    });
-
-    await act(async () => {
-      await result.current.saveCostLine(makeLine(1));
-    });
-
-    expect(mocks.updateEstimateCostLine).toHaveBeenCalledWith(
-      1,
-      1,
-      1,
-      {
-        label: "Achat licences",
-        quantity: 2,
-        unit_cost: 150,
-        planned_date: "2026-11-15T00:00:00Z",
-        task_id: null,
-      },
-      session,
-      expect.any(Function),
-    );
-  });
-
-  // Regression test for a review finding on #66: same stale-response gap as addCostLine
-  // above.
-  it("does not apply the updated line if the estimate version changed while the request was in flight", async () => {
-    let resolveUpdate!: (line: EstimateCostLine) => void;
-    mocks.updateEstimateCostLine.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          resolveUpdate = resolve;
-        }),
-    );
-    const { result, rerender, setCostLines, setError } = setup({ selectedEstimateId: 1 });
-    act(() => {
-      result.current.startEditCostLine(makeLine(1, { label: "Achat licences", quantity: 2, unit_cost: 150 } as never));
-    });
-
-    let savePromise!: Promise<void>;
-    act(() => {
-      savePromise = result.current.saveCostLine(makeLine(1));
-    });
-
-    rerender({ selectedEstimateId: 2, selectedPlanningId: null });
-
-    resolveUpdate(makeLine(1));
-    await act(async () => {
-      await savePromise;
-    });
-
-    expect(setCostLines).not.toHaveBeenCalled();
-    expect(result.current.editingLineId).toBe(1);
-    expect(setError).not.toHaveBeenCalledWith(expect.stringContaining("modifier"));
-  });
-});
-
-describe("useEstimateCostLines startEditCostLine planned date (E6-05)", () => {
-  beforeEach(() => {
-    mocks.getProjectCostCodes.mockReset().mockResolvedValue([]);
-  });
-
-  it("pre-fills the planned date input from the line's existing ISO datetime", () => {
-    const { result } = setup({ selectedEstimateId: 1 });
-
-    act(() => {
-      result.current.startEditCostLine(makeLine(1, { planned_date: "2026-10-01T00:00:00+00:00" } as never));
-    });
-
-    expect(result.current.editingLineDraft.plannedDate).toBe("2026-10-01");
-  });
-
-  it("pre-fills an empty planned date when the line has none", () => {
-    const { result } = setup({ selectedEstimateId: 1 });
-
-    act(() => {
-      result.current.startEditCostLine(makeLine(1, { planned_date: null } as never));
-    });
-
-    expect(result.current.editingLineDraft.plannedDate).toBe("");
-  });
-});
+// E12-10/#292: single-row "Modifier/Sauver" editing of an existing cost line (startEditCostLine/
+// saveCostLine/editingLineDraft, including this planned-date/task_id coverage) was removed along
+// with cost-lines-table.tsx -- the Devis grid now auto-saves each cell independently
+// (updateCostLineField, see use-estimate-grid-drafts.ts), and its own target column set has no
+// "Tâche"/"Date prévisionnelle" cell to edit either of those fields inline anymore (see
+// estimate-grid-tree-table.tsx's own column list). addCostLine's own task_id handling (the
+// create-line form still has a "Tâche" selector) is unaffected and still covered below.
 
 // E12-04/#276: task_id is optional, independent from every other field, and round-trips through
 // the same empty-string-means-null convention as planned_date above.
@@ -535,73 +464,6 @@ describe("useEstimateCostLines task attachment (E12-04)", () => {
     );
   });
 
-  it("pre-fills the edited line's task selector from the line's existing task_id", () => {
-    const { result } = setup({ selectedEstimateId: 1 });
-
-    act(() => {
-      result.current.startEditCostLine(makeLine(1, { task_id: 42 } as never));
-    });
-
-    expect(result.current.editingLineDraft.taskId).toBe("42");
-  });
-
-  it("pre-fills an empty task selector when the line has no attachment", () => {
-    const { result } = setup({ selectedEstimateId: 1 });
-
-    act(() => {
-      result.current.startEditCostLine(makeLine(1, { task_id: null } as never));
-    });
-
-    expect(result.current.editingLineDraft.taskId).toBe("");
-  });
-
-  it("sends the newly chosen task_id in the update payload", async () => {
-    mocks.updateEstimateCostLine.mockResolvedValue(makeLine(1));
-    const { result } = setup({ selectedEstimateId: 1 });
-
-    act(() => {
-      result.current.startEditCostLine(makeLine(1, { label: "Achat licences", quantity: 2, unit_cost: 150, task_id: null } as never));
-      result.current.updateEditingLineDraftTaskId("42");
-    });
-
-    await act(async () => {
-      await result.current.saveCostLine(makeLine(1));
-    });
-
-    expect(mocks.updateEstimateCostLine).toHaveBeenCalledWith(
-      1,
-      1,
-      1,
-      expect.objectContaining({ task_id: 42 }),
-      session,
-      expect.any(Function),
-    );
-  });
-
-  it("sends a null task_id in the update payload when the task attachment is removed", async () => {
-    mocks.updateEstimateCostLine.mockResolvedValue(makeLine(1));
-    const { result } = setup({ selectedEstimateId: 1 });
-
-    act(() => {
-      result.current.startEditCostLine(
-        makeLine(1, { label: "Achat licences", quantity: 2, unit_cost: 150, task_id: 42 } as never),
-      );
-      result.current.updateEditingLineDraftTaskId("");
-    });
-
-    await act(async () => {
-      await result.current.saveCostLine(makeLine(1));
-    });
-
-    expect(mocks.updateEstimateCostLine).toHaveBeenCalledWith(
-      1,
-      1,
-      1,
-      expect.objectContaining({ task_id: null }),
-      session,
-      expect.any(Function),
-    );
-  });
 });
 
 describe("useEstimateCostLines removeCostLine", () => {
@@ -1344,47 +1206,52 @@ function makeAssignment(id: number, overrides: Partial<EstimateRoleAssignment> =
 
 // E12-06/#278: loading the roles available for a chosen organizational node in the
 // "Ajouter une ligne MO" dialog.
-describe("useEstimateCostLines updateRoleAssignmentNodeId", () => {
+// E12-10/#292: the single "Nœud organisationnel" selector (updateRoleAssignmentNodeId) was
+// replaced by a two-level Dpt 1er niveau -> Dpt 2eme niveau cascade -- updateRoleAssignmentDept2Id
+// keeps the exact same "always fetch roles for this node id" contract the old function had (see
+// use-estimate-cost-lines.ts's own doc comment), so the request/reset/401/race coverage below is
+// carried over onto it unchanged, one level down in the cascade.
+describe("useEstimateCostLines updateRoleAssignmentDept2Id", () => {
   beforeEach(() => {
     mocks.getResourceRoles.mockReset();
     mocks.clearSession.mockReset();
   });
 
-  it("does nothing (no backend call) when the node is cleared", async () => {
+  it("does nothing (no backend call) when the department is cleared", async () => {
     const { result } = setup({ selectedEstimateId: 1 });
 
     await act(async () => {
-      await result.current.updateRoleAssignmentNodeId("");
+      await result.current.updateRoleAssignmentDept2Id("");
     });
 
     expect(mocks.getResourceRoles).not.toHaveBeenCalled();
     expect(result.current.roleAssignmentRoles).toEqual([]);
   });
 
-  it("loads the roles of the chosen node and its descendants, and exposes them", async () => {
+  it("loads the roles of the chosen department and its descendants, and exposes them", async () => {
     const roles = [{ id: 5, name: "Développeur", node_id: 3, cost_category_id: 9, calendar_id: null, is_active: true }];
     mocks.getResourceRoles.mockResolvedValue({ items: roles, total: 1 });
     const { result } = setup({ selectedEstimateId: 1 });
 
     await act(async () => {
-      await result.current.updateRoleAssignmentNodeId("3");
+      await result.current.updateRoleAssignmentDept2Id("3");
     });
 
     expect(mocks.getResourceRoles).toHaveBeenCalledWith(session, expect.any(Function), 3, true);
     expect(result.current.roleAssignmentRoles).toEqual(roles);
   });
 
-  it("resets the previously chosen role when the node changes", async () => {
+  it("resets the previously chosen role when the department changes", async () => {
     mocks.getResourceRoles.mockResolvedValue({ items: [], total: 0 });
     const { result } = setup({ selectedEstimateId: 1 });
 
     act(() => {
-      result.current.updateRoleAssignmentRoleId("5");
+      void result.current.updateRoleAssignmentRoleId("5");
     });
     expect(result.current.roleAssignmentRoleId).toBe("5");
 
     await act(async () => {
-      await result.current.updateRoleAssignmentNodeId("3");
+      await result.current.updateRoleAssignmentDept2Id("3");
     });
 
     expect(result.current.roleAssignmentRoleId).toBe("");
@@ -1395,7 +1262,7 @@ describe("useEstimateCostLines updateRoleAssignmentNodeId", () => {
     const { result, router } = setup({ selectedEstimateId: 1 });
 
     await act(async () => {
-      await result.current.updateRoleAssignmentNodeId("3");
+      await result.current.updateRoleAssignmentDept2Id("3");
     });
 
     expect(mocks.clearSession).toHaveBeenCalled();
@@ -1403,13 +1270,13 @@ describe("useEstimateCostLines updateRoleAssignmentNodeId", () => {
   });
 
   // Finding on the E12-06/#278 final review: `getResourceRoles` requests aren't guaranteed to
-  // resolve in the order they were fired -- selecting node A then quickly switching to node B
-  // must not let a slower-resolving response for A land in `roleAssignmentRoles` once the
-  // selector already shows B, or the user could pick a role that actually belongs to A's
-  // department. Same race/fix shape as app/resources/page.test.tsx's
+  // resolve in the order they were fired -- selecting department A then quickly switching to
+  // department B must not let a slower-resolving response for A land in `roleAssignmentRoles`
+  // once the selector already shows B, or the user could pick a role that actually belongs to
+  // A's department. Same race/fix shape as app/resources/page.test.tsx's
   // "does not leave the role-calendars table's loading indicator stuck..." test, using deferred
   // promises to force the out-of-order resolution.
-  it("ignores a stale node's roles response that resolves after a newer node was selected", async () => {
+  it("ignores a stale department's roles response that resolves after a newer one was selected", async () => {
     const rolesForA = [{ id: 5, name: "Développeur A", node_id: 1, cost_category_id: 9, calendar_id: null, is_active: true }];
     const rolesForB = [{ id: 6, name: "Développeur B", node_id: 2, cost_category_id: 9, calendar_id: null, is_active: true }];
 
@@ -1431,15 +1298,15 @@ describe("useEstimateCostLines updateRoleAssignmentNodeId", () => {
 
     let updateAPromise!: Promise<void>;
     act(() => {
-      updateAPromise = result.current.updateRoleAssignmentNodeId("1");
+      updateAPromise = result.current.updateRoleAssignmentDept2Id("1");
     });
     let updateBPromise!: Promise<void>;
     act(() => {
-      updateBPromise = result.current.updateRoleAssignmentNodeId("2");
+      updateBPromise = result.current.updateRoleAssignmentDept2Id("2");
     });
 
-    // Node A's request resolves after node B has already been selected: its (obsolete) roles
-    // must be dropped, not applied on top of whatever is currently displayed.
+    // Department A's request resolves after department B has already been selected: its
+    // (obsolete) roles must be dropped, not applied on top of whatever is currently displayed.
     resolveA({ items: rolesForA, total: 1 });
     await act(async () => {
       await updateAPromise;
@@ -1451,6 +1318,98 @@ describe("useEstimateCostLines updateRoleAssignmentNodeId", () => {
       await updateBPromise;
     });
     expect(result.current.roleAssignmentRoles).toEqual(rolesForB);
+  });
+});
+
+// E12-10/#292 acceptance tests: "Sélectionner un nœud Dpt 1er niveau restreint la liste Dpt 2eme
+// niveau à ses enfants directs" and the "Heures" calendar-prefill on role selection.
+describe("useEstimateCostLines role-assignment Dpt1 cascade + Heures calendar prefill (E12-10/#292)", () => {
+  const resourceNodes = [
+    { id: 1, code: "A", name: "Direction A", parent_id: null },
+    { id: 2, code: "B", name: "Direction B", parent_id: null },
+    { id: 10, code: "A1", name: "Service A1", parent_id: 1 },
+  ] as ResourceNode[];
+
+  beforeEach(() => {
+    mocks.getResourceRoles.mockReset();
+    mocks.getCalendar.mockReset();
+    mocks.clearSession.mockReset();
+  });
+
+  it("fetches roles for the chosen root department directly once it is picked, when it has no children", async () => {
+    mocks.getResourceRoles.mockResolvedValue({ items: [], total: 0 });
+    const { result } = setup({ selectedEstimateId: 1, resourceNodes });
+
+    await act(async () => {
+      await result.current.updateRoleAssignmentDept1Id("2");
+    });
+
+    expect(mocks.getResourceRoles).toHaveBeenCalledWith(session, expect.any(Function), 2, true);
+  });
+
+  it("does not fetch roles yet for a root department that has children, until Dpt 2eme niveau is picked", async () => {
+    mocks.getResourceRoles.mockResolvedValue({ items: [], total: 0 });
+    const { result } = setup({ selectedEstimateId: 1, resourceNodes });
+
+    await act(async () => {
+      await result.current.updateRoleAssignmentDept1Id("1");
+    });
+    expect(mocks.getResourceRoles).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await result.current.updateRoleAssignmentDept2Id("10");
+    });
+    expect(mocks.getResourceRoles).toHaveBeenCalledWith(session, expect.any(Function), 10, true);
+  });
+
+  it("prefills Heures with the maximum hours_per_day of the selected role's calendar", async () => {
+    mocks.getResourceRoles.mockResolvedValue({
+      items: [{ id: 5, name: "Développeur", node_id: 1, cost_category_id: 1, calendar_id: 99, is_active: true }],
+      total: 1,
+    });
+    mocks.getCalendar.mockResolvedValue({
+      id: 99,
+      code: "STD",
+      name: "Standard",
+      weeks_per_year: 47,
+      is_active: true,
+      is_default: false,
+      weekdays: [
+        { id: 1, calendar_id: 99, day_type: 2, hours_per_day: 7 },
+        { id: 2, calendar_id: 99, day_type: 3, hours_per_day: 8 },
+        { id: 3, calendar_id: 99, day_type: 1, hours_per_day: 0 },
+      ],
+    });
+    const { result } = setup({ selectedEstimateId: 1, resourceNodes });
+
+    await act(async () => {
+      await result.current.updateRoleAssignmentDept1Id("2");
+    });
+    await act(async () => {
+      await result.current.updateRoleAssignmentRoleId("5");
+    });
+
+    expect(result.current.roleAssignmentHours).toBe("8");
+  });
+
+  it("leaves Heures untouched for a role with no calendar_id", async () => {
+    mocks.getResourceRoles.mockResolvedValue({
+      items: [{ id: 6, name: "Chef de projet", node_id: 1, cost_category_id: 1, calendar_id: null, is_active: true }],
+      total: 1,
+    });
+    const { result } = setup({ selectedEstimateId: 1, resourceNodes });
+
+    await act(async () => {
+      await result.current.updateRoleAssignmentDept1Id("2");
+    });
+    const hoursBefore = result.current.roleAssignmentHours;
+
+    await act(async () => {
+      await result.current.updateRoleAssignmentRoleId("6");
+    });
+
+    expect(mocks.getCalendar).not.toHaveBeenCalled();
+    expect(result.current.roleAssignmentHours).toBe(hoursBefore);
   });
 });
 
@@ -1667,7 +1626,12 @@ describe("useEstimateCostLines submitCreateRoleAssignment", () => {
   });
 });
 
-describe("useEstimateCostLines saveRoleAssignment / removeRoleAssignment", () => {
+// E12-10/#292: the single-row "Modifier/Sauver" flow (startEditRoleAssignment/saveRoleAssignment/
+// editingRoleAssignmentDraft) was removed along with cost-lines-table.tsx -- the Devis grid now
+// auto-saves each of a labor row's Qté/Heures cells independently on blur via
+// updateRoleAssignmentField (use-estimate-grid-drafts.ts), which keeps the same "PATCH, then
+// refetch the list" shape/guards as saveRoleAssignment had.
+describe("useEstimateCostLines updateRoleAssignmentField / removeRoleAssignment", () => {
   beforeEach(() => {
     mocks.updateEstimateRoleAssignment.mockReset();
     mocks.deleteEstimateRoleAssignment.mockReset();
@@ -1675,32 +1639,16 @@ describe("useEstimateCostLines saveRoleAssignment / removeRoleAssignment", () =>
     mocks.clearSession.mockReset();
   });
 
-  it("starts editing with the assignment's current quantity/hours", () => {
-    const { result } = setup({ selectedEstimateId: 1 });
-
-    act(() => {
-      result.current.startEditRoleAssignment(makeAssignment(1, { quantity: 3, hours: 12 }));
-    });
-
-    expect(result.current.editingRoleAssignmentId).toBe(1);
-    expect(result.current.editingRoleAssignmentDraft).toEqual({ quantity: "3", hours: "12" });
-  });
-
-  it("patches only quantity/hours, refetches the list, and stops editing on success", async () => {
+  it("patches only the given fields, refetches the list, and reports success", async () => {
     const updated = makeAssignment(1, { quantity: 5, hours: 20 });
     mocks.updateEstimateRoleAssignment.mockResolvedValue(updated);
     const freshAssignments = [updated];
     mocks.listEstimateRoleAssignments.mockResolvedValue(freshAssignments);
     const { result, setEstimateRoleAssignments } = setup({ selectedEstimateId: 7 });
 
-    act(() => {
-      result.current.startEditRoleAssignment(makeAssignment(1));
-      result.current.updateEditingRoleAssignmentQuantity("5");
-      result.current.updateEditingRoleAssignmentHours("20");
-    });
-
+    let succeeded!: boolean;
     await act(async () => {
-      await result.current.saveRoleAssignment(makeAssignment(1));
+      succeeded = await result.current.updateRoleAssignmentField(1, { quantity: 5, hours: 20 });
     });
 
     expect(mocks.updateEstimateRoleAssignment).toHaveBeenCalledWith(
@@ -1712,11 +1660,11 @@ describe("useEstimateCostLines saveRoleAssignment / removeRoleAssignment", () =>
       expect.any(Function),
     );
     expect(setEstimateRoleAssignments).toHaveBeenCalledWith(freshAssignments);
-    expect(result.current.editingRoleAssignmentId).toBeNull();
+    expect(succeeded).toBe(true);
   });
 
-  // Same stale-response guard as saveCostLine's own sibling.
-  it("does not apply a stale update result if the estimate version changed while the request was in flight", async () => {
+  // Same stale-response guard as updateCostLineField's own sibling.
+  it("does not refetch/apply a stale update result if the estimate version changed while the request was in flight", async () => {
     let resolveUpdate!: (assignment: EstimateRoleAssignment) => void;
     mocks.updateEstimateRoleAssignment.mockImplementation(
       () =>
@@ -1726,15 +1674,9 @@ describe("useEstimateCostLines saveRoleAssignment / removeRoleAssignment", () =>
     );
     const { result, rerender, setEstimateRoleAssignments } = setup({ selectedEstimateId: 1 });
 
+    let savePromise!: Promise<boolean>;
     act(() => {
-      result.current.startEditRoleAssignment(makeAssignment(1));
-      result.current.updateEditingRoleAssignmentQuantity("5");
-      result.current.updateEditingRoleAssignmentHours("20");
-    });
-
-    let savePromise!: Promise<void>;
-    act(() => {
-      savePromise = result.current.saveRoleAssignment(makeAssignment(1));
+      savePromise = result.current.updateRoleAssignmentField(1, { quantity: 5, hours: 20 });
     });
 
     rerender({ selectedEstimateId: 2, selectedPlanningId: null });
@@ -1745,7 +1687,20 @@ describe("useEstimateCostLines saveRoleAssignment / removeRoleAssignment", () =>
     });
 
     expect(setEstimateRoleAssignments).not.toHaveBeenCalled();
-    expect(result.current.editingRoleAssignmentId).toBe(1);
+  });
+
+  it("clears the session and redirects to login on a post-refresh 401 while updating", async () => {
+    mocks.updateEstimateRoleAssignment.mockRejectedValue(new ApiError(401, "Unauthorized"));
+    const { result, router } = setup({ selectedEstimateId: 1 });
+
+    let succeeded!: boolean;
+    await act(async () => {
+      succeeded = await result.current.updateRoleAssignmentField(1, { quantity: 5 });
+    });
+
+    expect(mocks.clearSession).toHaveBeenCalled();
+    expect(router.push).toHaveBeenCalledWith("/login");
+    expect(succeeded).toBe(false);
   });
 
   it("requests, then confirms, deletion via requestDeleteRoleAssignment/removeRoleAssignment", async () => {
@@ -1808,6 +1763,340 @@ describe("useEstimateCostLines saveRoleAssignment / removeRoleAssignment", () =>
 
     await act(async () => {
       await result.current.removeRoleAssignment(makeAssignment(1));
+    });
+
+    expect(mocks.clearSession).toHaveBeenCalled();
+    expect(router.push).toHaveBeenCalledWith("/login");
+  });
+});
+
+// E12-10/#292: inline, per-cell update of an existing cost line from the Devis grid
+// (use-estimate-grid-drafts.ts's blur-commit) -- same "PATCH, fold response into costLines" shape
+// as bulkAssignCostCode's own per-line PATCH, just for a single line.
+describe("useEstimateCostLines updateCostLineField", () => {
+  beforeEach(() => {
+    mocks.updateEstimateCostLine.mockReset();
+    mocks.clearSession.mockReset();
+    mocks.getProjectCostCodes.mockReset().mockResolvedValue([]);
+  });
+
+  it("patches only the given fields, folds the response into costLines, and reports success", async () => {
+    const updated = makeLine(1, { label: "Nouveau libellé" });
+    mocks.updateEstimateCostLine.mockResolvedValue(updated);
+    const { result, setCostLines } = setup({ selectedEstimateId: 7 });
+
+    let succeeded!: boolean;
+    await act(async () => {
+      succeeded = await result.current.updateCostLineField(1, { label: "Nouveau libellé" });
+    });
+
+    expect(mocks.updateEstimateCostLine).toHaveBeenCalledWith(
+      1,
+      7,
+      1,
+      { label: "Nouveau libellé" },
+      session,
+      expect.any(Function),
+    );
+    expect(setCostLines).toHaveBeenCalled();
+    expect(succeeded).toBe(true);
+  });
+
+  // Same stale-response guard as updateRoleAssignmentField's own sibling.
+  it("does not apply a stale update result if the estimate version changed while the request was in flight", async () => {
+    let resolveUpdate!: (line: EstimateCostLine) => void;
+    mocks.updateEstimateCostLine.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveUpdate = resolve;
+        }),
+    );
+    const { result, rerender, setCostLines } = setup({ selectedEstimateId: 1 });
+
+    let savePromise!: Promise<boolean>;
+    act(() => {
+      savePromise = result.current.updateCostLineField(1, { label: "Nouveau libellé" });
+    });
+
+    rerender({ selectedEstimateId: 2, selectedPlanningId: null });
+
+    resolveUpdate(makeLine(1, { label: "Nouveau libellé" }));
+    await act(async () => {
+      await savePromise;
+    });
+
+    expect(setCostLines).not.toHaveBeenCalled();
+  });
+
+  it("clears the session and redirects to login on a post-refresh 401", async () => {
+    mocks.updateEstimateCostLine.mockRejectedValue(new ApiError(401, "Unauthorized"));
+    const { result, router } = setup({ selectedEstimateId: 1 });
+
+    let succeeded!: boolean;
+    await act(async () => {
+      succeeded = await result.current.updateCostLineField(1, { label: "x" });
+    });
+
+    expect(mocks.clearSession).toHaveBeenCalled();
+    expect(router.push).toHaveBeenCalledWith("/login");
+    expect(succeeded).toBe(false);
+  });
+});
+
+// E12-08/#290 + E12-10/#292: renames a task straight from the Devis grid's Libellé column.
+// Critique review finding on #292: the caller (use-estimate-grid-drafts.ts's commitLabel, see its
+// own dedicated test file) must pass `taskRow.task_uid`, not this tree's own `uid` (`task_id`) --
+// this hook-level suite only exercises `renameGridTask` itself (a plain `(taskUid, name)` PATCH
+// wrapper, agnostic of the tree/row shape the id came from), so it deliberately reuses a value
+// (99) that differs from the task-row fixtures' `task_id` (42) throughout this file, to make sure
+// nothing downstream (updateTaskName's call, the task-row refetch) silently substitutes the wrong
+// one.
+describe("useEstimateCostLines renameGridTask", () => {
+  beforeEach(() => {
+    mocks.updateTaskName.mockReset();
+    mocks.listEstimateTaskRows.mockReset().mockResolvedValue([]);
+    mocks.getPlanning.mockReset();
+    mocks.clearSession.mockReset();
+    mocks.getProjectCostCodes.mockReset().mockResolvedValue([]);
+  });
+
+  it("renames the task via its task_uid, refetches the estimate's task rows, and reports success", async () => {
+    mocks.updateTaskName.mockResolvedValue({ id: 7, name: "Terrassement lot 2" } as never);
+    const freshTaskRows = [makeTaskRow({ task_name: "Terrassement lot 2" })];
+    mocks.listEstimateTaskRows.mockResolvedValue(freshTaskRows);
+    const { result, setEstimateTaskRows } = setup({ selectedEstimateId: 7 });
+
+    let succeeded!: boolean;
+    await act(async () => {
+      succeeded = await result.current.renameGridTask(99, "Terrassement lot 2");
+    });
+
+    expect(mocks.updateTaskName).toHaveBeenCalledWith(1, 99, "Terrassement lot 2", session, expect.any(Function));
+    expect(mocks.listEstimateTaskRows).toHaveBeenCalledWith(1, 7, session, expect.any(Function));
+    expect(setEstimateTaskRows).toHaveBeenCalledWith(freshTaskRows);
+    expect(succeeded).toBe(true);
+  });
+
+  // Haute review finding on #292: without this refetch, planningDetail (and therefore the
+  // Planning tab/"Tâche parente" selector) never learns about the task's new name -- same gap
+  // already fixed for submitCreateTask/submitMilestoneTemplate above (see
+  // refreshPlanningDetailAfterTaskCreation's own call sites).
+  it("refetches the displayed planning and applies the fresh detail once the task is renamed", async () => {
+    mocks.updateTaskName.mockResolvedValue({ id: 7, name: "Terrassement lot 2" } as never);
+    const freshDetail = { id: 3, tasks: [{ uid: 99, name: "Terrassement lot 2" }] } as never;
+    mocks.getPlanning.mockResolvedValue(freshDetail);
+    const { result, setPlanningDetail } = setup({ selectedEstimateId: 1, selectedPlanningId: 3 });
+
+    await act(async () => {
+      await result.current.renameGridTask(99, "Terrassement lot 2");
+    });
+
+    expect(mocks.getPlanning).toHaveBeenCalledWith(1, 3, session, expect.any(Function));
+    expect(setPlanningDetail).toHaveBeenCalledWith(freshDetail);
+  });
+
+  it("does not refetch the planning when no planning is displayed", async () => {
+    mocks.updateTaskName.mockResolvedValue({ id: 7, name: "Terrassement lot 2" } as never);
+    const { result } = setup({ selectedEstimateId: 1, selectedPlanningId: null });
+
+    await act(async () => {
+      await result.current.renameGridTask(99, "Terrassement lot 2");
+    });
+
+    expect(mocks.getPlanning).not.toHaveBeenCalled();
+  });
+
+  // Same stale-response guard as submitCreateTask's own task-row refetch above.
+  it("does not apply a stale task-row refetch if the estimate version changed while the request was in flight", async () => {
+    mocks.updateTaskName.mockResolvedValue({ id: 7, name: "Terrassement lot 2" } as never);
+    let resolveListTaskRows!: (rows: ReturnType<typeof makeTaskRow>[]) => void;
+    mocks.listEstimateTaskRows.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveListTaskRows = resolve;
+        }),
+    );
+    const { result, rerender, setEstimateTaskRows } = setup({ selectedEstimateId: 1 });
+
+    let renamePromise!: Promise<boolean>;
+    act(() => {
+      renamePromise = result.current.renameGridTask(99, "Terrassement lot 2");
+    });
+
+    await waitFor(() => expect(mocks.listEstimateTaskRows).toHaveBeenCalled());
+
+    rerender({ selectedEstimateId: 2, selectedPlanningId: null });
+
+    resolveListTaskRows([makeTaskRow()]);
+    await act(async () => {
+      await renamePromise;
+    });
+
+    expect(setEstimateTaskRows).not.toHaveBeenCalled();
+  });
+
+  it("clears the session and redirects to login on a post-refresh 401", async () => {
+    mocks.updateTaskName.mockRejectedValue(new ApiError(401, "Unauthorized"));
+    const { result, router } = setup({ selectedEstimateId: 1 });
+
+    let succeeded!: boolean;
+    await act(async () => {
+      succeeded = await result.current.renameGridTask(99, "Terrassement lot 2");
+    });
+
+    expect(mocks.clearSession).toHaveBeenCalled();
+    expect(router.push).toHaveBeenCalledWith("/login");
+    expect(succeeded).toBe(false);
+  });
+});
+
+// E12-07/#289 + E12-10/#292: moves/reorders a selection of the Devis grid's cost-line/role
+// -assignment rows via the toolbar (indent/outdent/move up/down).
+describe("useEstimateCostLines moveGridSelection", () => {
+  const command: Omit<EstimateGridNodeMove, "expected_revision"> = { node_uids: [-1], target_parent_uid: 1, position: 1 };
+
+  beforeEach(() => {
+    mocks.moveEstimateGridNodes.mockReset();
+    mocks.listEstimateTaskRows.mockReset().mockResolvedValue([]);
+    mocks.listEstimateCostLines.mockReset().mockResolvedValue([]);
+    mocks.listEstimateRoleAssignments.mockReset().mockResolvedValue([]);
+    mocks.clearSession.mockReset();
+    mocks.getProjectCostCodes.mockReset().mockResolvedValue([]);
+  });
+
+  it("sends the move with the selected estimate's own revision, applies the updated estimate, then refetches task rows/cost lines/role assignments", async () => {
+    const updatedEstimate = makeEstimate(7, { revision: 4 });
+    mocks.moveEstimateGridNodes.mockResolvedValue(updatedEstimate);
+    const freshTaskRows = [makeTaskRow()];
+    const freshCostLines = [makeLine(1)];
+    const freshAssignments = [makeAssignment(1)];
+    mocks.listEstimateTaskRows.mockResolvedValue(freshTaskRows);
+    mocks.listEstimateCostLines.mockResolvedValue(freshCostLines);
+    mocks.listEstimateRoleAssignments.mockResolvedValue(freshAssignments);
+    const { result, setEstimates, setEstimateTaskRows, setCostLines, setEstimateRoleAssignments } = setup({
+      selectedEstimateId: 7,
+      estimates: [makeEstimate(7, { revision: 3 })],
+    });
+
+    await act(async () => {
+      await result.current.moveGridSelection(command);
+    });
+
+    expect(mocks.moveEstimateGridNodes).toHaveBeenCalledWith(
+      1,
+      7,
+      { ...command, expected_revision: 3 },
+      session,
+      expect.any(Function),
+    );
+    expect(mocks.listEstimateTaskRows).toHaveBeenCalledWith(1, 7, session, expect.any(Function));
+    expect(mocks.listEstimateCostLines).toHaveBeenCalledWith(1, 7, session, expect.any(Function));
+    expect(mocks.listEstimateRoleAssignments).toHaveBeenCalledWith(1, 7, session, expect.any(Function));
+    expect(setEstimateTaskRows).toHaveBeenCalledWith(freshTaskRows);
+    expect(setEstimateRoleAssignments).toHaveBeenCalledWith(freshAssignments);
+    expect(setCostLines).toHaveBeenCalledWith(expect.any(Function));
+    const costLinesUpdater = setCostLines.mock.calls[0][0] as (previous: EstimateCostLine[]) => EstimateCostLine[];
+    expect(costLinesUpdater([])).toEqual(freshCostLines);
+    expect(setEstimates).toHaveBeenCalled();
+  });
+
+  it("does not apply the update or refetch anything if the estimate version changed while the move was in flight (success case)", async () => {
+    let resolveMove!: (estimate: ProjectEstimate) => void;
+    mocks.moveEstimateGridNodes.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveMove = resolve;
+        }),
+    );
+    const { result, rerender, setEstimates, setEstimateTaskRows, setCostLines, setEstimateRoleAssignments } = setup({
+      selectedEstimateId: 7,
+      estimates: [makeEstimate(7, { revision: 3 })],
+    });
+
+    let movePromise!: Promise<void>;
+    act(() => {
+      movePromise = result.current.moveGridSelection(command);
+    });
+
+    rerender({ selectedEstimateId: 2, selectedPlanningId: null });
+
+    resolveMove(makeEstimate(7, { revision: 4 }));
+    await act(async () => {
+      await movePromise;
+    });
+
+    expect(setEstimates).not.toHaveBeenCalled();
+    expect(setEstimateTaskRows).not.toHaveBeenCalled();
+    expect(setCostLines).not.toHaveBeenCalled();
+    expect(setEstimateRoleAssignments).not.toHaveBeenCalled();
+  });
+
+  it("does not report an error if the estimate version changed while a failed move was in flight (failure case)", async () => {
+    let rejectMove!: (cause: unknown) => void;
+    mocks.moveEstimateGridNodes.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectMove = reject;
+        }),
+    );
+    const { result, rerender, setError } = setup({
+      selectedEstimateId: 7,
+      estimates: [makeEstimate(7, { revision: 3 })],
+    });
+
+    let movePromise!: Promise<void>;
+    act(() => {
+      movePromise = result.current.moveGridSelection(command);
+    });
+
+    rerender({ selectedEstimateId: 2, selectedPlanningId: null });
+
+    rejectMove(new ApiError(409, "Conflit"));
+    await act(async () => {
+      await movePromise;
+    });
+
+    // setError(null) is always called at the very start of the request -- only a non-null
+    // error report after the stale-selection guard would be a bug.
+    expect(setError).not.toHaveBeenCalledWith(expect.stringContaining("déplacer"));
+    expect(setError).not.toHaveBeenCalledWith(expect.stringContaining("modifié"));
+  });
+
+  // #289's own revision-conflict guard (mirrors the planning tree's own move endpoint) --
+  // getEstimateRevisionConflict recognizes the structured ESTIMATE_REVISION_CONFLICT 409 body and
+  // shows an explicit "reload" message instead of the generic move-failure fallback.
+  it("shows an explicit reload message on a revision conflict, not the generic move-failure fallback", async () => {
+    mocks.moveEstimateGridNodes.mockRejectedValue(
+      new ApiError(409, "Conflit de révision", {
+        code: "ESTIMATE_REVISION_CONFLICT",
+        project_id: 1,
+        estimate_id: 7,
+        expected_revision: 3,
+        current_revision: 4,
+      }),
+    );
+    const { result, setError } = setup({
+      selectedEstimateId: 7,
+      estimates: [makeEstimate(7, { revision: 3 })],
+    });
+
+    await act(async () => {
+      await result.current.moveGridSelection(command);
+    });
+
+    expect(setError).toHaveBeenCalledWith("Ce devis a été modifié entre-temps : recharge-le avant de continuer.");
+    expect(setError).not.toHaveBeenCalledWith("Impossible de déplacer la sélection.");
+  });
+
+  it("clears the session and redirects to login on a post-refresh 401", async () => {
+    mocks.moveEstimateGridNodes.mockRejectedValue(new ApiError(401, "Unauthorized"));
+    const { result, router } = setup({
+      selectedEstimateId: 7,
+      estimates: [makeEstimate(7, { revision: 3 })],
+    });
+
+    await act(async () => {
+      await result.current.moveGridSelection(command);
     });
 
     expect(mocks.clearSession).toHaveBeenCalled();
