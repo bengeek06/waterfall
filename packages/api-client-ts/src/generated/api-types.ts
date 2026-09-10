@@ -2894,6 +2894,15 @@ export interface operations {
                     "application/json": components["schemas"]["FastAPIErrorResponse"];
                 };
             };
+            /** @description Le limiteur de tentatives de connexion (Redis) est injoignable; la connexion est refusée par défaut (fail-closed) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FastAPIErrorResponse"];
+                };
+            };
         };
     };
     refreshAccessToken: {

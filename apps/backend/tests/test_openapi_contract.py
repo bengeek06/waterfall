@@ -468,6 +468,10 @@ def test_inline_error_responses_document_fastapi_error_shape_and_error_response_
         ("/imports/v1/batches/{batchId}/run", "post", "409"),
         ("/auth/token", "post", "423"),
         ("/auth/token", "post", "429"),
+        # Added by E13-01: the fail-closed 503 raised when the login rate limiter's
+        # Redis backend is unreachable. Same inline shape, anchored here by the same
+        # convention.
+        ("/auth/token", "post", "503"),
     ):
         schema_ref = static_paths[path][method]["responses"][status_code]["content"][
             "application/json"

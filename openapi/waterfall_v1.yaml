@@ -146,6 +146,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/FastAPIErrorResponse'
+        '503':
+          description: Le limiteur de tentatives de connexion (Redis) est injoignable; la connexion est refusée par défaut (fail-closed)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FastAPIErrorResponse'
   /auth/refresh:
     post:
       tags:

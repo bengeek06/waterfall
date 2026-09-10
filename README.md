@@ -185,11 +185,31 @@ depuis un checkout Git. Pour les réinstaller seuls, utilisez `make hooks`.
 
 ### 3) Configuration A : développement natif
 
-Cette configuration lance l’API et le frontend directement sur la machine. PostgreSQL reste lancé dans Docker.
+Cette configuration lance l’API et le frontend directement sur la machine. PostgreSQL et Redis
+restent lancés dans Docker.
 Le backend démarre aussi le seed admin en mode `dev`; `WF_ADMIN_PASSWORD` doit donc être défini dans `.env`.
+
+Renseignez au minimum dans `.env` :
+
+```env
+SECRET_KEY=<clé-secrète-générée>
+WF_ADMIN_PASSWORD=<mot-de-passe-local>
+REDIS_PASSWORD=<mot-de-passe-local>
+REDIS_URL=redis://localhost:6379/0
+```
+
+`REDIS_PASSWORD` est obligatoire même ici : le service `redis` du compose de base exige un mot
+de passe, et Compose interpole tout le fichier avant de choisir les services — sans cette
+variable, `make db-up`, `make down` et `make logs` échouent aussi.
+
+L'API refuse toute connexion si Redis est injoignable (limiteur de tentatives *fail-closed* :
+`503`, jamais un login accepté sans vérification). En dev natif, Redis doit donc tourner et
+`REDIS_URL`/`REDIS_PASSWORD` doivent être renseignés, sinon 100 % des `POST /auth/token`
+renvoient `503`. Laissez le mot de passe hors de l'URL : il n'est pas encodé en pourcents.
 
 ```bash
 make db-up                  # Postgres dans Docker, pour le dev natif
+docker compose -f infra/docker/docker-compose.yml up -d redis   # Redis, requis par /auth/token
 make migrate-up             # applique les migrations Alembic sur la base de dev
 make dev                    # backend (uvicorn) + frontend (next dev) — Ctrl-C arrête les deux
 ```
@@ -241,10 +261,17 @@ CORS_ALLOW_ORIGINS=http://<IP_VM>:3000
 NEXT_PUBLIC_API_BASE_URL=http://<IP_VM>:8000
 SECRET_KEY=<clé-secrète-générée>
 WF_ADMIN_PASSWORD=<mot-de-passe-local>
+REDIS_PASSWORD=<mot-de-passe-local>
 PGADMIN_DEFAULT_PASSWORD=<mot-de-passe-local>
 GRAFANA_ADMIN_PASSWORD=<mot-de-passe-local>
 # ADMIN_BIND_ADDRESS=127.0.0.1
 ```
+
+Contrairement à `PGADMIN_DEFAULT_PASSWORD` et `GRAFANA_ADMIN_PASSWORD`, qui ne concernent que
+`make up-full`, `REDIS_PASSWORD` est exigé par le compose de base : il conditionne aussi
+`make db-up`, `make down` et `make logs`. Le compose transmet le mot de passe à l'API via
+`REDIS_PASSWORD` (et non dans `REDIS_URL`), pour qu'un caractère `/`, `+` ou `@` issu d'un
+`openssl rand -base64 24` ne soit pas interprété comme un séparateur d'URL.
 
 La clé secrète et les mots de passe sont obligatoires et ne doivent jamais être commités. Générez
 une valeur aléatoire pour `SECRET_KEY`. Pour une VM, utilisez l’adresse IP réellement accessible

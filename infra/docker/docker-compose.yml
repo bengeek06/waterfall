@@ -8,6 +8,12 @@ services:
       CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
       DATABASE_URL: postgresql+psycopg://waterfall:waterfall@postgres:5432/waterfall
       IMPORT_STORAGE_PATH: /data/imports
+      # Password passed separately, never interpolated into the URL: `openssl rand
+      # -base64 24` routinely emits `/`, `+` or `@`, which a URL parser would read as
+      # host/path separators (e.g. `p@ss/word` parses as host="ss", password="p") --
+      # the API would start, Redis would look healthy, and every login would 503.
+      REDIS_URL: redis://redis:6379/0
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
       SECRET_KEY: ${SECRET_KEY:-}
       WF_ADMIN_EMAIL: ${WF_ADMIN_EMAIL:-admin@example.com}
       WF_ADMIN_IS_ACTIVE: ${WF_ADMIN_IS_ACTIVE:-true}
@@ -16,6 +22,8 @@ services:
       - "8000:8000"
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     command: >-
       sh -c "python -m waterfall.scripts.prepare_alembic_dev_schema && alembic upgrade head && exec uvicorn waterfall.main:app --host 0.0.0.0 --port 8000 --app-dir src"
@@ -38,6 +46,30 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    image: redis:7.4-alpine
+    command: >-
+      sh -c 'exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"'
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+      # redis-cli reads REDISCLI_AUTH natively. Using it instead of `-a <password>`
+      # keeps the secret out of the process table, where the healthcheck would
+      # otherwise publish it every 5 seconds (and it silences redis-cli's own warning).
+      REDISCLI_AUTH: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      # `| grep -q PONG` is load-bearing: redis-cli exits 0 even when the server answers
+      # NOAUTH/WRONGPASS, so without it the healthcheck would go green with a password
+      # the API cannot use.
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
 volumes:
   pgdata:
+  redisdata:
   import_data:

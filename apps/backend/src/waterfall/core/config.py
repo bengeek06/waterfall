@@ -36,6 +36,13 @@ class Settings(BaseSettings):
         default="sqlite+pysqlite:///./waterfall.db",
         alias="DATABASE_URL",
     )
+    redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
+    # Kept out of REDIS_URL on purpose: a password embedded in the URL must be
+    # percent-encoded, and `openssl rand -base64 24` routinely emits `/`, `+` and `@`,
+    # which silently corrupt the parsed host/password (redis-py would connect to the
+    # wrong host and every login would fail closed with a 503, with no usable
+    # diagnostic). Passing it as its own setting removes the encoding hazard entirely.
+    redis_password: str | None = Field(default=None, alias="REDIS_PASSWORD")
     secret_key: str = Field(default="", alias="SECRET_KEY")
     jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
     access_token_expire_minutes: int = Field(default=30, alias="ACCESS_TOKEN_EXPIRE_MINUTES")

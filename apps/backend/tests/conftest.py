@@ -4,12 +4,12 @@ from pathlib import Path
 
 import pytest
 
-# Registers _postgres_support's `postgres_app_database_url` fixture globally, so test
-# modules can request it by parameter name without importing it -- importing a
+# Registers _postgres_support's/_redis_support's fixtures globally, so test modules can
+# request them by parameter name without importing them -- importing a
 # @pytest.fixture-decorated callable by name into a module that also takes it as a test
 # parameter trips ruff's F811 ("redefinition of unused import"), which doesn't recognize
 # that pattern as pytest's normal cross-module fixture sharing.
-pytest_plugins = ["_postgres_support"]
+pytest_plugins = ["_postgres_support", "_redis_support"]
 
 SRC = Path(__file__).resolve().parents[1] / "src"
 if str(SRC) not in sys.path:
@@ -18,6 +18,10 @@ if str(SRC) not in sys.path:
 os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///./test.db")
 os.environ.setdefault("SECRET_KEY", "test-secret")
+# Same default as Settings.redis_url and the CI `redis` service; TEST_REDIS_URL lets a
+# developer point the whole app (not just _redis_support's reachability checks) at a
+# non-default Redis instance.
+os.environ.setdefault("REDIS_URL", os.environ.get("TEST_REDIS_URL", "redis://localhost:6379/0"))
 os.environ.setdefault("JWT_ALGORITHM", "HS256")
 os.environ.setdefault("ACCESS_TOKEN_EXPIRE_MINUTES", "30")
 
@@ -112,6 +116,9 @@ def reset_database() -> None:
 
 @pytest.fixture(autouse=True)
 def reset_login_rate_limiter() -> None:
+    # login_rate_limiter.clear() is a Redis-backed no-op when Redis is unreachable (see
+    # its docstring), so this runs safely before every test in the suite -- most of
+    # which have nothing to do with auth -- even on a machine with no Redis running.
     from waterfall.api.routes.auth import login_rate_limiter
 
     login_rate_limiter.clear()

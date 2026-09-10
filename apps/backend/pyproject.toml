@@ -23,6 +23,7 @@ dependencies = [
   "pwdlib[argon2]>=0.3.0",
   "python-multipart>=0.0.20",
   "prometheus-client>=0.22.1",
+  "redis>=5.0.0",
   "email-validator>=2.2.0",
   "openpyxl>=3.1.0",
   "lxml>=5.3.0",

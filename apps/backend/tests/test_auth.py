@@ -1,11 +1,16 @@
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, cast
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 from httpx import Response
 from sqlalchemy.engine import Engine
 
+from _redis_support import redis_test_url_and_password
+from waterfall.api.routes import auth as auth_module
 from waterfall.api.routes.auth import login_rate_limiter
 from waterfall.core.config import get_settings
 from waterfall.db.session import get_session_factory
@@ -389,7 +394,7 @@ def test_registration_can_be_disabled_outside_dev(monkeypatch: pytest.MonkeyPatc
         _clear_settings_cache()
 
 
-def test_login_rate_limit() -> None:
+def test_login_rate_limit(require_redis: None) -> None:
     login_rate_limiter.clear()
     os.environ["AUTH_RATE_LIMIT_ATTEMPTS"] = "2"
     os.environ["AUTH_RATE_LIMIT_WINDOW_SECONDS"] = "60"
@@ -410,7 +415,7 @@ def test_login_rate_limit() -> None:
         _clear_settings_cache()
 
 
-def test_login_lockout_after_failed_attempts() -> None:
+def test_login_lockout_after_failed_attempts(require_redis: None) -> None:
     login_rate_limiter.clear()
     os.environ["AUTH_MAX_FAILED_ATTEMPTS"] = "2"
     os.environ["AUTH_LOCKOUT_MINUTES"] = "15"
@@ -438,3 +443,138 @@ def test_login_lockout_after_failed_attempts() -> None:
         os.environ.pop("AUTH_RATE_LIMIT_ATTEMPTS", None)
         login_rate_limiter.clear()
         _clear_settings_cache()
+
+
+def test_login_fails_closed_when_rate_limiter_redis_is_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A login attempt must be rejected (503), never accepted, if the rate limiter's
+    Redis backend can't be reached -- fail-closed, not fail-open."""
+    # A fresh LoginRateLimiter so this test's bad REDIS_URL isn't shadowed by a Redis
+    # connection the shared singleton may have already opened against a working host.
+    monkeypatch.setattr(auth_module, "login_rate_limiter", auth_module.LoginRateLimiter())
+    # Port 1 is a privileged port nothing listens on; the connection is refused
+    # immediately rather than waiting out the client's socket_connect_timeout.
+    monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:1/0")
+    _clear_settings_cache()
+
+    try:
+        with TestClient(app) as client:
+            response = _login(client, "unreachable-redis@example.com", "bad-password")
+            assert response.status_code == 503
+            # The body matters as much as the status: it is what the frontend surfaces,
+            # and it must not leak the Redis URL (which may embed a password). The raw
+            # English `detail="Login temporarily unavailable"` never reaches the client:
+            # main.py's _generic_http_exception_handler rewrites every string detail into
+            # this translatable code, exactly as it does for the neighbouring 423/429.
+            assert response.json() == {"detail": {"code": "GENERIC_ERROR"}}
+    finally:
+        _clear_settings_cache()
+
+
+@pytest.mark.parametrize(
+    "redis_url",
+    [
+        # Nothing listens on privileged port 1: connection refused (a RedisError).
+        pytest.param("redis://127.0.0.1:1/0", id="unreachable"),
+        # No scheme -- the most banal misconfiguration. redis-py raises ValueError, not
+        # RedisError, from from_url(); if it escaped, allow() would 500 instead of the
+        # 503 the OpenAPI contract documents, and clear() would break the autouse
+        # fixture that calls it before all ~280 tests of the suite.
+        pytest.param("localhost:6379", id="malformed"),
+    ],
+)
+def test_rate_limiter_allow_fails_closed_while_clear_stays_silent(
+    monkeypatch: pytest.MonkeyPatch, redis_url: str
+) -> None:
+    """Locks the deliberate asymmetry between the limiter's two methods.
+
+    Direct unit test, no TestClient: now that CI provisions a Redis, `clear()`'s
+    error-swallowing branch is never exercised by the rest of the suite, so a regression
+    -- someone "harmonising" the two methods -- would otherwise go unnoticed.
+    """
+    monkeypatch.setenv("REDIS_URL", redis_url)
+    monkeypatch.delenv("REDIS_PASSWORD", raising=False)
+    _clear_settings_cache()
+
+    try:
+        limiter = auth_module.LoginRateLimiter()
+        limiter.clear()
+        with pytest.raises(auth_module.RateLimiterUnavailableError):
+            limiter.allow("unreachable-key", max_attempts=5, window_seconds=60)
+    finally:
+        _clear_settings_cache()
+
+
+def test_rate_limiter_authenticates_with_redis_password_outside_the_url(
+    require_redis: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """REDIS_PASSWORD is a setting of its own, not a fragment interpolated into REDIS_URL.
+
+    docker-compose deploys exactly this shape, because a password from
+    `openssl rand -base64 24` routinely contains `/`, `+` or `@` and would silently
+    corrupt URL parsing. Skipped-but-meaningful locally (passwordless Redis, password
+    None); against CI's password-protected Redis this is the authenticated path.
+    """
+    url, password = redis_test_url_and_password()
+    monkeypatch.setenv("REDIS_URL", url)
+    if password is None:
+        monkeypatch.delenv("REDIS_PASSWORD", raising=False)
+    else:
+        monkeypatch.setenv("REDIS_PASSWORD", password)
+    _clear_settings_cache()
+
+    try:
+        limiter = auth_module.LoginRateLimiter()
+        assert limiter.allow(f"split-password-{uuid4().hex}", max_attempts=1, window_seconds=60)
+    finally:
+        _clear_settings_cache()
+
+
+def test_login_rate_limiter_grants_exactly_max_attempts_under_concurrency(
+    require_redis: None,
+) -> None:
+    """The prune/count/record sequence must be atomic.
+
+    Run as three separate round-trips it is a read-modify-write: concurrent attempts on
+    the same key all read the same pre-increment count and are all admitted (measured
+    against a real Redis 7.4: 16 grants for a limit of 5 over 40 concurrent calls). The
+    limit is a security control, so overshooting it by 3x is not acceptable slack.
+    """
+    limiter = auth_module.LoginRateLimiter()
+    key = f"atomic-{uuid4().hex}"
+    max_attempts = 5
+    concurrency = 40
+    # Release every thread at once, so they genuinely interleave inside the limiter
+    # instead of finishing one after another as the pool warms up.
+    barrier = threading.Barrier(concurrency)
+
+    def attempt() -> bool:
+        barrier.wait(timeout=30)
+        return limiter.allow(key, max_attempts=max_attempts, window_seconds=60)
+
+    try:
+        with ThreadPoolExecutor(max_workers=concurrency) as pool:
+            futures = [pool.submit(attempt) for _ in range(concurrency)]
+            granted = sum(future.result() for future in futures)
+        assert granted == max_attempts
+    finally:
+        limiter.clear()
+
+
+def test_login_rate_limiter_sets_a_ttl_on_the_key(require_redis: None) -> None:
+    """The window key must never be left without an expiry.
+
+    With ZADD and EXPIRE issued as two separate commands, a process dying in between
+    leaks the key forever; the Lua script makes them one step.
+    """
+    limiter = auth_module.LoginRateLimiter()
+    key = f"ttl-{uuid4().hex}"
+
+    try:
+        assert limiter.allow(key, max_attempts=5, window_seconds=60)
+        client = limiter._get_client()  # pyright: ignore[reportPrivateUsage]
+        ttl = client.ttl(f"login_rate_limit:{key}")
+        assert 0 < ttl <= 61
+    finally:
+        limiter.clear()

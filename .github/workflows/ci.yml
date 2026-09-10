@@ -81,6 +81,27 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .[dev]
 
+      # Not a `services:` container: those cannot override the image command, and the
+      # redis image only enables authentication through `redis-server --requirepass`.
+      # An unauthenticated CI Redis would leave the authenticated code path -- the one
+      # docker-compose actually deploys -- untested. The password is a throwaway test
+      # credential, URL-safe on purpose (see REDIS_PASSWORD in docker-compose.yml:
+      # a password with /, + or @ must not be embedded in a URL).
+      - name: Start Redis (password-protected, as in docker-compose)
+        run: |
+          docker run -d --name ci-redis -p 6379:6379 redis:7.4-alpine \
+            redis-server --requirepass waterfall-ci-redis
+          for _ in $(seq 1 30); do
+            if docker exec -e REDISCLI_AUTH=waterfall-ci-redis ci-redis \
+                redis-cli ping | grep -q PONG; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Redis did not become ready" >&2
+          docker logs ci-redis >&2
+          exit 1
+
       - name: Ruff check
         run: ruff check .
 
@@ -93,11 +114,13 @@ jobs:
       - name: Pytest
         env:
           TEST_POSTGRES_URL: postgresql+psycopg://waterfall:waterfall@localhost:5432/waterfall
+          TEST_REDIS_URL: redis://:waterfall-ci-redis@localhost:6379/0
         run: pytest -q
 
       - name: PostgreSQL planning benchmark baseline
         env:
           TEST_POSTGRES_URL: postgresql+psycopg://waterfall:waterfall@localhost:5432/waterfall
+          TEST_REDIS_URL: redis://:waterfall-ci-redis@localhost:6379/0
         run: pytest -q -s --no-cov tests/test_planning_benchmark_postgres.py
 
   frontend-quality:
