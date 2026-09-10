@@ -17,6 +17,7 @@ export type Project = components["schemas"]["ProjectRead"];
 export type ProjectEstimate = components["schemas"]["ProjectEstimateRead"];
 export type EstimateTaskRow = components["schemas"]["EstimateTaskRowRead"];
 export type EstimateCostLine = components["schemas"]["EstimateCostLineRead"];
+export type EstimateRoleAssignment = components["schemas"]["EstimateRoleAssignmentRead"];
 export type ProjectCostCode = components["schemas"]["ProjectCostCodeRead"];
 export type Task = components["schemas"]["TaskRead"];
 export type PlanningStructureCreate = components["schemas"]["PlanningStructureCreate"];
@@ -274,6 +275,58 @@ export function getPlanningRevisionConflict(cause: unknown): {
   };
 }
 
+// E6-11/#175: the structured 400 body `POST .../role-assignments` raises when a labor
+// assignment covers a (cost category, year) with no `CostRate`, or a year with no
+// `InflationRate`, and the task it's attached to is already dated (start_at/finish_at set).
+// `describeStructuredDetailCode` above never learns this code (it has no fixed French sentence:
+// the message must list the actual missing combinations/years), so `cause.message` alone would
+// only carry the generic fallback -- callers needing the details go through
+// getMissingRateCoverage/describeMissingRateCoverage below instead, same precedent as
+// getPlanningTaskDeleteConflict/getPlanningRevisionConflict.
+export type MissingRateCoverageDetail = components["schemas"]["MissingRateCoverage"]["detail"];
+
+// Basse review finding #4 (E12-06/#278): the `409` branch below isn't dead code, even though
+// neither of this file's current callers (submitCreateRoleAssignment/saveRoleAssignment in
+// use-estimate-cost-lines.ts) ever actually gets a 409 with this code -- POST .../
+// role-assignments (create) only ever raises MISSING_RATE_COVERAGE as a 400, and PATCH .../
+// role-assignments/{id} (update) never raises it at all (task_id/role_id, the only fields the
+// rate-coverage check depends on, are immutable once created -- its own 409s are the generic
+// "estimate no longer a draft" conflict). It's kept because `validate_project_estimate`
+// (apps/backend/.../routes/estimates.py) *does* raise this exact structured detail as a 409
+// (see its own `responses` docstring: "au moins une (categorie de cout, annee) ... sans
+// CostRate/InflationRate (detail.code=MISSING_RATE_COVERAGE)") -- this helper is a small,
+// generic, cause-agnostic detector, not tied to one specific caller, so it stays able to
+// recognize that shape from any endpoint that might raise it this way, present or future.
+export function getMissingRateCoverage(cause: unknown): MissingRateCoverageDetail | null {
+  if (!(cause instanceof ApiError) || (cause.status !== 400 && cause.status !== 409)) {
+    return null;
+  }
+  const detail = cause.detail as { code?: string } | undefined;
+  if (!detail || detail.code !== "MISSING_RATE_COVERAGE") {
+    return null;
+  }
+  return detail as MissingRateCoverageDetail;
+}
+
+// Builds a readable French message listing every missing (cost category, year) hourly-rate
+// combination and every missing inflation year from a MissingRateCoverage detail -- rather than
+// only the generic "Une erreur est survenue..." fallback describeStructuredDetailCode would
+// otherwise produce for this code.
+export function describeMissingRateCoverage(detail: MissingRateCoverageDetail): string {
+  const parts: string[] = [];
+  if (detail.missing_cost_rates.length) {
+    const list = detail.missing_cost_rates
+      .map((entry) => `${entry.accounting_code} ${entry.category_name} (${entry.year})`)
+      .join(", ");
+    parts.push(`taux horaire manquant pour ${list}`);
+  }
+  if (detail.missing_inflation_years.length) {
+    parts.push(`taux d'inflation manquant pour ${detail.missing_inflation_years.join(", ")}`);
+  }
+  const suffix = parts.length ? ` : ${parts.join(" ; ")}.` : ".";
+  return `Couverture de taux incomplète pour cette tâche déjà datée${suffix}`;
+}
+
 export async function login(email: string, password: string): Promise<TokenResponse> {
   const body = new URLSearchParams();
   body.set("username", email);
@@ -386,9 +439,11 @@ export function deleteUser(
 export async function getResourceNodes(
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
+  includeInactive = false,
 ): Promise<ResourceNode[]> {
+  const query = includeInactive ? "?include_inactive=true" : "";
   const page = await authRequest<components["schemas"]["ResourceNodeListRead"]>(
-    "/resources/nodes",
+    `/resources/nodes${query}`,
     tokens,
     { method: "GET" },
     onSessionRefresh,
@@ -449,11 +504,17 @@ export async function getResourceRoles(
   nodeId?: number,
   includeDescendants = false,
   listParams: ListQueryParams = {},
+  includeInactive = false,
 ): Promise<ListPage<ResourceRole>> {
-  const extra = nodeId
-    ? { node_id: String(nodeId), include_descendants: String(includeDescendants) }
-    : undefined;
-  const query = buildListQuery(listParams, extra);
+  const extra: Record<string, string> = {};
+  if (nodeId) {
+    extra.node_id = String(nodeId);
+    extra.include_descendants = String(includeDescendants);
+  }
+  if (includeInactive) {
+    extra.include_inactive = "true";
+  }
+  const query = buildListQuery(listParams, Object.keys(extra).length > 0 ? extra : undefined);
   const page = await authRequest<components["schemas"]["ResourceRoleListRead"]>(
     `/resources/roles${query}`,
     tokens,
@@ -1035,6 +1096,83 @@ export function deleteEstimateCostLine(
 ) {
   return authRequest<void>(
     `/projects/${projectId}/estimates/${estimateId}/cost-lines/${lineId}`,
+    tokens,
+    { method: "DELETE" },
+    onSessionRefresh,
+  );
+}
+
+// E12-06/#278: CRUD for EstimateRoleAssignment ("MO"/labor) rows -- same shape as the
+// EstimateCostLine wrappers just above. `EstimateRoleAssignmentCreate`/`Update` distinguish
+// themselves from EstimateCostLine's own: `task_id`/`role_id` are only ever set at creation
+// (immutable afterward, see EstimateRoleAssignmentUpdate's own doc comment in the OpenAPI spec),
+// so `EstimateRoleAssignmentUpdate` doesn't carry either field at all.
+export type EstimateRoleAssignmentCreate = components["schemas"]["EstimateRoleAssignmentCreate"];
+export type EstimateRoleAssignmentUpdate = components["schemas"]["EstimateRoleAssignmentUpdate"];
+
+export async function listEstimateRoleAssignments(
+  projectId: number,
+  estimateId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+): Promise<EstimateRoleAssignment[]> {
+  const page = await authRequest<components["schemas"]["EstimateRoleAssignmentListRead"]>(
+    `/projects/${projectId}/estimates/${estimateId}/role-assignments`,
+    tokens,
+    { method: "GET" },
+    onSessionRefresh,
+  );
+  return page.items;
+}
+
+export function createEstimateRoleAssignment(
+  projectId: number,
+  estimateId: number,
+  payload: EstimateRoleAssignmentCreate,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<EstimateRoleAssignment>(
+    `/projects/${projectId}/estimates/${estimateId}/role-assignments`,
+    tokens,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    onSessionRefresh,
+  );
+}
+
+export function updateEstimateRoleAssignment(
+  projectId: number,
+  estimateId: number,
+  assignmentId: number,
+  payload: EstimateRoleAssignmentUpdate,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<EstimateRoleAssignment>(
+    `/projects/${projectId}/estimates/${estimateId}/role-assignments/${assignmentId}`,
+    tokens,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    onSessionRefresh,
+  );
+}
+
+export function deleteEstimateRoleAssignment(
+  projectId: number,
+  estimateId: number,
+  assignmentId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<void>(
+    `/projects/${projectId}/estimates/${estimateId}/role-assignments/${assignmentId}`,
     tokens,
     { method: "DELETE" },
     onSessionRefresh,

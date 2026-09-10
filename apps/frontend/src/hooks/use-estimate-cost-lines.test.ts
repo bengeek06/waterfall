@@ -2,7 +2,15 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { useRef } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { EstimateCostLine, EstimateTaskRow, PlanningDetail, Project, ProjectCostCode, ProjectEstimate } from "@/lib/backend";
+import type {
+  EstimateCostLine,
+  EstimateRoleAssignment,
+  EstimateTaskRow,
+  PlanningDetail,
+  Project,
+  ProjectCostCode,
+  ProjectEstimate,
+} from "@/lib/backend";
 import { ApiError } from "@/lib/backend";
 
 const mocks = vi.hoisted(() => ({
@@ -17,6 +25,11 @@ const mocks = vi.hoisted(() => ({
   listEstimateTaskRows: vi.fn(),
   validateProjectEstimate: vi.fn(),
   clearSession: vi.fn(),
+  createEstimateRoleAssignment: vi.fn(),
+  updateEstimateRoleAssignment: vi.fn(),
+  deleteEstimateRoleAssignment: vi.fn(),
+  listEstimateRoleAssignments: vi.fn(),
+  getResourceRoles: vi.fn(),
 }));
 
 vi.mock("@/lib/backend", async () => {
@@ -33,6 +46,11 @@ vi.mock("@/lib/backend", async () => {
     getPlanning: mocks.getPlanning,
     listEstimateTaskRows: mocks.listEstimateTaskRows,
     validateProjectEstimate: mocks.validateProjectEstimate,
+    createEstimateRoleAssignment: mocks.createEstimateRoleAssignment,
+    updateEstimateRoleAssignment: mocks.updateEstimateRoleAssignment,
+    deleteEstimateRoleAssignment: mocks.deleteEstimateRoleAssignment,
+    listEstimateRoleAssignments: mocks.listEstimateRoleAssignments,
+    getResourceRoles: mocks.getResourceRoles,
   };
 });
 
@@ -60,6 +78,7 @@ function setup(
   const setEstimates = vi.fn<SetEstimates>();
   const setEstimateTaskRows = vi.fn<SetEstimateTaskRows>();
   const setPlanningDetail = vi.fn<(detail: PlanningDetail | null) => void>();
+  const setEstimateRoleAssignments = vi.fn<(assignments: EstimateRoleAssignment[]) => void>();
   const { result, rerender } = renderHook(
     (props: { selectedEstimateId: number | null; selectedPlanningId?: number | null }) => {
       const selectedPlanningId = props.selectedPlanningId ?? null;
@@ -79,6 +98,7 @@ function setup(
         selectedPlanningId,
         selectedPlanningIdRef,
         setPlanningDetail,
+        setEstimateRoleAssignments,
         onSessionRefresh: vi.fn(),
         router: router as never,
         setError,
@@ -100,6 +120,7 @@ function setup(
     setEstimates,
     setEstimateTaskRows,
     setPlanningDetail,
+    setEstimateRoleAssignments,
   };
 }
 
@@ -1302,5 +1323,494 @@ describe("useEstimateCostLines submitMilestoneTemplate", () => {
 
     expect(setEstimateTaskRows).not.toHaveBeenCalled();
     expect(result.current.milestoneDialogOpen).toBe(true);
+  });
+});
+
+function makeAssignment(id: number, overrides: Partial<EstimateRoleAssignment> = {}): EstimateRoleAssignment {
+  return {
+    id,
+    estimate_id: 1,
+    task_id: 42,
+    role_id: 5,
+    role_code: "DEV",
+    role_name: "Développeur",
+    cost_category_id: 9,
+    accounting_code: "6410",
+    quantity: 1,
+    hours: 8,
+    ...overrides,
+  } as EstimateRoleAssignment;
+}
+
+// E12-06/#278: loading the roles available for a chosen organizational node in the
+// "Ajouter une ligne MO" dialog.
+describe("useEstimateCostLines updateRoleAssignmentNodeId", () => {
+  beforeEach(() => {
+    mocks.getResourceRoles.mockReset();
+    mocks.clearSession.mockReset();
+  });
+
+  it("does nothing (no backend call) when the node is cleared", async () => {
+    const { result } = setup({ selectedEstimateId: 1 });
+
+    await act(async () => {
+      await result.current.updateRoleAssignmentNodeId("");
+    });
+
+    expect(mocks.getResourceRoles).not.toHaveBeenCalled();
+    expect(result.current.roleAssignmentRoles).toEqual([]);
+  });
+
+  it("loads the roles of the chosen node and its descendants, and exposes them", async () => {
+    const roles = [{ id: 5, name: "Développeur", node_id: 3, cost_category_id: 9, calendar_id: null, is_active: true }];
+    mocks.getResourceRoles.mockResolvedValue({ items: roles, total: 1 });
+    const { result } = setup({ selectedEstimateId: 1 });
+
+    await act(async () => {
+      await result.current.updateRoleAssignmentNodeId("3");
+    });
+
+    expect(mocks.getResourceRoles).toHaveBeenCalledWith(session, expect.any(Function), 3, true);
+    expect(result.current.roleAssignmentRoles).toEqual(roles);
+  });
+
+  it("resets the previously chosen role when the node changes", async () => {
+    mocks.getResourceRoles.mockResolvedValue({ items: [], total: 0 });
+    const { result } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.updateRoleAssignmentRoleId("5");
+    });
+    expect(result.current.roleAssignmentRoleId).toBe("5");
+
+    await act(async () => {
+      await result.current.updateRoleAssignmentNodeId("3");
+    });
+
+    expect(result.current.roleAssignmentRoleId).toBe("");
+  });
+
+  it("clears the session and redirects to login on a post-refresh 401", async () => {
+    mocks.getResourceRoles.mockRejectedValue(new ApiError(401, "Unauthorized"));
+    const { result, router } = setup({ selectedEstimateId: 1 });
+
+    await act(async () => {
+      await result.current.updateRoleAssignmentNodeId("3");
+    });
+
+    expect(mocks.clearSession).toHaveBeenCalled();
+    expect(router.push).toHaveBeenCalledWith("/login");
+  });
+
+  // Finding on the E12-06/#278 final review: `getResourceRoles` requests aren't guaranteed to
+  // resolve in the order they were fired -- selecting node A then quickly switching to node B
+  // must not let a slower-resolving response for A land in `roleAssignmentRoles` once the
+  // selector already shows B, or the user could pick a role that actually belongs to A's
+  // department. Same race/fix shape as app/resources/page.test.tsx's
+  // "does not leave the role-calendars table's loading indicator stuck..." test, using deferred
+  // promises to force the out-of-order resolution.
+  it("ignores a stale node's roles response that resolves after a newer node was selected", async () => {
+    const rolesForA = [{ id: 5, name: "Développeur A", node_id: 1, cost_category_id: 9, calendar_id: null, is_active: true }];
+    const rolesForB = [{ id: 6, name: "Développeur B", node_id: 2, cost_category_id: 9, calendar_id: null, is_active: true }];
+
+    let resolveA!: (page: { items: typeof rolesForA; total: number }) => void;
+    const promiseA = new Promise<{ items: typeof rolesForA; total: number }>((resolve) => {
+      resolveA = resolve;
+    });
+    let resolveB!: (page: { items: typeof rolesForB; total: number }) => void;
+    const promiseB = new Promise<{ items: typeof rolesForB; total: number }>((resolve) => {
+      resolveB = resolve;
+    });
+    mocks.getResourceRoles.mockImplementation((_tokens: unknown, _refresh: unknown, nodeId: unknown) => {
+      if (nodeId === 1) return promiseA;
+      if (nodeId === 2) return promiseB;
+      return Promise.resolve({ items: [], total: 0 });
+    });
+
+    const { result } = setup({ selectedEstimateId: 1 });
+
+    let updateAPromise!: Promise<void>;
+    act(() => {
+      updateAPromise = result.current.updateRoleAssignmentNodeId("1");
+    });
+    let updateBPromise!: Promise<void>;
+    act(() => {
+      updateBPromise = result.current.updateRoleAssignmentNodeId("2");
+    });
+
+    // Node A's request resolves after node B has already been selected: its (obsolete) roles
+    // must be dropped, not applied on top of whatever is currently displayed.
+    resolveA({ items: rolesForA, total: 1 });
+    await act(async () => {
+      await updateAPromise;
+    });
+    expect(result.current.roleAssignmentRoles).toEqual([]);
+
+    resolveB({ items: rolesForB, total: 1 });
+    await act(async () => {
+      await updateBPromise;
+    });
+    expect(result.current.roleAssignmentRoles).toEqual(rolesForB);
+  });
+});
+
+describe("useEstimateCostLines submitCreateRoleAssignment", () => {
+  beforeEach(() => {
+    mocks.createEstimateRoleAssignment.mockReset();
+    mocks.listEstimateRoleAssignments.mockReset().mockResolvedValue([]);
+    mocks.clearSession.mockReset();
+  });
+
+  it("requires a task, a role, a positive quantity and a non-negative hours value", async () => {
+    const { result } = setup({ selectedEstimateId: 1 });
+
+    await act(async () => {
+      await result.current.submitCreateRoleAssignment();
+    });
+
+    expect(mocks.createEstimateRoleAssignment).not.toHaveBeenCalled();
+    expect(result.current.roleAssignmentError).toBe(
+      "Renseigne une tâche, un rôle, une quantité et un nombre d'heures valides.",
+    );
+  });
+
+  // Attaches the created assignment to the currently *selected* estimate, never another one --
+  // the payload/estimate_id pair go straight to createEstimateRoleAssignment's own arguments.
+  it("attaches the new role assignment to the selected estimate's own endpoint", async () => {
+    mocks.createEstimateRoleAssignment.mockResolvedValue(makeAssignment(1));
+    const { result } = setup({ selectedEstimateId: 7 });
+
+    act(() => {
+      result.current.updateRoleAssignmentTaskId("42");
+      result.current.updateRoleAssignmentRoleId("5");
+      result.current.updateRoleAssignmentQuantity("2");
+      result.current.updateRoleAssignmentHours("10");
+    });
+
+    await act(async () => {
+      await result.current.submitCreateRoleAssignment();
+    });
+
+    expect(mocks.createEstimateRoleAssignment).toHaveBeenCalledWith(
+      1,
+      7,
+      { task_id: 42, role_id: 5, cost_code_id: null, quantity: 2, hours: 10, comment: null },
+      session,
+      expect.any(Function),
+    );
+    expect(mocks.listEstimateRoleAssignments).toHaveBeenCalledWith(1, 7, session, expect.any(Function));
+  });
+
+  it("closes the dialog and refetches the role-assignment list on success", async () => {
+    mocks.createEstimateRoleAssignment.mockResolvedValue(makeAssignment(1));
+    const freshAssignments = [makeAssignment(1), makeAssignment(2)];
+    mocks.listEstimateRoleAssignments.mockResolvedValue(freshAssignments);
+    const { result, setEstimateRoleAssignments } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.openRoleAssignmentDialog();
+      result.current.updateRoleAssignmentTaskId("42");
+      result.current.updateRoleAssignmentRoleId("5");
+      result.current.updateRoleAssignmentQuantity("2");
+      result.current.updateRoleAssignmentHours("10");
+    });
+
+    await act(async () => {
+      await result.current.submitCreateRoleAssignment();
+    });
+
+    expect(setEstimateRoleAssignments).toHaveBeenCalledWith(freshAssignments);
+    expect(result.current.roleAssignmentDialogOpen).toBe(false);
+  });
+
+  // Same stale-response guard as submitCreateTask's own sibling: the estimate version can switch
+  // while this request is in flight.
+  it("does not apply a stale success result if the estimate version changed while the request was in flight", async () => {
+    let resolveCreate!: (assignment: EstimateRoleAssignment) => void;
+    mocks.createEstimateRoleAssignment.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveCreate = resolve;
+        }),
+    );
+    const { result, rerender, setEstimateRoleAssignments } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.openRoleAssignmentDialog();
+      result.current.updateRoleAssignmentTaskId("42");
+      result.current.updateRoleAssignmentRoleId("5");
+      result.current.updateRoleAssignmentQuantity("2");
+      result.current.updateRoleAssignmentHours("10");
+    });
+
+    let submitPromise!: Promise<void>;
+    act(() => {
+      submitPromise = result.current.submitCreateRoleAssignment();
+    });
+
+    rerender({ selectedEstimateId: 2, selectedPlanningId: null });
+
+    resolveCreate(makeAssignment(1));
+    await act(async () => {
+      await submitPromise;
+    });
+
+    expect(setEstimateRoleAssignments).not.toHaveBeenCalled();
+    expect(result.current.roleAssignmentDialogOpen).toBe(true);
+  });
+
+  // Moyenne finding #3 (E12-06/#278): the same selectedEstimateIdRef guard exists in the `catch`
+  // block too (see submitCreateRoleAssignment), but until now nothing proved it -- only the
+  // "stale success" branch above was tested. Same deferred-promise pattern as that test, except
+  // the mocked call is rejected (not resolved) after the estimate version has already switched.
+  it("does not apply a stale failure result if the estimate version changed while the request was in flight", async () => {
+    let rejectCreate!: (cause: unknown) => void;
+    mocks.createEstimateRoleAssignment.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectCreate = reject;
+        }),
+    );
+    const { result, rerender } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.openRoleAssignmentDialog();
+      result.current.updateRoleAssignmentTaskId("42");
+      result.current.updateRoleAssignmentRoleId("5");
+      result.current.updateRoleAssignmentQuantity("2");
+      result.current.updateRoleAssignmentHours("10");
+    });
+
+    let submitPromise!: Promise<void>;
+    act(() => {
+      submitPromise = result.current.submitCreateRoleAssignment();
+    });
+
+    rerender({ selectedEstimateId: 2, selectedPlanningId: null });
+
+    rejectCreate(new ApiError(400, "Une erreur est survenue."));
+    await act(async () => {
+      await submitPromise;
+    });
+
+    // The failed request was launched for estimate 1 -- its error must never leak into
+    // whatever state estimate 2 (the now-selected version) sees.
+    expect(result.current.roleAssignmentError).toBeNull();
+  });
+
+  it("clears the session and redirects to login on a post-refresh 401", async () => {
+    mocks.createEstimateRoleAssignment.mockRejectedValue(new ApiError(401, "Unauthorized"));
+    const { result, router } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.updateRoleAssignmentTaskId("42");
+      result.current.updateRoleAssignmentRoleId("5");
+      result.current.updateRoleAssignmentQuantity("2");
+      result.current.updateRoleAssignmentHours("10");
+    });
+
+    await act(async () => {
+      await result.current.submitCreateRoleAssignment();
+    });
+
+    expect(mocks.clearSession).toHaveBeenCalled();
+    expect(router.push).toHaveBeenCalledWith("/login");
+  });
+
+  // E6-11/#175: the structured MISSING_RATE_COVERAGE 400 is shown informatively, listing the
+  // missing (category, year) rate combinations and inflation years, not just a generic message.
+  it("shows an informative message for the MISSING_RATE_COVERAGE 400, not the generic fallback", async () => {
+    mocks.createEstimateRoleAssignment.mockRejectedValue(
+      new ApiError(400, "Une erreur est survenue. Réessayez ou contactez le support si le problème persiste.", {
+        code: "MISSING_RATE_COVERAGE",
+        missing_cost_rates: [{ category_id: 9, category_name: "Ingénierie", accounting_code: "6410", year: 2027 }],
+        missing_inflation_years: [],
+      }),
+    );
+    const { result } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.openRoleAssignmentDialog();
+      result.current.updateRoleAssignmentTaskId("42");
+      result.current.updateRoleAssignmentRoleId("5");
+      result.current.updateRoleAssignmentQuantity("2");
+      result.current.updateRoleAssignmentHours("10");
+    });
+
+    await act(async () => {
+      await result.current.submitCreateRoleAssignment();
+    });
+
+    expect(result.current.roleAssignmentError).not.toBe(
+      "Une erreur est survenue. Réessayez ou contactez le support si le problème persiste.",
+    );
+    expect(result.current.roleAssignmentError).toContain("6410 Ingénierie (2027)");
+    expect(result.current.roleAssignmentDialogOpen).toBe(true);
+  });
+
+  it("shows a distinct message for a generic 409 (estimate no longer a draft)", async () => {
+    mocks.createEstimateRoleAssignment.mockRejectedValue(new ApiError(409, "Une erreur est survenue."));
+    const { result } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.updateRoleAssignmentTaskId("42");
+      result.current.updateRoleAssignmentRoleId("5");
+      result.current.updateRoleAssignmentQuantity("2");
+      result.current.updateRoleAssignmentHours("10");
+    });
+
+    await act(async () => {
+      await result.current.submitCreateRoleAssignment();
+    });
+
+    expect(result.current.roleAssignmentError).toBe("Ce devis n'est plus modifiable.");
+  });
+});
+
+describe("useEstimateCostLines saveRoleAssignment / removeRoleAssignment", () => {
+  beforeEach(() => {
+    mocks.updateEstimateRoleAssignment.mockReset();
+    mocks.deleteEstimateRoleAssignment.mockReset();
+    mocks.listEstimateRoleAssignments.mockReset().mockResolvedValue([]);
+    mocks.clearSession.mockReset();
+  });
+
+  it("starts editing with the assignment's current quantity/hours", () => {
+    const { result } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.startEditRoleAssignment(makeAssignment(1, { quantity: 3, hours: 12 }));
+    });
+
+    expect(result.current.editingRoleAssignmentId).toBe(1);
+    expect(result.current.editingRoleAssignmentDraft).toEqual({ quantity: "3", hours: "12" });
+  });
+
+  it("patches only quantity/hours, refetches the list, and stops editing on success", async () => {
+    const updated = makeAssignment(1, { quantity: 5, hours: 20 });
+    mocks.updateEstimateRoleAssignment.mockResolvedValue(updated);
+    const freshAssignments = [updated];
+    mocks.listEstimateRoleAssignments.mockResolvedValue(freshAssignments);
+    const { result, setEstimateRoleAssignments } = setup({ selectedEstimateId: 7 });
+
+    act(() => {
+      result.current.startEditRoleAssignment(makeAssignment(1));
+      result.current.updateEditingRoleAssignmentQuantity("5");
+      result.current.updateEditingRoleAssignmentHours("20");
+    });
+
+    await act(async () => {
+      await result.current.saveRoleAssignment(makeAssignment(1));
+    });
+
+    expect(mocks.updateEstimateRoleAssignment).toHaveBeenCalledWith(
+      1,
+      7,
+      1,
+      { quantity: 5, hours: 20 },
+      session,
+      expect.any(Function),
+    );
+    expect(setEstimateRoleAssignments).toHaveBeenCalledWith(freshAssignments);
+    expect(result.current.editingRoleAssignmentId).toBeNull();
+  });
+
+  // Same stale-response guard as saveCostLine's own sibling.
+  it("does not apply a stale update result if the estimate version changed while the request was in flight", async () => {
+    let resolveUpdate!: (assignment: EstimateRoleAssignment) => void;
+    mocks.updateEstimateRoleAssignment.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveUpdate = resolve;
+        }),
+    );
+    const { result, rerender, setEstimateRoleAssignments } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.startEditRoleAssignment(makeAssignment(1));
+      result.current.updateEditingRoleAssignmentQuantity("5");
+      result.current.updateEditingRoleAssignmentHours("20");
+    });
+
+    let savePromise!: Promise<void>;
+    act(() => {
+      savePromise = result.current.saveRoleAssignment(makeAssignment(1));
+    });
+
+    rerender({ selectedEstimateId: 2, selectedPlanningId: null });
+
+    resolveUpdate(makeAssignment(1, { quantity: 5, hours: 20 }));
+    await act(async () => {
+      await savePromise;
+    });
+
+    expect(setEstimateRoleAssignments).not.toHaveBeenCalled();
+    expect(result.current.editingRoleAssignmentId).toBe(1);
+  });
+
+  it("requests, then confirms, deletion via requestDeleteRoleAssignment/removeRoleAssignment", async () => {
+    mocks.deleteEstimateRoleAssignment.mockResolvedValue(undefined);
+    const assignment = makeAssignment(1);
+    const { result } = setup({ selectedEstimateId: 7 });
+
+    act(() => {
+      result.current.requestDeleteRoleAssignment(assignment);
+    });
+    expect(result.current.roleAssignmentPendingDelete).toEqual(assignment);
+
+    await act(async () => {
+      await result.current.removeRoleAssignment(assignment);
+    });
+
+    expect(mocks.deleteEstimateRoleAssignment).toHaveBeenCalledWith(1, 7, 1, session, expect.any(Function));
+  });
+
+  it("cancels a pending deletion without calling the backend", () => {
+    const { result } = setup({ selectedEstimateId: 1 });
+
+    act(() => {
+      result.current.requestDeleteRoleAssignment(makeAssignment(1));
+      result.current.cancelDeleteRoleAssignment();
+    });
+
+    expect(result.current.roleAssignmentPendingDelete).toBeNull();
+  });
+
+  // Same stale-response guard as removeCostLine's own sibling.
+  it("does not apply a stale refetch if the estimate version changed while the deletion was in flight", async () => {
+    let resolveDelete!: () => void;
+    mocks.deleteEstimateRoleAssignment.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveDelete = () => resolve(undefined);
+        }),
+    );
+    const { result, rerender, setEstimateRoleAssignments } = setup({ selectedEstimateId: 1 });
+
+    let removePromise!: Promise<void>;
+    act(() => {
+      removePromise = result.current.removeRoleAssignment(makeAssignment(1));
+    });
+
+    rerender({ selectedEstimateId: 2, selectedPlanningId: null });
+
+    resolveDelete();
+    await act(async () => {
+      await removePromise;
+    });
+
+    expect(setEstimateRoleAssignments).not.toHaveBeenCalled();
+  });
+
+  it("clears the session and redirects to login on a post-refresh 401 while deleting", async () => {
+    mocks.deleteEstimateRoleAssignment.mockRejectedValue(new ApiError(401, "Unauthorized"));
+    const { result, router } = setup({ selectedEstimateId: 1 });
+
+    await act(async () => {
+      await result.current.removeRoleAssignment(makeAssignment(1));
+    });
+
+    expect(mocks.clearSession).toHaveBeenCalled();
+    expect(router.push).toHaveBeenCalledWith("/login");
   });
 });

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildEstimateGridEntries } from "@/lib/estimate-grid";
-import type { EstimateCostLine, EstimateTaskRow } from "@/lib/backend";
+import type { EstimateCostLine, EstimateRoleAssignment, EstimateTaskRow } from "@/lib/backend";
 
 function makeTaskRow(overrides: Partial<EstimateTaskRow> = {}): EstimateTaskRow {
   return {
@@ -29,6 +29,22 @@ function makeLine(overrides: Partial<EstimateCostLine> = {}): EstimateCostLine {
     task_id: null,
     ...overrides,
   } as EstimateCostLine;
+}
+
+function makeAssignment(overrides: Partial<EstimateRoleAssignment> = {}): EstimateRoleAssignment {
+  return {
+    id: 1,
+    estimate_id: 1,
+    task_id: 42,
+    role_id: 1,
+    role_code: "DEV",
+    role_name: "Développeur",
+    cost_category_id: 1,
+    accounting_code: "6410",
+    quantity: 1,
+    hours: 8,
+    ...overrides,
+  } as EstimateRoleAssignment;
 }
 
 describe("buildEstimateGridEntries", () => {
@@ -117,6 +133,108 @@ describe("buildEstimateGridEntries", () => {
       { kind: "task", taskRow },
       { kind: "global-header" },
       { kind: "line", line: orphanedLine, indentLevel: 0 },
+    ]);
+  });
+});
+
+// E12-06/#278: merges EstimateRoleAssignment ("labor") rows under their attached task, alongside
+// the non-labor cost lines already merged above.
+describe("buildEstimateGridEntries with role assignments (E12-06)", () => {
+  it("groups a role assignment right after the task row it is attached to, indented one level deeper", () => {
+    const taskRow = makeTaskRow({ id: 1, task_id: 42, outline_level: 1 });
+    const assignment = makeAssignment({ task_id: 42 });
+
+    const entries = buildEstimateGridEntries([], [taskRow], [assignment]);
+
+    expect(entries).toEqual([
+      { kind: "task", taskRow },
+      { kind: "labor", assignment, indentLevel: 2 },
+    ]);
+  });
+
+  it("lists a task's role assignments ahead of its non-labor cost lines", () => {
+    const taskRow = makeTaskRow({ id: 1, task_id: 42 });
+    const assignment = makeAssignment({ task_id: 42 });
+    const line = makeLine({ id: 100, task_id: 42 });
+
+    const entries = buildEstimateGridEntries([line], [taskRow], [assignment]);
+
+    expect(entries).toEqual([
+      { kind: "task", taskRow },
+      { kind: "labor", assignment, indentLevel: 1 },
+      { kind: "line", line, indentLevel: 1 },
+    ]);
+  });
+
+  it("never attaches a role assignment under a task row with no task_id (no MsTask twin)", () => {
+    const orphanTaskRow = makeTaskRow({ id: 1, task_id: null });
+    const assignment = makeAssignment({ task_id: 42 });
+
+    const entries = buildEstimateGridEntries([], [orphanTaskRow], [assignment]);
+
+    // The assignment doesn't attach under orphanTaskRow (task_id: null), and since no other task
+    // row of this estimate carries task_id 42 either, it now falls into the orphan fallback (see
+    // the next describe block) instead of disappearing.
+    expect(entries).toEqual([
+      { kind: "task", taskRow: orphanTaskRow },
+      { kind: "global-header" },
+      { kind: "labor", assignment, indentLevel: 0 },
+    ]);
+  });
+
+  it("has no 'global labor' section: a role assignment can never appear in the trailing global section", () => {
+    const taskRow = makeTaskRow({ id: 1, task_id: 42 });
+    const globalLine = makeLine({ id: 100, task_id: null });
+    const assignment = makeAssignment({ task_id: 42 });
+
+    const entries = buildEstimateGridEntries([globalLine], [taskRow], [assignment]);
+
+    expect(entries).toEqual([
+      { kind: "task", taskRow },
+      { kind: "labor", assignment, indentLevel: 1 },
+      { kind: "global-header" },
+      { kind: "line", line: globalLine, indentLevel: 0 },
+    ]);
+  });
+
+  it("defaults to no role assignments merged at all when the third argument is omitted", () => {
+    const taskRow = makeTaskRow({ id: 1, task_id: 42 });
+
+    const entries = buildEstimateGridEntries([], [taskRow]);
+
+    expect(entries).toEqual([{ kind: "task", taskRow }]);
+  });
+
+  // Moyenne finding #2 (E12-06/#278): an EstimateRoleAssignment whose task_id matches no
+  // EstimateTaskRow of this estimate version must never silently disappear from the grid, unlike
+  // what happened before this fix (it stayed in the internal grouping map and was never read
+  // back out). It is now folded into the trailing "Lignes globales" section, the same fallback
+  // already used for an unattached/orphaned cost line above.
+  it("falls back a role assignment with an unmatched task_id into the global section, instead of dropping it", () => {
+    const taskRow = makeTaskRow({ id: 1, task_id: 42 });
+    const orphanedAssignment = makeAssignment({ task_id: 999 });
+
+    const entries = buildEstimateGridEntries([], [taskRow], [orphanedAssignment]);
+
+    expect(entries).toEqual([
+      { kind: "task", taskRow },
+      { kind: "global-header" },
+      { kind: "labor", assignment: orphanedAssignment, indentLevel: 0 },
+    ]);
+  });
+
+  it("lists an orphaned role assignment ahead of global cost lines within the same global section", () => {
+    const taskRow = makeTaskRow({ id: 1, task_id: 42 });
+    const orphanedAssignment = makeAssignment({ task_id: 999 });
+    const globalLine = makeLine({ id: 100, task_id: null });
+
+    const entries = buildEstimateGridEntries([globalLine], [taskRow], [orphanedAssignment]);
+
+    expect(entries).toEqual([
+      { kind: "task", taskRow },
+      { kind: "global-header" },
+      { kind: "labor", assignment: orphanedAssignment, indentLevel: 0 },
+      { kind: "line", line: globalLine, indentLevel: 0 },
     ]);
   });
 });

@@ -4,20 +4,25 @@ import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { BulkCostCodeAssignmentBar } from "@/components/bulk-cost-code-assignment-bar";
 import { CostLineForm, type CostLineDraft } from "@/components/cost-line-form";
-import { CostLinesTable, type EditingLineDraft } from "@/components/cost-lines-table";
+import { CostLinesTable, type EditingLineDraft, type EditingRoleAssignmentDraft } from "@/components/cost-lines-table";
 import { EstimateCreateTaskDialog } from "@/components/estimate-create-task-dialog";
 import {
   EstimateMilestoneTemplateDialog,
   type MilestoneTemplateValue,
 } from "@/components/estimate-milestone-template-dialog";
+import { EstimateRoleAssignmentDialog } from "@/components/estimate-role-assignment-dialog";
 import { EstimateVersionControls } from "@/components/estimate-version-controls";
 import type {
   CostCategory,
+  CostRate,
   EstimateCostLine,
+  EstimateRoleAssignment,
   EstimateTaskRow,
   EstimateValidationWarning,
   ProjectCostCode,
   ProjectEstimate,
+  ResourceNode,
+  ResourceRole,
   Task,
 } from "@/lib/backend";
 
@@ -103,6 +108,44 @@ export type EstimateTabProps = {
   onMilestoneLagMinutesChange: (value: string) => void;
   onSubmitMilestoneTemplate: () => void;
   onReopenStructureForMilestone: () => void;
+  // E12-06/#278: role-assignment ("MO") referentials, threaded straight through to
+  // CostLinesTable's own Dept/Type/Catégorie/Cat/Taux horaire/MO column resolution -- see that
+  // component's own prop doc comments.
+  estimateRoleAssignments: EstimateRoleAssignment[];
+  resourceNodes: ResourceNode[];
+  resourceRoles: ResourceRole[];
+  costRates: CostRate[];
+  editingRoleAssignmentId: number | null;
+  editingRoleAssignmentDraft: EditingRoleAssignmentDraft;
+  onEditRoleAssignmentQuantityChange: (value: string) => void;
+  onEditRoleAssignmentHoursChange: (value: string) => void;
+  onStartEditRoleAssignment: (assignment: EstimateRoleAssignment) => void;
+  onSaveRoleAssignment: (assignment: EstimateRoleAssignment) => void;
+  onRequestDeleteRoleAssignment: (assignment: EstimateRoleAssignment) => void;
+  // "Ajouter une ligne MO" dialog (create-only -- editing an existing row happens inline in
+  // CostLinesTable instead, see that component's EditingRoleAssignmentDraft doc comment).
+  roleAssignmentDialogOpen: boolean;
+  roleAssignmentNodeId: string;
+  onRoleAssignmentNodeIdChange: (value: string) => void;
+  roleAssignmentRoles: ResourceRole[];
+  roleAssignmentRolesLoading: boolean;
+  roleAssignmentRoleId: string;
+  onRoleAssignmentRoleIdChange: (value: string) => void;
+  roleAssignmentTaskId: string;
+  onRoleAssignmentTaskIdChange: (value: string) => void;
+  roleAssignmentQuantity: string;
+  onRoleAssignmentQuantityChange: (value: string) => void;
+  roleAssignmentHours: string;
+  onRoleAssignmentHoursChange: (value: string) => void;
+  roleAssignmentCostCodeId: string;
+  onRoleAssignmentCostCodeIdChange: (value: string) => void;
+  roleAssignmentComment: string;
+  onRoleAssignmentCommentChange: (value: string) => void;
+  roleAssignmentBusy: boolean;
+  roleAssignmentError: string | null;
+  onOpenRoleAssignmentDialog: () => void;
+  onCloseRoleAssignmentDialog: () => void;
+  onSubmitRoleAssignment: () => void;
 };
 
 // Extracted from ProjectDetailsPage (E4-11 / #151): composes the whole "Devis" tab (version
@@ -182,6 +225,39 @@ export function EstimateTab({
   onMilestoneLagMinutesChange,
   onSubmitMilestoneTemplate,
   onReopenStructureForMilestone,
+  estimateRoleAssignments,
+  resourceNodes,
+  resourceRoles,
+  costRates,
+  editingRoleAssignmentId,
+  editingRoleAssignmentDraft,
+  onEditRoleAssignmentQuantityChange,
+  onEditRoleAssignmentHoursChange,
+  onStartEditRoleAssignment,
+  onSaveRoleAssignment,
+  onRequestDeleteRoleAssignment,
+  roleAssignmentDialogOpen,
+  roleAssignmentNodeId,
+  onRoleAssignmentNodeIdChange,
+  roleAssignmentRoles,
+  roleAssignmentRolesLoading,
+  roleAssignmentRoleId,
+  onRoleAssignmentRoleIdChange,
+  roleAssignmentTaskId,
+  onRoleAssignmentTaskIdChange,
+  roleAssignmentQuantity,
+  onRoleAssignmentQuantityChange,
+  roleAssignmentHours,
+  onRoleAssignmentHoursChange,
+  roleAssignmentCostCodeId,
+  onRoleAssignmentCostCodeIdChange,
+  roleAssignmentComment,
+  onRoleAssignmentCommentChange,
+  roleAssignmentBusy,
+  roleAssignmentError,
+  onOpenRoleAssignmentDialog,
+  onCloseRoleAssignmentDialog,
+  onSubmitRoleAssignment,
 }: EstimateTabProps) {
   if (!active) {
     return null;
@@ -260,9 +336,12 @@ export function EstimateTab({
           </div>
 
           {canEditEstimate ? (
-            <div>
+            <div className="flex flex-wrap gap-2">
               <Button type="button" variant="outline" disabled={estimateBusy} onClick={onOpenCreateTaskDialog}>
                 Ajouter une tâche au planning
+              </Button>
+              <Button type="button" variant="outline" disabled={estimateBusy} onClick={onOpenRoleAssignmentDialog}>
+                Ajouter une ligne MO
               </Button>
             </div>
           ) : null}
@@ -315,6 +394,18 @@ export function EstimateTab({
             bulkAssignBusy={bulkAssignBusy}
             onOpenMilestoneDialog={onOpenMilestoneDialog}
             milestoneTaskIds={milestoneTaskIds}
+            estimateRoleAssignments={estimateRoleAssignments}
+            resourceNodes={resourceNodes}
+            resourceRoles={resourceRoles}
+            costRates={costRates}
+            planningTasks={parentTaskOptions}
+            editingRoleAssignmentId={editingRoleAssignmentId}
+            editingRoleAssignmentDraft={editingRoleAssignmentDraft}
+            onEditRoleAssignmentQuantityChange={onEditRoleAssignmentQuantityChange}
+            onEditRoleAssignmentHoursChange={onEditRoleAssignmentHoursChange}
+            onStartEditRoleAssignment={onStartEditRoleAssignment}
+            onSaveRoleAssignment={onSaveRoleAssignment}
+            onRequestDeleteRoleAssignment={onRequestDeleteRoleAssignment}
           />
         </div>
       ) : null}
@@ -351,6 +442,33 @@ export function EstimateTab({
         onClose={onCloseMilestoneDialog}
         onSubmit={onSubmitMilestoneTemplate}
         onReopenStructure={onReopenStructureForMilestone}
+      />
+
+      <EstimateRoleAssignmentDialog
+        open={roleAssignmentDialogOpen}
+        resourceNodes={resourceNodes}
+        nodeId={roleAssignmentNodeId}
+        onNodeIdChange={onRoleAssignmentNodeIdChange}
+        roles={roleAssignmentRoles}
+        rolesLoading={roleAssignmentRolesLoading}
+        roleId={roleAssignmentRoleId}
+        onRoleIdChange={onRoleAssignmentRoleIdChange}
+        estimateTaskRows={estimateTaskRows}
+        taskId={roleAssignmentTaskId}
+        onTaskIdChange={onRoleAssignmentTaskIdChange}
+        quantity={roleAssignmentQuantity}
+        onQuantityChange={onRoleAssignmentQuantityChange}
+        hours={roleAssignmentHours}
+        onHoursChange={onRoleAssignmentHoursChange}
+        projectCostCodes={projectCostCodes}
+        costCodeId={roleAssignmentCostCodeId}
+        onCostCodeIdChange={onRoleAssignmentCostCodeIdChange}
+        comment={roleAssignmentComment}
+        onCommentChange={onRoleAssignmentCommentChange}
+        busy={roleAssignmentBusy}
+        error={roleAssignmentError}
+        onClose={onCloseRoleAssignmentDialog}
+        onSubmit={onSubmitRoleAssignment}
       />
     </div>
   );

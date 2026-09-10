@@ -144,6 +144,13 @@
     operationId: listResourceNodes
     security:
     - bearerAuth: []
+    parameters:
+    - name: include_inactive
+      in: query
+      required: false
+      schema:
+        type: boolean
+        default: false
     responses:
       '200':
         description: >-
@@ -272,6 +279,12 @@
         type: integer
         minimum: 1
     - name: include_descendants
+      in: query
+      required: false
+      schema:
+        type: boolean
+        default: false
+    - name: include_inactive
       in: query
       required: false
       schema:

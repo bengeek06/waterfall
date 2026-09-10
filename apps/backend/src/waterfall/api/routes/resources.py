@@ -471,18 +471,17 @@ def delete_calendar(
 
 @router.get("/nodes", response_model=ResourceNodeListRead)
 def list_nodes(
+    include_inactive: bool = Query(default=False),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_active_user),
 ) -> ResourceNodeListRead:
     # Deliberately not paginated (EPIC E7 explicitly excludes tree structures):
     # callers rebuild the full resource-node tree client-side and a truncated
     # page would silently produce an incomplete/broken tree.
-    nodes = (
-        db.query(ResourceNode)
-        .filter(ResourceNode.is_active.is_(True))
-        .order_by(ResourceNode.code)
-        .all()
-    )
+    query = db.query(ResourceNode)
+    if not include_inactive:
+        query = query.filter(ResourceNode.is_active.is_(True))
+    nodes = query.order_by(ResourceNode.code).all()
     items = [ResourceNodeRead.model_validate(node) for node in nodes]
     return ResourceNodeListRead(items=items, total=len(items), limit=None, offset=0)
 
@@ -556,15 +555,14 @@ def delete_node(
 def list_roles(
     node_id: int | None = Query(default=None, gt=0),
     include_descendants: bool = Query(default=False),
+    include_inactive: bool = Query(default=False),
     params: ListParams = Depends(list_params),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_active_user),
 ) -> ResourceRoleListRead:
-    query = (
-        db.query(ResourceRole)
-        .join(ResourceNode, ResourceRole.node_id == ResourceNode.id)
-        .filter(ResourceRole.is_active.is_(True))
-    )
+    query = db.query(ResourceRole).join(ResourceNode, ResourceRole.node_id == ResourceNode.id)
+    if not include_inactive:
+        query = query.filter(ResourceRole.is_active.is_(True))
     if node_id is not None:
         _get_or_404(db, ResourceNode, node_id, "Resource node")
         if include_descendants:

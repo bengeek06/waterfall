@@ -79,6 +79,39 @@ function renderTab(overrides: Partial<EstimateTabProps> = {}) {
     onMilestoneLagMinutesChange: vi.fn(),
     onSubmitMilestoneTemplate: vi.fn(),
     onReopenStructureForMilestone: vi.fn(),
+    estimateRoleAssignments: [],
+    resourceNodes: [],
+    resourceRoles: [],
+    costRates: [],
+    editingRoleAssignmentId: null,
+    editingRoleAssignmentDraft: { quantity: "", hours: "" },
+    onEditRoleAssignmentQuantityChange: vi.fn(),
+    onEditRoleAssignmentHoursChange: vi.fn(),
+    onStartEditRoleAssignment: vi.fn(),
+    onSaveRoleAssignment: vi.fn(),
+    onRequestDeleteRoleAssignment: vi.fn(),
+    roleAssignmentDialogOpen: false,
+    roleAssignmentNodeId: "",
+    onRoleAssignmentNodeIdChange: vi.fn(),
+    roleAssignmentRoles: [],
+    roleAssignmentRolesLoading: false,
+    roleAssignmentRoleId: "",
+    onRoleAssignmentRoleIdChange: vi.fn(),
+    roleAssignmentTaskId: "",
+    onRoleAssignmentTaskIdChange: vi.fn(),
+    roleAssignmentQuantity: "1",
+    onRoleAssignmentQuantityChange: vi.fn(),
+    roleAssignmentHours: "0",
+    onRoleAssignmentHoursChange: vi.fn(),
+    roleAssignmentCostCodeId: "",
+    onRoleAssignmentCostCodeIdChange: vi.fn(),
+    roleAssignmentComment: "",
+    onRoleAssignmentCommentChange: vi.fn(),
+    roleAssignmentBusy: false,
+    roleAssignmentError: null,
+    onOpenRoleAssignmentDialog: vi.fn(),
+    onCloseRoleAssignmentDialog: vi.fn(),
+    onSubmitRoleAssignment: vi.fn(),
     ...overrides,
   };
   return render(<EstimateTab {...props} />);
@@ -149,5 +182,27 @@ describe("EstimateTab milestone-template gating (E6-07 review finding)", () => {
     });
 
     expect(screen.getByRole("button", { name: "Gabarit de jalons" })).not.toBeDisabled();
+  });
+});
+
+// Basse review finding #5 (E12-06/#278): "Ajouter une ligne MO" sits in the same
+// `canEditEstimate ?` block as "Ajouter une tâche au planning", so it's correct by
+// construction -- these tests just make that explicit instead of leaving it unasserted.
+describe("EstimateTab 'Ajouter une ligne MO' visibility (E12-06)", () => {
+  afterEach(() => cleanup());
+
+  it("opens the role-assignment dialog when clicked, with canEditEstimate: true", () => {
+    const onOpenRoleAssignmentDialog = vi.fn();
+    renderTab({ canEditEstimate: true, onOpenRoleAssignmentDialog });
+
+    fireEvent.click(screen.getByRole("button", { name: "Ajouter une ligne MO" }));
+
+    expect(onOpenRoleAssignmentDialog).toHaveBeenCalledTimes(1);
+  });
+
+  it("is absent when canEditEstimate is false", () => {
+    renderTab({ canEditEstimate: false });
+
+    expect(screen.queryByRole("button", { name: "Ajouter une ligne MO" })).not.toBeInTheDocument();
   });
 });
