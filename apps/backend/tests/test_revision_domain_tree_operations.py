@@ -61,6 +61,7 @@ from waterfall.domain.revision import (
     describe_cost_losses,
     indent_nodes,
     insert_node,
+    levels,
     move_nodes,
     move_nodes_down,
     move_nodes_up,
@@ -70,6 +71,7 @@ from waterfall.domain.revision import (
     resolve_bearing_task,
     selection_roots,
     subtree_ids,
+    unreachable_node_ids,
     validate_revision,
     violated_invariant_ids,
 )
@@ -567,6 +569,50 @@ def test_a_cost_facet_of_an_unknown_node_is_ignored_by_the_reconciliation() -> N
     )
 
     assert reconcile_forecast_to_budget(project, budget=budget, forecast=forecast) == []
+
+
+def test_levels_group_the_tree_by_depth(bench: Bench) -> None:
+    """Roots first, then their children, each level in display order."""
+    grouped = [[node.id for node in level] for level in levels(bench.revision)]
+
+    assert grouped == [
+        [bench.root_a, bench.root_c, bench.global_cost],
+        [bench.child_b, bench.supply],
+        [bench.labor],
+    ]
+    assert unreachable_node_ids(bench.revision) == []
+
+
+def test_an_empty_revision_has_no_level(bench: Bench) -> None:
+    bench.revision.nodes.clear()
+
+    assert levels(bench.revision) == []
+    assert unreachable_node_ids(bench.revision) == []
+
+
+def test_a_node_hanging_from_a_missing_parent_belongs_to_no_level(bench: Bench) -> None:
+    """INV-09: no root reaches it, so a level-by-level walk must leave it out."""
+    bench.revision.nodes[bench.root_c].parent_id = 4242
+
+    assert bench.root_c not in [node.id for level in levels(bench.revision) for node in level]
+    assert unreachable_node_ids(bench.revision) == [bench.root_c]
+
+
+def test_a_parent_cycle_belongs_to_no_level(bench: Bench) -> None:
+    """INV-06: two nodes hanging off each other are reached from nowhere, and the
+    walk must still terminate."""
+    revision = bench.revision
+    revision.nodes[bench.root_a].parent_id = bench.child_b
+
+    # The cycle takes its whole subtree with it: nothing below `root_a` hangs off
+    # a root any more either.
+    assert unreachable_node_ids(revision) == sorted(
+        [bench.root_a, bench.child_b, bench.labor, bench.supply]
+    )
+    assert [node.id for level in levels(revision) for node in level] == [
+        bench.root_c,
+        bench.global_cost,
+    ]
 
 
 def test_depth_first_skips_a_node_hanging_from_a_missing_parent(bench: Bench) -> None:

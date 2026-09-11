@@ -54,6 +54,44 @@ def depth_first(revision: ProjectRevision, parent_id: int | None = None) -> list
     return ordered
 
 
+def levels(revision: ProjectRevision) -> list[list[RevisionNode]]:
+    """The nodes of the tree grouped by depth, roots first, each level in display order.
+
+    A node no root reaches -- its parent is missing (INV-09) or its parent chain
+    cycles (INV-06) -- belongs to no level and is therefore absent from the
+    result; :func:`unreachable_node_ids` is what names those.
+
+    Level order is what a writer needs that :func:`depth_first` does not give it:
+    a parent is always in a strictly earlier level than its children, so a store
+    that has to allocate an identity for a parent before its children can write
+    the tree one level at a time.
+    """
+    grouped: list[list[RevisionNode]] = []
+    visited: set[int] = set()
+    current = children_of(revision, None)
+    while current:
+        grouped.append(current)
+        visited.update(node.id for node in current)
+        current = [
+            child
+            for node in current
+            for child in children_of(revision, node.id)
+            if child.id not in visited
+        ]
+    return grouped
+
+
+def unreachable_node_ids(revision: ProjectRevision) -> list[int]:
+    """Ids of the nodes no root reaches, sorted: the nodes :func:`levels` leaves out.
+
+    Non-empty exactly when the parent graph is not a forest: either a node hangs
+    from a parent absent from the revision (INV-09), or a set of nodes hangs off
+    itself (INV-06).
+    """
+    reached = {node.id for level in levels(revision) for node in level}
+    return sorted(set(revision.nodes) - reached)
+
+
 def ancestors_of(revision: ProjectRevision, node_id: int) -> list[RevisionNode]:
     """Strict ancestors of ``node_id``, nearest first.
 

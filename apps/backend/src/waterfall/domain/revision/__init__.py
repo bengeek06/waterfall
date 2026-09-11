@@ -97,9 +97,11 @@ from waterfall.domain.revision.structure import (
     bearing_work_item_id,
     children_of,
     depth_first,
+    levels,
     node_by_work_item,
     resolve_bearing_task,
     subtree_ids,
+    unreachable_node_ids,
 )
 from waterfall.domain.revision.tree import (
     CostLoss,
@@ -200,6 +202,7 @@ __all__ = [
     "generate_skeleton",
     "indent_nodes",
     "insert_node",
+    "levels",
     "links_of",
     "move_nodes",
     "move_nodes_down",
@@ -225,6 +228,7 @@ __all__ = [
     "set_task_duration",
     "skeleton_fingerprint_of",
     "subtree_ids",
+    "unreachable_node_ids",
     "validate_revision",
     "violated_invariant_ids",
 ]

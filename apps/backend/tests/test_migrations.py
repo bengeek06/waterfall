@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import asyncio
 import os
 import subprocess
@@ -204,7 +205,7 @@ def test_migration_upgrade_creates_expected_schema() -> None:
 
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260910_0013"
+                == "20260911_0014"
             )
 
 
@@ -476,7 +477,7 @@ def test_calendar_default_flag_migration_backfills_standard_and_enforces_uniquen
 
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260910_0013"
+                == "20260911_0014"
             )
 
         # STANDARD is already backfilled to is_default=1 above, so a second row
@@ -959,7 +960,7 @@ def _assert_create_all_schema_can_be_stamped_by_migrate_up(database_url: str) ->
     _run_alembic(database_url, "head")
 
     with _disposable_engine(database_url) as engine, engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260910_0013"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260911_0014"
         standard = connection.execute(
             text("SELECT id, is_active, is_default FROM wf_calendar WHERE code = 'STANDARD'")
         ).one()
@@ -1079,7 +1080,7 @@ def test_legacy_prepare_reuses_empty_alembic_version_table() -> None:
         with _disposable_engine(database_url) as engine, engine.connect() as connection:
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260910_0013"
+                == "20260911_0014"
             )
 
 
@@ -1107,7 +1108,7 @@ def test_create_all_schema_before_planning_revision_is_repaired_then_migrated() 
         with _disposable_engine(database_url) as engine, engine.connect() as connection:
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260910_0013"
+                == "20260911_0014"
             )
             planning_columns = {
                 column["name"] for column in inspect(connection).get_columns("wf_planning")
@@ -1214,7 +1215,7 @@ def test_schema_revision_check_rejects_database_behind_head() -> None:
             assert_database_schema_current(engine)
 
     assert error.value.current_revision == "20260901_0005"
-    assert error.value.expected_revision == "20260910_0013"
+    assert error.value.expected_revision == "20260911_0014"
     assert "Run `make migrate-up`" in str(error.value)
 
 
@@ -1260,7 +1261,7 @@ def test_postgres_migration_upgrade_head_succeeds(postgres_database_url: str) ->
             "wf_estimate",
             "wf_estimate_task_row",
         }.issubset(table_names)
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260910_0013"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260911_0014"
 
 
 def test_postgres_project_external_uid_accepts_canonical_guid(
@@ -1397,7 +1398,7 @@ def test_project_cost_code_migration_backfills_root_from_code_and_prj_fallback()
 
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260910_0013"
+                == "20260911_0014"
             )
 
 
@@ -2513,3 +2514,167 @@ def test_postgres_estimate_grid_node_migration_backfill_and_downgrade(
     with _disposable_engine(postgres_database_url) as engine, engine.connect() as connection:
         table_names = set(inspect(connection).get_table_names())
         assert "wf_estimate_grid_node" in table_names
+
+
+_REVISION_MODEL_TABLES = frozenset(
+    {
+        "wf_work_item",
+        "wf_revision",
+        "wf_revision_node",
+        "wf_revision_plan_facet",
+        "wf_revision_cost_facet",
+        "wf_revision_node_link",
+    }
+)
+
+#: Everything E14-03 (#329) deliberately leaves in place, and E14-12 (#339) will
+#: remove once every consumer has been migrated off it.
+_LEGACY_TABLES_E14_03_MUST_NOT_TOUCH = frozenset(
+    {
+        "ms_task",
+        "ms_task_link",
+        "wf_planning_task_snapshot",
+        "wf_planning_link_snapshot",
+        "wf_estimate_task_row",
+        "wf_estimate_grid_node",
+        "wf_charge_line",
+        "wf_task_enrichment",
+        "wf_task_role_assignment",
+    }
+)
+
+_REVISION_MODEL_MIGRATION = (
+    BACKEND_DIR / "migrations" / "versions" / "20260911_0014_revision_model_tables.py"
+)
+
+
+def test_revision_model_migration_creates_its_tables_and_leaves_the_old_base_alone() -> None:
+    """E14-03 (#329): the new tables appear, the twin-task base is untouched."""
+    with TemporaryDirectory() as temporary_directory:
+        database_url = f"sqlite+pysqlite:///{Path(temporary_directory) / 'migration.db'}"
+        _run_alembic(database_url, "head")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            inspector = inspect(connection)
+            table_names = set(inspector.get_table_names())
+            assert table_names >= _REVISION_MODEL_TABLES
+            assert table_names >= _LEGACY_TABLES_E14_03_MUST_NOT_TOUCH
+
+            project_columns = {column["name"] for column in inspector.get_columns("ms_project")}
+            assert {
+                "planning_reference_id",
+                "displayed_planning_id",
+                "reference_estimate_id",
+            } <= project_columns
+            estimate_columns = {column["name"] for column in inspector.get_columns("wf_estimate")}
+            assert {"planning_id", "revision"} <= estimate_columns
+            planning_columns = {column["name"] for column in inspector.get_columns("wf_planning")}
+            assert "revision" in planning_columns
+
+            revision_columns = {column["name"] for column in inspector.get_columns("wf_revision")}
+            assert "lock_version" in revision_columns
+
+
+#: Operations an additive migration must never perform. ``execute`` is in the
+#: list because a raw ``op.execute("DROP TABLE ...")`` is exactly how the check
+#: below would otherwise be walked around, and ``batch_alter_table`` because it
+#: is the SQLite spelling of everything else in the list.
+_DESTRUCTIVE_MIGRATION_OPERATIONS = frozenset(
+    {
+        "alter_column",
+        "batch_alter_table",
+        "drop_column",
+        "drop_constraint",
+        "drop_index",
+        "drop_table",
+        "execute",
+        "rename_table",
+    }
+)
+
+
+def _called_operations(function: ast.FunctionDef) -> set[str]:
+    """Names of the ``op.<name>(...)`` calls made anywhere inside ``function``."""
+    return {
+        node.func.attr
+        for node in ast.walk(function)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "op"
+    }
+
+
+def _migration_function(path: Path, name: str) -> ast.FunctionDef:
+    module = ast.parse(path.read_text(encoding="utf-8"))
+    return next(
+        node for node in module.body if isinstance(node, ast.FunctionDef) and node.name == name
+    )
+
+
+def test_revision_model_migration_upgrade_holds_no_destructive_operation() -> None:
+    """The one thing this issue must never do, asserted on the file itself.
+
+    Read as a syntax tree rather than as text: a substring search would fire on
+    the word appearing in a comment, and would miss both a raw
+    ``op.execute("DROP TABLE ...")`` and an ``op.batch_alter_table`` block -- the
+    two spellings that would make a migration destructive without ever naming
+    ``drop_table``.
+    """
+    upgrade = _migration_function(_REVISION_MODEL_MIGRATION, "upgrade")
+
+    destructive = sorted(_called_operations(upgrade) & _DESTRUCTIVE_MIGRATION_OPERATIONS)
+    assert destructive == [], (
+        f"E14-03 must stay strictly additive, its upgrade() calls {destructive}"
+    )
+    assert "create_table" in _called_operations(upgrade), (
+        "the tree walk found no create_table either: it is not reading the migration"
+    )
+
+
+def test_revision_model_migration_is_reversible() -> None:
+    with TemporaryDirectory() as temporary_directory:
+        database_url = f"sqlite+pysqlite:///{Path(temporary_directory) / 'migration.db'}"
+        _run_alembic(database_url, "head")
+        _downgrade_alembic(database_url, "20260910_0013")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            table_names = set(inspect(connection).get_table_names())
+            assert not (_REVISION_MODEL_TABLES & table_names)
+            assert table_names >= _LEGACY_TABLES_E14_03_MUST_NOT_TOUCH
+            assert (
+                connection.scalar(text("SELECT version_num FROM alembic_version"))
+                == "20260910_0013"
+            )
+
+        _run_alembic(database_url, "head")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            assert set(inspect(connection).get_table_names()) >= _REVISION_MODEL_TABLES
+
+
+def test_postgres_revision_model_migration_round_trip(postgres_database_url: str) -> None:
+    """PostgreSQL variant: composite and self-referencing foreign keys, and two
+    partial unique indexes, are where a migration that only ever ran on SQLite
+    would break on the production dialect."""
+    _run_alembic(postgres_database_url, "head")
+
+    with _disposable_engine(postgres_database_url) as engine, engine.connect() as connection:
+        inspector = inspect(connection)
+        table_names = set(inspector.get_table_names())
+        assert table_names >= _REVISION_MODEL_TABLES
+        assert table_names >= _LEGACY_TABLES_E14_03_MUST_NOT_TOUCH
+        node_index_names = {index["name"] for index in inspector.get_indexes("wf_revision_node")}
+        assert "uq_wf_revision_node_root_position" in node_index_names
+
+    _downgrade_alembic(postgres_database_url, "20260910_0013")
+
+    with _disposable_engine(postgres_database_url) as engine, engine.connect() as connection:
+        table_names = set(inspect(connection).get_table_names())
+        assert not (_REVISION_MODEL_TABLES & table_names)
+        assert table_names >= _LEGACY_TABLES_E14_03_MUST_NOT_TOUCH
+
+    _run_alembic(postgres_database_url, "head")
+
+    with _disposable_engine(postgres_database_url) as engine, engine.connect() as connection:
+        assert set(inspect(connection).get_table_names()) >= _REVISION_MODEL_TABLES
