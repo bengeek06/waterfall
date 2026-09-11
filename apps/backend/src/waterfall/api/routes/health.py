@@ -16,9 +16,9 @@ The check logic lives here, next to the route that owns it, for the same reason
 endpoint, and it needs that endpoint's own Redis client -- a `core/` or `services/`
 module importing `api.routes.auth` would invert the layering (and risk an import cycle,
 since `auth` imports `waterfall.services`). `check_dependencies()` is nonetheless a
-standalone, argument-free function returning a per-dependency mapping, so the next issue
-(E13-04) can feed a Prometheus gauge from the same result without reaching into the
-handler.
+standalone, argument-free function returning a per-dependency mapping, which is what
+E13-04's `dependency_up` gauge is fed from -- the readiness handler publishes the result
+it already has, so the metric never costs a probe of its own.
 """
 
 from __future__ import annotations
@@ -39,6 +39,7 @@ from sqlalchemy.pool import NullPool
 from waterfall.api.routes.auth import login_rate_limiter
 from waterfall.core.config import get_settings
 from waterfall.core.object_storage import import_object_storage
+from waterfall.core.observability import set_dependency_up
 from waterfall.schemas.health import DependencyState, ReadinessChecks, ReadinessStatus
 
 router = APIRouter(prefix="/health")
@@ -112,6 +113,13 @@ def liveness() -> dict[str, str]:
 )
 def readiness(response: Response) -> ReadinessStatus:
     states = check_dependencies()
+    # E13-04: mirror the answer onto `dependency_up` for /metrics. Fed from the result
+    # this handler already holds -- which may be memoised -- so observability never costs
+    # an extra probe, and so a scrape of /metrics costs none at all. The metric stays out
+    # of the response body: /health/ready answers orchestrators, /metrics answers
+    # Prometheus, and the two payloads are deliberately not merged.
+    for dependency, is_up in states.items():
+        set_dependency_up(dependency.value, is_up)
     is_ready = all(states.values())
     # Same body either way, only the status code differs: a caller that gets a 503 needs
     # the per-dependency breakdown even more than one that gets a 200.
