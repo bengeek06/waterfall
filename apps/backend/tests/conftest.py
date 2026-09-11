@@ -4,12 +4,12 @@ from pathlib import Path
 
 import pytest
 
-# Registers _postgres_support's/_redis_support's fixtures globally, so test modules can
-# request them by parameter name without importing them -- importing a
-# @pytest.fixture-decorated callable by name into a module that also takes it as a test
-# parameter trips ruff's F811 ("redefinition of unused import"), which doesn't recognize
-# that pattern as pytest's normal cross-module fixture sharing.
-pytest_plugins = ["_postgres_support", "_redis_support"]
+# Registers the fixtures of _postgres_support/_redis_support/_object_storage_support
+# globally, so test modules can request them by parameter name without importing them --
+# importing a @pytest.fixture-decorated callable by name into a module that also takes it
+# as a test parameter trips ruff's F811 ("redefinition of unused import"), which doesn't
+# recognize that pattern as pytest's normal cross-module fixture sharing.
+pytest_plugins = ["_postgres_support", "_redis_support", "_object_storage_support"]
 
 SRC = Path(__file__).resolve().parents[1] / "src"
 if str(SRC) not in sys.path:
@@ -24,6 +24,10 @@ os.environ.setdefault("SECRET_KEY", "test-secret")
 os.environ.setdefault("REDIS_URL", os.environ.get("TEST_REDIS_URL", "redis://localhost:6379/0"))
 os.environ.setdefault("JWT_ALGORITHM", "HS256")
 os.environ.setdefault("ACCESS_TOKEN_EXPIRE_MINUTES", "30")
+# The GARAGE_* object storage settings are defaulted by _object_storage_support (the
+# plugin listed above), next to the moto backend that has to agree with them -- not here,
+# because importing that module from this one would disable pytest's assertion rewriting
+# for it. Plugins are imported before any test runs, hence before Settings is first read.
 
 
 @pytest.fixture(autouse=True, scope="session")

@@ -7,7 +7,13 @@ services:
       APP_ENV: ${APP_ENV:-dev}
       CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
       DATABASE_URL: postgresql+psycopg://waterfall:waterfall@postgres:5432/waterfall
-      IMPORT_STORAGE_PATH: /data/imports
+      # Uploaded import sources go to Garage, not to a container-local volume: object
+      # storage survives `docker compose down`, and is not tied to the one machine the
+      # API happens to run on. The credentials are the very ones garage-init imports.
+      GARAGE_ENDPOINT_URL: http://garage:3900
+      GARAGE_ACCESS_KEY_ID: ${GARAGE_ACCESS_KEY_ID:?GARAGE_ACCESS_KEY_ID must be set}
+      GARAGE_SECRET_ACCESS_KEY: ${GARAGE_SECRET_ACCESS_KEY:?GARAGE_SECRET_ACCESS_KEY must be set}
+      GARAGE_BUCKET: ${GARAGE_BUCKET:-waterfall-imports}
       # Password passed separately, never interpolated into the URL: `openssl rand
       # -base64 24` routinely emits `/`, `+` or `@`, which a URL parser would read as
       # host/path separators (e.g. `p@ss/word` parses as host="ss", password="p") --
@@ -25,10 +31,13 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      # Not `garage: service_healthy`: the bucket and the key only exist once garage-init
+      # has run, and that is what the API actually needs. The bootstrap waits for the node
+      # itself, so this transitively covers Garage being up.
+      garage-init:
+        condition: service_completed_successfully
     command: >-
       sh -c "python -m waterfall.scripts.prepare_alembic_dev_schema && alembic upgrade head && exec uvicorn waterfall.main:app --host 0.0.0.0 --port 8000 --app-dir src"
-    volumes:
-      - import_data:/data/imports
 
   postgres:
     image: postgres:17
@@ -69,7 +78,73 @@ services:
       timeout: 5s
       retries: 10
 
+  garage:
+    # Single source of truth for the Garage version: garage-init below builds its CLI
+    # image from the same value (see garage/Dockerfile's GARAGE_VERSION arg), so a bump
+    # here cannot leave the CLI a version behind the server.
+    image: dxflrs/garage:${GARAGE_VERSION:-v1.0.1}
+    environment:
+      # Guards node-to-node and CLI RPC. Required by Garage, and deliberately without a
+      # default: a committed one would be a shared secret in every deployment. Generate
+      # with `openssl rand -hex 32`.
+      GARAGE_RPC_SECRET: ${GARAGE_RPC_SECRET:?GARAGE_RPC_SECRET must be set}
+    ports:
+      # S3 API only. RPC (3901) stays inside the compose network. Published for
+      # Configuration A, where the API runs natively and must reach the store.
+      - "127.0.0.1:3900:3900"
+    volumes:
+      - ./garage/garage.toml:/etc/garage.toml:ro
+      # Garage keeps its metadata database and its object data in two distinct
+      # directories; both must persist, and losing either loses the bucket.
+      - garage_meta:/var/lib/garage/meta
+      - garage_data:/var/lib/garage/data
+    healthcheck:
+      # The honest question is "can this node serve the bucket the API reads and writes?",
+      # which is exactly what this answers -- it stays red until garage-init has applied
+      # the layout and created the bucket. It has to be the CLI: the image is built FROM
+      # scratch, so there is no shell for CMD-SHELL and no curl for the admin API.
+      test: ["CMD", "/garage", "bucket", "info", "${GARAGE_BUCKET:-waterfall-imports}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      # Nothing depends on this healthcheck (the api waits on garage-init instead), but
+      # without a grace period the node is reported unhealthy for as long as the bootstrap
+      # takes -- which on a first `up` includes building the garage-init image. Purely
+      # cosmetic, and it removes a red status that means nothing.
+      start_period: 60s
+
+  garage-init:
+    build:
+      context: ./garage
+      dockerfile: Dockerfile
+      args:
+        # Same value as the `garage` service image above, on purpose: the CLI this image
+        # ships must match the server it drives.
+        GARAGE_VERSION: ${GARAGE_VERSION:-v1.0.1}
+    environment:
+      GARAGE_RPC_SECRET: ${GARAGE_RPC_SECRET:?GARAGE_RPC_SECRET must be set}
+      # Imported as-is into the cluster (`garage key import`), so the API's credentials
+      # are deterministic instead of the random pair `garage key create` would mint.
+      GARAGE_ACCESS_KEY_ID: ${GARAGE_ACCESS_KEY_ID:?GARAGE_ACCESS_KEY_ID must be set}
+      GARAGE_SECRET_ACCESS_KEY: ${GARAGE_SECRET_ACCESS_KEY:?GARAGE_SECRET_ACCESS_KEY must be set}
+      GARAGE_BUCKET: ${GARAGE_BUCKET:-waterfall-imports}
+    volumes:
+      # The CLI addresses the node the same way it does inside the server container: it
+      # reads the RPC address from garage.toml and the node's identity from the metadata
+      # directory. `--rpc-host` is not an option here -- it requires the node's full ID,
+      # which is generated on first boot and therefore unknown when this file is written.
+      # Read-only: this container is a client, it must never write to the node's state.
+      - ./garage/garage.toml:/etc/garage.toml:ro
+      - garage_meta:/var/lib/garage/meta:ro
+    depends_on:
+      # Deliberately service_started, not service_healthy: the healthcheck above only goes
+      # green once this very service has created the bucket. init.sh polls RPC itself.
+      garage:
+        condition: service_started
+    restart: "no"
+
 volumes:
   pgdata:
   redisdata:
-  import_data:
+  garage_meta:
+  garage_data:

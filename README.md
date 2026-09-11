@@ -185,8 +185,8 @@ depuis un checkout Git. Pour les réinstaller seuls, utilisez `make hooks`.
 
 ### 3) Configuration A : développement natif
 
-Cette configuration lance l’API et le frontend directement sur la machine. PostgreSQL et Redis
-restent lancés dans Docker.
+Cette configuration lance l’API et le frontend directement sur la machine. PostgreSQL, Redis
+et Garage (stockage objet S3) restent lancés dans Docker.
 Le backend démarre aussi le seed admin en mode `dev`; `WF_ADMIN_PASSWORD` doit donc être défini dans `.env`.
 
 Renseignez au minimum dans `.env` :
@@ -196,20 +196,44 @@ SECRET_KEY=<clé-secrète-générée>
 WF_ADMIN_PASSWORD=<mot-de-passe-local>
 REDIS_PASSWORD=<mot-de-passe-local>
 REDIS_URL=redis://localhost:6379/0
+GARAGE_ACCESS_KEY_ID=GK<24-caractères-hexadécimaux>
+GARAGE_SECRET_ACCESS_KEY=<64-caractères-hexadécimaux>
+GARAGE_RPC_SECRET=<64-caractères-hexadécimaux>
+GARAGE_ENDPOINT_URL=http://localhost:3900
 ```
 
-`REDIS_PASSWORD` est obligatoire même ici : le service `redis` du compose de base exige un mot
-de passe, et Compose interpole tout le fichier avant de choisir les services — sans cette
-variable, `make db-up`, `make down` et `make logs` échouent aussi.
+`REDIS_PASSWORD` et les trois variables `GARAGE_*` sont obligatoires même ici : les services
+`redis` et `garage` du compose de base les exigent sans valeur par défaut, et Compose interpole
+tout le fichier avant de choisir les services — sans elles, `make db-up`, `make down` et
+`make logs` échouent aussi.
+
+Garage impose le format de ses identifiants S3 : la clé d'accès est `GK` suivi de 24 caractères
+hexadécimaux, la clé secrète en compte exactement 64. Générez un jeu complet avec :
+
+```bash
+echo "GARAGE_ACCESS_KEY_ID=GK$(openssl rand -hex 12)"
+echo "GARAGE_SECRET_ACCESS_KEY=$(openssl rand -hex 32)"
+echo "GARAGE_RPC_SECRET=$(openssl rand -hex 32)"
+```
+
+Une clé d'accès n'est jamais réattribuable dans Garage : pour changer la clé secrète, changez
+aussi `GARAGE_ACCESS_KEY_ID` (le service d'initialisation refuse de démarrer, avec un message
+explicite, si l'identifiant existe déjà avec un autre secret).
 
 L'API refuse toute connexion si Redis est injoignable (limiteur de tentatives *fail-closed* :
 `503`, jamais un login accepté sans vérification). En dev natif, Redis doit donc tourner et
 `REDIS_URL`/`REDIS_PASSWORD` doivent être renseignés, sinon 100 % des `POST /auth/token`
 renvoient `503`. Laissez le mot de passe hors de l'URL : il n'est pas encodé en pourcents.
 
+Les sources MS Project importées sont stockées dans Garage, plus sur disque : `POST
+/imports/v1/batches/{id}/xml`, `.../run` et `.../diff` renvoient `503` tant que le stockage
+objet est injoignable (le batch reste `pending`, l'import est rejouable tel quel).
+
 ```bash
 make db-up                  # Postgres dans Docker, pour le dev natif
-docker compose -f infra/docker/docker-compose.yml up -d redis   # Redis, requis par /auth/token
+# Redis (requis par /auth/token) et Garage (requis par les imports). `garage-init`
+# crée le layout, la clé et le bucket ; il est idempotent et se relance sans risque.
+docker compose --env-file .env -f infra/docker/docker-compose.yml up -d redis garage garage-init
 make migrate-up             # applique les migrations Alembic sur la base de dev
 make dev                    # backend (uvicorn) + frontend (next dev) — Ctrl-C arrête les deux
 ```
@@ -262,16 +286,28 @@ NEXT_PUBLIC_API_BASE_URL=http://<IP_VM>:8000
 SECRET_KEY=<clé-secrète-générée>
 WF_ADMIN_PASSWORD=<mot-de-passe-local>
 REDIS_PASSWORD=<mot-de-passe-local>
+GARAGE_ACCESS_KEY_ID=GK<24-caractères-hexadécimaux>
+GARAGE_SECRET_ACCESS_KEY=<64-caractères-hexadécimaux>
+GARAGE_RPC_SECRET=<64-caractères-hexadécimaux>
 PGADMIN_DEFAULT_PASSWORD=<mot-de-passe-local>
 GRAFANA_ADMIN_PASSWORD=<mot-de-passe-local>
 # ADMIN_BIND_ADDRESS=127.0.0.1
 ```
 
 Contrairement à `PGADMIN_DEFAULT_PASSWORD` et `GRAFANA_ADMIN_PASSWORD`, qui ne concernent que
-`make up-full`, `REDIS_PASSWORD` est exigé par le compose de base : il conditionne aussi
-`make db-up`, `make down` et `make logs`. Le compose transmet le mot de passe à l'API via
-`REDIS_PASSWORD` (et non dans `REDIS_URL`), pour qu'un caractère `/`, `+` ou `@` issu d'un
-`openssl rand -base64 24` ne soit pas interprété comme un séparateur d'URL.
+`make up-full`, `REDIS_PASSWORD` et les trois variables `GARAGE_*` sont exigés par le compose de
+base : ils conditionnent aussi `make db-up`, `make down` et `make logs`. Le compose transmet le
+mot de passe Redis à l'API via `REDIS_PASSWORD` (et non dans `REDIS_URL`), pour qu'un caractère
+`/`, `+` ou `@` issu d'un `openssl rand -base64 24` ne soit pas interprété comme un séparateur
+d'URL ; les identifiants S3 sont transmis de la même façon, hors de `GARAGE_ENDPOINT_URL`.
+
+En Docker, l'API attend que le service `garage-init` se termine avec succès : il applique le
+layout du nœud Garage, importe la clé d'accès telle qu'elle figure dans `.env` (`garage key
+import`, et non `key create` qui générerait des identifiants aléatoires) et crée le bucket
+`waterfall-imports`. Chaque étape est idempotente : relancer `make up` sur une stack déjà
+initialisée ne change rien et sort en succès. Les données vivent dans les volumes
+`garage_meta` (métadonnées) et `garage_data` (objets) — `make clean-docker` les supprime, ce
+qui efface les sources d'import déjà téléversées.
 
 La clé secrète et les mots de passe sont obligatoires et ne doivent jamais être commités. Générez
 une valeur aléatoire pour `SECRET_KEY`. Pour une VM, utilisez l’adresse IP réellement accessible

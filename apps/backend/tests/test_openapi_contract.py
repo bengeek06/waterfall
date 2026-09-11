@@ -472,6 +472,12 @@ def test_inline_error_responses_document_fastapi_error_shape_and_error_response_
         # Redis backend is unreachable. Same inline shape, anchored here by the same
         # convention.
         ("/auth/token", "post", "503"),
+        # Added by E13-02: import sources live in S3-compatible object storage (Garage),
+        # so every endpoint that stores or reads one can fail on that backend. Same
+        # inline shape again -- these all raise HTTPException from imports.py.
+        ("/imports/v1/batches/{batchId}/xml", "post", "503"),
+        ("/imports/v1/batches/{batchId}/run", "post", "503"),
+        ("/imports/v1/batches/{batchId}/diff", "get", "503"),
     ):
         schema_ref = static_paths[path][method]["responses"][status_code]["content"][
             "application/json"

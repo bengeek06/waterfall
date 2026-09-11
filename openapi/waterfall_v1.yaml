@@ -445,6 +445,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/FastAPIErrorResponse'
+        '503':
+          description: Le stockage objet des sources d'import (Garage) est injoignable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FastAPIErrorResponse'
   /imports/v1/batches/{batchId}/run:
     post:
       tags:
@@ -480,6 +486,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/FastAPIErrorResponse'
+        '503':
+          description: Le stockage objet des sources d'import (Garage) est injoignable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FastAPIErrorResponse'
   /imports/v1/batches/{batchId}/diff:
     get:
       tags:
@@ -505,6 +517,12 @@ paths:
           $ref: '#/components/responses/BatchNotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+        '503':
+          description: Le stockage objet des sources d'import (Garage) est injoignable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FastAPIErrorResponse'
   /imports/v1/batches/{batchId}:
     get:
       tags:

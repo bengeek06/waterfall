@@ -102,6 +102,10 @@ jobs:
           docker logs ci-redis >&2
           exit 1
 
+      # No Garage service here on purpose (E13-02): the import object storage is mocked
+      # in-process with moto (tests/_object_storage_support.py), so the suite needs no
+      # S3 backend of any kind -- unlike Redis above, which the fail-closed login path
+      # requires for real.
       - name: Ruff check
         run: ruff check .
 

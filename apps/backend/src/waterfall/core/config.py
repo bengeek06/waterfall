@@ -55,7 +55,21 @@ class Settings(BaseSettings):
     auth_max_failed_attempts: int = Field(default=5, alias="AUTH_MAX_FAILED_ATTEMPTS")
     auth_lockout_minutes: int = Field(default=15, alias="AUTH_LOCKOUT_MINUTES")
     cors_allow_origins: str | None = Field(default=None, alias="CORS_ALLOW_ORIGINS")
-    import_storage_path: str = Field(default=".waterfall-imports", alias="IMPORT_STORAGE_PATH")
+    # Uploaded MS Project sources live in an S3-compatible object store (Garage), not on
+    # a container-local disk: a bind/volume mount ties the API to a single machine and is
+    # lost whenever the container is recreated. The endpoint is a plain URL and the bucket
+    # a plain name; only the two credentials below are secrets, and they are deliberately
+    # separate settings rather than embedded in the endpoint URL (same rationale as
+    # redis_password above -- a generated secret key routinely contains URL separators).
+    garage_endpoint_url: str = Field(default="http://localhost:3900", alias="GARAGE_ENDPOINT_URL")
+    garage_access_key_id: str = Field(default="", alias="GARAGE_ACCESS_KEY_ID")
+    garage_secret_access_key: str = Field(default="", alias="GARAGE_SECRET_ACCESS_KEY")
+    garage_bucket: str = Field(default="waterfall-imports", alias="GARAGE_BUCKET")
+    # SigV4 signs the region into the credential scope, so it must match the `s3_region`
+    # of infra/docker/garage/garage.toml (or of whatever S3-compatible store is used
+    # instead -- a mismatch surfaces as an opaque SignatureDoesNotMatch, hence the
+    # commented line in .env.example). Only needs overriding in that latter case.
+    garage_region: str = Field(default="garage", alias="GARAGE_REGION")
     import_max_upload_bytes: int = Field(
         default=25 * 1024 * 1024,
         alias="IMPORT_MAX_UPLOAD_BYTES",
@@ -81,6 +95,12 @@ def _validate_settings(settings: Settings) -> Settings:
     secret_key = settings.secret_key.strip()
     if not secret_key or secret_key == "change-me":
         raise ValueError("SECRET_KEY must be set")
+    # Same fail-at-boot treatment: the compose file guards these with `${...:?}`, but a
+    # native dev run (Configuration A) has nothing to catch them. Empty credentials still
+    # produce a perfectly well-formed SigV4 signature, so the only symptom would be an
+    # opaque 503 on the first import, possibly hours after the misconfiguration.
+    if not settings.garage_access_key_id or not settings.garage_secret_access_key:
+        raise ValueError("GARAGE_ACCESS_KEY_ID and GARAGE_SECRET_ACCESS_KEY must be set")
     return settings
 
 

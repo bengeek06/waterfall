@@ -3215,6 +3215,15 @@ export interface operations {
                     "application/json": components["schemas"]["FastAPIErrorResponse"];
                 };
             };
+            /** @description Le stockage objet des sources d'import (Garage) est injoignable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FastAPIErrorResponse"];
+                };
+            };
         };
     };
     runImportBatchV1: {
@@ -3254,6 +3263,15 @@ export interface operations {
                     "application/json": components["schemas"]["FastAPIErrorResponse"];
                 };
             };
+            /** @description Le stockage objet des sources d'import (Garage) est injoignable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FastAPIErrorResponse"];
+                };
+            };
         };
     };
     getImportBatchDiffV1: {
@@ -3281,6 +3299,15 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["BatchNotFound"];
             409: components["responses"]["Conflict"];
+            /** @description Le stockage objet des sources d'import (Garage) est injoignable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FastAPIErrorResponse"];
+                };
+            };
         };
     };
     getImportBatchV1: {

@@ -1,0 +1,28 @@
+# Single-node Garage (S3-compatible object storage) for the local stack -- E13-02.
+#
+# Mounted read-only into the container, like prometheus/prometheus.yml. It carries no
+# secret on purpose: the RPC secret comes from the GARAGE_RPC_SECRET environment
+# variable, which Garage reads natively, and the S3 credentials are imported at
+# bootstrap by infra/docker/garage/init.sh.
+
+metadata_dir = "/var/lib/garage/meta"
+data_dir = "/var/lib/garage/data"
+db_engine = "lmdb"
+
+# One node holds one copy. Garage refuses a replication factor larger than the number
+# of nodes with a role in the layout, so this is the only valid value here.
+replication_factor = 1
+
+rpc_bind_addr = "[::]:3901"
+# Advertised to peers and used by the CLI: the compose service name, so the bootstrap
+# container reaches this node over the compose network.
+rpc_public_addr = "garage:3901"
+
+[s3_api]
+# Must match GARAGE_REGION on the API side: SigV4 signs the region into the credential
+# scope, and a mismatch is rejected as a signature error.
+s3_region = "garage"
+api_bind_addr = "[::]:3900"
+# No `root_domain`: the API addresses buckets path-style (see core/object_storage.py),
+# which needs no wildcard DNS. Declaring one here would only enable a second addressing
+# mode that nothing in this stack can resolve.
