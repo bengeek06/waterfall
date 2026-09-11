@@ -468,6 +468,16 @@ def test_inline_error_responses_document_fastapi_error_shape_and_error_response_
         ("/imports/v1/batches/{batchId}/run", "post", "409"),
         ("/auth/token", "post", "423"),
         ("/auth/token", "post", "429"),
+        # Added by E13-01: the fail-closed 503 raised when the login rate limiter's
+        # Redis backend is unreachable. Same inline shape, anchored here by the same
+        # convention.
+        ("/auth/token", "post", "503"),
+        # Added by E13-02: import sources live in S3-compatible object storage (Garage),
+        # so every endpoint that stores or reads one can fail on that backend. Same
+        # inline shape again -- these all raise HTTPException from imports.py.
+        ("/imports/v1/batches/{batchId}/xml", "post", "503"),
+        ("/imports/v1/batches/{batchId}/run", "post", "503"),
+        ("/imports/v1/batches/{batchId}/diff", "get", "503"),
     ):
         schema_ref = static_paths[path][method]["responses"][status_code]["content"][
             "application/json"
@@ -488,6 +498,57 @@ def test_inline_error_responses_document_fastapi_error_shape_and_error_response_
     # live schema, not just the static one, so this class of drift can't come back silently.
     runtime_schemas = cast(dict[str, Any], app.openapi()["components"])["schemas"]
     assert "ErrorResponse" not in runtime_schemas
+
+
+def test_readiness_contract_documents_the_dependency_checks_and_its_503() -> None:
+    """Issue #300 (E13-03): `/health/ready` really probes Postgres, Redis and the object
+    store, and answers 503 when any of them is unreachable.
+
+    Deliberately *not* added to the inline-error list above: unlike every other error
+    response in this API, this 503 is not an `HTTPException` and therefore not a
+    `FastAPIErrorResponse` -- the route sets the status code on the response and returns
+    the exact same `ReadinessStatus` body as the 200, because a caller that gets a 503
+    needs the per-dependency breakdown even more than one that gets a 200. Anchoring the
+    two `$ref`s equal is what keeps a future edit from "harmonizing" this into the generic
+    `{"detail": ...}` shape and silently dropping the diagnosis Docker's healthcheck (and
+    E13-04's gauge) depend on.
+    """
+    raw_document: object = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
+    static_document = cast(dict[str, Any], raw_document)
+    static_operation = cast(dict[str, Any], static_document["paths"]["/health/ready"])["get"]
+    runtime_document = app.openapi()
+    runtime_operation = cast(dict[str, Any], runtime_document["paths"]["/health/ready"])["get"]
+
+    for operation in (static_operation, runtime_operation):
+        for status_code in ("200", "503"):
+            assert (
+                operation["responses"][status_code]["content"]["application/json"]["schema"]["$ref"]
+                == "#/components/schemas/ReadinessStatus"
+            ), status_code
+
+    static_schemas = cast(dict[str, Any], static_document["components"])["schemas"]
+    runtime_schemas = cast(dict[str, Any], runtime_document["components"])["schemas"]
+    for schema_name in ("ReadinessStatus", "ReadinessChecks"):
+        assert set(static_schemas[schema_name]["properties"]) == set(
+            runtime_schemas[schema_name]["properties"]
+        )
+        assert set(static_schemas[schema_name]["required"]) == set(
+            runtime_schemas[schema_name]["required"]
+        )
+    # The three dependency keys are the published contract (and E13-04's `dependency`
+    # label values), so pin the names and their two possible states.
+    assert set(static_schemas["ReadinessChecks"]["properties"]) == {"database", "redis", "storage"}
+    for dependency in ("database", "redis", "storage"):
+        assert static_schemas["ReadinessChecks"]["properties"][dependency]["enum"] == [
+            "ok",
+            "unavailable",
+        ]
+
+    # Liveness stays a dependency-free `{"status": "ok"}`: E13-03 keeps it that way on
+    # purpose (a failing liveness probe restarts the container).
+    assert set(cast(dict[str, Any], static_document["paths"]["/health"])["get"]["responses"]) == {
+        "200"
+    }
 
 
 def test_generated_client_contains_every_static_operation() -> None:

@@ -6,6 +6,7 @@ from typing import TypedDict
 
 from sqlalchemy.orm import Session
 
+from waterfall.core.observability import ESTIMATE_CALCULATION_DURATION, track_duration
 from waterfall.models.ms_core import MsTask
 from waterfall.models.planning import WfPlanningTaskSnapshot
 from waterfall.models.resources import (
@@ -157,6 +158,7 @@ class MissingRateCoverageError(ValueError):
         super().__init__(format_missing_rate_message(missing_cost_rates, missing_inflation_years))
 
 
+@track_duration(ESTIMATE_CALCULATION_DURATION)
 def calculate_estimate_lines(db: Session, estimate_id: int) -> list[EstimateLine]:
     """
     Calculate and snapshot all estimate lines for a validated estimate.
@@ -556,6 +558,7 @@ def _resolve_cost_code_labels(db: Session, cost_code_ids: set[int]) -> dict[int,
     return {code.id: code.code for code in codes}
 
 
+@track_duration(ESTIMATE_CALCULATION_DURATION)
 def calculate_estimate_aggregates(db: Session, estimate_id: int) -> EstimateAggregates:
     """
     Calculate aggregate totals for an estimate by type, category, accounting code, etc.

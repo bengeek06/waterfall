@@ -49,11 +49,18 @@ paths:
       tags:
         - health
       summary: Vérifier que l'API est prête
+      description: 'Contrôle effectif des dépendances (Postgres, Redis, stockage objet), chacune sous un délai court : une dépendance qui ne répond pas est comptée en échec. Utilisé par le healthcheck Docker du service `api`. Ne pas confondre avec `GET /health`, qui est une sonde de vivacité et ne contacte volontairement aucune dépendance.'
       operationId: getReadiness
       security: []
       responses:
         '200':
-          description: API prête
+          description: API prête, toutes les dépendances répondent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessStatus'
+        '503':
+          description: 'Au moins une dépendance est injoignable. Même corps qu''en 200 : `checks` identifie la ou les dépendances en cause.'
           content:
             application/json:
               schema:
@@ -142,6 +149,12 @@ paths:
                 $ref: '#/components/schemas/FastAPIErrorResponse'
         '429':
           description: Trop de tentatives de connexion
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FastAPIErrorResponse'
+        '503':
+          description: Le limiteur de tentatives de connexion (Redis) est injoignable; la connexion est refusée par défaut (fail-closed)
           content:
             application/json:
               schema:
@@ -439,6 +452,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/FastAPIErrorResponse'
+        '503':
+          description: Le stockage objet des sources d'import (Garage) est injoignable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FastAPIErrorResponse'
   /imports/v1/batches/{batchId}/run:
     post:
       tags:
@@ -474,6 +493,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/FastAPIErrorResponse'
+        '503':
+          description: Le stockage objet des sources d'import (Garage) est injoignable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FastAPIErrorResponse'
   /imports/v1/batches/{batchId}/diff:
     get:
       tags:
@@ -499,6 +524,12 @@ paths:
           $ref: '#/components/responses/BatchNotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+        '503':
+          description: Le stockage objet des sources d'import (Garage) est injoignable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FastAPIErrorResponse'
   /imports/v1/batches/{batchId}:
     get:
       tags:
@@ -3059,16 +3090,49 @@ components:
           example: ok
     ReadinessStatus:
       type: object
+      description: 'État de préparation de l''API. Le corps est identique en 200 et en 503 : seul le code HTTP change, `checks` indique toujours quelle dépendance est en cause.'
       required:
         - status
+        - checks
         - timestamp
       properties:
         status:
           type: string
+          enum:
+            - ready
+            - unavailable
           example: ready
+        checks:
+          $ref: '#/components/schemas/ReadinessChecks'
         timestamp:
           type: string
           format: date-time
+    ReadinessChecks:
+      type: object
+      description: 'Résultat par dépendance. Volontairement binaire (`ok`/`unavailable`) et sans message : `/health/ready` n''est pas authentifié, le détail de la panne reste dans les logs de l''API.'
+      required:
+        - database
+        - redis
+        - storage
+      properties:
+        database:
+          type: string
+          enum:
+            - ok
+            - unavailable
+          example: ok
+        redis:
+          type: string
+          enum:
+            - ok
+            - unavailable
+          example: ok
+        storage:
+          type: string
+          enum:
+            - ok
+            - unavailable
+          example: ok
     UserCreate:
       type: object
       required:

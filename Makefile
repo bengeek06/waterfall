@@ -72,7 +72,7 @@ db-up:  ## Start Postgres only (detached) for native dev
 	$(COMPOSE) up -d postgres
 db-down:  ## Stop Postgres
 	$(COMPOSE) stop postgres
-up:  ## Start base stack (api + db), foreground
+up:  ## Start base stack (api, db, redis, garage), foreground
 	$(COMPOSE) up --build
 up-full:  ## Start full stack (api, db, frontend, observability)
 	$(COMPOSE_FULL) up --build

@@ -1,0 +1,35 @@
+# Dashboard provisioning (E13-05).
+#
+# Grafana reads this directory at startup and reloads it every `updateIntervalSeconds`.
+# The dashboards themselves are the `*.json` files sitting next to this file: `options.path`
+# points at this very directory, and Grafana ignores anything that is not JSON. The mount is
+# read-only (see the `grafana` service in docker-compose.full.yml), so the dashboards live in
+# git and nowhere else -- deleting the `grafana_data` volume and starting again restores them
+# identically, which is the acceptance criterion for this issue.
+#
+# `allowUiUpdates: false` is what enforces that: edits made in the browser are refused rather
+# than saved into `grafana_data`, where they would silently become a second, unversioned
+# source of truth that the next volume wipe would destroy. To change a panel, change the JSON.
+#
+# Caveat worth knowing before reading the "Dépendances" dashboard: `dependency_up` is a
+# process-local gauge, published by `GET /health/ready` in the API process that answered it.
+# The API runs a single uvicorn worker today (no `--workers` in apps/backend/Dockerfile nor in
+# the compose `command`), so there is exactly one registry and the dashboard can show that
+# gauge as *the* state. The day the API is started with several workers, Prometheus scrapes
+# whichever worker the load balancer picked, and the panel becomes a coin toss between
+# processes -- at that point the gauge has to move to a shared exporter (or
+# `prometheus_client`'s multiprocess mode) before the panel means anything again.
+apiVersion: 1
+
+providers:
+  - name: waterfall
+    orgId: 1
+    folder: Waterfall
+    folderUid: waterfall
+    type: file
+    disableDeletion: false
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false

@@ -4,12 +4,12 @@ from pathlib import Path
 
 import pytest
 
-# Registers _postgres_support's `postgres_app_database_url` fixture globally, so test
-# modules can request it by parameter name without importing it -- importing a
-# @pytest.fixture-decorated callable by name into a module that also takes it as a test
-# parameter trips ruff's F811 ("redefinition of unused import"), which doesn't recognize
-# that pattern as pytest's normal cross-module fixture sharing.
-pytest_plugins = ["_postgres_support"]
+# Registers the fixtures of _postgres_support/_redis_support/_object_storage_support
+# globally, so test modules can request them by parameter name without importing them --
+# importing a @pytest.fixture-decorated callable by name into a module that also takes it
+# as a test parameter trips ruff's F811 ("redefinition of unused import"), which doesn't
+# recognize that pattern as pytest's normal cross-module fixture sharing.
+pytest_plugins = ["_postgres_support", "_redis_support", "_object_storage_support"]
 
 SRC = Path(__file__).resolve().parents[1] / "src"
 if str(SRC) not in sys.path:
@@ -18,8 +18,18 @@ if str(SRC) not in sys.path:
 os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///./test.db")
 os.environ.setdefault("SECRET_KEY", "test-secret")
+# Same default as Settings.redis_url: the in-process limiter, so the suite runs on a
+# checkout with no Redis. Without it the fail-closed login path would 503 in every test
+# that authenticates, not just the auth ones. TEST_REDIS_URL points the whole app (not
+# just _redis_support's reachability checks) at a real Redis; CI sets it so the Redis
+# backend itself stays covered.
+os.environ.setdefault("REDIS_URL", os.environ.get("TEST_REDIS_URL", "memory://"))
 os.environ.setdefault("JWT_ALGORITHM", "HS256")
 os.environ.setdefault("ACCESS_TOKEN_EXPIRE_MINUTES", "30")
+# The GARAGE_* object storage settings are defaulted by _object_storage_support (the
+# plugin listed above), next to the moto backend that has to agree with them -- not here,
+# because importing that module from this one would disable pytest's assertion rewriting
+# for it. Plugins are imported before any test runs, hence before Settings is first read.
 
 
 @pytest.fixture(autouse=True, scope="session")
@@ -111,7 +121,28 @@ def reset_database() -> None:
 
 
 @pytest.fixture(autouse=True)
+def reset_readiness_probe_state() -> None:
+    """Drop the readiness probe's memoised result and its private engine (E13-03).
+
+    `check_dependencies()` caches for a few seconds so that a burst of anonymous
+    /health/ready calls cannot spawn three threads each; tests run far faster than that
+    window and simulate outages in-process, so without this a test would assert on the
+    previous test's answer. The probe engine is cached the same way as `get_engine()` and
+    is dropped for the same reason: a test repointing DATABASE_URL must not inherit an
+    engine built from the value before it.
+    """
+    from waterfall.api.routes.health import reset_dependency_cache, reset_probe_engine
+
+    reset_dependency_cache()
+    reset_probe_engine()
+
+
+@pytest.fixture(autouse=True)
 def reset_login_rate_limiter() -> None:
+    # Runs before every test in the suite -- most of which have nothing to do with auth --
+    # so it must never fail: on the default memory:// backend it empties an in-process
+    # dict, and on Redis it swallows connection errors rather than failing closed like
+    # allow() (see _RedisRateLimitBackend.clear()).
     from waterfall.api.routes.auth import login_rate_limiter
 
     login_rate_limiter.clear()

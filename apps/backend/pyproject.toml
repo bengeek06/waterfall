@@ -23,6 +23,8 @@ dependencies = [
   "pwdlib[argon2]>=0.3.0",
   "python-multipart>=0.0.20",
   "prometheus-client>=0.22.1",
+  "redis>=5.0.0",
+  "boto3>=1.35.0",
   "email-validator>=2.2.0",
   "openpyxl>=3.1.0",
   "lxml>=5.3.0",
@@ -38,6 +40,10 @@ dev = [
   "pre-commit>=3.8.0",
   "PyYAML>=6.0.2",
   "lxml-stubs>=0.5.1",
+  # boto3 ships no inline types; pyright runs in strict mode here.
+  "boto3-stubs[s3]>=1.35.0",
+  # In-memory S3 backend for the import tests: keeps the suite fast and docker-free.
+  "moto[s3]>=5.0.0",
 ]
 
 [tool.setuptools]
@@ -54,6 +60,11 @@ waterfall-seed-admin = "waterfall.scripts.seed_admin:main"
 minversion = "8.0"
 addopts = "-q --cov=src/waterfall --cov-report=term-missing"
 testpaths = ["tests"]
+markers = [
+  # Opt out of _object_storage_support's autouse moto backend, for the few tests that
+  # need real botocore failures against an unreachable store.
+  "no_object_storage_mock: run without the in-memory S3 backend",
+]
 filterwarnings = [
   # Third-party warning from Starlette/FastAPI TestClient; not fixable without
   # migrating to httpx2 (out of scope). Targeted ignore, keep default behavior otherwise.

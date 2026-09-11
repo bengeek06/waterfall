@@ -185,11 +185,72 @@ depuis un checkout Git. Pour les réinstaller seuls, utilisez `make hooks`.
 
 ### 3) Configuration A : développement natif
 
-Cette configuration lance l’API et le frontend directement sur la machine. PostgreSQL reste lancé dans Docker.
+Cette configuration lance l’API et le frontend directement sur la machine. PostgreSQL et
+Garage (stockage objet S3) restent lancés dans Docker ; Redis est facultatif (voir plus bas
+`REDIS_URL=memory://`).
 Le backend démarre aussi le seed admin en mode `dev`; `WF_ADMIN_PASSWORD` doit donc être défini dans `.env`.
+
+Renseignez au minimum dans `.env` :
+
+```env
+SECRET_KEY=<clé-secrète-générée>
+WF_ADMIN_PASSWORD=<mot-de-passe-local>
+REDIS_PASSWORD=<mot-de-passe-local>
+GARAGE_ACCESS_KEY_ID=GK<24-caractères-hexadécimaux>
+GARAGE_SECRET_ACCESS_KEY=<64-caractères-hexadécimaux>
+GARAGE_RPC_SECRET=<64-caractères-hexadécimaux>
+GARAGE_ENDPOINT_URL=http://localhost:3900
+PGADMIN_DEFAULT_PASSWORD=<mot-de-passe-local>
+GRAFANA_ADMIN_PASSWORD=<mot-de-passe-local>
+```
+
+`REDIS_PASSWORD` et les trois variables `GARAGE_*` sont obligatoires même ici, et même si vous
+laissez `REDIS_URL` sur `memory://` : les services `redis` et `garage` du compose de base les
+exigent sans valeur par défaut, et Compose interpole tout le fichier avant de choisir les
+services — sans elles, `make db-up` et `make logs` échouent aussi.
+
+`PGADMIN_DEFAULT_PASSWORD` et `GRAFANA_ADMIN_PASSWORD` sont requis ici pour une autre raison :
+non pas parce que pgAdmin et Grafana tournent en Configuration A — ils ne tournent pas —, mais
+parce que les cibles d'arrêt et de nettoyage (`make down`, `make stop`, `make clean-docker`,
+`make distclean`) passent par le compose **complet**, donc Compose interpole aussi
+`docker-compose.full.yml`. Sans ces deux variables, `make db-up` et `make dev` fonctionnent,
+puis `make down` échoue sur `db-viewer`, un service jamais démarré.
+
+Garage impose le format de ses identifiants S3 : la clé d'accès est `GK` suivi de 24 caractères
+hexadécimaux, la clé secrète en compte exactement 64. Générez un jeu complet avec :
+
+```bash
+echo "GARAGE_ACCESS_KEY_ID=GK$(openssl rand -hex 12)"
+echo "GARAGE_SECRET_ACCESS_KEY=$(openssl rand -hex 32)"
+echo "GARAGE_RPC_SECRET=$(openssl rand -hex 32)"
+```
+
+Une clé d'accès n'est jamais réattribuable dans Garage : pour changer la clé secrète, changez
+aussi `GARAGE_ACCESS_KEY_ID` (le service d'initialisation refuse de démarrer, avec un message
+explicite, si l'identifiant existe déjà avec un autre secret).
+
+L'API refuse toute connexion si le limiteur de tentatives est injoignable (*fail-closed* :
+`503`, jamais un login accepté sans vérification). Dès que `REDIS_URL` pointe sur un
+`redis://`, Redis doit donc tourner et `REDIS_URL`/`REDIS_PASSWORD` doivent être renseignés,
+sinon 100 % des `POST /auth/token` renvoient `503`. Laissez le mot de passe hors de l'URL :
+il n'est pas encodé en pourcents.
+
+`REDIS_URL` vaut `memory://` par défaut : le limiteur tourne alors dans le process, sans
+serveur, comme `DATABASE_URL` retombe sur SQLite. Les compteurs ne sont ni partagés entre
+instances ni conservés au redémarrage — réservez-le au poste de développement et à la suite de
+tests, et pointez `REDIS_URL` sur un vrai Redis partout ailleurs (c'est ce que fait
+`docker-compose.yml`).
+
+Les sources MS Project importées sont stockées dans Garage, plus sur disque : `POST
+/imports/v1/batches/{id}/xml`, `.../run` et `.../diff` renvoient `503` tant que le stockage
+objet est injoignable (le batch reste `pending`, l'import est rejouable tel quel).
 
 ```bash
 make db-up                  # Postgres dans Docker, pour le dev natif
+# Redis (facultatif : sans lui, REDIS_URL=memory://) et Garage (requis par les imports).
+# `garage-init`
+# crée le layout, la clé et le bucket ; il est idempotent et se relance sans risque.
+docker compose --env-file .env -f infra/docker/docker-compose.yml up -d redis garage garage-init
 make migrate-up             # applique les migrations Alembic sur la base de dev
 make dev                    # backend (uvicorn) + frontend (next dev) — Ctrl-C arrête les deux
 ```
@@ -231,8 +292,9 @@ En local, remplacez `<IP_VM>` par `localhost` et utilisez les ports indiqués ci
 ### 4) Configuration B : stack Docker complet
 
 Cette configuration lance l’API, PostgreSQL, le frontend et les outils d’observabilité dans Docker.
-Elle combine [docker-compose.yml](infra/docker/docker-compose.yml), qui définit API + PostgreSQL,
-et [docker-compose.full.yml](infra/docker/docker-compose.full.yml), qui ajoute frontend et observabilité.
+Elle combine [docker-compose.yml](infra/docker/docker-compose.yml), qui définit l'API, PostgreSQL,
+Redis et Garage (`garage` + `garage-init`), et
+[docker-compose.full.yml](infra/docker/docker-compose.full.yml), qui ajoute frontend et observabilité.
 
 Depuis la racine du dépôt, renseignez au minimum dans `.env` :
 
@@ -241,10 +303,34 @@ CORS_ALLOW_ORIGINS=http://<IP_VM>:3000
 NEXT_PUBLIC_API_BASE_URL=http://<IP_VM>:8000
 SECRET_KEY=<clé-secrète-générée>
 WF_ADMIN_PASSWORD=<mot-de-passe-local>
+REDIS_PASSWORD=<mot-de-passe-local>
+GARAGE_ACCESS_KEY_ID=GK<24-caractères-hexadécimaux>
+GARAGE_SECRET_ACCESS_KEY=<64-caractères-hexadécimaux>
+GARAGE_RPC_SECRET=<64-caractères-hexadécimaux>
 PGADMIN_DEFAULT_PASSWORD=<mot-de-passe-local>
 GRAFANA_ADMIN_PASSWORD=<mot-de-passe-local>
 # ADMIN_BIND_ADDRESS=127.0.0.1
 ```
+
+Ces sept variables sont toutes obligatoires, mais pas au même titre. `REDIS_PASSWORD` et les
+trois variables `GARAGE_*` sont exigées par le compose de **base** : elles conditionnent aussi
+`make db-up` et `make logs`, qui ne lancent pourtant ni Redis ni Garage.
+`PGADMIN_DEFAULT_PASSWORD` et `GRAFANA_ADMIN_PASSWORD` ne sont lues que par le compose complet,
+donc par `make up-full` — mais aussi par `make down`, `make stop`, `make clean-docker` et
+`make distclean`, qui passent tous par ce même fichier. Aucune des sept n'est donc limitée aux
+services qu'elle configure : Compose interpole le fichier entier avant de choisir les services.
+Le compose transmet le
+mot de passe Redis à l'API via `REDIS_PASSWORD` (et non dans `REDIS_URL`), pour qu'un caractère
+`/`, `+` ou `@` issu d'un `openssl rand -base64 24` ne soit pas interprété comme un séparateur
+d'URL ; les identifiants S3 sont transmis de la même façon, hors de `GARAGE_ENDPOINT_URL`.
+
+En Docker, l'API attend que le service `garage-init` se termine avec succès : il applique le
+layout du nœud Garage, importe la clé d'accès telle qu'elle figure dans `.env` (`garage key
+import`, et non `key create` qui générerait des identifiants aléatoires) et crée le bucket
+`waterfall-imports`. Chaque étape est idempotente : relancer `make up` sur une stack déjà
+initialisée ne change rien et sort en succès. Les données vivent dans les volumes
+`garage_meta` (métadonnées) et `garage_data` (objets) — `make clean-docker` les supprime, ce
+qui efface les sources d'import déjà téléversées.
 
 La clé secrète et les mots de passe sont obligatoires et ne doivent jamais être commités. Générez
 une valeur aléatoire pour `SECRET_KEY`. Pour une VM, utilisez l’adresse IP réellement accessible
@@ -277,7 +363,33 @@ Adresses par défaut :
 - Prometheus : `http://127.0.0.1:9090`
 - pgAdmin : `http://127.0.0.1:5050`
 
-`docker-compose.yml` utilisé seul ne lance pas le frontend. Il fournit uniquement l’API et PostgreSQL.
+Grafana arrive provisionné : la source de données Prometheus et deux dashboards du dossier
+`Waterfall` sont créés au démarrage depuis
+[infra/docker/grafana/provisioning](infra/docker/grafana/provisioning), monté en lecture seule.
+
+- **Waterfall — API & devis** (`/d/waterfall-api-estimates`) : débit et latence HTTP par route,
+  durée des calculs de devis.
+- **Waterfall — Dépendances** (`/d/waterfall-dependencies`) : état de PostgreSQL, Redis et Garage
+  tel que publié par `GET /health/ready`.
+
+Ces dashboards ne se modifient pas depuis l'interface (`allowUiUpdates: false` : Grafana refuse
+l'enregistrement) mais en éditant les JSON du dépôt. C'est ce qui garantit que supprimer le volume
+`grafana_data` et relancer `make up-full` les restaure à l'identique. Les panneaux restent vides
+tant que la métrique correspondante n'a pas été produite : le débit HTTP démarre à la première
+requête **applicative** servie, les durées de calcul au premier devis validé ou agrégé, et l'état
+des dépendances au premier appel de `/health/ready` (que le healthcheck du conteneur `api`
+déclenche toutes les 15 s).
+
+Les panneaux HTTP **agrégés** excluent les chemins de sonde (`path!~"/metrics|/health(/ready)?"`).
+La stack `up-full` s'appelle elle-même en permanence — scrape Prometheus toutes les 15 s,
+healthcheck Docker toutes les 15 s, soit un plancher d'environ 0,133 req/s — et une dépendance
+tombée ferait répondre `/health/ready` en 503 toutes les 15 s : sans ce filtre, le débit 5xx et la
+latence p95 passeraient au rouge pendant une panne que le dashboard « Dépendances » diagnostique
+déjà correctement. Les panneaux **par route** ne sont pas filtrés, c'est là qu'on lit le trafic de
+sonde.
+
+`docker-compose.yml` utilisé seul ne lance ni le frontend ni l’observabilité. Il fournit l’API,
+PostgreSQL, Redis et Garage (`garage` + `garage-init`).
 PostgreSQL et les outils d’observabilité sont limités à la VM par défaut. Utilisez un tunnel SSH
 ou définissez `ADMIN_BIND_ADDRESS` uniquement si ces interfaces doivent être accessibles à distance,
 avec un filtrage réseau adapté.

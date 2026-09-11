@@ -1,0 +1,415 @@
+{
+  "uid": "waterfall-dependencies",
+  "title": "Waterfall — Dépendances",
+  "description": "État de Postgres, Redis et Garage tel que vu par GET /health/ready (gauge dependency_up, labels database/redis/storage). La gauge est écrite par le handler de readiness, jamais par le scrape : elle n'existe pas tant que /health/ready n'a pas été appelé au moins une fois, et elle n'est fraîche que jusqu'au dernier appel. En Compose le healthcheck de l'API l'appelle toutes les 15 s et Prometheus scrape toutes les 15 s, donc en régime établi la fraîcheur est bonne ; juste après un redémarrage, un à deux scrapes ne voient pas du tout la série. Tous les panneaux passent donc par last_over_time(dependency_up[2m]), et l'absence de donnée est affichée « Inconnu » et non « Indisponible ».",
+  "tags": ["waterfall", "dependances", "sre"],
+  "timezone": "browser",
+  "editable": false,
+  "graphTooltip": 1,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "État courant",
+      "description": "Dernière valeur de dependency_up vue dans les 2 dernières minutes, par dépendance. Trois états distincts, et la distinction est le point du panneau : Disponible (1), Indisponible (0, /health/ready a bien sondé et a échoué), Inconnu (aucun point sur 2 min — l'API ne publie rien, ce qui n'autorise pas à conclure que la dépendance est tombée). Le panneau « Sonde de readiness muette » à droite tranche entre « API injoignable » et « API joignable mais silencieuse ».",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 16,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "Inconnu",
+          "min": 0,
+          "max": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Indisponible",
+                  "color": "red",
+                  "index": 0
+                },
+                "1": {
+                  "text": "Disponible",
+                  "color": "green",
+                  "index": 1
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "Inconnu",
+                  "color": "text",
+                  "index": 2
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value_and_name"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "last_over_time(dependency_up[2m])",
+          "legendFormat": "{{dependency}}",
+          "instant": true,
+          "range": false
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Sonde de readiness muette",
+      "description": "Trois états, et c'est ce panneau qui tranche entre « API injoignable » et « API joignable mais silencieuse ». « Oui » (1) : la cible API est bien scrapée (up == 1) mais aucune série dependency_up n'existe — l'API répond au scrape et ne publie pourtant aucun état de dépendance. C'est normal pendant le ou les deux premiers scrapes après un redémarrage, puisque la gauge n'a pas d'enfant avant le premier GET /health/ready ; si cela persiste au-delà d'une minute ou deux, la sonde de readiness ne tourne plus. « API injoignable » (2) : aucune série up{job=\"waterfall-api\"} à 1, le scrape lui-même échoue — on ne peut rien dire de la sonde, et le panneau « État courant » affiche « Inconnu » pour la même raison. Résultat vide : l'API est scrapée et publie bien dependency_up, la sonde n'est donc pas muette ; c'est aussi ce que montrerait une requête en erreur, d'où l'absence de vert par défaut. Les trois branches sont mutuellement exclusives. Ne jamais remplacer ce panneau par un test dependency_up == 0 : « je ne sais pas » et « la dépendance est tombée » ne sont pas le même incident. Le `on()` n'est pas indispensable en l'état — max() sans `by` dépouille déjà le côté gauche de ses labels, donc l'appariement par défaut avec le vecteur sans label d'absent() aboutit — il est défensif : il garde l'expression correcte si quelqu'un remplace un jour max(up{...}) par un sélecteur brut, qui lui porte des labels.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "Non — sonde active",
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "1": {
+                  "text": "Oui",
+                  "color": "orange",
+                  "index": 0
+                },
+                "2": {
+                  "text": "API injoignable",
+                  "color": "red",
+                  "index": 1
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 2
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "((max(up{job=\"waterfall-api\"}) == 1) and on() absent(dependency_up)) or on() (2 * absent(up{job=\"waterfall-api\"} == 1))",
+          "legendFormat": "sonde muette",
+          "instant": true,
+          "range": false
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "État des dépendances sur la fenêtre",
+      "description": "last_over_time(dependency_up[2m]) : la valeur est reportée sur 2 minutes, de sorte qu'un scrape manqué ne troue pas la courbe. 1 = disponible, 0 = sondée et injoignable. Une interruption de la courbe signifie qu'aucun état n'a été publié pendant plus de 2 minutes (API arrêtée ou readiness muette), pas que la dépendance était à 0.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 16,
+        "x": 0,
+        "y": 6
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "min": 0,
+          "max": 1,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "axisSoftMax": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["min", "lastNotNull"]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "last_over_time(dependency_up[2m])",
+          "legendFormat": "{{dependency}}",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Disponibilité observée sur la fenêtre",
+      "description": "Moyenne de dependency_up sur toute la fenêtre du dashboard, en pourcentage. Ne se lit que sur les instants où un état a été publié : les périodes « Inconnu » sont exclues du calcul, pas comptées comme indisponibles. Ce n'est donc pas un SLA, c'est la part de sondes réussies.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 16,
+        "y": 6
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2,
+          "noValue": "Inconnu",
+          "min": 0,
+          "max": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.95
+              },
+              {
+                "color": "green",
+                "value": 0.999
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "value_and_name"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "avg_over_time(dependency_up[$__range])",
+          "legendFormat": "{{dependency}}",
+          "instant": true,
+          "range": false
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Cible API scrapée (up)",
+      "description": "up{job=\"waterfall-api\"}, produit par Prometheus lui-même et non par l'application. À lire sous le panneau précédent : tant que cette courbe est à 1, un trou dans dependency_up vient de l'API (readiness jamais appelée) et non du scrape ; quand elle tombe à 0, l'API est injoignable et l'état des dépendances est par construction inconnu.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 15
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "min": 0,
+          "max": 1,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "axisSoftMax": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "up{job=\"waterfall-api\"}",
+          "legendFormat": "{{instance}}",
+          "range": true
+        }
+      ]
+    }
+  ]
+}

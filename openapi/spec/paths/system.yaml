@@ -17,11 +17,24 @@
     tags:
     - health
     summary: Vérifier que l'API est prête
+    description: >-
+      Contrôle effectif des dépendances (Postgres, Redis, stockage objet), chacune sous
+      un délai court : une dépendance qui ne répond pas est comptée en échec. Utilisé par
+      le healthcheck Docker du service `api`. Ne pas confondre avec `GET /health`, qui est
+      une sonde de vivacité et ne contacte volontairement aucune dépendance.
     operationId: getReadiness
     security: []
     responses:
       '200':
-        description: API prête
+        description: API prête, toutes les dépendances répondent
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ReadinessStatus.yaml
+      '503':
+        description: >-
+          Au moins une dépendance est injoignable. Même corps qu'en 200 : `checks`
+          identifie la ou les dépendances en cause.
         content:
           application/json:
             schema:

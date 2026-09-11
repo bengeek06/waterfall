@@ -1,20 +1,27 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
-import os
+import logging
+import tempfile
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from waterfall.api.dependencies import get_current_active_user
 from waterfall.api.routes.project_access import get_mutable_project_lock
 from waterfall.core.config import get_settings
+from waterfall.core.object_storage import (
+    ObjectStorageKeyNotFoundError,
+    ObjectStorageUnavailableError,
+    import_object_storage,
+)
 from waterfall.db.session import get_db
 from waterfall.models.ms_core import MsProject
 from waterfall.models.planning import WfPlanning, WfPlanningLinkSnapshot, WfPlanningTaskSnapshot
@@ -44,39 +51,98 @@ from waterfall.services.msproject_xml import (
 from waterfall.services.msproject_xml_import import import_tasks_and_links
 from waterfall.services.project_lifecycle import ensure_project_mutable
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/imports/v1/batches", tags=["imports-v1"])
 UPLOAD_CHUNK_SIZE = 1024 * 1024
+# Above this, the staging buffer spills from RAM to a temporary file. Keeps a handful of
+# concurrent uploads of typical MS Project exports entirely in memory while still bounding
+# what a single request can hold, whatever import_max_upload_bytes allows. Only holds
+# because ObjectStorage.upload issues a single PUT straight from this buffer: s3transfer's
+# multipart path would have copied every part back into RAM above 8 MiB.
+UPLOAD_SPOOL_MAX_MEMORY_BYTES = 4 * 1024 * 1024
+# Object keys, not filesystem paths: `source_storage_path` now names an object inside the
+# Garage bucket (see core/object_storage.py).
+_SOURCE_KEY_PREFIX = "imports/"
+_STAGING_KEY_PREFIX = f"{_SOURCE_KEY_PREFIX}staging/"
 
 
-def _source_path(batch_id: int) -> Path:
-    return Path(get_settings().import_storage_path) / f"batch-{batch_id}.xml"
+def _source_key(batch_id: int) -> str:
+    return f"{_SOURCE_KEY_PREFIX}batch-{batch_id}.xml"
 
 
-async def _stage_source_xml(file: UploadFile, batch_id: int) -> tuple[Path, int, str]:
+def _staging_key(batch_id: int) -> str:
+    # Unique per upload so two concurrent uploads for the same batch never write to the
+    # same object before the final, lock-protected switchover.
+    return f"{_STAGING_KEY_PREFIX}batch-{batch_id}.{uuid4().hex}.part"
+
+
+def _storage_unavailable(exc: Exception) -> HTTPException:
+    # The client only ever sees a generic 503 (main.py rewrites string details into
+    # {"code": "GENERIC_ERROR"}), so this log line is the only thing that lets an operator
+    # tell an unreachable endpoint from a missing bucket, a SignatureDoesNotMatch or an
+    # AccessDenied. Same reasoning as the fail-closed login rate limiter (E13-01): carry
+    # the underlying cause and its traceback, never the credentials.
+    logger.error(
+        "imports.object_storage_unavailable",
+        extra={"error": str(exc.__cause__ or exc)},
+        exc_info=exc,
+    )
+    # 503, like that rate limiter: the request failed because a backing service is down,
+    # not because the caller or the batch is in a bad state, and retrying the exact same
+    # call once storage is back is the right move.
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="Import object storage is unavailable",
+    )
+
+
+async def _stage_source_xml(file: UploadFile, batch_id: int) -> tuple[str, int, str]:
+    """Buffer the upload, hash it, and put it in the bucket under a staging key.
+
+    Runs before the project lock is taken (see upload_xml), so neither the network
+    round trip nor the hashing ever blocks writers serialized on that lock.
+    """
     settings = get_settings()
-    final_path = _source_path(batch_id)
-    final_path.parent.mkdir(parents=True, exist_ok=True)
-    # Unique staging name so concurrent uploads never write to the same file.
-    staging_path = final_path.with_name(f"{final_path.name}.{uuid4().hex}.part")
+    staging_key = _staging_key(batch_id)
 
     byte_count = 0
     digest = hashlib.sha256()
-    try:
-        with staging_path.open("wb") as destination:
-            while chunk := await file.read(UPLOAD_CHUNK_SIZE):
-                byte_count += len(chunk)
-                if byte_count > settings.import_max_upload_bytes:
-                    raise HTTPException(
-                        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
-                        detail="XML file exceeds the configured size limit",
-                    )
-                digest.update(chunk)
-                destination.write(chunk)
-    except Exception:
-        staging_path.unlink(missing_ok=True)
-        raise
+    # Spooled rather than a plain BytesIO: the size limit below is enforced *while*
+    # reading, so an oversized upload is rejected mid-stream, but a file just under the
+    # limit would still be a large in-memory blob. The spool caps resident memory and
+    # deletes whatever it spilled to disk when the block exits, on success or failure --
+    # nothing persistent, no volume.
+    with tempfile.SpooledTemporaryFile(max_size=UPLOAD_SPOOL_MAX_MEMORY_BYTES) as buffer:
+        while chunk := await file.read(UPLOAD_CHUNK_SIZE):
+            byte_count += len(chunk)
+            if byte_count > settings.import_max_upload_bytes:
+                raise HTTPException(
+                    status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                    detail="XML file exceeds the configured size limit",
+                )
+            digest.update(chunk)
+            buffer.write(chunk)
+        buffer.seek(0)
+        try:
+            # boto3 is synchronous: called inline it would block the event loop for as
+            # long as the store takes to answer (up to connect+read timeouts x retries),
+            # freezing every other request in the process, /health and /metrics included.
+            await run_in_threadpool(import_object_storage.upload, staging_key, buffer)
+        except ObjectStorageUnavailableError as exc:
+            raise _storage_unavailable(exc) from exc
 
-    return staging_path, byte_count, digest.hexdigest()
+    return staging_key, byte_count, digest.hexdigest()
+
+
+def _discard_staged_object(staging_key: str) -> None:
+    """Best-effort staging cleanup; never turns a successful upload into a failure.
+
+    A leftover staging object is unreachable garbage (its key is never stored), so
+    failing the request over it would trade a harmless leak for a lost import.
+    """
+    with contextlib.suppress(ObjectStorageUnavailableError):
+        import_object_storage.delete(staging_key)
 
 
 def _read_source_xml(batch: WfImportBatch) -> bytes:
@@ -86,13 +152,15 @@ def _read_source_xml(batch: WfImportBatch) -> bytes:
             detail="No XML uploaded for this batch",
         )
 
-    source_path = Path(batch.source_storage_path)
-    if not source_path.is_file():
+    try:
+        return import_object_storage.download(batch.source_storage_path)
+    except ObjectStorageKeyNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Uploaded XML is unavailable",
-        )
-    return source_path.read_bytes()
+        ) from exc
+    except ObjectStorageUnavailableError as exc:
+        raise _storage_unavailable(exc) from exc
 
 
 def _to_batch_response(batch: WfImportBatch) -> ImportBatchResponse:
@@ -224,6 +292,7 @@ def create_batch(
         400: {"model": FastAPIErrorResponse},
         401: {"model": FastAPIErrorResponse},
         404: {"model": FastAPIErrorResponse},
+        503: {"model": FastAPIErrorResponse},
     },
 )
 async def upload_xml(
@@ -242,43 +311,74 @@ async def upload_xml(
     batch = _get_batch_or_404(db, batch_id, current_user.id)
     if batch.project_id is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-    # Stage the upload before locking so slow file I/O never blocks planning
+    # Stage the upload before locking so slow storage I/O never blocks planning
     # writers serialized on the project row lock.
-    staging_path, byte_count, source_sha256 = await _stage_source_xml(file, batch.id)
-    final_path = _source_path(batch.id)
+    staging_key, byte_count, source_sha256 = await _stage_source_xml(file, batch.id)
+    final_key = _source_key(batch.id)
     try:
-        get_mutable_project_lock(db, batch.project_id, current_user.id)
-        db.refresh(batch)
-        if batch.status != "pending":
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Batch is no longer pending",
-            )
-        os.replace(staging_path, final_path)
-    except BaseException:
-        staging_path.unlink(missing_ok=True)
-        raise
-
-    log_payload: dict[str, object]
-    if batch.log_json:
         try:
-            loaded = json.loads(batch.log_json)
-            log_payload = loaded if isinstance(loaded, dict) else {}
-        except json.JSONDecodeError:
-            log_payload = {}
-    else:
-        log_payload = {}
+            get_mutable_project_lock(db, batch.project_id, current_user.id)
+            db.refresh(batch)
+            if batch.status != "pending":
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Batch is no longer pending",
+                )
+            # S3 has no rename: this server-side copy is the switchover that os.replace
+            # used to be. Concurrent uploads each own a distinct staging key, so the only
+            # contended write is this one, and it happens under the project lock.
+            #
+            # It is the only network call left inside the locked section, and it has to
+            # stay there: it is what makes the switchover atomic with respect to the
+            # `status != "pending"` re-check just above. So its timeout budget *is the
+            # maximum time every other writer on this project is blocked* -- planning,
+            # devis and task writers all serialize on the same `ms_project` row, and
+            # `db/session.get_engine` sets no `lock_timeout`, so they wait indefinitely.
+            # `ObjectStorage.copy` therefore runs on a dedicated fail-fast client
+            # (`_SWITCHOVER_*` in core/object_storage.py: ~25s worst case, against the
+            # ~105s the data-path timeouts would allow). Anything added inside this
+            # section has to be accounted for the same way.
+            try:
+                await run_in_threadpool(import_object_storage.copy, staging_key, final_key)
+            # A staging object that vanished between the two calls is a storage anomaly,
+            # not a caller mistake, so it maps to the same 503 as an outright outage.
+            except (ObjectStorageKeyNotFoundError, ObjectStorageUnavailableError) as exc:
+                raise _storage_unavailable(exc) from exc
 
-    log_payload["uploaded_bytes"] = byte_count
+            log_payload: dict[str, object]
+            if batch.log_json:
+                try:
+                    loaded = json.loads(batch.log_json)
+                    log_payload = loaded if isinstance(loaded, dict) else {}
+                except json.JSONDecodeError:
+                    log_payload = {}
+            else:
+                log_payload = {}
 
-    batch.source_filename = filename
-    batch.source_storage_path = str(final_path)
-    batch.source_sha256 = source_sha256
-    batch.status = "pending"
-    batch.log_json = json.dumps(log_payload)
-    db.add(batch)
-    db.commit()
-    db.refresh(batch)
+            log_payload["uploaded_bytes"] = byte_count
+
+            batch.source_filename = filename
+            batch.source_storage_path = final_key
+            batch.source_sha256 = source_sha256
+            batch.status = "pending"
+            batch.log_json = json.dumps(log_payload)
+            db.add(batch)
+            # Releases the project row lock. Everything below runs unlocked.
+            db.commit()
+            db.refresh(batch)
+        except Exception:
+            # Same reason as the commit above: end the transaction, and with it the row
+            # lock, before the staging cleanup in the `finally`. That cleanup is a network
+            # call now, and the failure paths that reach here are precisely the ones where
+            # the store is slow, so holding the lock across it would stall every planning,
+            # devis and task writer on this project for the whole timeout budget.
+            db.rollback()
+            raise
+    finally:
+        # Always: after a successful copy the staging object is a duplicate, and after a
+        # failure it is orphaned. Unlike os.replace, a copy leaves the source behind.
+        await run_in_threadpool(_discard_staged_object, staging_key)
+
     return _to_batch_response(batch)
 
 
@@ -529,6 +629,7 @@ def _run_confirmed_import(
         401: {"model": FastAPIErrorResponse},
         404: {"model": FastAPIErrorResponse},
         409: {"model": FastAPIErrorResponse},
+        503: {"model": FastAPIErrorResponse},
     },
 )
 def run_batch(
@@ -579,7 +680,11 @@ def run_batch(
     )
 
 
-@router.get("/{batch_id}/diff", response_model=ImportDiffResponse)
+@router.get(
+    "/{batch_id}/diff",
+    response_model=ImportDiffResponse,
+    responses={503: {"model": FastAPIErrorResponse}},
+)
 def get_batch_diff(
     batch_id: int,
     db: Session = Depends(get_db),
