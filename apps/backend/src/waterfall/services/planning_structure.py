@@ -183,7 +183,6 @@ def generate_planning_structure(
             db.add(task)
             next_uid += 1
         task.structure_kind = node.kind
-        task.parent_uid = uid_by_key.get(node.parent_key) if node.parent_key else None
         task.position = node.position
         task.name = node.name
         task.outline_number = node.outline_number
@@ -192,6 +191,17 @@ def generate_planning_structure(
         task.is_milestone = node.is_milestone
         tasks.append(task)
         uid_by_key[node.key] = task.uid
+
+    # Two passes over fk_ms_task_parent, deliberately: SQLAlchemy emits a
+    # flush's UPDATEs *before* its INSERTs, so pointing a kept row's parent_uid
+    # at a uid created in the same pass raises "FOREIGN KEY constraint failed".
+    # Reachable since #313: an XML import can adopt part of a generated
+    # structure (clearing those rows' structure_key), leaving this function to
+    # recreate the missing nodes under fresh uids while a kept node -- e.g. the
+    # lot's completion milestone -- must be reparented onto one of them.
+    db.flush()
+    for node, task in zip(nodes, tasks, strict=True):
+        task.parent_uid = uid_by_key.get(node.parent_key) if node.parent_key else None
 
     db.flush()
     deliverables_by_lot_key = {

@@ -4,6 +4,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import patch
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -14,7 +15,7 @@ from waterfall.db.session import get_session_factory
 from waterfall.main import app
 from waterfall.models.ms_core import MsProject, MsTask
 from waterfall.models.planning import WfPlanning, WfPlanningLinkSnapshot, WfPlanningTaskSnapshot
-from waterfall.models.resources import Calendar, CalendarWeekday
+from waterfall.models.resources import Calendar, CalendarWeekday, CostCategory, CostType
 from waterfall.models.wf_core import WfChargeLine, WfImportBatch
 from waterfall.services.calendar_schedule import resolve_calendars_for_tasks
 
@@ -363,6 +364,125 @@ def test_confirmation_succeeds_when_removed_task_is_not_referenced() -> None:
 
         assert run.status_code == 202
         assert run.json()["status"] == "success"
+
+
+def _seed_supply_category() -> int:
+    """An active supply `CostCategory`, the minimum needed to create a cost line."""
+    with get_session_factory()() as session:
+        cost_type = CostType(code=f"FOURN-{uuid4().hex[:8]}", name="Fourniture", kind="supply")
+        session.add(cost_type)
+        session.flush()
+        category = CostCategory(
+            cost_type_id=cost_type.id,
+            accounting_code=f"FO-{uuid4().hex[:8]}",
+            category_code="ACHAT",
+            name="Cables",
+        )
+        session.add(category)
+        session.commit()
+        return category.id
+
+
+def _tasks_xml(*uids: int) -> bytes:
+    tasks = "".join(
+        f"<Task><UID>{uid}</UID><ID>{uid}</ID><Name>T{uid}</Name>"
+        f"<OutlineNumber>{uid}</OutlineNumber><OutlineLevel>1</OutlineLevel></Task>"
+        for uid in uids
+    )
+    return (
+        '<Project xmlns="http://schemas.microsoft.com/project"><SaveVersion>16</SaveVersion>'
+        "<ScheduleFromStart>1</ScheduleFromStart><StartDate>2026-01-01T08:00:00</StartDate>"
+        f"<Tasks>{tasks}</Tasks></Project>"
+    ).encode()
+
+
+def test_reimport_conflicts_on_a_task_priced_by_an_existing_estimate() -> None:
+    """Contract change introduced by issue #313, locked here on purpose.
+
+    Now that the XML import writes the canonical `MsTask` rows, the
+    `ms_task.id`-keyed branches of `is_task_referenced` (reached through
+    `build_import_diff`) actually bite on an imported project: re-importing a
+    file that drops a task already carrying an `EstimateCostLine` is rejected
+    with 409 `IMPORT_CONFLICT` instead of silently deleting the priced task's
+    planning side. Before the fix, an imported project had no `MsTask` at all,
+    so those branches could never match.
+
+    Note the conflict surface is wider than the cost line alone: creating a
+    devis also fills `EstimateTaskRow.task_id`, itself a referencing column.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client, "import.estimate.conflict@example.com")
+        project_id = _create_project(client, headers)
+
+        batch_id = _prepare_pending_batch(client, headers, project_id, _tasks_xml(1, 2))
+        first_run = client.post(
+            f"/imports/v1/batches/{batch_id}/run",
+            json={"dryRun": False, "confirm": True},
+            headers=headers,
+        )
+        assert first_run.status_code == 202
+        assert first_run.json()["status"] == "success"
+
+        estimate = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate.status_code == 201
+        estimate_id = cast(int, estimate.json()["id"])
+
+        rows = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
+        )
+        assert rows.status_code == 200
+        task_id_by_uid = {
+            cast(int, row["task_uid"]): cast(int, row["task_id"])
+            for row in cast(list[dict[str, Any]], rows.json()["items"])
+        }
+        assert set(task_id_by_uid) == {1, 2}
+
+        cost_line = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "task_id": task_id_by_uid[2],
+                "cost_category_id": _seed_supply_category(),
+                "label": "Cable",
+                "quantity": "2.00",
+                "unit_cost": "10.00",
+            },
+            headers=headers,
+        )
+        assert cost_line.status_code == 201
+
+        second_batch_id = _prepare_pending_batch(client, headers, project_id, _tasks_xml(1))
+        rerun = client.post(
+            f"/imports/v1/batches/{second_batch_id}/run",
+            json={"dryRun": False, "confirm": True},
+            headers=headers,
+        )
+
+        assert rerun.status_code == 409
+        detail = rerun.json()["detail"]
+        assert detail["code"] == "IMPORT_CONFLICT"
+        assert detail["conflicts"] == [2]
+
+        # The batch stays reusable, and nothing of the priced task was touched.
+        batch_status = client.get(f"/imports/v1/batches/{second_batch_id}", headers=headers)
+        assert batch_status.status_code == 200
+        assert batch_status.json()["status"] == "pending"
+        with get_session_factory()() as session:
+            assert (
+                session.query(MsTask)
+                .filter(MsTask.project_id == project_id, MsTask.uid == 2)
+                .count()
+                == 1
+            )
+            assert (
+                session.query(WfPlanningTaskSnapshot)
+                .filter(WfPlanningTaskSnapshot.uid == 2)
+                .count()
+                == 1
+            )
 
 
 def test_confirmed_run_never_resolves_calendars_under_the_project_lock() -> None:
