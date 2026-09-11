@@ -53,6 +53,7 @@ from waterfall.domain.revision import (
     check_all_invariants,
     check_invariants,
     children_of,
+    compact_positions,
     copy_revision,
     create_revision,
     create_work_item,
@@ -68,6 +69,7 @@ from waterfall.domain.revision import (
     node_by_work_item,
     outdent_nodes,
     plan_reimport,
+    require_node,
     resolve_bearing_task,
     selection_roots,
     subtree_ids,
@@ -174,6 +176,49 @@ def test_a_delete_closes_the_hole_it_leaves_in_the_sibling_positions(bench: Benc
     delete_nodes(project, revision, [bench.root_a])
 
     assert [node.position for node in children_of(revision, None)] == [1, 2]
+    assert_sound(project, revision)
+
+
+def test_compact_positions_closes_every_hole_a_foreign_writer_left(bench: Bench) -> None:
+    """The public renumbering, and the reason it exists next to the private one.
+
+    Positions written by something other than this module -- rows inserted
+    straight into the tables, a manual repair, the legacy services E14-12 (#339)
+    has yet to remove -- can be non-contiguous in a way no operation closes on its
+    own: each one only renumbers the parents it touched.
+    """
+    project, revision = bench.project, bench.revision
+    revision.nodes[bench.root_c].position = 9
+    revision.nodes[bench.child_b].position = 4
+    assert violated_invariant_ids(check_invariants(project, revision)) == ["INV-05"]
+
+    moved = compact_positions(revision)
+
+    # Every node the compaction had to renumber, in either sibling set: the two
+    # that were pushed out of range, and the two they jumped over.
+    assert set(moved) == {bench.root_c, bench.global_cost, bench.child_b, bench.supply}
+    assert [node.position for node in children_of(revision, None)] == [1, 2, 3]
+    assert [node.position for node in children_of(revision, bench.root_a)] == [1, 2]
+    # The display order the broken positions described is the one kept: compaction
+    # closes the holes, it does not invent an order of its own.
+    assert _names(bench, None) == ["A", "Assurance chantier", "C"]
+    assert _names(bench, bench.root_a) == ["Câblage", "B"]
+    assert_sound(project, revision)
+
+
+def test_compact_positions_keeps_the_display_order_and_still_counts_as_a_write(
+    bench: Bench,
+) -> None:
+    """A no-op repair is still a write: two callers holding the same lock version
+    must not both be able to succeed, so the counter is bumped either way."""
+    project, revision = bench.project, bench.revision
+    before = _names(bench, bench.root_a)
+    lock_version = revision.lock_version
+
+    assert compact_positions(revision) == ()
+
+    assert _names(bench, bench.root_a) == before
+    assert revision.lock_version == lock_version + 1
     assert_sound(project, revision)
 
 
@@ -322,6 +367,51 @@ def test_resolve_bearing_task_walks_up_through_nested_cost_lines(bench: Bench) -
     assert bearing is not None
     assert bearing.id == bench.root_a
     assert resolve_bearing_task(revision, bench.global_cost) is None
+
+
+def test_require_node_is_what_tells_an_unknown_node_from_a_global_cost(bench: Bench) -> None:
+    """The guard :func:`resolve_bearing_task` deliberately does not carry.
+
+    ``resolve_bearing_task`` is total -- ``None`` for a global cost *and* ``None``
+    for a node that does not exist -- because the invariant checker runs it on
+    states built to be invalid. A caller needing the two told apart asks here,
+    rather than writing the membership test itself outside the domain (E14-04
+    round-2 M-1).
+    """
+    revision = bench.revision
+
+    assert require_node(revision, bench.global_cost) is revision.nodes[bench.global_cost]
+    assert resolve_bearing_task(revision, bench.global_cost) is None
+    assert resolve_bearing_task(revision, 4242) is None
+
+    with pytest.raises(NotFoundError, match="Node 4242 does not exist in revision"):
+        require_node(revision, 4242)
+
+
+def test_require_node_refuses_an_unknown_node_with_the_message_every_operation_gives(
+    bench: Bench,
+) -> None:
+    """One message for one refusal: ``_require_nodes`` is this guard in a loop, so a
+    selection naming an unknown node and a single lookup of it cannot drift apart."""
+    revision = bench.revision
+
+    with pytest.raises(NotFoundError) as direct:
+        require_node(revision, 4242)
+    with pytest.raises(NotFoundError) as through_a_selection:
+        delete_nodes(bench.project, revision, [bench.root_c, 4242])
+
+    assert str(direct.value) == str(through_a_selection.value)
+
+
+def test_require_node_reads_a_validated_revision_without_refusing_it(bench: Bench) -> None:
+    """It is a reader, which is why it sits in the INV-03 reader whitelist: reading a
+    frozen revision is exactly what INV-03 still allows."""
+    project, revision = bench.project, bench.revision
+    validate_revision(project, revision, now=NOW)
+    lock_version = revision.lock_version
+
+    assert require_node(revision, bench.root_a).id == bench.root_a
+    assert revision.lock_version == lock_version
 
 
 def test_ancestors_and_subtree_helpers(bench: Bench) -> None:

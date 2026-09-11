@@ -64,6 +64,7 @@ from waterfall.domain.revision import (
     apply_reimport,
     bearing_work_item_id,
     check_invariants,
+    compact_positions,
     copy_revision,
     create_revision,
     create_work_item,
@@ -236,6 +237,7 @@ def _write_attempts(bench: Bench) -> list[tuple[str, Callable[[], object]]]:
         ("indent_nodes", lambda: indent_nodes(project, revision, [bench.root_c])),
         ("outdent_nodes", lambda: outdent_nodes(project, revision, [bench.child_b])),
         ("delete_nodes", lambda: delete_nodes(project, revision, [bench.child_b])),
+        ("compact_positions", lambda: compact_positions(revision)),
         (
             "add_link",
             lambda: add_link(revision, node_id=bench.child_b, predecessor_node_id=bench.root_c),
@@ -335,6 +337,10 @@ _TREE_READERS = frozenset(
         "create_work_item",
         "describe_cost_losses",
         "links_of",
+        # Addressing guard, not a write: it raises on an unknown node and returns
+        # the node otherwise, on a validated revision exactly as on a draft --
+        # reading a frozen revision is what INV-03 explicitly still allows.
+        "require_node",
         "selection_roots",
     }
 )

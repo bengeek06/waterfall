@@ -111,6 +111,7 @@ from waterfall.domain.revision.tree import (
     add_task,
     carries_labor,
     check_external_uid_available,
+    compact_positions,
     cost_losses_of,
     create_work_item,
     delete_nodes,
@@ -122,6 +123,7 @@ from waterfall.domain.revision.tree import (
     move_nodes_down,
     move_nodes_up,
     outdent_nodes,
+    require_node,
     selection_roots,
 )
 from waterfall.domain.revision.work_breakdown import (
@@ -191,6 +193,7 @@ __all__ = [
     "check_invariants",
     "children_of",
     "clear_task_calendar_override",
+    "compact_positions",
     "copy_revision",
     "cost_losses_of",
     "create_revision",
@@ -213,6 +216,7 @@ __all__ = [
     "reconcile_forecast_to_budget",
     "regenerate_skeleton",
     "rename_task",
+    "require_node",
     "resolve_bearing_task",
     "save_work_breakdown",
     "selection_roots",

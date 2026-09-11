@@ -288,6 +288,42 @@ def _renumber_children(revision: ProjectRevision, parent_id: int | None) -> None
         node.position = index
 
 
+def compact_positions(revision: ProjectRevision) -> tuple[int, ...]:
+    """Renumber **every** sibling set of the revision as contiguous positions 1..n (INV-05).
+
+    The public counterpart of :func:`_renumber_children`, and the only renumbering
+    exposed on the package surface: it carries a ``require_draft`` of its own,
+    which is exactly what the private helper cannot -- its callers have already
+    run one, whereas this one is reachable from outside.
+
+    Every operation of this module already leaves the positions contiguous, so a
+    revision built through the domain alone never needs it. What does need it is a
+    tree the domain did not write: rows inserted straight into the tables, a
+    manual repair, or the legacy services E14-12 (#339) has yet to remove -- all of
+    which can leave a hole in a sibling set that no later operation closes on its
+    own, because each one only renumbers the parents it touched.
+
+    Returns the ids of the nodes whose position actually changed, sorted, so a
+    caller can tell a repair from a no-op. The lock counter is bumped either way:
+    "a write happened" is what :func:`touch` records, and making that conditional
+    would hand two callers holding the same ``lock_version`` a way to both succeed.
+
+    A node whose parent the revision does not hold (INV-09) is renumbered within
+    the set of its fellow orphans rather than skipped -- the same totality
+    :mod:`~waterfall.domain.revision.structure` maintains on a deliberately
+    invalid state. Such a revision is refused at write time anyway.
+    """
+    require_draft(revision)
+    moved: list[int] = []
+    for parent_id in {node.parent_id for node in revision.nodes.values()}:
+        for index, node in enumerate(children_of(revision, parent_id), start=1):
+            if node.position != index:
+                node.position = index
+                moved.append(node.id)
+    touch(revision)
+    return tuple(sorted(moved))
+
+
 def _apply_calendar_defaults(project: Project, plan: PlanFacet) -> None:
     """Initialise a brand new planning facet's calendar (Rule 1, INV-15).
 
@@ -470,14 +506,35 @@ def add_cost_line(
     )
 
 
+def require_node(revision: ProjectRevision, node_id: int) -> RevisionNode:
+    """The node ``node_id`` designates, refused when the revision does not hold it.
+
+    The public addressing guard of the tree, and the reason it is public: the
+    read-only helpers of :mod:`~waterfall.domain.revision.structure` are
+    deliberately **total** -- :func:`~waterfall.domain.revision.structure.resolve_bearing_task`
+    answers ``None`` for an unknown node exactly as it does for a global cost,
+    because the invariant checker calls them on states built to be invalid. A
+    caller that does need the two told apart (a route resolving a node id it was
+    handed, say) has to ask, and asking is this function; writing the membership
+    test itself would put a decision about the tree outside the domain.
+
+    Raises rather than returning ``None`` so the refusal is the one every other
+    operation gives, message included -- :func:`_require_nodes` is this function
+    in a loop.
+    """
+    node = revision.nodes.get(node_id)
+    if node is None:
+        raise NotFoundError(f"Node {node_id} does not exist in revision {revision.id}")
+    return node
+
+
 def _require_nodes(revision: ProjectRevision, node_ids: list[int]) -> None:
     if not node_ids:
         raise SelectionError("The selection is empty")
     if len(set(node_ids)) != len(node_ids):
         raise SelectionError("The selection contains duplicates")
     for node_id in node_ids:
-        if node_id not in revision.nodes:
-            raise NotFoundError(f"Node {node_id} does not exist in revision {revision.id}")
+        require_node(revision, node_id)
 
 
 def selection_roots(revision: ProjectRevision, node_ids: list[int]) -> list[RevisionNode]:
