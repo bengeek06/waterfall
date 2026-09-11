@@ -10,6 +10,7 @@ from sqlalchemy import func
 from waterfall.db.session import get_session_factory
 from waterfall.main import app
 from waterfall.models.ms_core import MsTask
+from waterfall.models.resources import TaskRoleAssignment
 from waterfall.models.user import User
 from waterfall.services.msproject_xml import parse_msproject_xml
 
@@ -56,11 +57,6 @@ def _create_legacy_task(project_id: int, name: str) -> int:
         max_uid = (
             session.query(func.max(MsTask.uid)).filter(MsTask.project_id == project_id).scalar()
         )
-        max_id_display = (
-            session.query(func.max(MsTask.id_display))
-            .filter(MsTask.project_id == project_id)
-            .scalar()
-        )
         root_count = (
             session.query(MsTask)
             .filter(MsTask.project_id == project_id)
@@ -70,7 +66,6 @@ def _create_legacy_task(project_id: int, name: str) -> int:
         task = MsTask(
             project_id=project_id,
             uid=(max_uid or 0) + 1,
-            id_display=(max_id_display or 0) + 1,
             name=name,
             outline_number=str(root_count + 1),
             outline_level=1,
@@ -81,6 +76,35 @@ def _create_legacy_task(project_id: int, name: str) -> int:
         session.add(task)
         session.commit()
         return task.uid
+
+
+def _create_role_assignment(
+    project_id: int, task_uid: int, role_id: int, *, quantity: str = "1", hours: str = "10"
+) -> int:
+    """Insert a `TaskRoleAssignment` directly via the ORM.
+
+    E12-01 (#273) removed the `/tasks/{uid}/role-assignments` HTTP route this
+    module used to create these fixtures through; `TaskRoleAssignment` (and the
+    calendar-resolution logic under test here, unaffected by that issue) is
+    untouched, so this reaches directly into the DB the same way `_create_legacy_task`
+    above already does for its own removed route.
+    """
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        task = (
+            session.query(MsTask)
+            .filter(MsTask.project_id == project_id, MsTask.uid == task_uid)
+            .one()
+        )
+        assignment = TaskRoleAssignment(
+            task_id=task.id,
+            role_id=role_id,
+            quantity=Decimal(quantity),
+            hours=Decimal(hours),
+        )
+        session.add(assignment)
+        session.commit()
+        return assignment.id
 
 
 def _create_calendar(
@@ -303,6 +327,58 @@ def test_export_xml_contains_task_notes_from_description() -> None:
         assert notes_by_uid.get(task_uid) == description
 
 
+def test_export_id_follows_depth_first_row_number_not_creation_order() -> None:
+    """Issue #148 (E9-03): the exported <ID> must be the task's row_number (#147/E9-02) --
+    its 1-based rank in depth-first display order -- never a stale/creation-order value.
+    Seeds two root siblings with `position` deliberately reversed relative to `MsTask.id`/
+    `uid` creation order, so a regression back to ordering by id/uid (as `export_project_xml`
+    did before this issue) would produce <ID> 1/2 in the wrong order.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_response: Response = client.post(
+            "/projects", json={"name": "Export row_number order"}, headers=headers
+        )
+        assert project_response.status_code == 201
+        project_id = cast(int, project_response.json()["id"])
+
+        first_uid = _create_legacy_task(project_id, "Created first, positioned second")
+        second_uid = _create_legacy_task(project_id, "Created second, positioned first")
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            first_task = (
+                session.query(MsTask)
+                .filter(MsTask.project_id == project_id, MsTask.uid == first_uid)
+                .one()
+            )
+            second_task = (
+                session.query(MsTask)
+                .filter(MsTask.project_id == project_id, MsTask.uid == second_uid)
+                .one()
+            )
+            first_task.position = 2
+            second_task.position = 1
+            session.commit()
+
+        export_response: Response = client.get(
+            f"/projects/{project_id}/export.xml",
+            headers=headers,
+        )
+        assert export_response.status_code == 200
+        root = ET.fromstring(cast(bytes, export_response.content))
+        id_by_uid: dict[int, int] = {}
+        for task_node in root.findall("ms:Tasks/ms:Task", NS):
+            uid_node = task_node.find("ms:UID", NS)
+            id_node = task_node.find("ms:ID", NS)
+            assert uid_node is not None and uid_node.text is not None
+            assert id_node is not None and id_node.text is not None
+            id_by_uid[int(uid_node.text)] = int(id_node.text)
+
+        assert id_by_uid[second_uid] == 1
+        assert id_by_uid[first_uid] == 2
+
+
 def test_export_includes_task_calendar_and_reference_minutes() -> None:
     with TestClient(app) as client:
         headers = _admin_headers(client, "export.calendars@example.com")
@@ -328,12 +404,7 @@ def test_export_includes_task_calendar_and_reference_minutes() -> None:
             client, headers, suffix="CAL1", calendar_id=calendar_id
         )
 
-        assignment_response: Response = client.post(
-            f"/projects/{project_id}/tasks/{task_uid}/role-assignments",
-            json={"role_id": role_id, "quantity": "1", "hours": "10"},
-            headers=headers,
-        )
-        assert assignment_response.status_code == 201
+        _create_role_assignment(project_id, task_uid, role_id)
 
         export_response: Response = client.get(
             f"/projects/{project_id}/export.xml",
@@ -456,12 +527,7 @@ def test_export_task_calendar_uses_lowest_role_id_among_multiple_assignments() -
         expected_calendar_id = calendar_by_role_id[lower_role_id]
 
         for role_id in (higher_role_id, lower_role_id):
-            assignment_response: Response = client.post(
-                f"/projects/{project_id}/tasks/{task_uid}/role-assignments",
-                json={"role_id": role_id, "quantity": "1", "hours": "10"},
-                headers=headers,
-            )
-            assert assignment_response.status_code == 201
+            _create_role_assignment(project_id, task_uid, role_id)
 
         export_response: Response = client.get(
             f"/projects/{project_id}/export.xml",
@@ -519,12 +585,7 @@ def test_export_falls_back_to_task_calendar_when_standard_has_no_working_day() -
             client, headers, suffix="USABLE", calendar_id=calendar_id
         )
 
-        assignment_response: Response = client.post(
-            f"/projects/{project_id}/tasks/{task_uid}/role-assignments",
-            json={"role_id": role_id, "quantity": "1", "hours": "10"},
-            headers=headers,
-        )
-        assert assignment_response.status_code == 201
+        _create_role_assignment(project_id, task_uid, role_id)
 
         export_response: Response = client.get(
             f"/projects/{project_id}/export.xml",
@@ -831,12 +892,7 @@ def test_export_then_reimport_round_trip_preserves_tasks_and_links() -> None:
             client, headers, code="RT-CAL", weeks_per_year=47, weekday_hours="8.00"
         )
         role_id = _create_role_with_calendar(client, headers, suffix="RT", calendar_id=calendar_id)
-        assignment_response: Response = client.post(
-            f"/projects/{source_project_id}/tasks/{first_task_uid}/role-assignments",
-            json={"role_id": role_id, "quantity": "1", "hours": "10"},
-            headers=headers,
-        )
-        assert assignment_response.status_code == 201
+        _create_role_assignment(source_project_id, first_task_uid, role_id)
 
         export_response: Response = client.get(
             f"/projects/{source_project_id}/export.xml",

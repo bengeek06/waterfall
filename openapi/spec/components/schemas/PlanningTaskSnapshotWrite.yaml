@@ -1,7 +1,6 @@
 type: object
 required:
 - uid
-- id_display
 - structure_key
 - structure_kind
 - parent_uid
@@ -26,8 +25,6 @@ properties:
   uid:
     type: integer
     minimum: 1
-  id_display:
-    type: [integer, "null"]
   structure_key:
     type: [string, "null"]
     maxLength: 128

@@ -1,0 +1,7 @@
+description: |-
+  Le deplacement entre en conflit avec l'arbre du devis, ou `expected_revision`
+  ne correspond plus a la revision persistee (code `ESTIMATE_REVISION_CONFLICT`).
+content:
+  application/json:
+    schema:
+      $ref: ../schemas/FastAPIErrorResponse.yaml

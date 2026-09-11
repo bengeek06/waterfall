@@ -1,0 +1,16 @@
+allOf:
+- $ref: ProjectEstimateRead.yaml
+- type: object
+  required:
+  - warnings
+  properties:
+    warnings:
+      type: array
+      items:
+        $ref: EstimateValidationWarning.yaml
+description: |-
+  Reponse de `POST .../estimates/{estimateId}/validate` uniquement.
+  Volontairement distinct de `ProjectEstimateRead` (partage par
+  `listProjectEstimates`/`createProjectEstimate`/`setEstimateReference`, qui
+  ne calculent pas cet avertissement) : ces endpoints ne renvoient donc jamais
+  ce champ `warnings` toujours vide/absent dans leur contexte.

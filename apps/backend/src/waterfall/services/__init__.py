@@ -11,10 +11,41 @@ from waterfall.services.calendar_schedule import (
 )
 from waterfall.services.estimate_calculation import (
     EstimateAggregates,
+    MissingRateCoverageError,
     calculate_estimate_aggregates,
     calculate_estimate_lines,
+    collect_missing_rate_coverage,
+    format_missing_rate_message,
+    get_estimate_validation_warnings,
+    missing_rate_coverage_detail,
+    sync_task_role_assignments_from_estimate,
 )
 from waterfall.services.estimate_export import build_estimate_workbook
+from waterfall.services.estimate_grid import (
+    EstimateGridInvariantError,
+    EstimateGridMoveError,
+    EstimateGridMoveNotFoundError,
+    create_estimate_grid_node,
+    move_estimate_grid_nodes,
+    next_estimate_grid_node_uid,
+)
+from waterfall.services.estimate_reconciliation_export import (
+    build_estimate_reconciliation_workbook,
+)
+from waterfall.services.estimate_reconciliation_import import (
+    CostLineFileRow,
+    EstimateReconciliationFormatError,
+    LaborFileRow,
+    ParsedReconciliationWorkbook,
+    TaskFileRow,
+    parse_estimate_reconciliation_workbook,
+)
+from waterfall.services.estimate_task_display import (
+    ResolvedTaskDisplay,
+    resolve_effective_task_uid,
+    resolve_live_task_display,
+    resolve_task_uid_by_id,
+)
 from waterfall.services.pagination import PaginationResult, apply_pagination
 from waterfall.services.planning_links import (
     PlanningLinkError,
@@ -52,9 +83,32 @@ __all__ = [
     "resolve_default_calendar_id",
     "resolve_task_calendar_ids",
     "EstimateAggregates",
+    "MissingRateCoverageError",
     "calculate_estimate_lines",
     "calculate_estimate_aggregates",
+    "collect_missing_rate_coverage",
+    "format_missing_rate_message",
+    "get_estimate_validation_warnings",
+    "missing_rate_coverage_detail",
+    "sync_task_role_assignments_from_estimate",
     "build_estimate_workbook",
+    "EstimateGridInvariantError",
+    "EstimateGridMoveError",
+    "EstimateGridMoveNotFoundError",
+    "create_estimate_grid_node",
+    "move_estimate_grid_nodes",
+    "next_estimate_grid_node_uid",
+    "build_estimate_reconciliation_workbook",
+    "CostLineFileRow",
+    "EstimateReconciliationFormatError",
+    "LaborFileRow",
+    "ParsedReconciliationWorkbook",
+    "TaskFileRow",
+    "parse_estimate_reconciliation_workbook",
+    "ResolvedTaskDisplay",
+    "resolve_effective_task_uid",
+    "resolve_live_task_display",
+    "resolve_task_uid_by_id",
     "PaginationResult",
     "apply_pagination",
     "generate_planning_snapshot",

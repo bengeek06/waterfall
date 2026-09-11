@@ -142,13 +142,11 @@ class MsTask(Base):
             name="ck_ms_task_work_non_negative",
         ),
         Index("idx_ms_task_project_outline", "project_id", "outline_level", "outline_number"),
-        Index("idx_ms_task_project_id_display", "project_id", "id_display"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("ms_project.id"), nullable=False)
     uid: Mapped[int] = mapped_column(Integer, nullable=False)
-    id_display: Mapped[int | None] = mapped_column(Integer, nullable=True)
     structure_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
     structure_kind: Mapped[str | None] = mapped_column(String(16), nullable=True)
     parent_uid: Mapped[int | None] = mapped_column(Integer, nullable=True)

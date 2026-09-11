@@ -1,0 +1,28 @@
+type: object
+description: >-
+  Résultat par dépendance. Volontairement binaire (`ok`/`unavailable`) et sans message :
+  `/health/ready` n'est pas authentifié, le détail de la panne reste dans les logs de
+  l'API.
+required:
+- database
+- redis
+- storage
+properties:
+  database:
+    type: string
+    enum:
+    - ok
+    - unavailable
+    example: ok
+  redis:
+    type: string
+    enum:
+    - ok
+    - unavailable
+    example: ok
+  storage:
+    type: string
+    enum:
+    - ok
+    - unavailable
+    example: ok

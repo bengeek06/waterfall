@@ -2,4 +2,4 @@ description: Droits administrateur requis
 content:
   application/json:
     schema:
-      $ref: ../schemas/ErrorResponse.yaml
+      $ref: ../schemas/FastAPIErrorResponse.yaml

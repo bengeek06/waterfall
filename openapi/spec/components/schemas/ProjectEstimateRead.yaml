@@ -7,6 +7,7 @@ required:
 - kind
 - status
 - currency_code
+- revision
 - created_at
 properties:
   id:
@@ -39,6 +40,9 @@ properties:
     - archived
   currency_code:
     type: string
+  revision:
+    type: integer
+    minimum: 0
   created_at:
     type: string
     format: date-time

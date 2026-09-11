@@ -114,26 +114,42 @@ paths:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1planning-tree
   /projects/{projectId}/tasks/{taskUid}:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1tasks~1{taskUid}
-  /projects/{projectId}/tasks/{taskUid}/role-assignments:
-    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1tasks~1{taskUid}~1role-assignments
-  /projects/{projectId}/tasks/{taskUid}/role-assignments/{assignmentId}:
-    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1tasks~1{taskUid}~1role-assignments~1{assignmentId}
   /projects/{projectId}/estimates:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates
   /projects/{projectId}/estimates/{estimateId}:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}
   /projects/{projectId}/estimates/{estimateId}/task-rows:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1task-rows
+  /projects/{projectId}/estimates/{estimateId}/tasks:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1tasks
   /projects/{projectId}/estimates/{estimateId}/cost-lines:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1cost-lines
   /projects/{projectId}/estimates/{estimateId}/cost-lines/{costLineId}:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1cost-lines~1{costLineId}
+  /projects/{projectId}/estimates/{estimateId}/cost-lines/{costLineId}/milestones:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1cost-lines~1{costLineId}~1milestones
+  /projects/{projectId}/estimates/{estimateId}/role-assignments:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1role-assignments
+  /projects/{projectId}/estimates/{estimateId}/role-assignments/{assignmentId}:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1role-assignments~1{assignmentId}
+  /projects/{projectId}/estimates/{estimateId}/grid-nodes/move:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1grid-nodes~1move
   /projects/{projectId}/estimates/{estimateId}/validate:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1validate
   /projects/{projectId}/estimates/{estimateId}/aggregates:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1aggregates
   /projects/{projectId}/estimates/{estimateId}/export.xlsx:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1export.xlsx
+  /projects/{projectId}/estimates/{estimateId}/export-reconciliation.xlsx:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1export-reconciliation.xlsx
+  /projects/{projectId}/estimates/{estimateId}/import-reconciliation/preview:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1import-reconciliation~1preview
+  /projects/{projectId}/estimates/{estimateId}/import-reconciliation/confirm:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1import-reconciliation~1confirm
+  /projects/{projectId}/cost-codes:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1cost-codes
+  /projects/{projectId}/cost-codes/{costCodeId}:
+    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1cost-codes~1{costCodeId}
   /projects/{projectId}/export.xml:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1export.xml
   /resources/calendars:
@@ -181,6 +197,8 @@ components:
       $ref: ./components/schemas/HealthStatus.yaml
     ReadinessStatus:
       $ref: ./components/schemas/ReadinessStatus.yaml
+    ReadinessChecks:
+      $ref: ./components/schemas/ReadinessChecks.yaml
     UserCreate:
       $ref: ./components/schemas/UserCreate.yaml
     UserRead:
@@ -223,8 +241,6 @@ components:
       $ref: ./components/schemas/ImportIssue.yaml
     ImportErrorListResponse:
       $ref: ./components/schemas/ImportErrorListResponse.yaml
-    ErrorResponse:
-      $ref: ./components/schemas/ErrorResponse.yaml
     FastAPIErrorResponse:
       $ref: ./components/schemas/FastAPIErrorResponse.yaml
     ProjectRead:
@@ -275,14 +291,14 @@ components:
       $ref: ./components/schemas/PlanningTreeRead.yaml
     PlanningTaskTreeRead:
       $ref: ./components/schemas/PlanningTaskTreeRead.yaml
-    TaskDescriptionUpdate:
-      $ref: ./components/schemas/TaskDescriptionUpdate.yaml
-    TaskRoleAssignmentCreate:
-      $ref: ./components/schemas/TaskRoleAssignmentCreate.yaml
-    TaskRoleAssignmentUpdate:
-      $ref: ./components/schemas/TaskRoleAssignmentUpdate.yaml
-    TaskRoleAssignmentRead:
-      $ref: ./components/schemas/TaskRoleAssignmentRead.yaml
+    TaskUpdate:
+      $ref: ./components/schemas/TaskUpdate.yaml
+    EstimateRoleAssignmentCreate:
+      $ref: ./components/schemas/EstimateRoleAssignmentCreate.yaml
+    EstimateRoleAssignmentUpdate:
+      $ref: ./components/schemas/EstimateRoleAssignmentUpdate.yaml
+    EstimateRoleAssignmentRead:
+      $ref: ./components/schemas/EstimateRoleAssignmentRead.yaml
     ProjectEstimateCreate:
       $ref: ./components/schemas/ProjectEstimateCreate.yaml
     ProjectEstimateRead:
@@ -383,8 +399,8 @@ components:
       $ref: ./components/schemas/EstimateTaskRowListRead.yaml
     EstimateCostLineListRead:
       $ref: ./components/schemas/EstimateCostLineListRead.yaml
-    TaskRoleAssignmentListRead:
-      $ref: ./components/schemas/TaskRoleAssignmentListRead.yaml
+    EstimateRoleAssignmentListRead:
+      $ref: ./components/schemas/EstimateRoleAssignmentListRead.yaml
     UserAdminListRead:
       $ref: ./components/schemas/UserAdminListRead.yaml
   parameters:

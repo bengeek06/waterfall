@@ -10,6 +10,9 @@ required:
 - quantity
 - unit_cost
 - purchase_cost
+- uid
+- position
+- row_number
 properties:
   id:
     type: integer
@@ -25,6 +28,9 @@ properties:
     minimum: 1
   cost_category_id:
     type: integer
+    minimum: 1
+  cost_code_id:
+    type: [integer, "null"]
     minimum: 1
   cost_type_code:
     type: string
@@ -44,3 +50,32 @@ properties:
     anyOf:
     - $ref: SupplyStatus.yaml
     - type: "null"
+  planned_date:
+    type: [string, "null"]
+    format: date-time
+  uid:
+    type: integer
+    maximum: -1
+    description: >-
+      This line's own EstimateGridNode uid (E12-07, #289), always negative.
+  parent_uid:
+    type: [integer, "null"]
+    not:
+      enum: [0]
+    description: >-
+      This line's grid-node parent_uid, exposed as-is (E12-09, #291): positif
+      = tache de ce devis (`MsTask.id`), negatif = un autre noeud de grille de
+      ce devis, absent/null = racine du devis -- meme convention que
+      `EstimateGridNodeMove.target_parent_uid`, reutilisable telle quelle dans
+      un appel ulterieur a grid-nodes/move.
+  position:
+    type: integer
+    minimum: 1
+    description: This line's local sibling position within its grid-node parent.
+  row_number:
+    type: integer
+    minimum: 1
+    readOnly: true
+    description: >-
+      1-based rank of this line in the devis's merged tasks+grid-node tree
+      (E12-09, #291), recomputed on every read, never stored.

@@ -18,8 +18,11 @@ from waterfall.models.resources import (
     CostType,
     Estimate,
     EstimateCostLine,
+    EstimateGridNode,
     EstimateLine,
+    EstimateRoleAssignment,
     EstimateTaskRow,
+    ProjectCostCode,
     ResourceRole,
     TaskRoleAssignment,
 )
@@ -27,6 +30,7 @@ from waterfall.models.user import User
 from waterfall.models.wf_core import WfChargeLine, WfExcelImport, WfImportBatch, WfTaskEnrichment
 from waterfall.schemas.projects import (
     EstimateCostLineRead,
+    EstimateRoleAssignmentRead,
     EstimateTaskRowRead,
     ProjectCreate,
     ProjectEstimateRead,
@@ -40,10 +44,14 @@ from waterfall.schemas.projects import (
     SupplyStatus,
     TaskLinkRead,
     TaskRead,
-    TaskRoleAssignmentRead,
 )
 from waterfall.schemas.resources import CostTypeKind
-from waterfall.services import apply_pagination, get_project_setup_warnings
+from waterfall.services import (
+    ResolvedTaskDisplay,
+    apply_pagination,
+    get_project_setup_warnings,
+    resolve_effective_task_uid,
+)
 from waterfall.services.project_lifecycle import (
     ensure_project_mutable,
     validate_project_status_transition,
@@ -96,33 +104,96 @@ def to_project_estimate_read(estimate: Estimate) -> ProjectEstimateRead:
         kind=estimate.kind,
         status=estimate.status,
         currency_code=estimate.currency_code,
+        revision=estimate.revision,
         created_at=estimate.created_at,
         validated_at=estimate.validated_at,
         note=estimate.note,
     )
 
 
-def to_estimate_task_row_read(row: EstimateTaskRow) -> EstimateTaskRowRead:
+def to_estimate_task_row_read(
+    row: EstimateTaskRow,
+    resolved: ResolvedTaskDisplay | None,
+    task_uid_by_task_id: dict[int, int],
+    row_number_by_uid: dict[int, int] | None = None,
+) -> EstimateTaskRowRead:
+    """Build the response for a single ``EstimateTaskRow``.
+
+    ``resolved`` is the live-resolved counterpart from
+    ``services.estimate_task_display.resolve_live_task_display`` -- callers
+    only ever compute one for a *draft* estimate (see that module's
+    docstring), so ``None`` here falls back to ``row``'s own frozen, stored
+    columns for ``parent_task_id``/``position``/``task_name``/
+    ``outline_number``/``outline_level``: the correct behaviour both for a
+    validated estimate (which must never drift after a later task
+    rename/move) and for the pre-existing degenerate case of a row whose task
+    can no longer be resolved live.
+
+    ``task_uid``, unlike those fields, is always resolved when possible, even
+    when ``resolved`` is ``None``: a task's ``uid`` is a stable identity, not
+    derived/drifting state, so a validated estimate need not leave it ``None``
+    just because it keeps its other fields frozen (E12-08 Finding Moyenne #4,
+    round 4 review) -- ``task_uid_by_task_id`` (built by
+    ``services.estimate_task_display.resolve_task_uid_by_id``) is the fallback
+    lookup for that case.
+
+    ``row_number_by_uid`` (E12-09/#291) is the devis's whole merged tasks+grid
+    -node rank map (``api.routes.estimates._load_estimate_grid_context``),
+    keyed by the same ``task_uid``/grid-node-``uid`` space
+    ``order_estimate_grid_depth_first`` produces -- absent (``None``) only for
+    the handful of pre-existing call sites that never had this field to begin
+    with, or when this row's own ``task_uid`` could not be resolved at all
+    (the pre-existing degenerate case above), in which case ``row_number`` is
+    ``None`` too rather than a misleading, arbitrarily-picked rank.
+    """
+    task_uid = resolve_effective_task_uid(row, resolved, task_uid_by_task_id)
+    row_number = (
+        row_number_by_uid.get(task_uid)
+        if row_number_by_uid is not None and task_uid is not None
+        else None
+    )
     return EstimateTaskRowRead(
         id=row.id,
         estimate_id=row.estimate_id,
         task_id=row.task_id,
-        parent_task_id=row.parent_task_id,
-        position=row.position,
-        task_name=row.task_name,
-        outline_number=row.outline_number,
-        outline_level=row.outline_level,
+        task_uid=task_uid,
+        row_number=row_number,
+        parent_task_id=resolved.parent_task_id if resolved is not None else row.parent_task_id,
+        position=resolved.position if resolved is not None else row.position,
+        task_name=resolved.task_name if resolved is not None else row.task_name,
+        outline_number=resolved.outline_number if resolved is not None else row.outline_number,
+        outline_level=resolved.outline_level if resolved is not None else row.outline_level,
         is_milestone=row.is_milestone,
     )
 
 
-def to_estimate_cost_line_read(line: EstimateCostLine) -> EstimateCostLineRead:
+def to_estimate_cost_line_read(
+    line: EstimateCostLine,
+    node: EstimateGridNode,
+    row_number_by_uid: dict[int, int],
+) -> EstimateCostLineRead:
+    """Build the response for a single ``EstimateCostLine``.
+
+    ``node`` is this line's own ``EstimateGridNode`` (``line.node_id``,
+    NOT NULL/unique -- every line owns exactly one): ``uid``/``parent_uid``/
+    ``position`` are exposed as-is, unchanged from ``EstimateGridNode``'s own
+    storage convention (a positive ``parent_uid`` is a ``MsTask.id``, matching
+    ``EstimateGridNodeMove``'s own wire contract, so a caller can feed a
+    read's ``parent_uid`` straight back into ``grid-nodes/move`` without any
+    translation). ``row_number_by_uid`` is the devis's whole merged rank map
+    (E12-09/#291, see ``to_estimate_task_row_read``'s own docstring) --
+    ``node.uid`` is always present in it, since every existing grid node is
+    always visited by ``order_estimate_grid_depth_first``'s traversal (its own
+    orphan-cycle fallback guarantees this even for a node whose declared
+    ancestor chain is broken).
+    """
     return EstimateCostLineRead(
         id=line.id,
         estimate_id=line.estimate_id,
         task_id=line.task_id,
         cost_type_id=line.cost_type_id,
         cost_category_id=line.cost_category_id,
+        cost_code_id=line.cost_code_id,
         cost_type_code=line.cost_type_code,
         accounting_code=line.accounting_code,
         category_code=line.category_code,
@@ -131,6 +202,11 @@ def to_estimate_cost_line_read(line: EstimateCostLine) -> EstimateCostLineRead:
         unit_cost=line.unit_cost,
         purchase_cost=line.purchase_cost,
         supply_status=cast(SupplyStatus | None, line.supply_status),
+        planned_date=line.planned_date,
+        uid=node.uid,
+        parent_uid=node.parent_uid,
+        position=node.position,
+        row_number=row_number_by_uid[node.uid],
     )
 
 
@@ -183,12 +259,14 @@ def to_task_read(
     task: MsTask,
     description: str | None,
     predecessor_links: list[MsTaskLink] | None = None,
+    *,
+    row_number: int,
 ) -> TaskRead:
     return TaskRead(
         id=task.id,
         project_id=task.project_id,
         uid=task.uid,
-        id_display=task.id_display,
+        row_number=row_number,
         structure_key=task.structure_key,
         structure_kind=cast(StructureKind | None, task.structure_kind),
         parent_uid=task.parent_uid,
@@ -221,24 +299,37 @@ def to_task_read(
     )
 
 
-def to_task_role_assignment_read(
-    assignment: TaskRoleAssignment,
+def to_estimate_role_assignment_read(
+    assignment: EstimateRoleAssignment,
     role: ResourceRole,
     category: CostCategory,
-) -> TaskRoleAssignmentRead:
-    return TaskRoleAssignmentRead(
+    node: EstimateGridNode,
+    row_number_by_uid: dict[int, int],
+) -> EstimateRoleAssignmentRead:
+    """Build the response for a single ``EstimateRoleAssignment``.
+
+    ``node``/``row_number_by_uid`` follow the exact same E12-09/#291
+    contract as ``to_estimate_cost_line_read`` above.
+    """
+    return EstimateRoleAssignmentRead(
         id=assignment.id,
+        estimate_id=assignment.estimate_id,
         task_id=assignment.task_id,
         role_id=role.id,
         role_code=role.name,
         role_name=role.name,
         cost_category_id=category.id,
         accounting_code=category.accounting_code,
+        cost_code_id=assignment.cost_code_id,
         quantity=assignment.quantity,
         hours=assignment.hours,
         comment=assignment.comment,
         created_at=assignment.created_at,
         updated_at=assignment.updated_at,
+        uid=node.uid,
+        parent_uid=node.parent_uid,
+        position=node.position,
+        row_number=row_number_by_uid[node.uid],
     )
 
 
@@ -297,6 +388,25 @@ def create_project(
         status=cast(ProjectStatus, "cree"),
     )
     db.add(project)
+    # Flush (not commit) to obtain project.id without ending the transaction: the root cost
+    # code below must be created atomically with the project itself, never as a second,
+    # separately-committed write -- a failure creating it must roll back the whole project
+    # creation instead of leaving a durable MsProject row with no root cost code (#62/E6-01
+    # review finding: E6-02 depends on every project always having one).
+    db.flush()
+
+    # Issue #62 (E6-01): every project gets a single automatically-created root cost
+    # code, named after the project's own code -- or the deterministic PRJ-{id}
+    # fallback when the project has none, since `MsProject.code` is nullable. The
+    # user may rename this root afterward like any other cost code; only its
+    # creation is automatic.
+    root_cost_code = ProjectCostCode(
+        project_id=project.id,
+        parent_id=None,
+        code=project.code or f"PRJ-{project.id}",
+        name=project.name,
+    )
+    db.add(root_cost_code)
     db.commit()
     db.refresh(project)
     return to_project_read(project)
@@ -425,6 +535,16 @@ def delete_project(
         db.query(EstimateCostLine).filter(EstimateCostLine.estimate_id.in_(estimate_ids)).delete(
             synchronize_session=False
         )
+        db.query(EstimateRoleAssignment).filter(
+            EstimateRoleAssignment.estimate_id.in_(estimate_ids)
+        ).delete(synchronize_session=False)
+        # Issue #289 (E12-07): every cost line/role assignment above owned exactly
+        # one grid node (node_id, NOT NULL unique FK) -- deleted only now that
+        # nothing references them, still before the wf_estimate rows they
+        # themselves reference.
+        db.query(EstimateGridNode).filter(EstimateGridNode.estimate_id.in_(estimate_ids)).delete(
+            synchronize_session=False
+        )
         db.query(EstimateLine).filter(EstimateLine.estimate_id.in_(estimate_ids)).delete(
             synchronize_session=False
         )
@@ -460,6 +580,15 @@ def delete_project(
         synchronize_session=False
     )
     db.query(MsTask).filter(MsTask.project_id == project_id).delete(synchronize_session=False)
+    # Issue #62 (E6-01): a single bulk DELETE removing every ProjectCostCode row for
+    # this project -- root and every descendant -- in one SQL statement. PostgreSQL's
+    # default (immediate, not-deferrable) FK constraint check for the self-referencing
+    # parent_id column is evaluated at the end of the statement, not per row, so this
+    # works regardless of tree order without needing a leaf-first delete or ON DELETE
+    # CASCADE.
+    db.query(ProjectCostCode).filter(ProjectCostCode.project_id == project_id).delete(
+        synchronize_session=False
+    )
     db.delete(project)
     db.commit()
 

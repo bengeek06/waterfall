@@ -1,0 +1,82 @@
+type: object
+required:
+- id
+- estimate_id
+- task_id
+- role_id
+- role_code
+- role_name
+- cost_category_id
+- accounting_code
+- quantity
+- hours
+- created_at
+- updated_at
+- uid
+- position
+- row_number
+properties:
+  id:
+    type: integer
+    minimum: 1
+  estimate_id:
+    type: integer
+    minimum: 1
+  task_id:
+    type: [integer, "null"]
+    minimum: 1
+  role_id:
+    type: integer
+    minimum: 1
+  role_code:
+    type: string
+  role_name:
+    type: string
+  cost_category_id:
+    type: integer
+    minimum: 1
+  accounting_code:
+    type: string
+  cost_code_id:
+    type: [integer, "null"]
+    minimum: 1
+  quantity:
+    type: number
+  hours:
+    type: number
+  comment:
+    type: [string, "null"]
+  created_at:
+    type: string
+    format: date-time
+  updated_at:
+    type: string
+    format: date-time
+  uid:
+    type: integer
+    maximum: -1
+    description: >-
+      This assignment's own EstimateGridNode uid (E12-07, #289), always
+      negative.
+  parent_uid:
+    type: [integer, "null"]
+    not:
+      enum: [0]
+    description: >-
+      This assignment's grid-node parent_uid, exposed as-is (E12-09, #291):
+      positif = tache de ce devis (`MsTask.id`), negatif = un autre noeud de
+      grille de ce devis, absent/null = racine du devis -- meme convention que
+      `EstimateGridNodeMove.target_parent_uid`, reutilisable telle quelle dans
+      un appel ulterieur a grid-nodes/move.
+  position:
+    type: integer
+    minimum: 1
+    description: >-
+      This assignment's local sibling position within its grid-node parent.
+  row_number:
+    type: integer
+    minimum: 1
+    readOnly: true
+    description: >-
+      1-based rank of this assignment in the devis's merged tasks+grid-node
+      tree (E12-09, #291), recomputed on every read, never stored.

@@ -80,7 +80,7 @@ export function PlanningTaskLinksDialog({
                     <option value="">Sélectionner une tâche</option>
                     {linkCandidateTasks.map((candidate) => (
                       <option key={candidate.uid} value={candidate.uid}>
-                        {candidate.id_display ?? candidate.uid} - {candidate.name}
+                        {candidate.row_number} - {candidate.name}
                       </option>
                     ))}
                   </select>

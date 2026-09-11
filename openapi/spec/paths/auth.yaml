@@ -66,13 +66,20 @@
         content:
           application/json:
             schema:
-              $ref: ../components/schemas/ErrorResponse.yaml
+              $ref: ../components/schemas/FastAPIErrorResponse.yaml
       '429':
         description: Trop de tentatives de connexion
         content:
           application/json:
             schema:
-              $ref: ../components/schemas/ErrorResponse.yaml
+              $ref: ../components/schemas/FastAPIErrorResponse.yaml
+      '503':
+        description: Le limiteur de tentatives de connexion (Redis) est injoignable;
+          la connexion est refusée par défaut (fail-closed)
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/FastAPIErrorResponse.yaml
 /auth/refresh:
   post:
     tags:

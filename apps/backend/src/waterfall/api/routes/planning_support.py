@@ -1,6 +1,6 @@
 # pyright: reportUnusedClass=false, reportUnusedFunction=false
 
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Iterable, Mapping
 from typing import Any, cast
 
 from fastapi import HTTPException, Request, status
@@ -14,8 +14,10 @@ from waterfall.api.routes.project_access import (
     get_latest_draft_planning,
     get_mutable_project_lock,
 )
+from waterfall.api.routes.projects import to_task_read
 from waterfall.models.ms_core import MsProject, MsTask, MsTaskLink
 from waterfall.models.planning import WfPlanning, WfPlanningLinkSnapshot, WfPlanningTaskSnapshot
+from waterfall.models.resources import EstimateGridNode
 from waterfall.models.wf_core import WfTaskEnrichment
 from waterfall.schemas.projects import (
     PlanningDetailRead,
@@ -142,12 +144,13 @@ def to_snapshot_task_read(
     task: WfPlanningTaskSnapshot,
     links: list[WfPlanningLinkSnapshot],
     project_id: int,
+    row_number: int,
 ) -> TaskRead:
     return TaskRead(
         id=task.id,
         project_id=project_id,
         uid=task.uid,
-        id_display=task.id_display,
+        row_number=row_number,
         structure_key=task.structure_key,
         structure_kind=cast(StructureKind | None, task.structure_kind),
         parent_uid=task.parent_uid,
@@ -180,50 +183,20 @@ def to_snapshot_task_read(
     )
 
 
-def to_task_read(
-    task: MsTask,
-    description: str | None,
-    predecessor_links: list[MsTaskLink] | None = None,
-) -> TaskRead:
-    return TaskRead(
-        id=task.id,
-        project_id=task.project_id,
-        uid=task.uid,
-        id_display=task.id_display,
-        structure_key=task.structure_key,
-        structure_kind=cast(StructureKind | None, task.structure_kind),
-        parent_uid=task.parent_uid,
-        position=task.position,
-        name=task.name,
-        outline_number=task.outline_number,
-        outline_level=task.outline_level,
-        wbs=task.wbs,
-        start_at=task.start_at,
-        finish_at=task.finish_at,
-        duration_minutes=task.duration_minutes,
-        duration_format=task.duration_format,
-        work_minutes=task.work_minutes,
-        task_type=task.task_type,
-        percent_complete=task.percent_complete,
-        is_summary=task.is_summary,
-        is_milestone=task.is_milestone,
-        is_manual=task.is_manual,
-        calendar_uid=task.calendar_uid,
-        description=description,
-        predecessor_links=[
-            TaskLinkRead(
-                predecessor_uid=link.predecessor_uid,
-                link_type=link.link_type,
-                lag_tenth_minute=link.lag_tenth_minute,
-                lag_format=link.lag_format,
-            )
-            for link in predecessor_links or []
-        ],
-    )
-
-
 def _to_task_reads(db: Session, project_id: int, tasks: list[MsTask]) -> list[TaskRead]:
-    task_uids = [task.uid for task in tasks]
+    """Build a `TaskRead` for every ``MsTask``, ordered depth-first (E9-02, #147).
+
+    ``tasks`` need not be pre-sorted: it is always the *complete* set of a
+    project's legacy tasks at both call sites (``list_project_tasks`` and
+    ``get_planning_tree``'s no-planning branch, both deliberately
+    unpaginated -- see the comment on ``list_project_tasks``), so
+    ``row_number`` -- the 1-based rank in the reordered list -- and the
+    returned item order are always consistent with each other and with the
+    whole project, never just a page of it.
+    """
+    ordered_tasks = order_ms_tasks_depth_first(tasks)
+    row_numbers = {task.uid: position for position, task in enumerate(ordered_tasks, start=1)}
+    task_uids = [task.uid for task in ordered_tasks]
     descriptions_by_uid: dict[int, str | None] = {}
     links_by_task_uid: dict[int, list[MsTaskLink]] = {}
     if task_uids:
@@ -249,8 +222,9 @@ def _to_task_reads(db: Session, project_id: int, tasks: list[MsTask]) -> list[Ta
             task,
             descriptions_by_uid.get(task.uid),
             links_by_task_uid.get(task.uid),
+            row_number=row_numbers[task.uid],
         )
-        for task in tasks
+        for task in ordered_tasks
     ]
 
 
@@ -267,48 +241,146 @@ def _to_planning_read(planning: WfPlanning) -> PlanningRead:
     )
 
 
+def _order_uids_depth_first(
+    rows: Iterable[tuple[int, int | None, int | None, int]],
+) -> list[int]:
+    """Depth-first, sibling-sorted order over plain ``(uid, parent_uid, position, id)`` rows.
+
+    ``position`` is local to a sibling group, so a global sort mixes branches. Roots
+    (``parent_uid`` NULL or referencing an absent ``uid``) and each sibling group are
+    sorted by ``position`` (NULLs last) with ``id`` as a stable tie-breaker.
+
+    Shared by :func:`order_snapshots_depth_first` (``WfPlanningTaskSnapshot``) and
+    :func:`order_ms_tasks_depth_first` (``MsTask``, E9-02/#147): both models carry the
+    same ``uid``/``parent_uid``/``position``/``id`` shape and the exact same "current
+    display order" semantics `row_number` needs, but pyright's structural typing does
+    not consider their SQLAlchemy ``Mapped[...]`` columns interchangeable through a
+    ``Protocol`` -- the same tradeoff already documented on
+    ``waterfall.services.msproject_xml.outline_parent_uids`` -- so each caller narrows
+    its ORM rows down to a plain tuple instead of this function taking either object
+    type directly.
+    """
+    materialized = list(rows)
+    known_uids = {uid for uid, _parent_uid, _position, _id in materialized}
+    children_by_parent: dict[int | None, list[tuple[int, int | None, int | None, int]]] = {}
+    for row in materialized:
+        _uid, parent_uid, _position, _id = row
+        parent = parent_uid if parent_uid in known_uids else None
+        children_by_parent.setdefault(parent, []).append(row)
+
+    def sort_key(row: tuple[int, int | None, int | None, int]) -> tuple[int, int, int]:
+        _uid, _parent_uid, position, row_id = row
+        return (0 if position is not None else 1, position or 0, row_id)
+
+    for group in children_by_parent.values():
+        group.sort(key=sort_key)
+
+    ordered: list[int] = []
+    visited: set[int] = set()
+
+    def traverse(start: tuple[int, int | None, int | None, int]) -> None:
+        stack = [start]
+        while stack:
+            node = stack.pop()
+            uid = node[0]
+            if uid in visited:
+                continue
+            visited.add(uid)
+            ordered.append(uid)
+            stack.extend(reversed(children_by_parent.get(uid, [])))
+
+    for root in children_by_parent.get(None, []):
+        traverse(root)
+    # Guard against orphan cycles that never surface as roots.
+    for row in sorted(materialized, key=sort_key):
+        if row[0] not in visited:
+            traverse(row)
+
+    return ordered
+
+
 def order_snapshots_depth_first(
     snapshots: list[WfPlanningTaskSnapshot],
 ) -> list[WfPlanningTaskSnapshot]:
     """Return snapshots depth-first: each parent immediately followed by its children.
 
-    ``position`` is local to a sibling group, so a global sort mixes branches. Roots
-    (``parent_uid`` NULL or referencing an absent parent) and each sibling group are
-    sorted by ``position`` (NULLs last) with ``id`` as a stable tie-breaker.
+    See :func:`_order_uids_depth_first` for the sibling-sort/traversal rules.
     """
-    known_uids = {task.uid for task in snapshots}
-    children_by_parent: dict[int | None, list[WfPlanningTaskSnapshot]] = {}
-    for task in snapshots:
-        parent = task.parent_uid if task.parent_uid in known_uids else None
-        children_by_parent.setdefault(parent, []).append(task)
+    by_uid = {task.uid: task for task in snapshots}
+    ordered_uids = _order_uids_depth_first(
+        (task.uid, task.parent_uid, task.position, task.id) for task in snapshots
+    )
+    return [by_uid[uid] for uid in ordered_uids]
 
-    def sort_key(task: WfPlanningTaskSnapshot) -> tuple[int, int, int]:
-        return (0 if task.position is not None else 1, task.position or 0, task.id)
 
-    for group in children_by_parent.values():
-        group.sort(key=sort_key)
+def order_ms_tasks_depth_first(tasks: list[MsTask]) -> list[MsTask]:
+    """Return legacy ``MsTask`` rows depth-first (E9-02, #147): the same traversal and
+    sibling sort as :func:`order_snapshots_depth_first`, applied to ``MsTask``'s own
+    ``uid``/``parent_uid``/``position``/``id`` columns.
 
-    ordered: list[WfPlanningTaskSnapshot] = []
-    visited: set[int] = set()
+    Deliberately does *not* reuse the already-stored ``outline_number`` string (unlike
+    the query this replaces, which sorted by ``MsTask.outline_number.asc()``): a plain
+    lexicographic string compare mis-orders a group with more than 9 siblings (e.g.
+    "1.10" sorts before "1.2"), whereas this traversal sorts each sibling group
+    numerically by ``position`` like the snapshot tree already does.
+    """
+    by_uid = {task.uid: task for task in tasks}
+    ordered_uids = _order_uids_depth_first(
+        (task.uid, task.parent_uid, task.position, task.id) for task in tasks
+    )
+    return [by_uid[uid] for uid in ordered_uids]
 
-    def traverse(start: WfPlanningTaskSnapshot) -> None:
-        stack = [start]
-        while stack:
-            node = stack.pop()
-            if node.uid in visited:
-                continue
-            visited.add(node.uid)
-            ordered.append(node)
-            stack.extend(reversed(children_by_parent.get(node.uid, [])))
 
-    for root in children_by_parent.get(None, []):
-        traverse(root)
-    # Guard against orphan cycles that never surface as roots.
-    for task in sorted(snapshots, key=sort_key):
-        if task.uid not in visited:
-            traverse(task)
+def order_estimate_grid_depth_first(
+    task_rows: Iterable[tuple[int, int | None, int, int]],
+    grid_nodes: Iterable[EstimateGridNode],
+    task_id_to_uid: Mapping[int, int],
+) -> list[int]:
+    """Depth-first order over a devis's *merged* tasks + grid-node tree (E12-09, #291).
 
-    return ordered
+    Feeds a single ``_order_uids_depth_first`` pass with two already-normalized
+    streams sharing one uid space -- positive for a task, negative for a grid
+    node (``EstimateGridNode.uid``, see that model's own docstring) -- which
+    never collide by construction:
+
+    * ``task_rows``: caller-prepared ``(task_uid, parent_task_uid, position,
+      EstimateTaskRow.id)`` tuples. The caller has already resolved each row's
+      own business ``uid`` live for a draft estimate or from its frozen stored
+      columns for a validated one (``services.estimate_task_display``,
+      E12-08/#290), and translated its parent task's id into that same
+      ``task_uid`` space via ``task_id_to_uid``.
+    * ``grid_nodes``: raw ``EstimateGridNode`` rows, reused as-is for their own
+      ``uid``/``position``/``id`` -- but ``parent_uid``, when positive, is
+      still expressed as a ``MsTask.id`` (``EstimateGridNode``'s own storage
+      convention, matching ``EstimateGridNodeMove``'s wire contract), so it is
+      translated here through the same ``task_id_to_uid`` map before being
+      handed to the shared traversal, or the node would land as a spurious
+      root instead of that task's child.
+
+    A parent that cannot be translated (the referenced task id is not in
+    ``task_id_to_uid`` -- e.g. an ancestor task no longer resolves) becomes
+    ``None`` here, which ``_order_uids_depth_first``'s own "unknown parent ->
+    root" fallback already covers -- the same graceful degradation already
+    relied on for an out-of-scope planning ancestor, extended to this merged
+    tree without any extra logic.
+    """
+    translated_grid_rows = (
+        (
+            node.uid,
+            (
+                task_id_to_uid.get(node.parent_uid)
+                if node.parent_uid is not None and node.parent_uid > 0
+                else node.parent_uid
+            ),
+            node.position,
+            node.id,
+        )
+        for node in grid_nodes
+    )
+    combined: list[tuple[int, int | None, int | None, int]] = []
+    combined.extend(task_rows)
+    combined.extend(translated_grid_rows)
+    return _order_uids_depth_first(combined)
 
 
 def _planning_detail(
@@ -322,6 +394,10 @@ def _planning_detail(
         .filter(WfPlanningTaskSnapshot.planning_id == planning.id)
         .all()
     )
+    # row_number must reflect each task's rank in the *complete* display order, not its
+    # position within the paginated slice below -- otherwise every page would restart
+    # numbering at 1 (E9-02, #147).
+    row_numbers = {task.uid: position for position, task in enumerate(ordered, start=1)}
     snapshots = ordered[offset : offset + limit] if limit is not None else ordered
     task_uids = [task.uid for task in snapshots]
     links = (
@@ -339,7 +415,12 @@ def _planning_detail(
     return PlanningDetailRead(
         **_to_planning_read(planning).model_dump(),
         tasks=[
-            to_snapshot_task_read(task, links_by_uid.get(task.uid, []), planning.project_id)
+            to_snapshot_task_read(
+                task,
+                links_by_uid.get(task.uid, []),
+                planning.project_id,
+                row_number=row_numbers[task.uid],
+            )
             for task in snapshots
         ],
         links=[

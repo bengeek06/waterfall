@@ -1,24 +1,36 @@
+from __future__ import annotations
+
 import json
 import xml.etree.ElementTree as ET
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import patch
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 from httpx import Response
 
+from _object_storage_support import TEST_BUCKET, stored_object_keys
 from waterfall.core.config import get_settings
+from waterfall.core.object_storage import import_object_storage
 from waterfall.db.session import get_session_factory
 from waterfall.main import app
 from waterfall.models.ms_core import MsProject, MsTask
 from waterfall.models.planning import WfPlanning, WfPlanningLinkSnapshot, WfPlanningTaskSnapshot
-from waterfall.models.resources import Calendar, CalendarWeekday
+from waterfall.models.resources import Calendar, CalendarWeekday, CostCategory, CostType
 from waterfall.models.wf_core import WfChargeLine, WfImportBatch
 from waterfall.services.calendar_schedule import resolve_calendars_for_tasks
 
+if TYPE_CHECKING:
+    from mypy_boto3_s3.client import S3Client
+
 NS = {"ms": "http://schemas.microsoft.com/project"}
+# Port 1 is privileged and cannot be bound by an unprivileged process, so a connection
+# there is always refused -- unlike the configured test endpoint, which a developer may
+# well have a real Garage listening on.
+UNREACHABLE_ENDPOINT_URL = "http://127.0.0.1:1"
 EXAMPLE_XML = Path(__file__).resolve().parent / "planning_test.xml"
 EXAMPLE_XML_FILES = [EXAMPLE_XML]
 EXAMPLE_XML_WITH_CALENDARS = Path(__file__).resolve().parent / "planning_with_calendars.xml"
@@ -138,7 +150,6 @@ def test_import_batch_minimal_flow() -> None:
         with session_factory() as session:
             stored_batch = session.query(WfImportBatch).filter(WfImportBatch.id == batch_id).one()
             assert stored_batch.source_storage_path is not None
-            assert Path(stored_batch.source_storage_path).is_file()
             assert stored_batch.log_json is not None
             assert "xml_b64" not in stored_batch.log_json
 
@@ -363,6 +374,125 @@ def test_confirmation_succeeds_when_removed_task_is_not_referenced() -> None:
 
         assert run.status_code == 202
         assert run.json()["status"] == "success"
+
+
+def _seed_supply_category() -> int:
+    """An active supply `CostCategory`, the minimum needed to create a cost line."""
+    with get_session_factory()() as session:
+        cost_type = CostType(code=f"FOURN-{uuid4().hex[:8]}", name="Fourniture", kind="supply")
+        session.add(cost_type)
+        session.flush()
+        category = CostCategory(
+            cost_type_id=cost_type.id,
+            accounting_code=f"FO-{uuid4().hex[:8]}",
+            category_code="ACHAT",
+            name="Cables",
+        )
+        session.add(category)
+        session.commit()
+        return category.id
+
+
+def _tasks_xml(*uids: int) -> bytes:
+    tasks = "".join(
+        f"<Task><UID>{uid}</UID><ID>{uid}</ID><Name>T{uid}</Name>"
+        f"<OutlineNumber>{uid}</OutlineNumber><OutlineLevel>1</OutlineLevel></Task>"
+        for uid in uids
+    )
+    return (
+        '<Project xmlns="http://schemas.microsoft.com/project"><SaveVersion>16</SaveVersion>'
+        "<ScheduleFromStart>1</ScheduleFromStart><StartDate>2026-01-01T08:00:00</StartDate>"
+        f"<Tasks>{tasks}</Tasks></Project>"
+    ).encode()
+
+
+def test_reimport_conflicts_on_a_task_priced_by_an_existing_estimate() -> None:
+    """Contract change introduced by issue #313, locked here on purpose.
+
+    Now that the XML import writes the canonical `MsTask` rows, the
+    `ms_task.id`-keyed branches of `is_task_referenced` (reached through
+    `build_import_diff`) actually bite on an imported project: re-importing a
+    file that drops a task already carrying an `EstimateCostLine` is rejected
+    with 409 `IMPORT_CONFLICT` instead of silently deleting the priced task's
+    planning side. Before the fix, an imported project had no `MsTask` at all,
+    so those branches could never match.
+
+    Note the conflict surface is wider than the cost line alone: creating a
+    devis also fills `EstimateTaskRow.task_id`, itself a referencing column.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client, "import.estimate.conflict@example.com")
+        project_id = _create_project(client, headers)
+
+        batch_id = _prepare_pending_batch(client, headers, project_id, _tasks_xml(1, 2))
+        first_run = client.post(
+            f"/imports/v1/batches/{batch_id}/run",
+            json={"dryRun": False, "confirm": True},
+            headers=headers,
+        )
+        assert first_run.status_code == 202
+        assert first_run.json()["status"] == "success"
+
+        estimate = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate.status_code == 201
+        estimate_id = cast(int, estimate.json()["id"])
+
+        rows = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
+        )
+        assert rows.status_code == 200
+        task_id_by_uid = {
+            cast(int, row["task_uid"]): cast(int, row["task_id"])
+            for row in cast(list[dict[str, Any]], rows.json()["items"])
+        }
+        assert set(task_id_by_uid) == {1, 2}
+
+        cost_line = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "task_id": task_id_by_uid[2],
+                "cost_category_id": _seed_supply_category(),
+                "label": "Cable",
+                "quantity": "2.00",
+                "unit_cost": "10.00",
+            },
+            headers=headers,
+        )
+        assert cost_line.status_code == 201
+
+        second_batch_id = _prepare_pending_batch(client, headers, project_id, _tasks_xml(1))
+        rerun = client.post(
+            f"/imports/v1/batches/{second_batch_id}/run",
+            json={"dryRun": False, "confirm": True},
+            headers=headers,
+        )
+
+        assert rerun.status_code == 409
+        detail = rerun.json()["detail"]
+        assert detail["code"] == "IMPORT_CONFLICT"
+        assert detail["conflicts"] == [2]
+
+        # The batch stays reusable, and nothing of the priced task was touched.
+        batch_status = client.get(f"/imports/v1/batches/{second_batch_id}", headers=headers)
+        assert batch_status.status_code == 200
+        assert batch_status.json()["status"] == "pending"
+        with get_session_factory()() as session:
+            assert (
+                session.query(MsTask)
+                .filter(MsTask.project_id == project_id, MsTask.uid == 2)
+                .count()
+                == 1
+            )
+            assert (
+                session.query(WfPlanningTaskSnapshot)
+                .filter(WfPlanningTaskSnapshot.uid == 2)
+                .count()
+                == 1
+            )
 
 
 def test_confirmed_run_never_resolves_calendars_under_the_project_lock() -> None:
@@ -824,7 +954,9 @@ def test_import_batch_isolated_by_project_owner() -> None:
             assert response.status_code == 404
 
 
-def test_upload_rejects_files_over_configured_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_upload_rejects_files_over_configured_limit(
+    monkeypatch: pytest.MonkeyPatch, object_storage: S3Client
+) -> None:
     monkeypatch.setenv("IMPORT_MAX_UPLOAD_BYTES", "8")
     get_settings.cache_clear()
     try:
@@ -845,5 +977,250 @@ def test_upload_rejects_files_over_configured_limit(monkeypatch: pytest.MonkeyPa
                 headers=headers,
             )
             assert upload_response.status_code == 413
+            # The limit is enforced while the request body is being read, before the
+            # upload call: an oversized file must never reach the bucket at all.
+            assert stored_object_keys(object_storage) == []
     finally:
         get_settings.cache_clear()
+
+
+def test_uploaded_source_is_stored_under_an_object_key_not_a_disk_path(
+    object_storage: S3Client,
+) -> None:
+    """E13-02: `source_storage_path` names an object in the bucket, not a local file."""
+    xml = b'<Project xmlns="http://schemas.microsoft.com/project"><SaveVersion>16</SaveVersion><ScheduleFromStart>1</ScheduleFromStart><StartDate>2026-01-01T08:00:00</StartDate><Tasks><Task><UID>1</UID><ID>1</ID><Name>One</Name></Task></Tasks></Project>'
+
+    with TestClient(app) as client:
+        headers = _auth_headers(client, "import.storage.key@example.com")
+        project_id = _create_project(client, headers)
+        batch_id = _prepare_pending_batch(client, headers, project_id, xml)
+
+        with get_session_factory()() as session:
+            stored_batch = session.query(WfImportBatch).filter(WfImportBatch.id == batch_id).one()
+            storage_key = stored_batch.source_storage_path
+            assert storage_key == f"imports/batch-{batch_id}.xml"
+
+        assert storage_key is not None
+        assert not Path(storage_key).is_absolute()
+        assert not Path(storage_key).exists()
+
+        # The object really is in the bucket, byte for byte, and the staging object used
+        # during the upload was cleaned up.
+        body = object_storage.get_object(Bucket=TEST_BUCKET, Key=storage_key)["Body"].read()
+        assert body == xml
+        assert stored_object_keys(object_storage) == [storage_key]
+
+        # And the batch is usable end to end from that key alone.
+        run = client.post(
+            f"/imports/v1/batches/{batch_id}/run",
+            json={"confirm": True},
+            headers=headers,
+        )
+        assert run.status_code == 202
+
+
+@pytest.mark.no_object_storage_mock
+def test_upload_reports_object_storage_outage_without_touching_the_batch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Garage down during an upload: explicit 503, and the batch stays untouched."""
+    monkeypatch.setenv("GARAGE_ENDPOINT_URL", UNREACHABLE_ENDPOINT_URL)
+    get_settings.cache_clear()
+    import_object_storage.reset()
+    try:
+        with TestClient(app) as client:
+            headers = _auth_headers(client, "import.storage.down@example.com")
+            project_id = _create_project(client, headers)
+            create_response = client.post(
+                "/imports/v1/batches",
+                json={"projectId": project_id, "importMode": "standard"},
+                headers=headers,
+            )
+            assert create_response.status_code == 201
+            batch_id = cast(int, create_response.json()["id"])
+
+            upload = client.post(
+                f"/imports/v1/batches/{batch_id}/xml",
+                files={"file": ("import.xml", b"<Project/>", "application/xml")},
+                headers=headers,
+            )
+
+            assert upload.status_code == 503
+            # main.py's _generic_http_exception_handler rewrites every string detail into
+            # this translatable code, so the storage endpoint never leaks into the body.
+            assert upload.json() == {"detail": {"code": "GENERIC_ERROR"}}
+
+            with get_session_factory()() as session:
+                batch = session.query(WfImportBatch).filter(WfImportBatch.id == batch_id).one()
+                # Still pending, still without a source: no half-written state to clean up.
+                assert batch.status == "pending"
+                assert batch.source_storage_path is None
+                assert batch.source_sha256 is None
+    finally:
+        get_settings.cache_clear()
+        import_object_storage.reset()
+
+
+@pytest.mark.no_object_storage_mock
+def test_run_reports_object_storage_outage_and_leaves_the_batch_pending(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Garage down between upload and run: explicit 503, batch still replayable.
+
+    The batch must not be marked `failed`: nothing about it is wrong, and flipping it
+    out of `pending` would make the retry that becomes possible once storage is back
+    impossible (run_batch only accepts pending batches).
+    """
+    monkeypatch.setenv("GARAGE_ENDPOINT_URL", UNREACHABLE_ENDPOINT_URL)
+    get_settings.cache_clear()
+    import_object_storage.reset()
+    try:
+        with TestClient(app) as client:
+            headers = _auth_headers(client, "import.storage.run.down@example.com")
+            project_id = _create_project(client, headers)
+            create_response = client.post(
+                "/imports/v1/batches",
+                json={"projectId": project_id, "importMode": "standard"},
+                headers=headers,
+            )
+            assert create_response.status_code == 201
+            batch_id = cast(int, create_response.json()["id"])
+
+            # Simulate a batch uploaded while storage was up: only the row matters here,
+            # the object itself is exactly what the outage makes unreachable.
+            with get_session_factory()() as session:
+                batch = session.query(WfImportBatch).filter(WfImportBatch.id == batch_id).one()
+                batch.source_storage_path = f"imports/batch-{batch_id}.xml"
+                batch.source_sha256 = "0" * 64
+                batch.log_json = json.dumps({"uploaded_bytes": 10})
+                session.commit()
+
+            for payload in ({"dryRun": True}, {"confirm": True}):
+                run = client.post(
+                    f"/imports/v1/batches/{batch_id}/run", json=payload, headers=headers
+                )
+                assert run.status_code == 503, payload
+                assert run.json() == {"detail": {"code": "GENERIC_ERROR"}}
+
+            diff = client.get(f"/imports/v1/batches/{batch_id}/diff", headers=headers)
+            assert diff.status_code == 503
+
+            with get_session_factory()() as session:
+                batch = session.query(WfImportBatch).filter(WfImportBatch.id == batch_id).one()
+                assert batch.status == "pending"
+                assert batch.finished_at is None
+                assert batch.source_sha256 == "0" * 64
+    finally:
+        get_settings.cache_clear()
+        import_object_storage.reset()
+
+
+def test_missing_bucket_is_reported_as_an_outage_not_as_a_dead_batch(
+    object_storage: S3Client,
+) -> None:
+    """A vanished bucket is broken infrastructure (503), never a broken batch (409).
+
+    `NoSuchBucket` used to be classified alongside `NoSuchKey`, so a half-finished
+    garage-init (layout applied, bucket never created) or a wiped volume answered 409
+    "Uploaded XML is unavailable" -- a permanent state conflict, telling the user to
+    give up on a batch that is in fact perfectly replayable once the bucket is back.
+    """
+    xml = b'<Project xmlns="http://schemas.microsoft.com/project"><SaveVersion>16</SaveVersion><ScheduleFromStart>1</ScheduleFromStart><StartDate>2026-01-01T08:00:00</StartDate><Tasks><Task><UID>1</UID><ID>1</ID><Name>One</Name></Task></Tasks></Project>'
+
+    with TestClient(app) as client:
+        headers = _auth_headers(client, "import.storage.nobucket@example.com")
+        project_id = _create_project(client, headers)
+        batch_id = _prepare_pending_batch(client, headers, project_id, xml)
+
+        for key in stored_object_keys(object_storage):
+            object_storage.delete_object(Bucket=TEST_BUCKET, Key=key)
+        object_storage.delete_bucket(Bucket=TEST_BUCKET)
+
+        run = client.post(
+            f"/imports/v1/batches/{batch_id}/run", json={"confirm": True}, headers=headers
+        )
+        assert run.status_code == 503
+        assert run.json() == {"detail": {"code": "GENERIC_ERROR"}}
+
+        diff = client.get(f"/imports/v1/batches/{batch_id}/diff", headers=headers)
+        assert diff.status_code == 503
+
+        with get_session_factory()() as session:
+            batch = session.query(WfImportBatch).filter(WfImportBatch.id == batch_id).one()
+            assert batch.status == "pending"
+            assert batch.finished_at is None
+
+
+def test_legacy_batch_pointing_at_a_disk_path_is_rejected(object_storage: S3Client) -> None:
+    """E13-02 migrates no data: a pre-switch batch is simply unusable, and says so.
+
+    Its `source_storage_path` is a filesystem path, which the bucket resolves as an
+    ordinary (missing) key. 409, not 503: nothing is down, that source really is gone
+    for good, and the user has to re-upload.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client, "import.legacy.path@example.com")
+        project_id = _create_project(client, headers)
+        create = client.post(
+            "/imports/v1/batches",
+            json={"projectId": project_id, "importMode": "standard"},
+            headers=headers,
+        )
+        assert create.status_code == 201
+        batch_id = cast(int, create.json()["id"])
+
+        with get_session_factory()() as session:
+            batch = session.query(WfImportBatch).filter(WfImportBatch.id == batch_id).one()
+            batch.source_storage_path = f"/data/imports/batch-{batch_id}.xml"
+            batch.source_sha256 = "0" * 64
+            batch.log_json = json.dumps({"uploaded_bytes": 10})
+            session.commit()
+
+        for payload in ({"dryRun": True}, {"confirm": True}):
+            run = client.post(f"/imports/v1/batches/{batch_id}/run", json=payload, headers=headers)
+            assert run.status_code == 409, payload
+
+        diff = client.get(f"/imports/v1/batches/{batch_id}/diff", headers=headers)
+        assert diff.status_code == 409
+
+        # No object was created under that path, and the batch stays replayable after a
+        # fresh upload.
+        assert stored_object_keys(object_storage) == []
+        with get_session_factory()() as session:
+            batch = session.query(WfImportBatch).filter(WfImportBatch.id == batch_id).one()
+            assert batch.status == "pending"
+
+
+def test_upload_larger_than_the_multipart_threshold_is_stored_intact(
+    object_storage: S3Client,
+) -> None:
+    """Above 8 MiB, s3transfer would have switched to multipart; a single PUT must not.
+
+    That threshold sits well below the 25 MB upload limit, so this size range is the
+    normal case for a large MS Project export -- and it is the one where s3transfer
+    re-buffers every part in memory, which is exactly what the spooled staging buffer
+    exists to avoid.
+    """
+    padding = b"<!--" + b"x" * (9 * 1024 * 1024) + b"-->"
+    xml = (
+        b'<Project xmlns="http://schemas.microsoft.com/project"><SaveVersion>16</SaveVersion>'
+        b"<ScheduleFromStart>1</ScheduleFromStart><StartDate>2026-01-01T08:00:00</StartDate>"
+        + padding
+        + b"<Tasks><Task><UID>1</UID><ID>1</ID><Name>One</Name></Task></Tasks></Project>"
+    )
+    assert len(xml) > 8 * 1024 * 1024
+    assert len(xml) < get_settings().import_max_upload_bytes
+
+    with TestClient(app) as client:
+        headers = _auth_headers(client, "import.storage.large@example.com")
+        project_id = _create_project(client, headers)
+        batch_id = _prepare_pending_batch(client, headers, project_id, xml)
+
+        key = f"imports/batch-{batch_id}.xml"
+        assert stored_object_keys(object_storage) == [key]
+        assert object_storage.get_object(Bucket=TEST_BUCKET, Key=key)["Body"].read() == xml
+
+        run = client.post(
+            f"/imports/v1/batches/{batch_id}/run", json={"confirm": True}, headers=headers
+        )
+        assert run.status_code == 202

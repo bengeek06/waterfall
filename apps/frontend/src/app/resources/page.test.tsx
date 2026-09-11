@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -693,6 +694,57 @@ describe("ResourcesPage reload race", () => {
 
     // Still only ever called once, even after the single in-flight load settles.
     expect(mocks.getResourceNodes).toHaveBeenCalledTimes(1);
+  });
+
+  // Regression test for #227: the main grouped-load effect's catch guards on
+  // `isCurrentGeneration()` (see `loadGenerationRef`'s comment in page.tsx -- kept
+  // as defense in depth against, e.g., React StrictMode's double-invoke of this
+  // effect, exercised directly here). Per issue #227, that guard must run *after*
+  // the session-expiry check: a now-superseded generation's request that fails
+  // precisely because the session expired must still force a logout, or the
+  // session would never get invalidated once the user stops interacting.
+  // StrictMode double-invokes the effect on mount, starting two overlapping
+  // generations of the "loaded" branch; `getMe` is made to hang on the first
+  // (soon-to-be-stale) call and resolve immediately on the second, so generation
+  // 2 commits its data well before generation 1's own request is rejected below.
+  it("still logs out when a StrictMode-superseded generation of the initial load fails with a post-refresh 401", async () => {
+    let rejectFirstGetMe!: (cause: unknown) => void;
+    let getMeCallCount = 0;
+    mocks.getMe.mockImplementation(() => {
+      getMeCallCount += 1;
+      if (getMeCallCount === 1) {
+        return new Promise((_resolve, reject) => {
+          rejectFirstGetMe = reject;
+        });
+      }
+      return Promise.resolve({ id: 999, email: "admin@example.com", is_active: true });
+    });
+    mocks.getResourceNodes.mockResolvedValue([]);
+    mockGetResourceRoles([]);
+    mocks.getCalendars.mockResolvedValue({ items: [], total: 0 });
+    mocks.getCostTypes.mockResolvedValue({ items: [], total: 0 });
+    mocks.getCostCategories.mockResolvedValue({ items: [], total: 0 });
+    mocks.getCostRates.mockResolvedValue([]);
+    mocks.getInflationRates.mockResolvedValue([]);
+    mocks.getRoleCapacities.mockResolvedValue([]);
+    mocks.getUsers.mockResolvedValue({ items: [], total: 0 });
+
+    render(
+      <StrictMode>
+        <ResourcesPage />
+      </StrictMode>,
+    );
+
+    // Generation 2 (the second, fresher double-invoked run) resolves and commits
+    // successfully -- the loading indicator clears.
+    await waitFor(() => expect(mocks.getMe).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+
+    // The now-stale generation 1 fails afterward -- it must still force a
+    // logout instead of being silently discarded.
+    rejectFirstGetMe(new ApiError(401, "Unauthorized"));
+    await waitFor(() => expect(mocks.clearSession).toHaveBeenCalled());
+    expect(mocks.router.push).toHaveBeenCalledWith("/login");
   });
 });
 
@@ -3594,19 +3646,23 @@ describe("ResourcesPage users table (E8-09)", () => {
     expect(screen.queryByText("alice@example.com")).not.toBeInTheDocument();
   });
 
-  it("does not log out or surface an error from a stale reload once a newer generation has already reloaded successfully", async () => {
+  it("still logs out on a stale reload's session expiry, even once a newer generation has already reloaded successfully", async () => {
     // Simulates: `deleteExistingUser` triggers `reloadUsersPage` (generation N),
     // then -- before that request resolves -- the admin changes the sort
     // (the confirmation dialog has already closed by then, so sorting is
     // reachable again; unlike pagination, the sort header isn't disabled while
     // a fetch is in flight -- see `DataTable`), starting the paginated-view
     // effect's own fresher request (generation N+1). The stale generation-N
-    // request can still fail afterward (e.g. session expired mid-flight);
-    // that failure must be discarded, not force a logout or overwrite the
-    // fresh data with an error. (A session-token refresh can no longer be the
-    // trigger for a background reload here -- see issue #138 -- so a sort
-    // change is used instead, which remains a valid trigger once the dialog
-    // has closed.)
+    // request can still fail afterward (e.g. session expired mid-flight).
+    // Per issue #227, that failure must still force a logout -- an obsolete
+    // request failing precisely because the session expired must never be
+    // silently discarded just because a fresher generation already won, or the
+    // session would never get invalidated if the user stops interacting. It
+    // must not, however, overwrite the fresh data with a generic error banner
+    // (the early `return` after `clearSession`/`router.push` skips that).
+    // (A session-token refresh can no longer be the trigger for a background
+    // reload here -- see issue #138 -- so a sort change is used instead, which
+    // remains a valid trigger once the dialog has closed.)
     const userA = userFixture({ id: 1, email: "alice@example.com" });
     const freshUser = userFixture({ id: 3, email: "fresh@example.com" });
     let rejectStale!: (cause: unknown) => void;
@@ -3644,10 +3700,13 @@ describe("ResourcesPage users table (E8-09)", () => {
     await waitFor(() => expect(screen.getByText("fresh@example.com")).toBeInTheDocument());
 
     // The stale generation-N request now fails, well after generation N+1
-    // already committed fresh data -- it must be discarded, not undo it.
+    // already committed fresh data -- it must still force a logout, but it
+    // must not overwrite the already-displayed fresh data with a generic
+    // "reload failed" error banner.
     rejectStale(new SessionExpiredError());
-    await waitFor(() => expect(screen.getByText("fresh@example.com")).toBeInTheDocument());
-    expect(mocks.router.push).not.toHaveBeenCalledWith("/login");
+    await waitFor(() => expect(mocks.clearSession).toHaveBeenCalled());
+    expect(mocks.router.push).toHaveBeenCalledWith("/login");
+    expect(screen.getByText("fresh@example.com")).toBeInTheDocument();
     expect(
       screen.queryByText("L'action a réussi, mais l'actualisation de la liste a échoué. Rechargez la page pour la voir à jour."),
     ).not.toBeInTheDocument();

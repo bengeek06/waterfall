@@ -1,0 +1,5 @@
+description: Projet, devis, tache ou noeud introuvable pendant le deplacement
+content:
+  application/json:
+    schema:
+      $ref: ../schemas/FastAPIErrorResponse.yaml

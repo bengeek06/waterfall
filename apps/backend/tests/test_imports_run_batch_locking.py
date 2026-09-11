@@ -7,8 +7,9 @@ drops `SELECT ... FOR UPDATE`, so the normal SQLite-backed TestClient test
 session could never observe the row lock this issue is about.
 
 `run_batch` now reads and parses the uploaded XML *before* acquiring the
-project row lock, so slow file I/O and XML parsing never block other writers
-serialized on it. This test proves the lock re-acquisition that follows (on
+project row lock, so slow storage I/O (a download from the object store, since
+E13-02) and XML parsing never block other writers serialized on it.
+This test proves the lock re-acquisition that follows (on
 both the dry-run and confirmation paths) still correctly queues behind a
 concurrently-held project lock, exactly like before the refactor.
 """
@@ -19,7 +20,7 @@ import hashlib
 import json
 from collections.abc import Generator
 from datetime import UTC, datetime
-from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 import pytest
@@ -27,11 +28,15 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
+from _object_storage_support import TEST_BUCKET
 from _postgres_support import (
     ephemeral_postgres_database,
     postgres_admin_url,
     postgres_reachable,
 )
+
+if TYPE_CHECKING:
+    from mypy_boto3_s3.client import S3Client
 
 MINIMAL_XML = (
     b'<?xml version="1.0" encoding="UTF-8"?>'
@@ -70,7 +75,9 @@ def postgres_app_database_url() -> Generator[str]:
         yield database_url
 
 
-def _seed_project_with_pending_batch(session: Session, tmp_path: Path) -> tuple[int, int, int]:
+def _seed_project_with_pending_batch(
+    session: Session, object_storage: S3Client
+) -> tuple[int, int, int]:
     from waterfall.models.ms_core import MsProject
     from waterfall.models.user import User
     from waterfall.models.wf_core import WfImportBatch
@@ -99,15 +106,17 @@ def _seed_project_with_pending_batch(session: Session, tmp_path: Path) -> tuple[
     session.add(project)
     session.flush()
 
-    xml_path = tmp_path / f"batch-{uuid4().hex}.xml"
-    xml_path.write_bytes(MINIMAL_XML)
+    # The source lives in the (mocked) object store, exactly like a real upload's would;
+    # only the key is stored on the batch row.
+    source_key = f"imports/batch-{uuid4().hex}.xml"
+    object_storage.put_object(Bucket=TEST_BUCKET, Key=source_key, Body=MINIMAL_XML)
     source_sha256 = hashlib.sha256(MINIMAL_XML).hexdigest()
 
     batch = WfImportBatch(
         project_id=project.id,
         import_mode="standard",
         source_filename="minimal.xml",
-        source_storage_path=str(xml_path),
+        source_storage_path=source_key,
         source_sha256=source_sha256,
         started_at=datetime.now(UTC),
         status="pending",
@@ -122,7 +131,7 @@ def _seed_project_with_pending_batch(session: Session, tmp_path: Path) -> tuple[
 @pytest.mark.parametrize("dry_run", [True, False])
 def test_run_batch_queues_behind_project_lock(
     postgres_app_database_url: str,
-    tmp_path: Path,
+    object_storage: S3Client,
     monkeypatch: pytest.MonkeyPatch,
     dry_run: bool,
 ) -> None:
@@ -139,7 +148,7 @@ def test_run_batch_queues_behind_project_lock(
     try:
         with session_factory() as seed_session:
             owner_id, project_id, batch_id = _seed_project_with_pending_batch(
-                seed_session, tmp_path
+                seed_session, object_storage
             )
 
         session_a = session_factory()
@@ -190,7 +199,7 @@ def test_run_batch_queues_behind_project_lock(
 
 def test_run_batch_rejects_stale_source_after_concurrent_reupload(
     postgres_app_database_url: str,
-    tmp_path: Path,
+    object_storage: S3Client,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A concurrent re-upload between the unlocked parse and the lock must 409."""
@@ -206,7 +215,7 @@ def test_run_batch_rejects_stale_source_after_concurrent_reupload(
     try:
         with session_factory() as seed_session:
             owner_id, _project_id, batch_id = _seed_project_with_pending_batch(
-                seed_session, tmp_path
+                seed_session, object_storage
             )
 
         session_b = session_factory()
@@ -222,7 +231,11 @@ def test_run_batch_rejects_stale_source_after_concurrent_reupload(
                     concurrent_batch = concurrent_session.get(WfImportBatch, batch_id)
                     assert concurrent_batch is not None
                     new_bytes = MINIMAL_XML.replace(b"minimal.xml", b"replaced.xml")
-                    Path(str(concurrent_batch.source_storage_path)).write_bytes(new_bytes)
+                    object_storage.put_object(
+                        Bucket=TEST_BUCKET,
+                        Key=str(concurrent_batch.source_storage_path),
+                        Body=new_bytes,
+                    )
                     concurrent_batch.source_sha256 = hashlib.sha256(new_bytes).hexdigest()
                     concurrent_session.commit()
                 return xml_bytes

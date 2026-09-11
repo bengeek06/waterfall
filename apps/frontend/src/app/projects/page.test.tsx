@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { SessionExpiredError, type Project } from "@/lib/backend";
+import { ApiError, SessionExpiredError, type Project } from "@/lib/backend";
 
 const { getProjects, createProject, deleteProject, getProjectSetupWarnings, router, clearSession } = vi.hoisted(() => {
   return {
@@ -358,6 +358,47 @@ describe("ProjectsPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Créer projet" }));
 
+    await waitFor(() => expect(clearSession).toHaveBeenCalled());
+    await waitFor(() => expect(router.push).toHaveBeenCalledWith("/login"));
+  });
+
+  // Regression test for #227: the main list-load effect guards its catch block with
+  // `isCurrentGeneration()` (a stale/superseded request must not overwrite fresher
+  // state). Before #227, that guard ran *before* the session-expiry check, so a
+  // request that became stale (e.g. the user toggled a filter before it resolved)
+  // and failed precisely because the session expired would return early and never
+  // reach `clearSession`/redirect -- the session would then never get invalidated
+  // if the user stopped interacting. The session check must run first, regardless
+  // of staleness.
+  it("still logs out when a now-stale initial-load request fails with a post-refresh 401, even though a fresher load has already won", async () => {
+    let rejectStale!: (cause: unknown) => void;
+    let callCount = 0;
+    getProjects.mockImplementation(() => {
+      callCount += 1;
+      if (callCount === 1) {
+        // The initial load (includeArchived: false), held pending until rejected
+        // explicitly below, once the toggle's own fresher request has resolved.
+        return new Promise((_resolve, reject) => {
+          rejectStale = reject;
+        });
+      }
+      // The fresher request, triggered by toggling "Inclure les projets..." while
+      // call 1 is still in flight.
+      return Promise.resolve(page([project({ id: 2, name: "Projet archivé", status: "termine" })]));
+    });
+
+    render(<ProjectsPage />);
+    await waitFor(() => expect(getProjects).toHaveBeenCalledTimes(1));
+
+    // Toggling the filter changes `includeArchived`, an effect dependency: this
+    // starts a fresher generation before call 1 has resolved.
+    fireEvent.click(screen.getByRole("checkbox", { name: /Inclure les projets/ }));
+    await waitFor(() => expect(getProjects).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByText("Projet archivé")).toBeInTheDocument());
+
+    // The now-stale call 1 fails after the fresher call already won -- it must
+    // still force a logout instead of being silently discarded.
+    rejectStale(new ApiError(401, "Unauthorized"));
     await waitFor(() => expect(clearSession).toHaveBeenCalled());
     await waitFor(() => expect(router.push).toHaveBeenCalledWith("/login"));
   });

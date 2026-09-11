@@ -190,12 +190,12 @@ export function usePlanningDetailEffect({
           }
         }
       } catch (cause) {
-        if (!isPlanningLoadStillActive(cancelled, loadGeneration, planningLoadGenerationRef.current)) {
-          return;
-        }
         if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
           clearSession();
           router.push("/login");
+          return;
+        }
+        if (!isPlanningLoadStillActive(cancelled, loadGeneration, planningLoadGenerationRef.current)) {
           return;
         }
         setError(cause instanceof ApiError ? cause.message : "Impossible de charger le planning.");

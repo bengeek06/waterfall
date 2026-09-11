@@ -167,14 +167,7 @@ def generate_planning_structure(
         .order_by(MsTask.uid.desc())
         .first()
     )
-    max_id = (
-        db.query(MsTask.id_display)
-        .filter(MsTask.project_id == project.id)
-        .order_by(MsTask.id_display.desc())
-        .first()
-    )
     next_uid = (max_uid[0] if max_uid else 0) + 1
-    next_id = (max_id[0] if max_id and max_id[0] is not None else 0) + 1
     uid_by_key: dict[str, int] = {}
     tasks: list[MsTask] = []
 
@@ -184,15 +177,12 @@ def generate_planning_structure(
             task = MsTask(
                 project_id=project.id,
                 uid=next_uid,
-                id_display=next_id,
                 structure_key=node.key,
                 task_type=0,
             )
             db.add(task)
             next_uid += 1
-            next_id += 1
         task.structure_kind = node.kind
-        task.parent_uid = uid_by_key.get(node.parent_key) if node.parent_key else None
         task.position = node.position
         task.name = node.name
         task.outline_number = node.outline_number
@@ -201,6 +191,17 @@ def generate_planning_structure(
         task.is_milestone = node.is_milestone
         tasks.append(task)
         uid_by_key[node.key] = task.uid
+
+    # Two passes over fk_ms_task_parent, deliberately: SQLAlchemy emits a
+    # flush's UPDATEs *before* its INSERTs, so pointing a kept row's parent_uid
+    # at a uid created in the same pass raises "FOREIGN KEY constraint failed".
+    # Reachable since #313: an XML import can adopt part of a generated
+    # structure (clearing those rows' structure_key), leaving this function to
+    # recreate the missing nodes under fresh uids while a kept node -- e.g. the
+    # lot's completion milestone -- must be reparented onto one of them.
+    db.flush()
+    for node, task in zip(nodes, tasks, strict=True):
+        task.parent_uid = uid_by_key.get(node.parent_key) if node.parent_key else None
 
     db.flush()
     deliverables_by_lot_key = {
@@ -334,7 +335,6 @@ def _create_or_update_node_snapshots(
             task = WfPlanningTaskSnapshot(
                 planning_id=planning.id,
                 uid=max_uid,
-                id_display=max_uid,
                 structure_key=node.key,
                 notes=None,
             )
@@ -344,7 +344,6 @@ def _create_or_update_node_snapshots(
             task = WfPlanningTaskSnapshot(
                 planning_id=planning.id,
                 uid=source_task.uid,
-                id_display=source_task.id_display,
                 structure_key=node.key,
                 notes=source_task.notes,
             )

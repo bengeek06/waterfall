@@ -64,7 +64,7 @@ def _seed_project_and_draft_estimate(
 ) -> tuple[int, int, int, int, int, int, int]:
     from waterfall.models.ms_core import MsProject, MsTask
     from waterfall.models.planning import WfPlanning
-    from waterfall.models.resources import CostCategory, CostType, Estimate
+    from waterfall.models.resources import CostCategory, CostType, Estimate, ProjectCostCode
     from waterfall.models.user import User
 
     owner = User(
@@ -89,6 +89,17 @@ def _seed_project_and_draft_estimate(
         currency_code="EUR",
     )
     session.add(project)
+    session.flush()
+
+    # This helper bypasses POST /projects (which auto-creates the project's root cost
+    # code -- see create_project), so it must uphold that same #62/E6-01 invariant
+    # itself: create_estimate_cost_line/create_task_role_assignment (E6-02/#63) below
+    # require every project to always have an active root cost code to default to.
+    session.add(
+        ProjectCostCode(
+            project_id=project.id, parent_id=None, code=f"PRJ-{project.id}", name=project.name
+        )
+    )
     session.flush()
 
     task = MsTask(project_id=project.id, uid=1, name="Referenced task")
@@ -138,7 +149,10 @@ def _seed_project_and_draft_estimate(
         "validate_project_estimate",
         "create_estimate_cost_line",
         "update_estimate_cost_line",
-        "create_task_role_assignment",
+        "delete_estimate_cost_line",
+        "create_estimate_role_assignment",
+        "update_estimate_role_assignment",
+        "delete_estimate_role_assignment",
     ],
 )
 def test_project_lock_blocks_every_task_reference_creator(
@@ -148,18 +162,22 @@ def test_project_lock_blocks_every_task_reference_creator(
     """Every reference creator must queue behind task deletion's project lock."""
     from waterfall.api.routes.estimates import (
         create_estimate_cost_line,
+        create_estimate_role_assignment,
         create_project_estimate,
+        delete_estimate_cost_line,
+        delete_estimate_role_assignment,
         update_estimate_cost_line,
+        update_estimate_role_assignment,
         validate_project_estimate,
     )
     from waterfall.api.routes.project_access import get_mutable_draft_planning_with_locks
-    from waterfall.api.routes.tasks import create_task_role_assignment
     from waterfall.models.user import User
     from waterfall.schemas.projects import (
         EstimateCostLineCreate,
         EstimateCostLineUpdate,
+        EstimateRoleAssignmentCreate,
+        EstimateRoleAssignmentUpdate,
         ProjectEstimateCreate,
-        TaskRoleAssignmentCreate,
     )
 
     engine = create_engine(postgres_app_database_url, future=True)
@@ -173,7 +191,7 @@ def test_project_lock_blocks_every_task_reference_creator(
                 estimate_id,
                 cost_category_id,
                 task_id,
-                task_uid,
+                _task_uid,
             ) = _seed_project_and_draft_estimate(seed_session)
 
         session_a = session_factory()
@@ -223,10 +241,41 @@ def test_project_lock_blocks_every_task_reference_creator(
                         db=session_b,
                         current_user=current_user,
                     )
-                return create_task_role_assignment(
+                if operation == "delete_estimate_cost_line":
+                    # The lock must block before this row is even looked up, so a
+                    # placeholder line_id (never actually queried) is enough.
+                    return delete_estimate_cost_line(
+                        project_id,
+                        estimate_id,
+                        1,
+                        db=session_b,
+                        current_user=current_user,
+                    )
+                if operation == "create_estimate_role_assignment":
+                    return create_estimate_role_assignment(
+                        project_id,
+                        estimate_id,
+                        EstimateRoleAssignmentCreate(
+                            task_id=task_id, role_id=1, quantity=Decimal("1"), hours=Decimal("1")
+                        ),
+                        db=session_b,
+                        current_user=current_user,
+                    )
+                if operation == "update_estimate_role_assignment":
+                    # The lock must block before this row is even looked up, so a
+                    # placeholder assignment_id (never actually queried) is enough.
+                    return update_estimate_role_assignment(
+                        project_id,
+                        estimate_id,
+                        1,
+                        EstimateRoleAssignmentUpdate(quantity=Decimal("2")),
+                        db=session_b,
+                        current_user=current_user,
+                    )
+                return delete_estimate_role_assignment(
                     project_id,
-                    task_uid,
-                    TaskRoleAssignmentCreate(role_id=1, quantity=Decimal("1"), hours=Decimal("1")),
+                    estimate_id,
+                    1,
                     db=session_b,
                     current_user=current_user,
                 )

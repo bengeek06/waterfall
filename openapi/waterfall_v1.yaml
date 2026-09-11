@@ -49,11 +49,18 @@ paths:
       tags:
         - health
       summary: Vérifier que l'API est prête
+      description: 'Contrôle effectif des dépendances (Postgres, Redis, stockage objet), chacune sous un délai court : une dépendance qui ne répond pas est comptée en échec. Utilisé par le healthcheck Docker du service `api`. Ne pas confondre avec `GET /health`, qui est une sonde de vivacité et ne contacte volontairement aucune dépendance.'
       operationId: getReadiness
       security: []
       responses:
         '200':
-          description: API prête
+          description: API prête, toutes les dépendances répondent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessStatus'
+        '503':
+          description: 'Au moins une dépendance est injoignable. Même corps qu''en 200 : `checks` identifie la ou les dépendances en cause.'
           content:
             application/json:
               schema:
@@ -139,13 +146,19 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/FastAPIErrorResponse'
         '429':
           description: Trop de tentatives de connexion
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/FastAPIErrorResponse'
+        '503':
+          description: Le limiteur de tentatives de connexion (Redis) est injoignable; la connexion est refusée par défaut (fail-closed)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FastAPIErrorResponse'
   /auth/refresh:
     post:
       tags:
@@ -432,13 +445,19 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/FastAPIErrorResponse'
         '415':
           description: Media type non supporte
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/FastAPIErrorResponse'
+        '503':
+          description: Le stockage objet des sources d'import (Garage) est injoignable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FastAPIErrorResponse'
   /imports/v1/batches/{batchId}/run:
     post:
       tags:
@@ -473,7 +492,13 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/FastAPIErrorResponse'
+        '503':
+          description: Le stockage objet des sources d'import (Garage) est injoignable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FastAPIErrorResponse'
   /imports/v1/batches/{batchId}/diff:
     get:
       tags:
@@ -499,6 +524,12 @@ paths:
           $ref: '#/components/responses/BatchNotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+        '503':
+          description: Le stockage objet des sources d'import (Garage) est injoignable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FastAPIErrorResponse'
   /imports/v1/batches/{batchId}:
     get:
       tags:
@@ -1305,8 +1336,9 @@ paths:
     patch:
       tags:
         - projects
-      summary: Mettre a jour la description d'une tache
-      operationId: updateTaskDescription
+      summary: Mettre a jour le nom et/ou la description d'une tache
+      description: 'Issue #290 (E12-08) a ajoute le champ optionnel `name`, en plus du champ `description` preexistant. Quand un planning est affiche, le renommage met a jour `WfPlanningTaskSnapshot.name` et son jumeau `MsTask.name` dans la meme transaction ; sinon, `MsTask.name` seul. Ce renommage est immediatement visible sur toutes les lignes de taches d''un devis brouillon referencant cette tache (voir `EstimateTaskRowRead`).'
+      operationId: updateTask
       security:
         - bearerAuth: []
       parameters:
@@ -1317,7 +1349,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/TaskDescriptionUpdate'
+              $ref: '#/components/schemas/TaskUpdate'
       responses:
         '200':
           description: Tache mise a jour
@@ -1327,125 +1359,6 @@ paths:
                 $ref: '#/components/schemas/TaskRead'
         '400':
           $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/TaskNotFound'
-  /projects/{projectId}/tasks/{taskUid}/role-assignments:
-    get:
-      tags:
-        - projects
-      summary: Lister les affectations de main-d'œuvre d'une tâche
-      description: Le parametre `q` recherche sur `role_name` (nom du role affecte).
-      operationId: listTaskRoleAssignments
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: '#/components/parameters/ProjectId'
-        - $ref: '#/components/parameters/TaskUid'
-        - $ref: '#/components/parameters/Limit'
-        - $ref: '#/components/parameters/Offset'
-        - $ref: '#/components/parameters/Search'
-        - name: sort
-          in: query
-          required: false
-          schema:
-            allOf:
-              - $ref: '#/components/schemas/SortColumn'
-            enum:
-              - role_name
-              - -role_name
-              - quantity
-              - -quantity
-              - hours
-              - -hours
-      responses:
-        '200':
-          description: Affectations de rôles
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/TaskRoleAssignmentListRead'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/TaskNotFound'
-    post:
-      tags:
-        - projects
-      summary: Affecter un rôle de main-d'œuvre à une tâche
-      operationId: createTaskRoleAssignment
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: '#/components/parameters/ProjectId'
-        - $ref: '#/components/parameters/TaskUid'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/TaskRoleAssignmentCreate'
-      responses:
-        '201':
-          description: Affectation créée
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/TaskRoleAssignmentRead'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/TaskNotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-  /projects/{projectId}/tasks/{taskUid}/role-assignments/{assignmentId}:
-    patch:
-      tags:
-        - projects
-      summary: Modifier une affectation de rôle
-      operationId: updateTaskRoleAssignment
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: '#/components/parameters/ProjectId'
-        - $ref: '#/components/parameters/TaskUid'
-        - $ref: '#/components/parameters/AssignmentId'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/TaskRoleAssignmentUpdate'
-      responses:
-        '200':
-          description: Affectation modifiée
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/TaskRoleAssignmentRead'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/TaskNotFound'
-    delete:
-      tags:
-        - projects
-      summary: Supprimer une affectation de rôle
-      operationId: deleteTaskRoleAssignment
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: '#/components/parameters/ProjectId'
-        - $ref: '#/components/parameters/TaskUid'
-        - $ref: '#/components/parameters/AssignmentId'
-      responses:
-        '204':
-          description: Affectation supprimée
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -1585,6 +1498,39 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/ProjectNotFound'
+  /projects/{projectId}/estimates/{estimateId}/tasks:
+    post:
+      tags:
+        - projects
+      summary: Ajouter une tache au planning affiche depuis le devis
+      description: Insere la tache dans le brouillon de planning affiche du projet (via `create_planning_task`) et cree, dans la meme transaction, une ligne `MsTask` jumelle partageant le meme `uid` ainsi que la ligne `EstimateTaskRow` correspondante dans ce devis -- necessaire pour que la tache puisse ensuite recevoir une affectation de role ou une ligne de cout, toutes deux rattachees a `ms_task.id`. Le planning affiche doit etre un brouillon (code `ESTIMATE_TASK_CREATE_REQUIRES_PLANNING_DRAFT` sinon, a resoudre via `POST /{projectId}/planning-structure/reopen`) et le devis doit etre a l'etat `draft`.
+      operationId: createEstimateTask
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/EstimateId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EstimateTaskCreate'
+      responses:
+        '201':
+          description: Tache creee et ligne de devis correspondante
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EstimateTaskRowRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
   /projects/{projectId}/estimates/{estimateId}/cost-lines:
     get:
       tags:
@@ -1634,6 +1580,7 @@ paths:
       tags:
         - projects
       summary: Ajouter une ligne Fourniture, Frais ou UO à un brouillon
+      description: Sans `cost_code_id` explicite, la ligne est rattachée au code d'imputation racine actif du projet ; un `cost_code_id` fourni doit appartenir au projet, sous peine de `400`.
       operationId: createEstimateCostLine
       security:
         - bearerAuth: []
@@ -1714,6 +1661,201 @@ paths:
           $ref: '#/components/responses/ProjectNotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+  /projects/{projectId}/estimates/{estimateId}/cost-lines/{costLineId}/milestones:
+    post:
+      tags:
+        - projects
+      summary: Appliquer un gabarit de jalons chaînés à une ligne de coût
+      description: 'Genere N+2 taches-jalons (`fourniture`: 2 ; `sous_traitance`: 2 + `intermediate_milestones_count`) dans le brouillon de planning affiche -- chacune avec sa ligne `MsTask` jumelle et sa ligne `EstimateTaskRow`, comme `POST .../estimates/{estimateId}/tasks` -- puis les chaine par N+1 liens Fin-a-Debut (`link_type=1`) portant tous le meme `lag_minutes`. Le premier jalon devient l''enfant de la tache de la ligne de coût (`task_id`) si elle en a une, sinon les jalons sont des taches racines ; dans les deux cas ils sont ajoutes en fin de liste des taches existantes, jamais en tete. Refuse une ligne de coût de main-d''oeuvre (`cost_type.kind = ''labor''`), un devis non-brouillon, ou un planning affiche non-brouillon (code `ESTIMATE_TASK_CREATE_REQUIRES_PLANNING_DRAFT`, a resoudre via `POST /{projectId}/planning-structure/reopen`).'
+      operationId: createEstimateCostLineMilestones
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/EstimateId'
+        - $ref: '#/components/parameters/CostLineId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EstimateCostLineMilestonesCreate'
+      responses:
+        '201':
+          description: Jalons crees et liens Fin-a-Debut chaines correspondants
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EstimateTaskRowListRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /projects/{projectId}/estimates/{estimateId}/role-assignments:
+    get:
+      tags:
+        - projects
+      summary: Lister les affectations de main-d'œuvre d'un devis
+      description: Le parametre `q` recherche sur `role_name` (nom du role affecte).
+      operationId: listEstimateRoleAssignments
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/EstimateId'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/Search'
+        - name: sort
+          in: query
+          required: false
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/SortColumn'
+            enum:
+              - role_name
+              - -role_name
+              - quantity
+              - -quantity
+              - hours
+              - -hours
+      responses:
+        '200':
+          description: Affectations de rôles du devis
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EstimateRoleAssignmentListRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+    post:
+      tags:
+        - projects
+      summary: Affecter un rôle de main-d'œuvre à une tâche, dans un devis brouillon
+      description: '`task_id` reference `MsTask.id` (jamais un uid de planning). Sans `cost_code_id` explicite, l''affectation est rattachée au code d''imputation racine actif du projet ; un `cost_code_id` fourni doit appartenir au projet, sous peine de `400`. Refuse avec `409` si le devis n''est pas un brouillon, ou si une affectation existe deja pour ce couple tache/role sur ce devis (E12-01, #273).'
+      operationId: createEstimateRoleAssignment
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/EstimateId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EstimateRoleAssignmentCreate'
+      responses:
+        '201':
+          description: Affectation créée
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EstimateRoleAssignmentRead'
+        '400':
+          $ref: '#/components/responses/CreateEstimateRoleAssignmentBadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /projects/{projectId}/estimates/{estimateId}/role-assignments/{assignmentId}:
+    patch:
+      tags:
+        - projects
+      summary: Modifier une affectation de rôle d'un devis brouillon
+      description: '`task_id`/`role_id` sont immuables ; refuse avec `409` si le devis n''est pas un brouillon.'
+      operationId: updateEstimateRoleAssignment
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/EstimateId'
+        - $ref: '#/components/parameters/AssignmentId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EstimateRoleAssignmentUpdate'
+      responses:
+        '200':
+          description: Affectation modifiée
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EstimateRoleAssignmentRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    delete:
+      tags:
+        - projects
+      summary: Supprimer une affectation de rôle d'un devis brouillon
+      description: Refuse avec `409` si le devis n'est pas un brouillon.
+      operationId: deleteEstimateRoleAssignment
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/EstimateId'
+        - $ref: '#/components/parameters/AssignmentId'
+      responses:
+        '204':
+          description: Affectation supprimée
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /projects/{projectId}/estimates/{estimateId}/grid-nodes/move:
+    post:
+      tags:
+        - projects
+      summary: Deplacer ou reordonner des noeuds de la grille d'un devis brouillon
+      description: 'Deplace une selection de lignes de coût/main-d''oeuvre (E12-07, #289) : `node_uids` (toujours negatifs) sont normalises a leurs racines selectionnees, puis inseres sous `target_parent_uid` a `position`. Le `task_id` de chaque ligne affectee (et de ses descendants) est recalcule a partir de la tache ancetre la plus proche.'
+      operationId: moveEstimateGridNodes
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/EstimateId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EstimateGridNodeMove'
+      responses:
+        '200':
+          description: Devis mis a jour (revision incrementee)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectEstimateRead'
+        '400':
+          $ref: '#/components/responses/MoveEstimateGridNodesBadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/MoveEstimateGridNodesNotFound'
+        '409':
+          $ref: '#/components/responses/MoveEstimateGridNodesConflict'
   /projects/{projectId}/estimates/{estimateId}/validate:
     post:
       tags:
@@ -1727,17 +1869,17 @@ paths:
         - $ref: '#/components/parameters/EstimateId'
       responses:
         '200':
-          description: Devis validé
+          description: 'Devis validé. `warnings` (issue #65, E6-04) liste les tâches "réelles" du planning (ni récapitulatives ni jalons) sans affectation de rôle ni ligne de coût rattachée -- purement informatif, n''a jamais empêché cette validation d''aboutir.'
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ProjectEstimateRead'
+                $ref: '#/components/schemas/EstimateValidationRead'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/ProjectNotFound'
         '409':
-          $ref: '#/components/responses/Conflict'
+          $ref: '#/components/responses/ValidateProjectEstimateConflict'
   /projects/{projectId}/estimates/{estimateId}/aggregates:
     get:
       tags:
@@ -1783,6 +1925,245 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/ProjectNotFound'
+  /projects/{projectId}/estimates/{estimateId}/export-reconciliation.xlsx:
+    get:
+      tags:
+        - projects
+      summary: Exporter le devis au format Excel réconciliable (E6-08)
+      description: 'Export technique distinct de /export.xlsx, destiné à une réimportation fidèle (E6-09) : une feuille par nature de ligne (Tâches, MO, Non-MO), chacune portant l''identifiant interne stable de sa ligne source (EstimateTaskRow.id / TaskRoleAssignment.id / EstimateCostLine.id) en plus des libellés lisibles, permettant de distinguer une mise à jour d''une création à la réimportation.'
+      operationId: exportEstimateReconciliationExcel
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/EstimateId'
+      responses:
+        '200':
+          description: Classeur Excel réconciliable du devis (feuilles Tâches / MO / Non-MO)
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+  /projects/{projectId}/estimates/{estimateId}/import-reconciliation/preview:
+    post:
+      tags:
+        - projects
+      summary: Prévisualiser une réimportation Excel réconciliable (E6-09)
+      description: Analyse le fichier réexporté par /export-reconciliation.xlsx (E6-08), éventuellement édité, et calcule le diff (créations / mises à jour / suppressions sur les feuilles Tâches, MO, Non-MO) sans rien écrire en base. Le devis doit être à l'état `draft`. Exécute exactement la même analyse que /confirm sur le même fichier, garantissant un diagnostic identique -- seul `applied` (toujours `false` ici) distingue les deux réponses.
+      operationId: previewEstimateReconciliationImport
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/EstimateId'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Classeur Excel réconciliable (voir /export-reconciliation.xlsx)
+      responses:
+        '200':
+          description: Diagnostic de réconciliation (aperçu, rien n'est appliqué)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconciliationPlanRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          description: Classeur de reconciliation trop volumineux
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FastAPIErrorResponse'
+  /projects/{projectId}/estimates/{estimateId}/import-reconciliation/confirm:
+    post:
+      tags:
+        - projects
+      summary: Confirmer une réimportation Excel réconciliable (E6-09)
+      description: 'Rejoue exactement la même analyse que /preview sur le fichier resoumis (aucune session d''import stockée côté serveur) et applique le résultat en une seule transaction si `blocking_issues` est vide. Ordre d''application : suppressions (Non-MO, MO, puis Tâches), créations (Tâches, puis MO/Non-MO), mises à jour (MO, puis Non-MO). Le devis doit être à l''état `draft`. Si des problèmes bloquants sont trouvés, rien n''est écrit et la réponse est un 409 portant le `ReconciliationPlanRead` complet (`applied=false`), jamais un 2xx trompeur. Dans de rares cas, une écriture concurrente entre le precheck (hors verrou) et l''application réelle (sous verrou) peut aussi produire un 409 au format `PlanningTaskDeleteConflict`, identique à celui de la suppression directe de tâches du planning.'
+      operationId: confirmEstimateReconciliationImport
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/EstimateId'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Le même classeur Excel que celui soumis à /preview
+      responses:
+        '200':
+          description: Réconciliation appliquée
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconciliationPlanRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+        '409':
+          $ref: '#/components/responses/EstimateReconciliationConfirmConflict'
+        '413':
+          description: Classeur de reconciliation trop volumineux
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FastAPIErrorResponse'
+  /projects/{projectId}/cost-codes:
+    get:
+      tags:
+        - projects
+      summary: Lister l'arbre des codes d'imputation d'un projet
+      operationId: listProjectCostCodes
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      responses:
+        '200':
+          description: 'Arbre complet des codes d''imputation actifs du projet. Non paginable (meme motif que GET /resources/nodes) : l''arbre doit toujours etre renvoye en entier, jamais tronque. `limit` est donc toujours `null` et `total` egale `items.length`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectCostCodeListRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+    post:
+      tags:
+        - projects
+      summary: Creer un code d'imputation dans l'arbre du projet
+      operationId: createProjectCostCode
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectCostCodeCreate'
+      responses:
+        '201':
+          description: Code d'imputation cree
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectCostCodeRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /projects/{projectId}/cost-codes/{costCodeId}:
+    get:
+      tags:
+        - projects
+      summary: Lire un code d'imputation du projet
+      operationId: getProjectCostCode
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/CostCodeId'
+      responses:
+        '200':
+          description: Code d'imputation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectCostCodeRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+    patch:
+      tags:
+        - projects
+      summary: Modifier ou desactiver un code d'imputation du projet
+      operationId: updateProjectCostCode
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/CostCodeId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectCostCodeUpdate'
+      responses:
+        '200':
+          description: Code d'imputation modifie
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectCostCodeRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    delete:
+      tags:
+        - projects
+      summary: Desactiver un code d'imputation du projet
+      operationId: deleteProjectCostCode
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/CostCodeId'
+      responses:
+        '204':
+          description: Code d'imputation desactive
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
   /projects/{projectId}/export.xml:
     get:
       tags:
@@ -1960,6 +2341,13 @@ paths:
       operationId: listResourceNodes
       security:
         - bearerAuth: []
+      parameters:
+        - name: include_inactive
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
       responses:
         '200':
           description: 'Arbre complet des noeuds de ressources actifs. Non paginable (EPIC E7) : l''arbre doit toujours etre renvoye en entier, jamais tronque, sous peine de laisser le client reconstruire un arbre incomplet. `limit` est donc toujours `null` et `total` egale `items.length`.'
@@ -2083,6 +2471,12 @@ paths:
             type: integer
             minimum: 1
         - name: include_descendants
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+        - name: include_inactive
           in: query
           required: false
           schema:
@@ -2696,16 +3090,49 @@ components:
           example: ok
     ReadinessStatus:
       type: object
+      description: 'État de préparation de l''API. Le corps est identique en 200 et en 503 : seul le code HTTP change, `checks` indique toujours quelle dépendance est en cause.'
       required:
         - status
+        - checks
         - timestamp
       properties:
         status:
           type: string
+          enum:
+            - ready
+            - unavailable
           example: ready
+        checks:
+          $ref: '#/components/schemas/ReadinessChecks'
         timestamp:
           type: string
           format: date-time
+    ReadinessChecks:
+      type: object
+      description: 'Résultat par dépendance. Volontairement binaire (`ok`/`unavailable`) et sans message : `/health/ready` n''est pas authentifié, le détail de la panne reste dans les logs de l''API.'
+      required:
+        - database
+        - redis
+        - storage
+      properties:
+        database:
+          type: string
+          enum:
+            - ok
+            - unavailable
+          example: ok
+        redis:
+          type: string
+          enum:
+            - ok
+            - unavailable
+          example: ok
+        storage:
+          type: string
+          enum:
+            - ok
+            - unavailable
+          example: ok
     UserCreate:
       type: object
       required:
@@ -3049,20 +3476,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ImportIssue'
-    ErrorResponse:
-      type: object
-      required:
-        - error
-        - message
-      properties:
-        error:
-          type: string
-          example: INVALID_XML
-        message:
-          type: string
-        details:
-          type: object
-          additionalProperties: true
     FastAPIErrorResponse:
       type: object
       required:
@@ -3354,7 +3767,6 @@ components:
       type: object
       required:
         - uid
-        - id_display
         - structure_key
         - structure_kind
         - parent_uid
@@ -3379,10 +3791,6 @@ components:
         uid:
           type: integer
           minimum: 1
-        id_display:
-          type:
-            - integer
-            - 'null'
         structure_key:
           type:
             - string
@@ -3547,6 +3955,7 @@ components:
         - id
         - project_id
         - uid
+        - row_number
         - name
         - is_summary
         - is_milestone
@@ -3560,10 +3969,10 @@ components:
         uid:
           type: integer
           minimum: 1
-        id_display:
-          type:
-            - integer
-            - 'null'
+        row_number:
+          type: integer
+          readOnly: true
+          description: 'Rank of the task in the planning''s current display order (flattened depth-first walk, siblings sorted the same way as `outline_number`). Recomputed on every read, never stored -- it changes whenever the task is moved, reparented, or another task is created/deleted ahead of it. Read-only: this field cannot be set by clients.'
         structure_key:
           type:
             - string
@@ -3803,7 +4212,7 @@ components:
               type: array
               items:
                 $ref: '#/components/schemas/PlanningTaskTreeRead'
-    TaskDescriptionUpdate:
+    TaskUpdate:
       type: object
       properties:
         description:
@@ -3811,15 +4220,30 @@ components:
             - string
             - 'null'
           maxLength: 10000
-    TaskRoleAssignmentCreate:
+        name:
+          type:
+            - string
+            - 'null'
+          minLength: 1
+          maxLength: 512
+    EstimateRoleAssignmentCreate:
       type: object
       required:
+        - task_id
         - role_id
         - quantity
         - hours
       properties:
+        task_id:
+          type: integer
+          minimum: 1
         role_id:
           type: integer
+          minimum: 1
+        cost_code_id:
+          type:
+            - integer
+            - 'null'
           minimum: 1
         quantity:
           type: number
@@ -3832,9 +4256,34 @@ components:
             - string
             - 'null'
           maxLength: 10000
-    TaskRoleAssignmentUpdate:
+        target_parent_uid:
+          type:
+            - integer
+            - 'null'
+          not:
+            enum:
+              - 0
+          description: |-
+            Position de la nouvelle ligne dans l'arbre du devis (E12-07/#289) :
+            positif = tache de ce devis (`EstimateTaskRow`), negatif = un autre
+            noeud de grille de ce devis, absent/null = racine du devis. Independant
+            de `task_id`.
+        insert_after_uid:
+          type:
+            - integer
+            - 'null'
+          maximum: -1
+          description: |-
+            Noeud de grille frere apres lequel inserer la nouvelle ligne ; absent =
+            dernier enfant du parent resolu.
+    EstimateRoleAssignmentUpdate:
       type: object
       properties:
+        cost_code_id:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
         quantity:
           type: number
           exclusiveMinimum: 0
@@ -3846,10 +4295,11 @@ components:
             - string
             - 'null'
           maxLength: 10000
-    TaskRoleAssignmentRead:
+    EstimateRoleAssignmentRead:
       type: object
       required:
         - id
+        - estimate_id
         - task_id
         - role_id
         - role_code
@@ -3860,12 +4310,20 @@ components:
         - hours
         - created_at
         - updated_at
+        - uid
+        - position
+        - row_number
       properties:
         id:
           type: integer
           minimum: 1
-        task_id:
+        estimate_id:
           type: integer
+          minimum: 1
+        task_id:
+          type:
+            - integer
+            - 'null'
           minimum: 1
         role_id:
           type: integer
@@ -3879,6 +4337,11 @@ components:
           minimum: 1
         accounting_code:
           type: string
+        cost_code_id:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
         quantity:
           type: number
         hours:
@@ -3893,6 +4356,27 @@ components:
         updated_at:
           type: string
           format: date-time
+        uid:
+          type: integer
+          maximum: -1
+          description: 'This assignment''s own EstimateGridNode uid (E12-07, #289), always negative.'
+        parent_uid:
+          type:
+            - integer
+            - 'null'
+          not:
+            enum:
+              - 0
+          description: 'This assignment''s grid-node parent_uid, exposed as-is (E12-09, #291): positif = tache de ce devis (`MsTask.id`), negatif = un autre noeud de grille de ce devis, absent/null = racine du devis -- meme convention que `EstimateGridNodeMove.target_parent_uid`, reutilisable telle quelle dans un appel ulterieur a grid-nodes/move.'
+        position:
+          type: integer
+          minimum: 1
+          description: This assignment's local sibling position within its grid-node parent.
+        row_number:
+          type: integer
+          minimum: 1
+          readOnly: true
+          description: '1-based rank of this assignment in the devis''s merged tasks+grid-node tree (E12-09, #291), recomputed on every read, never stored.'
     ProjectEstimateCreate:
       type: object
       required:
@@ -3929,6 +4413,7 @@ components:
         - kind
         - status
         - currency_code
+        - revision
         - created_at
       properties:
         id:
@@ -3965,6 +4450,9 @@ components:
             - archived
         currency_code:
           type: string
+        revision:
+          type: integer
+          minimum: 0
         created_at:
           type: string
           format: date-time
@@ -3997,6 +4485,18 @@ components:
             - integer
             - 'null'
           minimum: 1
+        task_uid:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
+        row_number:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
+          readOnly: true
+          description: '1-based rank of this row in the devis''s merged tasks+grid-node tree (E12-09, #291), recomputed on every read, never stored. `null` only in the same pre-existing degenerate case `task_uid` itself already falls back to `null` for (this row''s task can no longer be resolved at all).'
         parent_task_id:
           type:
             - integer
@@ -4040,6 +4540,11 @@ components:
         cost_category_id:
           type: integer
           minimum: 1
+        cost_code_id:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
         label:
           type: string
           minLength: 1
@@ -4054,6 +4559,31 @@ components:
           anyOf:
             - $ref: '#/components/schemas/SupplyStatus'
             - type: 'null'
+        planned_date:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        target_parent_uid:
+          type:
+            - integer
+            - 'null'
+          not:
+            enum:
+              - 0
+          description: |-
+            Position de la nouvelle ligne dans l'arbre du devis (E12-07/#289) :
+            positif = tache de ce devis (`EstimateTaskRow`), negatif = un autre
+            noeud de grille de ce devis, absent/null = racine du devis. Independant
+            de `task_id`.
+        insert_after_uid:
+          type:
+            - integer
+            - 'null'
+          maximum: -1
+          description: |-
+            Noeud de grille frere apres lequel inserer la nouvelle ligne ; absent =
+            dernier enfant du parent resolu.
     EstimateCostLineUpdate:
       type: object
       properties:
@@ -4065,6 +4595,11 @@ components:
         cost_category_id:
           type: integer
           minimum: 1
+        cost_code_id:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
         label:
           type: string
           minLength: 1
@@ -4079,6 +4614,11 @@ components:
           anyOf:
             - $ref: '#/components/schemas/SupplyStatus'
             - type: 'null'
+        planned_date:
+          type:
+            - string
+            - 'null'
+          format: date-time
     EstimateCostLineRead:
       type: object
       required:
@@ -4092,6 +4632,9 @@ components:
         - quantity
         - unit_cost
         - purchase_cost
+        - uid
+        - position
+        - row_number
       properties:
         id:
           type: integer
@@ -4109,6 +4652,11 @@ components:
           minimum: 1
         cost_category_id:
           type: integer
+          minimum: 1
+        cost_code_id:
+          type:
+            - integer
+            - 'null'
           minimum: 1
         cost_type_code:
           type: string
@@ -4130,6 +4678,32 @@ components:
           anyOf:
             - $ref: '#/components/schemas/SupplyStatus'
             - type: 'null'
+        planned_date:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        uid:
+          type: integer
+          maximum: -1
+          description: 'This line''s own EstimateGridNode uid (E12-07, #289), always negative.'
+        parent_uid:
+          type:
+            - integer
+            - 'null'
+          not:
+            enum:
+              - 0
+          description: 'This line''s grid-node parent_uid, exposed as-is (E12-09, #291): positif = tache de ce devis (`MsTask.id`), negatif = un autre noeud de grille de ce devis, absent/null = racine du devis -- meme convention que `EstimateGridNodeMove.target_parent_uid`, reutilisable telle quelle dans un appel ulterieur a grid-nodes/move.'
+        position:
+          type: integer
+          minimum: 1
+          description: This line's local sibling position within its grid-node parent.
+        row_number:
+          type: integer
+          minimum: 1
+          readOnly: true
+          description: '1-based rank of this line in the devis''s merged tasks+grid-node tree (E12-09, #291), recomputed on every read, never stored.'
     EstimateAggregatesRead:
       type: object
       required:
@@ -4855,7 +5429,7 @@ components:
               type: array
               items:
                 $ref: '#/components/schemas/EstimateCostLineRead'
-    TaskRoleAssignmentListRead:
+    EstimateRoleAssignmentListRead:
       allOf:
         - $ref: '#/components/schemas/PaginationMeta'
         - type: object
@@ -4865,7 +5439,7 @@ components:
             items:
               type: array
               items:
-                $ref: '#/components/schemas/TaskRoleAssignmentRead'
+                $ref: '#/components/schemas/EstimateRoleAssignmentRead'
     UserAdminListRead:
       allOf:
         - $ref: '#/components/schemas/PaginationMeta'
@@ -5039,6 +5613,321 @@ components:
         expected_revision:
           type: integer
           minimum: 0
+    EstimateTaskCreate:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 512
+        is_milestone:
+          type: boolean
+          default: false
+        target_parent_uid:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
+        insert_after_uid:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
+    MilestoneTemplate:
+      type: string
+      enum:
+        - fourniture
+        - sous_traitance
+    EstimateCostLineMilestonesCreate:
+      type: object
+      required:
+        - template
+      properties:
+        template:
+          $ref: '#/components/schemas/MilestoneTemplate'
+        intermediate_milestones_count:
+          type: integer
+          minimum: 0
+          maximum: 50
+          default: 0
+        lag_minutes:
+          type: integer
+          minimum: 0
+          maximum: 7884000
+          default: 0
+    MissingRateCoverageEntry:
+      type: object
+      required:
+        - category_id
+        - category_name
+        - accounting_code
+        - year
+      properties:
+        category_id:
+          type: integer
+        category_name:
+          type: string
+        accounting_code:
+          type: string
+        year:
+          type: integer
+      description: 'Une combinaison (categorie de cout, annee) sans `CostRate`, element de `MissingRateCoverage.detail.missing_cost_rates` (E6-11, #175).'
+    MissingRateCoverage:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: object
+          required:
+            - code
+            - missing_cost_rates
+            - missing_inflation_years
+          properties:
+            code:
+              type: string
+              enum:
+                - MISSING_RATE_COVERAGE
+            missing_cost_rates:
+              description: Chaque combinaison (categorie de cout, annee) utilisee par une affectation de main-d'oeuvre sans `CostRate` correspondant -- dedupliquee et triee par `(accounting_code, year)`. Vide si seule la couverture `InflationRate` manque.
+              type: array
+              items:
+                $ref: '#/components/schemas/MissingRateCoverageEntry'
+            missing_inflation_years:
+              description: Chaque annee (dedupliquee, triee) utilisee par une affectation de main-d'oeuvre sans `InflationRate` correspondant, independamment de la categorie. Vide si seule la couverture `CostRate` manque.
+              type: array
+              items:
+                type: integer
+      description: 'Corps 400/409 structure pour `POST .../role-assignments` et `POST .../validate` quand une affectation de main-d''oeuvre couvre une (categorie de cout, annee) sans `CostRate`, ou une annee sans `InflationRate` (E6-11, #175). Liste chaque combinaison manquante trouvee, pas seulement la premiere.'
+    EstimateGridNodeMove:
+      type: object
+      required:
+        - node_uids
+        - position
+        - expected_revision
+      properties:
+        node_uids:
+          type: array
+          minItems: 1
+          items:
+            type: integer
+            maximum: -1
+        target_parent_uid:
+          type:
+            - integer
+            - 'null'
+          not:
+            enum:
+              - 0
+          description: |-
+            Positif = tache de ce devis (`EstimateTaskRow`), negatif = un autre
+            noeud de grille de ce devis, absent/null = racine du devis.
+        position:
+          type: integer
+          minimum: 1
+        expected_revision:
+          type: integer
+          minimum: 0
+          description: |-
+            Revision du devis sur laquelle cette mutation a ete calculee. Comparee a
+            la revision persistee ; un ecart renvoie un 409 ESTIMATE_REVISION_CONFLICT.
+    EstimateValidationWarning:
+      type: object
+      required:
+        - task_uid
+        - task_name
+      properties:
+        task_uid:
+          type: integer
+        task_name:
+          type: string
+      description: |-
+        Issue #65 (E6-04) : une tache "reelle" du planning (ni recapitulative ni
+        jalon) qui n'a ni affectation de role de ce devis (`EstimateRoleAssignment`,
+        scopee par `estimate_id`, E12-02/#274) ni ligne de cout de ce devis
+        (`EstimateCostLine.task_id`) la referencant -- c'est-a-dire une tache
+        probablement oubliee lors du chiffrage. Purement informatif : n'empeche
+        jamais la validation d'aboutir.
+    EstimateValidationRead:
+      allOf:
+        - $ref: '#/components/schemas/ProjectEstimateRead'
+        - type: object
+          required:
+            - warnings
+          properties:
+            warnings:
+              type: array
+              items:
+                $ref: '#/components/schemas/EstimateValidationWarning'
+      description: |-
+        Reponse de `POST .../estimates/{estimateId}/validate` uniquement.
+        Volontairement distinct de `ProjectEstimateRead` (partage par
+        `listProjectEstimates`/`createProjectEstimate`/`setEstimateReference`, qui
+        ne calculent pas cet avertissement) : ces endpoints ne renvoient donc jamais
+        ce champ `warnings` toujours vide/absent dans leur contexte.
+    ReconciliationIssue:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        sheet:
+          type:
+            - string
+            - 'null'
+        row:
+          type:
+            - integer
+            - 'null'
+          description: 'Numero de ligne Excel (1-based, en comptant l''entete). Absent pour un probleme qui ne pointe pas vers une ligne precise du fichier (ex : precondition globale, ou ligne existante proposee a la suppression, qui par definition n''apparait plus dans le fichier).'
+      description: 'Une entree structuree de `ReconciliationPlanRead.blocking_issues` ou `.warnings` (E6-09, #70).'
+    ReconciliationPlanRead:
+      type: object
+      required:
+        - blocking_issues
+        - warnings
+        - tasks_to_create
+        - tasks_to_delete
+        - labor_to_create
+        - labor_to_update
+        - labor_to_delete
+        - non_labor_to_create
+        - non_labor_to_update
+        - non_labor_to_delete
+        - applied
+      properties:
+        blocking_issues:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReconciliationIssue'
+          description: Non vide => rien n'est/ne sera applique, meme pour un confirm (voir `applied`).
+        warnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReconciliationIssue'
+          description: 'Changements ignores (ex : renommage d''une tache existante), lignes hors perimetre, etc. -- jamais bloquant.'
+        tasks_to_create:
+          type: integer
+          minimum: 0
+        tasks_to_delete:
+          type: array
+          items:
+            type: integer
+            minimum: 1
+          description: Identifiants `EstimateTaskRow.id` proposes a la suppression.
+        labor_to_create:
+          type: integer
+          minimum: 0
+        labor_to_update:
+          type: array
+          items:
+            type: integer
+            minimum: 1
+          description: Identifiants `TaskRoleAssignment.id` a mettre a jour.
+        labor_to_delete:
+          type: array
+          items:
+            type: integer
+            minimum: 1
+          description: Identifiants `TaskRoleAssignment.id` proposes a la suppression.
+        non_labor_to_create:
+          type: integer
+          minimum: 0
+        non_labor_to_update:
+          type: array
+          items:
+            type: integer
+            minimum: 1
+          description: Identifiants `EstimateCostLine.id` a mettre a jour.
+        non_labor_to_delete:
+          type: array
+          items:
+            type: integer
+            minimum: 1
+          description: Identifiants `EstimateCostLine.id` proposes a la suppression.
+        applied:
+          type: boolean
+          description: Toujours `false` pour un preview. Pour un confirm, `true` uniquement si `blocking_issues` etait vide et que les changements ont ete appliques.
+      description: 'Diagnostic + resultat d''un import de reconciliation de devis (E6-09, #70). `POST .../import-reconciliation/preview` et `POST .../import-reconciliation/confirm` executent exactement la meme analyse sur le meme fichier -- seul `applied` distingue les deux reponses.'
+    ProjectCostCodeCreate:
+      type: object
+      required:
+        - code
+        - name
+      properties:
+        code:
+          type: string
+          minLength: 1
+          maxLength: 64
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        parent_id:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
+    ProjectCostCodeRead:
+      allOf:
+        - $ref: '#/components/schemas/ProjectCostCodeCreate'
+        - type: object
+          required:
+            - id
+            - project_id
+            - is_active
+            - created_at
+            - updated_at
+          properties:
+            id:
+              type: integer
+              minimum: 1
+            project_id:
+              type: integer
+              minimum: 1
+            is_active:
+              type: boolean
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+    ProjectCostCodeListRead:
+      allOf:
+        - $ref: '#/components/schemas/PaginationMeta'
+        - type: object
+          required:
+            - items
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/ProjectCostCodeRead'
+    ProjectCostCodeUpdate:
+      type: object
+      properties:
+        code:
+          type: string
+          minLength: 1
+          maxLength: 64
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        parent_id:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
+        is_active:
+          type: boolean
   parameters:
     BatchId:
       name: batchId
@@ -5195,55 +6084,63 @@ components:
       schema:
         type: string
         minLength: 1
+    CostCodeId:
+      name: costCodeId
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+      description: Identifiant technique du code d'imputation du projet
   responses:
     BadRequest:
       description: Requete invalide
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/ErrorResponse'
+            $ref: '#/components/schemas/FastAPIErrorResponse'
     Unauthorized:
       description: Authentification requise
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/ErrorResponse'
+            $ref: '#/components/schemas/FastAPIErrorResponse'
     Forbidden:
       description: Droits administrateur requis
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/ErrorResponse'
+            $ref: '#/components/schemas/FastAPIErrorResponse'
     Conflict:
       description: Conflit avec une valeur existante
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/ErrorResponse'
+            $ref: '#/components/schemas/FastAPIErrorResponse'
     BatchNotFound:
       description: Batch introuvable
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/ErrorResponse'
+            $ref: '#/components/schemas/FastAPIErrorResponse'
     ProjectNotFound:
       description: Projet introuvable
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/ErrorResponse'
+            $ref: '#/components/schemas/FastAPIErrorResponse'
     PlanningNotFound:
       description: Planning introuvable
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/ErrorResponse'
+            $ref: '#/components/schemas/FastAPIErrorResponse'
     ProjectPlanningTaskNotFound:
       description: Projet, planning ou tache introuvable
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/ErrorResponse'
+            $ref: '#/components/schemas/FastAPIErrorResponse'
     MovePlanningTasksBadRequest:
       description: Requete de deplacement invalide
       content:
@@ -5309,25 +6206,25 @@ components:
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/ErrorResponse'
+            $ref: '#/components/schemas/FastAPIErrorResponse'
     TaskNotFound:
       description: Tache introuvable
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/ErrorResponse'
+            $ref: '#/components/schemas/FastAPIErrorResponse'
     ResourceNotFound:
       description: Ressource introuvable
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/ErrorResponse'
+            $ref: '#/components/schemas/FastAPIErrorResponse'
     UserNotFound:
       description: Utilisateur introuvable
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/ErrorResponse'
+            $ref: '#/components/schemas/FastAPIErrorResponse'
     UpdatePlanningTaskScheduleBadRequest:
       description: Combinaison mode/dates/duree invalide pour la tache
       content:
@@ -5392,3 +6289,47 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/FastAPIErrorResponse'
+    CreateEstimateRoleAssignmentBadRequest:
+      description: 'Requete invalide -- soit `task_id` ne correspond a aucune tache du projet, soit le role ne correspond pas a une categorie de cout main-d''oeuvre active (detail generique FastAPIErrorResponse), soit la tache est deja datee (start_at et finish_at renseignes) et au moins une (categorie de cout, annee) qu''elle couvre n''a pas de CostRate/InflationRate (detail.code=MISSING_RATE_COVERAGE, E6-11, #175).'
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/MissingRateCoverage'
+              - $ref: '#/components/schemas/FastAPIErrorResponse'
+    MoveEstimateGridNodesBadRequest:
+      description: Requete de deplacement invalide
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/FastAPIErrorResponse'
+    MoveEstimateGridNodesNotFound:
+      description: Projet, devis, tache ou noeud introuvable pendant le deplacement
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/FastAPIErrorResponse'
+    MoveEstimateGridNodesConflict:
+      description: |-
+        Le deplacement entre en conflit avec l'arbre du devis, ou `expected_revision`
+        ne correspond plus a la revision persistee (code `ESTIMATE_REVISION_CONFLICT`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/FastAPIErrorResponse'
+    ValidateProjectEstimateConflict:
+      description: 'Le devis n''est pas un brouillon (detail generique FastAPIErrorResponse), ou au moins une (categorie de cout, annee) couverte par une affectation de main-d''oeuvre n''a pas de CostRate/InflationRate (detail.code= MISSING_RATE_COVERAGE, E6-11, #175) -- dans ce dernier cas, aucune EstimateLine n''est generee ni persistee et le devis reste un brouillon.'
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/MissingRateCoverage'
+              - $ref: '#/components/schemas/FastAPIErrorResponse'
+    EstimateReconciliationConfirmConflict:
+      description: Soit des problemes bloquants ont ete trouves et rien n'a ete applique -- le corps est alors le `ReconciliationPlanRead` complet (pas l'enveloppe `FastAPIErrorResponse` habituelle), avec `applied=false` ; soit le precheck (execute hors verrou) n'a rien trouve mais une ecriture concurrente a fait echouer la suppression de tache reelle une fois le verrou pris, auquel cas le corps est un `PlanningTaskDeleteConflict` (detail.code=CASCADE_CONFIRMATION_REQUIRED/TASK_REFERENCED), exactement comme la suppression directe de taches du planning (`DeletePlanningTasksConflict`).
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/ReconciliationPlanRead'
+              - $ref: '#/components/schemas/PlanningTaskDeleteConflict'

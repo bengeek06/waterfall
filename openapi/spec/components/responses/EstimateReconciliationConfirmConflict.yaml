@@ -1,0 +1,16 @@
+description: >-
+  Soit des problemes bloquants ont ete trouves et rien n'a ete applique -- le
+  corps est alors le `ReconciliationPlanRead` complet (pas l'enveloppe
+  `FastAPIErrorResponse` habituelle), avec `applied=false` ; soit le precheck
+  (execute hors verrou) n'a rien trouve mais une ecriture concurrente a fait
+  echouer la suppression de tache reelle une fois le verrou pris, auquel cas
+  le corps est un `PlanningTaskDeleteConflict`
+  (detail.code=CASCADE_CONFIRMATION_REQUIRED/TASK_REFERENCED), exactement
+  comme la suppression directe de taches du planning
+  (`DeletePlanningTasksConflict`).
+content:
+  application/json:
+    schema:
+      oneOf:
+      - $ref: ../schemas/ReconciliationPlanRead.yaml
+      - $ref: ../schemas/PlanningTaskDeleteConflict.yaml

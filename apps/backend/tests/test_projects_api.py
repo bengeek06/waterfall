@@ -1,11 +1,14 @@
 from datetime import UTC, datetime
 from decimal import Decimal
+from io import BytesIO
 from typing import Any, cast
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
 from httpx import Response
+from openpyxl import load_workbook
 
+from _estimate_grid_support import seed_root_grid_node
 from waterfall.db.session import get_session_factory
 from waterfall.main import app
 from waterfall.models.ms_core import MsProject, MsTask
@@ -14,9 +17,14 @@ from waterfall.models.resources import (
     Calendar,
     CalendarWeekday,
     CostCategory,
+    CostRate,
     CostType,
     Estimate,
+    EstimateCostLine,
+    EstimateRoleAssignment,
     EstimateTaskRow,
+    InflationRate,
+    ProjectCostCode,
     ResourceNode,
     ResourceRole,
 )
@@ -71,10 +79,23 @@ def _seed_projects_and_tasks(owner_id: int) -> tuple[int, int]:
         session.add(project)
         session.flush()
 
+        # This helper bypasses POST /projects (which auto-creates the project's root
+        # cost code -- see create_project), so it must uphold that same #62/E6-01
+        # invariant itself: role-assignment/cost-line creation (E6-02/#63) requires
+        # every project to always have an active root cost code to default to.
+        session.add(
+            ProjectCostCode(
+                project_id=project.id,
+                parent_id=None,
+                code=f"PRJ-{project.id}",
+                name=project.name,
+            )
+        )
+        session.flush()
+
         task1 = MsTask(
             project_id=project.id,
             uid=1001,
-            id_display=1,
             name="Task One",
             task_type=0,
             outline_number="1",
@@ -93,7 +114,6 @@ def _seed_projects_and_tasks(owner_id: int) -> tuple[int, int]:
         task2 = MsTask(
             project_id=project.id,
             uid=1002,
-            id_display=2,
             name="Task Two",
             task_type=0,
             outline_number="2",
@@ -152,8 +172,89 @@ def _seed_roles() -> tuple[int, int]:
             name="Câble",
         )
         session.add_all([labor_role, supply_role])
+        session.flush()
+
+        # Issue #175 (E6-11): every task role assignment created against this
+        # module's dated fixture tasks (all seeded in year 2026, see
+        # `_seed_projects_and_tasks`) now requires full CostRate/InflationRate
+        # coverage for the years it spans -- without this, `create_task_role_assignment`
+        # would refuse every assignment on a dated task with a 400.
+        session.add(
+            CostRate(
+                cost_category_id=labor_category.id,
+                year=2026,
+                hourly_rate=Decimal("100.00"),
+                currency_code="EUR",
+            )
+        )
+        session.add(InflationRate(year=2026, coefficient=Decimal("1.0")))
         session.commit()
         return labor_role.id, supply_role.id
+
+
+def _cost_category_id_for_role(role_id: int) -> int:
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        role = session.query(ResourceRole).filter(ResourceRole.id == role_id).one()
+        return role.cost_category_id
+
+
+def _list_cost_codes(
+    client: TestClient, headers: dict[str, str], project_id: int
+) -> list[dict[str, Any]]:
+    response: Response = client.get(f"/projects/{project_id}/cost-codes", headers=headers)
+    assert response.status_code == 200
+    return cast(list[dict[str, Any]], response.json()["items"])
+
+
+def _root_cost_code_id(client: TestClient, headers: dict[str, str], project_id: int) -> int:
+    root = next(
+        item for item in _list_cost_codes(client, headers, project_id) if item["parent_id"] is None
+    )
+    return cast(int, root["id"])
+
+
+def _seed_estimate_role_assignment(
+    project_id: int,
+    estimate_id: int,
+    task_uid: int,
+    role_id: int,
+    quantity: str | float,
+    hours: str | float,
+    *,
+    comment: str | None = None,
+    cost_code_id: int | None = None,
+) -> int:
+    """Insert an `EstimateRoleAssignment` directly via the ORM, scoped to `estimate_id`.
+
+    The devis-scoped table `calculate_estimate_lines`/`get_estimate_validation_warnings`
+    read from since E12-02/#274, and the reconciliation export/import's own MO sheet
+    source of truth since E12-03/#275. `cost_code_id` is left `None` (unassigned) by
+    default rather than defaulted to the project's root: not every one of this module's
+    tests asserts on it, and doing so unconditionally would require an extra HTTP round
+    trip this ORM-only helper otherwise avoids.
+    """
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        task = (
+            session.query(MsTask)
+            .filter(MsTask.project_id == project_id, MsTask.uid == task_uid)
+            .one()
+        )
+        node_id = seed_root_grid_node(session, estimate_id, "labor")
+        assignment = EstimateRoleAssignment(
+            estimate_id=estimate_id,
+            task_id=task.id,
+            role_id=role_id,
+            cost_code_id=cost_code_id,
+            quantity=Decimal(str(quantity)),
+            hours=Decimal(str(hours)),
+            comment=comment,
+            node_id=node_id,
+        )
+        session.add(assignment)
+        session.commit()
+        return assignment.id
 
 
 def test_get_projects_and_project_tasks() -> None:
@@ -189,6 +290,13 @@ def test_get_projects_and_project_tasks() -> None:
         assert len(tasks_payload) == expected_tasks
         assert tasks_payload[0]["project_id"] == project_id
         assert all("description" in task for task in tasks_payload)
+        # E9-01 (#146): id_display is gone, replaced by a read-only row_number.
+        # E9-02 (#147): row_number is now computed from the depth-first display order
+        # (both seeded tasks are roots with no explicit position, so ties break on id,
+        # i.e. creation order).
+        assert "id_display" not in tasks_payload[0]
+        row_number_by_uid = {task["uid"]: task["row_number"] for task in tasks_payload}
+        assert row_number_by_uid == {1001: 1, 1002: 2}
 
 
 def test_patch_task_description_and_read_back() -> None:
@@ -218,6 +326,80 @@ def test_patch_task_description_and_read_back() -> None:
         assert task_by_uid[1002]["description"] is None
 
 
+def _seed_ms_task_group_with_eleven_children(owner_id: int) -> int:
+    """Root summary task (uid 100) with 11 children (uid 101..111), each carrying a
+    numeric ``position``/``outline_number`` pair that a plain lexicographic string sort
+    on ``outline_number`` would mis-order (e.g. "1.10"/"1.11" sort before "1.2") --
+    E9-02 (#147) regression: row_number must reflect the numeric depth-first order, not
+    the ``outline_number`` string.
+    """
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        project = MsProject(
+            owner_id=owner_id,
+            external_uid=None,
+            source_version=2016,
+            save_version_out=16,
+            name="Eleven siblings",
+            schedule_from_start=True,
+            start_date=datetime(2026, 1, 5, 8, 0, tzinfo=UTC),
+            finish_date=datetime(2026, 1, 20, 18, 0, tzinfo=UTC),
+            calendar_uid=1,
+            minutes_per_day=480,
+            minutes_per_week=2400,
+            days_per_month=20,
+            currency_code="EUR",
+        )
+        session.add(project)
+        session.flush()
+
+        session.add(
+            MsTask(
+                project_id=project.id,
+                uid=100,
+                name="Group",
+                task_type=0,
+                outline_number="1",
+                outline_level=1,
+                is_summary=True,
+                is_milestone=False,
+            )
+        )
+        session.add_all(
+            MsTask(
+                project_id=project.id,
+                uid=100 + child_position,
+                name=f"Child {child_position}",
+                task_type=0,
+                parent_uid=100,
+                position=child_position,
+                outline_number=f"1.{child_position}",
+                outline_level=2,
+                is_summary=False,
+                is_milestone=False,
+            )
+            for child_position in range(1, 12)
+        )
+        session.commit()
+        return project.id
+
+
+def test_project_tasks_row_number_ignores_lexicographic_outline_number_order() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _seed_ms_task_group_with_eleven_children(_current_user_id(client, headers))
+
+        tasks_response: Response = client.get(
+            f"/projects/{project_id}/tasks",
+            headers=headers,
+        )
+        assert tasks_response.status_code == 200
+        tasks_payload = cast(list[dict[str, Any]], tasks_response.json()["items"])
+
+        assert [task["uid"] for task in tasks_payload] == list(range(100, 112))
+        assert [task["row_number"] for task in tasks_payload] == list(range(1, 13))
+
+
 def test_patch_task_description_not_found() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)
@@ -231,43 +413,417 @@ def test_patch_task_description_not_found() -> None:
         assert response.status_code == 404
 
 
-def test_snapshot_only_task_rejects_legacy_assignment() -> None:
+def test_patch_task_name_empty_returns_400_not_422() -> None:
+    """E12-08 Finding Haute #2 (round 4 review): `openapi/spec/paths/projects.yaml`
+    documents a 400 (`FastAPIErrorResponse`) for this endpoint's body validation
+    errors, but FastAPI's own default behaviour raises its undocumented 422
+    unless `_PlanningTaskBodyValidationRoute` converts it -- the same route class
+    `create_estimate_task` already uses.
+    """
     with TestClient(app) as client:
-        headers = _auth_headers(client, "projects.snapshot-assignment@example.com")
-        project_id = cast(
-            int,
-            client.post(
-                "/projects", json={"name": "Snapshot-only assignment"}, headers=headers
-            ).json()["id"],
-        )
-        with get_session_factory()() as session:
-            planning = WfPlanning(project_id=project_id, version_number=1, status="draft")
-            session.add(planning)
-            session.flush()
-            session.add(
-                WfPlanningTaskSnapshot(
-                    planning_id=planning.id,
-                    uid=9101,
-                    name="Snapshot-only",
-                    position=1,
-                    is_summary=False,
-                    is_milestone=False,
-                )
-            )
-            session.query(MsProject).filter(MsProject.id == project_id).update(
-                {MsProject.displayed_planning_id: planning.id}
-            )
-            session.commit()
-        role_id, _ = _seed_roles()
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
 
-        response = client.post(
-            f"/projects/{project_id}/tasks/9101/role-assignments",
-            json={"role_id": role_id, "quantity": 1, "hours": 1},
+        response: Response = client.patch(
+            f"/projects/{project_id}/tasks/1001",
+            json={"name": ""},
             headers=headers,
         )
+        assert response.status_code == 400
 
-        assert response.status_code == 409
-        assert response.json()["detail"] == {"code": "GENERIC_ERROR"}
+
+def test_patch_task_name_too_long_returns_400_not_422() -> None:
+    """Same as above, for the other `TaskUpdate.name` validation failure mode."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        response: Response = client.patch(
+            f"/projects/{project_id}/tasks/1001",
+            json={"name": "x" * 513},
+            headers=headers,
+        )
+        assert response.status_code == 400
+
+
+def test_patch_task_name_without_displayed_planning_updates_legacy_task_only() -> None:
+    """Issue #290 (E12-08): no displayed planning -- `MsTask.name` is the only column
+    a rename touches, and a name-only request must not disturb the task's existing
+    description (partial-update semantics, checked via `model_fields_set`)."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        describe_response: Response = client.patch(
+            f"/projects/{project_id}/tasks/1001",
+            json={"description": "Pre-existing description"},
+            headers=headers,
+        )
+        assert describe_response.status_code == 200
+
+        rename_response: Response = client.patch(
+            f"/projects/{project_id}/tasks/1001",
+            json={"name": "Task One Renamed"},
+            headers=headers,
+        )
+        assert rename_response.status_code == 200
+        rename_payload = rename_response.json()
+        assert rename_payload["name"] == "Task One Renamed"
+        # A name-only request never sent "description" -- must not clear it.
+        assert rename_payload["description"] == "Pre-existing description"
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            task = (
+                session.query(MsTask)
+                .filter(MsTask.project_id == project_id, MsTask.uid == 1001)
+                .one()
+            )
+            assert task.name == "Task One Renamed"
+
+        tasks_response: Response = client.get(f"/projects/{project_id}/tasks", headers=headers)
+        task_by_uid = {task["uid"]: task for task in tasks_response.json()["items"]}
+        assert task_by_uid[1001]["name"] == "Task One Renamed"
+        assert task_by_uid[1002]["name"] == "Task Two"
+
+
+def test_patch_task_name_with_displayed_planning_updates_snapshot_twin_and_live_draft_rows() -> (
+    None
+):
+    """Issue #290 (E12-08): with a displayed planning, a rename updates
+    `WfPlanningTaskSnapshot.name` and its `MsTask` twin in the same transaction, and
+    is immediately visible on every draft estimate already referencing that task --
+    without rewriting `EstimateTaskRow`'s own stored columns or recreating anything.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        planning_response: Response = client.post(
+            f"/projects/{project_id}/plannings", json={}, headers=headers
+        )
+        assert planning_response.status_code == 201
+        planning_id = cast(int, planning_response.json()["id"])
+        display_response: Response = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/display", headers=headers
+        )
+        assert display_response.status_code == 200
+
+        estimate_ids = []
+        for _ in range(2):
+            estimate_response: Response = client.post(
+                f"/projects/{project_id}/estimates",
+                json={"kind": "initial", "currency_code": "EUR"},
+                headers=headers,
+            )
+            assert estimate_response.status_code == 201
+            estimate_ids.append(cast(int, estimate_response.json()["id"]))
+
+        row_ids_by_estimate: dict[int, int] = {}
+        for estimate_id in estimate_ids:
+            rows = cast(
+                list[dict[str, Any]],
+                client.get(
+                    f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
+                ).json()["items"],
+            )
+            row = next(item for item in rows if item["task_uid"] == 1001)
+            assert row["task_name"] == "Task One"
+            row_ids_by_estimate[estimate_id] = cast(int, row["id"])
+
+        rename_response: Response = client.patch(
+            f"/projects/{project_id}/tasks/1001",
+            json={"name": "Task One Renamed"},
+            headers=headers,
+        )
+        assert rename_response.status_code == 200
+        assert rename_response.json()["name"] == "Task One Renamed"
+        assert rename_response.json()["uid"] == 1001
+
+        # Planning tree itself.
+        tasks_response: Response = client.get(f"/projects/{project_id}/tasks", headers=headers)
+        task_by_uid = {task["uid"]: task for task in tasks_response.json()["items"]}
+        assert task_by_uid[1001]["name"] == "Task One Renamed"
+
+        # Legacy MsTask twin kept in sync in the same transaction.
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            twin = (
+                session.query(MsTask)
+                .filter(MsTask.project_id == project_id, MsTask.uid == 1001)
+                .one()
+            )
+            assert twin.name == "Task One Renamed"
+
+        # Both draft estimates already referencing the task see the new name, from
+        # this single PATCH call.
+        for estimate_id, row_id in row_ids_by_estimate.items():
+            rows_after = cast(
+                list[dict[str, Any]],
+                client.get(
+                    f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
+                ).json()["items"],
+            )
+            row_after = next(item for item in rows_after if item["id"] == row_id)
+            assert row_after["task_name"] == "Task One Renamed"
+            assert row_after["task_uid"] == 1001
+
+
+def test_list_estimate_task_rows_pagination_reports_global_position() -> None:
+    """Finding Haute (E12-08/#290, round 5 review): `resolve_live_task_display`
+    renumbers `position` 1..N depth-first across only the rows it is given
+    (see its own docstring) -- passing it the already-paginated *page*
+    (`result.rows`, sliced by SQL `limit`/`offset` before the call) instead of
+    the estimate's full task-row set made every page after the first report
+    `position` starting back at 1, instead of the row's true position in the
+    complete devis.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        estimate_response: Response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate_response.status_code == 201
+        estimate_id = cast(int, estimate_response.json()["id"])
+
+        page_response: Response = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/task-rows",
+            params={"limit": 1, "offset": 1, "sort": "position"},
+            headers=headers,
+        )
+        assert page_response.status_code == 200
+        body = cast(dict[str, Any], page_response.json())
+        items = cast(list[dict[str, Any]], body["items"])
+        assert len(items) == 1
+        assert items[0]["task_uid"] == 1002
+        assert items[0]["position"] == 2
+
+
+def test_patch_task_name_does_not_affect_already_validated_estimate_task_rows() -> None:
+    """Issue #290 (E12-08) acceptance criterion: a validated devis is a frozen
+    snapshot of the past -- it must not drift when a task is renamed afterwards."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        planning_response: Response = client.post(
+            f"/projects/{project_id}/plannings", json={}, headers=headers
+        )
+        assert planning_response.status_code == 201
+        planning_id = cast(int, planning_response.json()["id"])
+        display_response: Response = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/display", headers=headers
+        )
+        assert display_response.status_code == 200
+
+        estimate_response: Response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate_response.status_code == 201
+        estimate_id = cast(int, estimate_response.json()["id"])
+
+        validate_response: Response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/validate",
+            headers=headers,
+        )
+        assert validate_response.status_code == 200
+        assert validate_response.json()["status"] == "validated"
+
+        rename_response: Response = client.patch(
+            f"/projects/{project_id}/tasks/1001",
+            json={"name": "Task One Renamed"},
+            headers=headers,
+        )
+        assert rename_response.status_code == 200
+
+        rows_response: Response = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
+        )
+        assert rows_response.status_code == 200
+        rows = cast(list[dict[str, Any]], rows_response.json()["items"])
+        task_names = {row["task_name"] for row in rows}
+        assert "Task One" in task_names
+        assert "Task One Renamed" not in task_names
+
+        # The Planning tree itself is unaffected by this distinction -- it is always live.
+        tasks_response: Response = client.get(f"/projects/{project_id}/tasks", headers=headers)
+        task_by_uid = {task["uid"]: task for task in tasks_response.json()["items"]}
+        assert task_by_uid[1001]["name"] == "Task One Renamed"
+
+
+def test_estimate_task_row_freezes_to_last_live_name_seen_before_validation() -> None:
+    """E12-08 Finding Moyenne #3 (round 4 review): a task renamed live one or more
+    times while its devis is still a draft must validate with its *last-seen*
+    name, not the name the row was created with -- mirroring the same
+    "freeze at validation, not creation" rule already applied to a root labor
+    line's own pricing (`calculate_estimate_lines`). A rename occurring *after*
+    validation must still leave the now-frozen row untouched (see
+    `test_patch_task_name_does_not_affect_already_validated_estimate_task_rows`
+    above).
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        planning_response: Response = client.post(
+            f"/projects/{project_id}/plannings", json={}, headers=headers
+        )
+        assert planning_response.status_code == 201
+        planning_id = cast(int, planning_response.json()["id"])
+        display_response: Response = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/display", headers=headers
+        )
+        assert display_response.status_code == 200
+
+        estimate_response: Response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate_response.status_code == 201
+        estimate_id = cast(int, estimate_response.json()["id"])
+
+        for name in ("Task One Renamed Once", "Task One Renamed Twice"):
+            rename_response: Response = client.patch(
+                f"/projects/{project_id}/tasks/1001",
+                json={"name": name},
+                headers=headers,
+            )
+            assert rename_response.status_code == 200
+
+        validate_response: Response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/validate",
+            headers=headers,
+        )
+        assert validate_response.status_code == 200
+        assert validate_response.json()["status"] == "validated"
+
+        rows_response: Response = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
+        )
+        assert rows_response.status_code == 200
+        rows = cast(list[dict[str, Any]], rows_response.json()["items"])
+        row = next(item for item in rows if item["task_uid"] == 1001)
+        assert row["task_name"] == "Task One Renamed Twice"
+
+        # A rename occurring after validation must not disturb the now-frozen row.
+        rename_after_response: Response = client.patch(
+            f"/projects/{project_id}/tasks/1001",
+            json={"name": "Task One Renamed After Validation"},
+            headers=headers,
+        )
+        assert rename_after_response.status_code == 200
+        rows_after_response: Response = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
+        )
+        rows_after = cast(list[dict[str, Any]], rows_after_response.json()["items"])
+        row_after = next(item for item in rows_after if item["id"] == row["id"])
+        assert row_after["task_name"] == "Task One Renamed Twice"
+
+
+def test_validated_estimate_task_row_resolves_task_uid() -> None:
+    """E12-08 Finding Moyenne #4 (round 4 review): `task_uid` must still resolve
+    for a validated estimate's task rows -- unlike `task_name`/`position`/etc, a
+    task's `uid` is a stable identity, not live/derived state, so validation
+    must not leave it `None` just because the estimate stops reading its other
+    fields live.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        planning_response: Response = client.post(
+            f"/projects/{project_id}/plannings", json={}, headers=headers
+        )
+        assert planning_response.status_code == 201
+        planning_id = cast(int, planning_response.json()["id"])
+        display_response: Response = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/display", headers=headers
+        )
+        assert display_response.status_code == 200
+
+        estimate_response: Response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate_response.status_code == 201
+        estimate_id = cast(int, estimate_response.json()["id"])
+
+        draft_rows_response: Response = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
+        )
+        draft_rows = cast(list[dict[str, Any]], draft_rows_response.json()["items"])
+        assert {row["task_uid"] for row in draft_rows} == {1001, 1002}
+
+        validate_response: Response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/validate",
+            headers=headers,
+        )
+        assert validate_response.status_code == 200
+
+        validated_rows_response: Response = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
+        )
+        validated_rows = cast(list[dict[str, Any]], validated_rows_response.json()["items"])
+        assert {row["task_uid"] for row in validated_rows} == {1001, 1002}
+
+
+def test_estimate_task_row_position_follows_live_planning_move() -> None:
+    """Issue #290 (E12-08) acceptance criterion: moving a task in the Planning
+    (position/parent) is reflected immediately in a draft estimate's own task-row
+    `position`/`parent_task_id` values, without recreating the estimate."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        planning_response: Response = client.post(
+            f"/projects/{project_id}/plannings", json={}, headers=headers
+        )
+        assert planning_response.status_code == 201
+        planning_id = cast(int, planning_response.json()["id"])
+        display_response: Response = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/display", headers=headers
+        )
+        assert display_response.status_code == 200
+
+        estimate_response: Response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate_response.status_code == 201
+        estimate_id = cast(int, estimate_response.json()["id"])
+
+        rows_before = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
+        ).json()["items"]
+        position_by_uid_before = {row["task_uid"]: row["position"] for row in rows_before}
+        assert position_by_uid_before == {1001: 1, 1002: 2}
+
+        move_response: Response = client.post(
+            f"/projects/{project_id}/plannings/{planning_id}/tasks/move",
+            json={
+                "task_uids": [1002],
+                "target_parent_uid": None,
+                "position": 1,
+                "expected_revision": 0,
+            },
+            headers=headers,
+        )
+        assert move_response.status_code == 200
+
+        rows_after = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
+        ).json()["items"]
+        position_by_uid_after = {row["task_uid"]: row["position"] for row in rows_after}
+        assert position_by_uid_after == {1002: 1, 1001: 2}
 
 
 def test_delete_planning_task_referenced_by_cost_line_conflicts_without_mutation() -> None:
@@ -476,6 +1032,560 @@ def test_estimate_aggregates_and_excel_export_after_validation() -> None:
             == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
         assert excel_response.content[:2] == b"PK"
+
+
+_TASK_SHEET_HEADERS = (
+    "id",
+    "task_id",
+    "task_uid",
+    "parent_task_id",
+    "position",
+    "task_name",
+    "outline_number",
+    "outline_level",
+    "is_milestone",
+)
+_LABOR_SHEET_HEADERS = (
+    "id",
+    "task_id",
+    "task_name",
+    "role_id",
+    "role_name",
+    "cost_category_id",
+    "cost_category_name",
+    "cost_code_id",
+    "quantity",
+    "hours",
+    "comment",
+    "hors_perimetre_planning",
+)
+_NON_LABOR_SHEET_HEADERS = (
+    "id",
+    "task_id",
+    "cost_type_id",
+    "cost_type_code",
+    "cost_category_id",
+    "accounting_code",
+    "category_code",
+    "cost_code_id",
+    "label",
+    "quantity",
+    "unit_cost",
+    "purchase_cost",
+    "supply_status",
+    "planned_date",
+)
+
+
+def _sheet_records(sheet: Any) -> list[dict[str, Any]]:
+    rows = list(sheet.iter_rows(values_only=True))
+    headers = rows[0]
+    return [dict(zip(headers, row, strict=True)) for row in rows[1:]]
+
+
+def _fetch_task_id_by_uid(
+    client: TestClient, headers: dict[str, str], project_id: int
+) -> dict[int, int]:
+    response: Response = client.get(f"/projects/{project_id}/tasks", headers=headers)
+    assert response.status_code == 200
+    return {
+        task["uid"]: task["id"] for task in cast(list[dict[str, Any]], response.json()["items"])
+    }
+
+
+def _seed_reconciliation_fixture(client: TestClient, headers: dict[str, str]) -> dict[str, Any]:
+    """Set up a project with one estimate-scoped role assignment (MO) and one
+    non-labor cost line, in a devis backed by a source planning -- E6-08 (#69)
+    fixture shared by the reconciliation export tests below, migrated to
+    `EstimateRoleAssignment` by E12-03/#275.
+    """
+    project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+    planning_response: Response = client.post(
+        f"/projects/{project_id}/plannings", json={}, headers=headers
+    )
+    assert planning_response.status_code == 201
+    planning_id = cast(int, planning_response.json()["id"])
+
+    # create_planning alone never touches displayed_planning_id (only
+    # .../reference and .../display do); an estimate created below picks up
+    # estimate.planning_id from project.displayed_planning_id, so it must be
+    # set explicitly for the estimate to have a source planning at all.
+    display_response: Response = client.post(
+        f"/projects/{project_id}/plannings/{planning_id}/display", headers=headers
+    )
+    assert display_response.status_code == 200
+
+    role_id, supply_role_id = _seed_roles()
+    labor_category_id = _cost_category_id_for_role(role_id)
+    supply_category_id = _cost_category_id_for_role(supply_role_id)
+
+    task_id_by_uid = _fetch_task_id_by_uid(client, headers, project_id)
+
+    estimate_response: Response = client.post(
+        f"/projects/{project_id}/estimates",
+        json={"kind": "initial", "currency_code": "EUR"},
+        headers=headers,
+    )
+    assert estimate_response.status_code == 201
+    estimate_id = cast(int, estimate_response.json()["id"])
+    assert estimate_response.json()["planning_id"] == planning_id
+
+    # EstimateRoleAssignment (not TaskRoleAssignment): the MO sheet's source of
+    # truth since E12-03/#275, scoped to this one estimate.
+    assignment_id = _seed_estimate_role_assignment(
+        project_id, estimate_id, 1001, role_id, 2, 10, comment="Dev senior"
+    )
+
+    cost_line_response: Response = client.post(
+        f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+        json={
+            "task_id": task_id_by_uid[1002],
+            "cost_category_id": supply_category_id,
+            "label": "Cable reseau",
+            "quantity": 5,
+            "unit_cost": 12.5,
+        },
+        headers=headers,
+    )
+    assert cost_line_response.status_code == 201
+    cost_line_id = cast(int, cost_line_response.json()["id"])
+
+    task_rows_response: Response = client.get(
+        f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
+    )
+    assert task_rows_response.status_code == 200
+    task_row_by_task_id = {
+        row["task_id"]: row["id"]
+        for row in cast(list[dict[str, Any]], task_rows_response.json()["items"])
+    }
+
+    return {
+        "project_id": project_id,
+        "estimate_id": estimate_id,
+        "task1_id": task_id_by_uid[1001],
+        "task2_id": task_id_by_uid[1002],
+        "task_row_id_for_task1": task_row_by_task_id[task_id_by_uid[1001]],
+        "role_id": role_id,
+        "labor_category_id": labor_category_id,
+        "assignment_id": assignment_id,
+        "supply_category_id": supply_category_id,
+        "cost_line_id": cost_line_id,
+    }
+
+
+def test_estimate_reconciliation_export_contains_tasks_labor_and_non_labor_sheets() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        fixture = _seed_reconciliation_fixture(client, headers)
+
+        response: Response = client.get(
+            "/projects/"
+            f"{fixture['project_id']}/estimates/{fixture['estimate_id']}"
+            "/export-reconciliation.xlsx",
+            headers=headers,
+        )
+        assert response.status_code == 200
+        assert (
+            response.headers["content-type"]
+            == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+        assert response.content[:2] == b"PK"
+
+        workbook = load_workbook(BytesIO(cast(bytes, response.content)))
+        assert workbook.sheetnames == ["Tâches", "MO", "Non-MO"]
+
+        tasks_sheet = workbook["Tâches"]
+        assert tuple(next(tasks_sheet.iter_rows(values_only=True))) == _TASK_SHEET_HEADERS
+        task_records = _sheet_records(tasks_sheet)
+        assert len(task_records) == 2
+        task1_record = next(
+            record for record in task_records if record["task_id"] == fixture["task1_id"]
+        )
+        assert task1_record["id"] == fixture["task_row_id_for_task1"]
+        assert task1_record["task_uid"] == 1001
+        assert task1_record["task_name"] == "Task One"
+        assert task1_record["is_milestone"] is False
+
+        labor_sheet = workbook["MO"]
+        assert tuple(next(labor_sheet.iter_rows(values_only=True))) == _LABOR_SHEET_HEADERS
+        labor_records = _sheet_records(labor_sheet)
+        assert len(labor_records) == 1
+        labor_record = labor_records[0]
+        assert labor_record["id"] == fixture["assignment_id"]
+        assert labor_record["task_id"] == fixture["task1_id"]
+        assert labor_record["task_name"] == "Task One"
+        assert labor_record["role_id"] == fixture["role_id"]
+        assert labor_record["role_name"] == "Développeur"
+        assert labor_record["cost_category_id"] == fixture["labor_category_id"]
+        assert labor_record["quantity"] == 2
+        assert labor_record["hours"] == 10
+        assert labor_record["comment"] == "Dev senior"
+        assert labor_record["hors_perimetre_planning"] is False
+
+        non_labor_sheet = workbook["Non-MO"]
+        assert tuple(next(non_labor_sheet.iter_rows(values_only=True))) == _NON_LABOR_SHEET_HEADERS
+        non_labor_records = _sheet_records(non_labor_sheet)
+        assert len(non_labor_records) == 1
+        non_labor_record = non_labor_records[0]
+        assert non_labor_record["id"] == fixture["cost_line_id"]
+        assert non_labor_record["task_id"] == fixture["task2_id"]
+        assert non_labor_record["cost_category_id"] == fixture["supply_category_id"]
+        assert non_labor_record["label"] == "Cable reseau"
+        assert non_labor_record["quantity"] == 5
+        assert non_labor_record["unit_cost"] == 12.5
+        assert non_labor_record["purchase_cost"] == 62.5
+        assert non_labor_record["planned_date"] is None
+
+
+def test_estimate_reconciliation_export_row_ids_are_stable_across_exports() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        fixture = _seed_reconciliation_fixture(client, headers)
+        url = (
+            "/projects/"
+            f"{fixture['project_id']}/estimates/{fixture['estimate_id']}"
+            "/export-reconciliation.xlsx"
+        )
+
+        first_response: Response = client.get(url, headers=headers)
+        second_response: Response = client.get(url, headers=headers)
+        assert first_response.status_code == 200
+        assert second_response.status_code == 200
+
+        first_workbook = load_workbook(BytesIO(cast(bytes, first_response.content)))
+        second_workbook = load_workbook(BytesIO(cast(bytes, second_response.content)))
+        for sheet_name in ("Tâches", "MO", "Non-MO"):
+            first_ids = [record["id"] for record in _sheet_records(first_workbook[sheet_name])]
+            second_ids = [record["id"] for record in _sheet_records(second_workbook[sheet_name])]
+            assert first_ids == second_ids
+            assert first_ids  # each sheet has at least the one seeded row
+
+
+def test_estimate_reconciliation_export_without_source_planning_does_not_crash() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        role_id, _ = _seed_roles()
+
+        estimate_response: Response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate_response.status_code == 201
+        estimate_id = cast(int, estimate_response.json()["id"])
+        assert estimate_response.json()["planning_id"] is None
+
+        _seed_estimate_role_assignment(project_id, estimate_id, 1001, role_id, 1, 1)
+
+        response: Response = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/export-reconciliation.xlsx",
+            headers=headers,
+        )
+        assert response.status_code == 200
+
+        workbook = load_workbook(BytesIO(cast(bytes, response.content)))
+        assert len(_sheet_records(workbook["Tâches"])) == 2
+        labor_records = _sheet_records(workbook["MO"])
+        assert len(labor_records) == 1
+        # No source planning at all: nothing can be "outside" a snapshot that doesn't exist.
+        assert labor_records[0]["hors_perimetre_planning"] is False
+
+
+def test_estimate_reconciliation_export_includes_devis_root_labor_line() -> None:
+    """Issue #289 (E12-07) review finding (Finding Critique): a labor (MO) line
+    detached from every task (`EstimateRoleAssignment.task_id IS NULL`, a
+    devis-root line -- e.g. after `POST .../grid-nodes/move` unindents it all
+    the way to the root) must still appear on the `MO` sheet -- never silently
+    dropped by an INNER JOIN on `MsTask` inside `_scoped_estimate_role_assignments`,
+    which also backs the reconciliation import staging (`_run_reconciliation`)."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        role_id, _ = _seed_roles()
+
+        estimate_response: Response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate_response.status_code == 201
+        estimate_id = cast(int, estimate_response.json()["id"])
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            node_id = seed_root_grid_node(session, estimate_id, "labor")
+            assignment = EstimateRoleAssignment(
+                estimate_id=estimate_id,
+                task_id=None,
+                role_id=role_id,
+                cost_code_id=None,
+                quantity=Decimal("1"),
+                hours=Decimal("10"),
+                comment="Ligne MO racine",
+                node_id=node_id,
+            )
+            session.add(assignment)
+            session.commit()
+            assignment_id = assignment.id
+
+        response: Response = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/export-reconciliation.xlsx",
+            headers=headers,
+        )
+        assert response.status_code == 200
+
+        workbook = load_workbook(BytesIO(cast(bytes, response.content)))
+        labor_records = _sheet_records(workbook["MO"])
+        assert len(labor_records) == 1
+        record = labor_records[0]
+        assert record["id"] == assignment_id
+        assert record["task_id"] is None
+        assert record["task_name"] is None
+        # No task at all: "outside the planning snapshot" doesn't apply here.
+        assert record["hors_perimetre_planning"] is False
+
+
+def test_estimate_reconciliation_export_excludes_labor_cost_line_defensively() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        estimate_response: Response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        estimate_id = cast(int, estimate_response.json()["id"])
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            labor_type = CostType(code=f"MO-{uuid4().hex[:8]}", name="Main d'oeuvre", kind="labor")
+            session.add(labor_type)
+            session.flush()
+            labor_category = CostCategory(
+                cost_type_id=labor_type.id,
+                accounting_code=f"MOCAT-{uuid4().hex[:8]}",
+                name="Main d'oeuvre",
+            )
+            session.add(labor_category)
+            session.flush()
+            # Direct ORM insert: the API (get_non_labor_category_or_400) never lets a
+            # labor cost type through create_estimate_cost_line, so this defensive
+            # scenario can only be reproduced by bypassing the route layer.
+            node_id = seed_root_grid_node(session, estimate_id, "cost_line")
+            stray_line = EstimateCostLine(
+                estimate_id=estimate_id,
+                task_id=None,
+                cost_code_id=None,
+                cost_type_id=labor_type.id,
+                cost_category_id=labor_category.id,
+                cost_type_code=labor_type.code,
+                accounting_code=labor_category.accounting_code,
+                category_code=None,
+                label="Ligne MO egaree",
+                quantity=Decimal("1"),
+                unit_cost=Decimal("100"),
+                purchase_cost=Decimal("100"),
+                supply_status=None,
+                planned_date=None,
+                node_id=node_id,
+            )
+            session.add(stray_line)
+            session.commit()
+
+        response: Response = client.get(
+            f"/projects/{project_id}/estimates/{estimate_id}/export-reconciliation.xlsx",
+            headers=headers,
+        )
+        assert response.status_code == 200
+
+        workbook = load_workbook(BytesIO(cast(bytes, response.content)))
+        non_labor_records = _sheet_records(workbook["Non-MO"])
+        assert all(record["label"] != "Ligne MO egaree" for record in non_labor_records)
+
+
+def test_estimate_reconciliation_export_flags_assignment_outside_planning_snapshot() -> None:
+    """PR review finding Moyenne #1 (#69): a role assignment whose task was added
+    to the project *after* the estimate's source planning was snapshotted (or
+    whose task otherwise never made it into that snapshot) must still appear on
+    the "MO" sheet -- never silently dropped -- flagged via
+    ``hors_perimetre_planning=True`` so a reconciliation user can see it won't be
+    reprised automatically on a future reimport (E6-09)."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        fixture = _seed_reconciliation_fixture(client, headers)
+        project_id = cast(int, fixture["project_id"])
+
+        # Added after the planning (and its snapshot) already exist, so this task's
+        # uid is absent from `WfPlanningTaskSnapshot` for the estimate's source planning.
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            outside_task = MsTask(
+                project_id=project_id,
+                uid=1003,
+                name="Task Outside Snapshot",
+                task_type=0,
+                outline_number="3",
+                outline_level=1,
+                wbs="3",
+                start_at=datetime(2026, 1, 11, 8, 0, tzinfo=UTC),
+                finish_at=datetime(2026, 1, 12, 18, 0, tzinfo=UTC),
+                duration_minutes=None,
+                duration_format=None,
+                work_minutes=None,
+                percent_complete=0,
+                is_summary=False,
+                is_milestone=False,
+                calendar_uid=1,
+            )
+            session.add(outside_task)
+            session.commit()
+
+        outside_assignment_id = _seed_estimate_role_assignment(
+            project_id, cast(int, fixture["estimate_id"]), 1003, fixture["role_id"], 1, 5
+        )
+
+        response: Response = client.get(
+            f"/projects/{project_id}/estimates/{fixture['estimate_id']}/export-reconciliation.xlsx",
+            headers=headers,
+        )
+        assert response.status_code == 200
+
+        workbook = load_workbook(BytesIO(cast(bytes, response.content)))
+        labor_records = _sheet_records(workbook["MO"])
+        assert len(labor_records) == 2
+
+        outside_record = next(
+            record for record in labor_records if record["id"] == outside_assignment_id
+        )
+        assert outside_record["task_name"] == "Task Outside Snapshot"
+        assert outside_record["hors_perimetre_planning"] is True
+
+        in_scope_record = next(
+            record for record in labor_records if record["id"] == fixture["assignment_id"]
+        )
+        assert in_scope_record["hors_perimetre_planning"] is False
+
+
+def test_estimate_reconciliation_export_does_not_leak_role_assignments_across_projects() -> None:
+    """Non-regression test for PR review finding Moyenne #2 (#69), migrated to
+    `EstimateRoleAssignment` by E12-03/#275: a regression in
+    `_scoped_estimate_role_assignments`'s `EstimateRoleAssignment.estimate_id ==
+    estimate.id` filter could silently pull another project's labor assignments
+    (scoped to one of that other project's own estimates) into this one's
+    reconciliation export."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        owner_id = _current_user_id(client, headers)
+        project_a_id, _ = _seed_projects_and_tasks(owner_id)
+        project_b_id, _ = _seed_projects_and_tasks(owner_id)
+        role_id, _ = _seed_roles()
+
+        estimate_a_response: Response = client.post(
+            f"/projects/{project_a_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate_a_response.status_code == 201
+        estimate_a_id = cast(int, estimate_a_response.json()["id"])
+
+        estimate_b_response: Response = client.post(
+            f"/projects/{project_b_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate_b_response.status_code == 201
+        estimate_b_id = cast(int, estimate_b_response.json()["id"])
+
+        _seed_estimate_role_assignment(
+            project_b_id,
+            estimate_b_id,
+            1001,
+            role_id,
+            1,
+            1,
+            comment="PROJECT_B_ONLY_MUST_NOT_LEAK",
+        )
+
+        response: Response = client.get(
+            f"/projects/{project_a_id}/estimates/{estimate_a_id}/export-reconciliation.xlsx",
+            headers=headers,
+        )
+        assert response.status_code == 200
+
+        workbook = load_workbook(BytesIO(cast(bytes, response.content)))
+        labor_records = _sheet_records(workbook["MO"])
+        assert all(record["comment"] != "PROJECT_B_ONLY_MUST_NOT_LEAK" for record in labor_records)
+        assert labor_records == []
+
+
+def test_estimate_reconciliation_export_does_not_leak_role_assignments_across_estimates() -> None:
+    """New acceptance test (E12-03/#275): two draft devis of the *same* project,
+    each carrying their own `EstimateRoleAssignment` for the same task (allowed
+    since E12-01/#273 scopes uniqueness per-estimate, never project-wide) --
+    exporting one devis must only ever include its own assignment, never the
+    sibling devis'."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        role_id, _ = _seed_roles()
+
+        estimate_a_response: Response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate_a_response.status_code == 201
+        estimate_a_id = cast(int, estimate_a_response.json()["id"])
+
+        estimate_b_response: Response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate_b_response.status_code == 201
+        estimate_b_id = cast(int, estimate_b_response.json()["id"])
+
+        assignment_a_id = _seed_estimate_role_assignment(
+            project_id, estimate_a_id, 1001, role_id, 1, 1, comment="ESTIMATE_A_ONLY"
+        )
+        _seed_estimate_role_assignment(
+            project_id, estimate_b_id, 1001, role_id, 2, 2, comment="ESTIMATE_B_ONLY"
+        )
+
+        response: Response = client.get(
+            f"/projects/{project_id}/estimates/{estimate_a_id}/export-reconciliation.xlsx",
+            headers=headers,
+        )
+        assert response.status_code == 200
+
+        workbook = load_workbook(BytesIO(cast(bytes, response.content)))
+        labor_records = _sheet_records(workbook["MO"])
+        assert [record["id"] for record in labor_records] == [assignment_a_id]
+        assert labor_records[0]["comment"] == "ESTIMATE_A_ONLY"
+
+
+def test_estimate_reconciliation_export_project_not_found() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        response: Response = client.get(
+            "/projects/999999/estimates/1/export-reconciliation.xlsx", headers=headers
+        )
+        assert response.status_code == 404
+
+
+def test_estimate_reconciliation_export_estimate_not_found() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+
+        response: Response = client.get(
+            f"/projects/{project_id}/estimates/999999/export-reconciliation.xlsx",
+            headers=headers,
+        )
+        assert response.status_code == 404
 
 
 def test_get_project_not_found() -> None:
@@ -823,7 +1933,6 @@ def test_creates_first_planning_from_a_hierarchical_legacy_project() -> None:
                 MsTask(
                     project_id=project_id,
                     uid=100,
-                    id_display=1,
                     parent_uid=None,
                     name="Root",
                     task_type=1,
@@ -837,7 +1946,6 @@ def test_creates_first_planning_from_a_hierarchical_legacy_project() -> None:
                 MsTask(
                     project_id=project_id,
                     uid=2,
-                    id_display=2,
                     parent_uid=100,
                     name="Child",
                     task_type=0,
@@ -851,7 +1959,6 @@ def test_creates_first_planning_from_a_hierarchical_legacy_project() -> None:
                 MsTask(
                     project_id=project_id,
                     uid=1,
-                    id_display=3,
                     parent_uid=2,
                     name="Grandchild",
                     task_type=0,
@@ -881,7 +1988,7 @@ def test_creates_first_planning_from_legacy_project_preserves_task_enrichment_no
     # without carrying over the task's notes, unlike the sibling source_planning_id
     # branch and reopen_planning_structure. MsTask itself has no `notes` column --
     # legacy task notes live in WfTaskEnrichment, keyed by (project_id, task_uid), the
-    # same table update_task_description falls back to while no WfPlanning exists yet
+    # same table update_task falls back to while no WfPlanning exists yet
     # (see tasks.py). This covers both a task with an enrichment row (its description
     # must land in WfPlanningTaskSnapshot.notes) and a task with none (must clone with
     # notes=None, not raise).
@@ -911,7 +2018,6 @@ def test_creates_first_planning_from_legacy_project_preserves_task_enrichment_no
                 MsTask(
                     project_id=project_id,
                     uid=1,
-                    id_display=1,
                     parent_uid=None,
                     name="Annotated task",
                     task_type=1,
@@ -925,7 +2031,6 @@ def test_creates_first_planning_from_legacy_project_preserves_task_enrichment_no
                 MsTask(
                     project_id=project_id,
                     uid=2,
-                    id_display=2,
                     parent_uid=None,
                     name="Bare task",
                     task_type=1,
@@ -1266,69 +2371,6 @@ def test_list_plannings_pagination_sort_and_validation() -> None:
         assert [item["note"] for item in searched.json()["items"]] == ["Brouillon de reference"]
 
 
-def test_list_task_role_assignments_pagination_sort_and_validation() -> None:
-    with TestClient(app) as client:
-        headers = _auth_headers(client)
-        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
-        labor_role_id, _ = _seed_roles()
-
-        session_factory = get_session_factory()
-        with session_factory() as session:
-            labor_role = session.query(ResourceRole).filter(ResourceRole.id == labor_role_id).one()
-            second_role = ResourceRole(
-                node_id=labor_role.node_id,
-                cost_category_id=labor_role.cost_category_id,
-                name="Analyste",
-            )
-            session.add(second_role)
-            session.commit()
-            second_role_id = second_role.id
-
-        first_assignment = client.post(
-            f"/projects/{project_id}/tasks/1001/role-assignments",
-            json={"role_id": labor_role_id, "quantity": "1", "hours": "1"},
-            headers=headers,
-        )
-        assert first_assignment.status_code == 201
-        second_assignment = client.post(
-            f"/projects/{project_id}/tasks/1001/role-assignments",
-            json={"role_id": second_role_id, "quantity": "1", "hours": "1"},
-            headers=headers,
-        )
-        assert second_assignment.status_code == 201
-
-        listed = client.get(f"/projects/{project_id}/tasks/1001/role-assignments", headers=headers)
-        assert listed.status_code == 200
-        body = cast(dict[str, Any], listed.json())
-        assert body["limit"] is None
-        assert body["total"] == len(body["items"]) == 2
-        # Default sort is role_name ascending: "Analyste" precedes "Développeur".
-        assert [item["role_name"] for item in body["items"]] == ["Analyste", "Développeur"]
-
-        descending = client.get(
-            f"/projects/{project_id}/tasks/1001/role-assignments?sort=-role_name",
-            headers=headers,
-        )
-        assert descending.status_code == 200
-        assert [item["role_name"] for item in descending.json()["items"]] == [
-            "Développeur",
-            "Analyste",
-        ]
-
-        invalid_sort = client.get(
-            f"/projects/{project_id}/tasks/1001/role-assignments?sort=unknown_column",
-            headers=headers,
-        )
-        assert invalid_sort.status_code == 400
-
-        searched = client.get(
-            f"/projects/{project_id}/tasks/1001/role-assignments?q=analyste",
-            headers=headers,
-        )
-        assert searched.status_code == 200
-        assert [item["role_name"] for item in searched.json()["items"]] == ["Analyste"]
-
-
 def test_project_estimate_snapshots_tasks_and_validates() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)
@@ -1361,12 +2403,152 @@ def test_project_estimate_snapshots_tasks_and_validates() -> None:
         assert validate_response.status_code == 200
         assert validate_response.json()["status"] == "validated"
         assert validate_response.json()["validated_at"] is not None
+        # Issue #65 (E6-04): neither task got a role assignment nor a cost line, so
+        # both are surfaced as non-blocking warnings -- validation still succeeded.
+        assert {w["task_uid"] for w in validate_response.json()["warnings"]} == {1001, 1002}
 
         validate_again_response = client.post(
             f"/projects/{project_id}/estimates/{estimate_id}/validate",
             headers=headers,
         )
         assert validate_again_response.status_code == 409
+
+
+def test_validate_estimate_warns_about_uncovered_tasks_only() -> None:
+    """Issue #65 (E6-04): the validation warning only flags "real" tasks (excludes
+    summaries/milestones) with neither an EstimateRoleAssignment nor an
+    EstimateCostLine of this estimate referencing them -- and never blocks
+    validation (E12-02/#274: both are now scoped to this estimate)."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client, "projects.validation-warnings@example.com")
+        owner_id = _current_user_id(client, headers)
+        project_id, _ = _seed_projects_and_tasks(owner_id)
+        labor_role_id, supply_role_id = _seed_roles()
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            summary_task = MsTask(
+                project_id=project_id,
+                uid=1003,
+                name="Summary task",
+                is_summary=True,
+                is_milestone=False,
+            )
+            milestone_task = MsTask(
+                project_id=project_id,
+                uid=1004,
+                name="Milestone task",
+                is_summary=False,
+                is_milestone=True,
+            )
+            uncovered_task = MsTask(
+                project_id=project_id,
+                uid=1005,
+                name="Forgotten task",
+                is_summary=False,
+                is_milestone=False,
+            )
+            session.add_all([summary_task, milestone_task, uncovered_task])
+            session.commit()
+
+        tasks_response = client.get(f"/projects/{project_id}/tasks", headers=headers)
+        assert tasks_response.status_code == 200
+        tasks_by_uid = {
+            task["uid"]: task["id"]
+            for task in cast(list[dict[str, Any]], tasks_response.json()["items"])
+        }
+
+        estimate_response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate_response.status_code == 201
+        estimate_id = cast(int, estimate_response.json()["id"])
+
+        # Task 1001 is covered via this estimate's own EstimateRoleAssignment.
+        _seed_estimate_role_assignment(project_id, estimate_id, 1001, labor_role_id, 1, 1)
+
+        # Task 1002 is covered via an EstimateCostLine.task_id.
+        cost_line_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "task_id": tasks_by_uid[1002],
+                "cost_category_id": _cost_category_id_for_role(supply_role_id),
+                "label": "Câble dédié",
+                "quantity": 1,
+                "unit_cost": 10,
+            },
+            headers=headers,
+        )
+        assert cost_line_response.status_code == 201
+
+        # A cost line with no task_id at all must not count as covering any task.
+        unattached_cost_line_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "cost_category_id": _cost_category_id_for_role(supply_role_id),
+                "label": "Frais generaux",
+                "quantity": 1,
+                "unit_cost": 5,
+            },
+            headers=headers,
+        )
+        assert unattached_cost_line_response.status_code == 201
+
+        validate_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/validate",
+            headers=headers,
+        )
+        assert validate_response.status_code == 200
+        body = cast(dict[str, Any], validate_response.json())
+        assert body["status"] == "validated"
+        assert body["warnings"] == [{"task_uid": 1005, "task_name": "Forgotten task"}]
+
+
+def test_validate_estimate_reports_no_warnings_when_all_tasks_are_covered() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client, "projects.validation-no-warnings@example.com")
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        labor_role_id, supply_role_id = _seed_roles()
+
+        tasks_response = client.get(f"/projects/{project_id}/tasks", headers=headers)
+        assert tasks_response.status_code == 200
+        tasks_by_uid = {
+            task["uid"]: task["id"]
+            for task in cast(list[dict[str, Any]], tasks_response.json()["items"])
+        }
+
+        estimate_response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        assert estimate_response.status_code == 201
+        estimate_id = cast(int, estimate_response.json()["id"])
+
+        _seed_estimate_role_assignment(project_id, estimate_id, 1001, labor_role_id, 1, 1)
+        assert (
+            client.post(
+                f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+                json={
+                    "task_id": tasks_by_uid[1002],
+                    "cost_category_id": _cost_category_id_for_role(supply_role_id),
+                    "label": "Câble dédié",
+                    "quantity": 1,
+                    "unit_cost": 10,
+                },
+                headers=headers,
+            ).status_code
+            == 201
+        )
+
+        validate_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/validate",
+            headers=headers,
+        )
+        assert validate_response.status_code == 200
+        assert validate_response.json()["warnings"] == []
 
 
 def test_project_estimate_can_snapshot_planning_without_legacy_tasks() -> None:
@@ -1942,6 +3124,484 @@ def test_estimate_cost_lines_support_non_labor_costs_and_draft_locking() -> None
         assert locked_response.status_code == 409
 
 
+def test_estimate_cost_line_defaults_to_project_root_cost_code() -> None:
+    """Issue #63 (E6-02): a non-labor cost line created without an explicit
+    `cost_code_id` is attached to the project's active root cost code by default."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        _, supply_role_id = _seed_roles()
+        root_id = _root_cost_code_id(client, headers, project_id)
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            supply_category_id = (
+                session.query(ResourceRole)
+                .filter(ResourceRole.id == supply_role_id)
+                .one()
+                .cost_category_id
+            )
+
+        estimate_response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        estimate_id = cast(int, estimate_response.json()["id"])
+
+        create_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "cost_category_id": supply_category_id,
+                "label": "Câble réseau",
+                "quantity": "1",
+                "unit_cost": "1",
+            },
+            headers=headers,
+        )
+        assert create_response.status_code == 201
+        assert create_response.json()["cost_code_id"] == root_id
+
+
+def test_estimate_cost_line_accepts_explicit_sub_cost_code_and_rejects_foreign_one() -> None:
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        _, supply_role_id = _seed_roles()
+        root_id = _root_cost_code_id(client, headers, project_id)
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            supply_category_id = (
+                session.query(ResourceRole)
+                .filter(ResourceRole.id == supply_role_id)
+                .one()
+                .cost_category_id
+            )
+
+        sub_code_response = client.post(
+            f"/projects/{project_id}/cost-codes",
+            json={"code": "LOT-FOURN", "name": "Lot fourniture", "parent_id": root_id},
+            headers=headers,
+        )
+        assert sub_code_response.status_code == 201
+        sub_code_id = cast(int, sub_code_response.json()["id"])
+
+        estimate_response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        estimate_id = cast(int, estimate_response.json()["id"])
+
+        create_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "cost_category_id": supply_category_id,
+                "label": "Câble réseau",
+                "quantity": "1",
+                "unit_cost": "1",
+                "cost_code_id": sub_code_id,
+            },
+            headers=headers,
+        )
+        assert create_response.status_code == 201
+        cost_line_id = cast(int, create_response.json()["id"])
+        assert create_response.json()["cost_code_id"] == sub_code_id
+
+        other_project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        other_root_id = _root_cost_code_id(client, headers, other_project_id)
+
+        rejected_create_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "cost_category_id": supply_category_id,
+                "label": "Câble refusé",
+                "quantity": "1",
+                "unit_cost": "1",
+                "cost_code_id": other_root_id,
+            },
+            headers=headers,
+        )
+        assert rejected_create_response.status_code == 400
+
+        rejected_update_response = client.patch(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines/{cost_line_id}",
+            json={"cost_code_id": other_root_id},
+            headers=headers,
+        )
+        assert rejected_update_response.status_code == 400
+
+        accepted_update_response = client.patch(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines/{cost_line_id}",
+            json={"cost_code_id": root_id},
+            headers=headers,
+        )
+        assert accepted_update_response.status_code == 200
+        assert accepted_update_response.json()["cost_code_id"] == root_id
+
+
+def test_estimate_cost_line_explicit_null_cost_code_id_resolves_to_root_not_cleared() -> None:
+    """Review finding on #63: `{"cost_code_id": null}` must resolve back to the
+    project's root, exactly like an omitted field at create time -- never leave the
+    line with no attachment at all."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        _, supply_role_id = _seed_roles()
+        root_id = _root_cost_code_id(client, headers, project_id)
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            supply_category_id = (
+                session.query(ResourceRole)
+                .filter(ResourceRole.id == supply_role_id)
+                .one()
+                .cost_category_id
+            )
+
+        sub_code_response = client.post(
+            f"/projects/{project_id}/cost-codes",
+            json={"code": "LOT-NULL", "name": "Lot", "parent_id": root_id},
+            headers=headers,
+        )
+        sub_code_id = cast(int, sub_code_response.json()["id"])
+
+        estimate_id = cast(
+            int,
+            client.post(
+                f"/projects/{project_id}/estimates",
+                json={"kind": "initial", "currency_code": "EUR"},
+                headers=headers,
+            ).json()["id"],
+        )
+
+        create_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "cost_category_id": supply_category_id,
+                "label": "Câble",
+                "quantity": "1",
+                "unit_cost": "1",
+                "cost_code_id": sub_code_id,
+            },
+            headers=headers,
+        )
+        cost_line_id = cast(int, create_response.json()["id"])
+        assert create_response.json()["cost_code_id"] == sub_code_id
+
+        null_update_response = client.patch(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines/{cost_line_id}",
+            json={"cost_code_id": None},
+            headers=headers,
+        )
+        assert null_update_response.status_code == 200
+        assert null_update_response.json()["cost_code_id"] == root_id
+
+
+def test_estimate_cost_line_rejects_a_deactivated_cost_code() -> None:
+    """Review finding on #63: a deactivated cost code must never accept a new
+    attachment, even though it may still be referenced by pre-existing lines."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        _, supply_role_id = _seed_roles()
+        root_id = _root_cost_code_id(client, headers, project_id)
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            supply_category_id = (
+                session.query(ResourceRole)
+                .filter(ResourceRole.id == supply_role_id)
+                .one()
+                .cost_category_id
+            )
+
+        sub_code_response = client.post(
+            f"/projects/{project_id}/cost-codes",
+            json={"code": "LOT-INACTIVE", "name": "Lot", "parent_id": root_id},
+            headers=headers,
+        )
+        sub_code_id = cast(int, sub_code_response.json()["id"])
+
+        deactivate_response = client.delete(
+            f"/projects/{project_id}/cost-codes/{sub_code_id}", headers=headers
+        )
+        assert deactivate_response.status_code == 204
+
+        estimate_id = cast(
+            int,
+            client.post(
+                f"/projects/{project_id}/estimates",
+                json={"kind": "initial", "currency_code": "EUR"},
+                headers=headers,
+            ).json()["id"],
+        )
+        rejected_create_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "cost_category_id": supply_category_id,
+                "label": "Câble refusé",
+                "quantity": "1",
+                "unit_cost": "1",
+                "cost_code_id": sub_code_id,
+            },
+            headers=headers,
+        )
+        assert rejected_create_response.status_code == 400
+
+
+def test_estimate_cost_line_planned_date_is_independent_from_task_id() -> None:
+    """Issue #66 (E6-05): `planned_date` and `task_id` are entirely independent --
+    either, both, or neither may be set on a given cost line."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        _, supply_role_id = _seed_roles()
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            supply_category_id = (
+                session.query(ResourceRole)
+                .filter(ResourceRole.id == supply_role_id)
+                .one()
+                .cost_category_id
+            )
+
+        estimate_id = cast(
+            int,
+            client.post(
+                f"/projects/{project_id}/estimates",
+                json={"kind": "initial", "currency_code": "EUR"},
+                headers=headers,
+            ).json()["id"],
+        )
+
+        # planned_date without task_id.
+        date_only_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "cost_category_id": supply_category_id,
+                "label": "Câble avec date",
+                "quantity": "1",
+                "unit_cost": "1",
+                "planned_date": "2026-10-01T00:00:00Z",
+            },
+            headers=headers,
+        )
+        assert date_only_response.status_code == 201
+        assert date_only_response.json()["task_id"] is None
+        assert date_only_response.json()["planned_date"].startswith("2026-10-01T00:00:00")
+
+        # task_id without planned_date.
+        task_only_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "task_id": 1,
+                "cost_category_id": supply_category_id,
+                "label": "Câble avec tâche",
+                "quantity": "1",
+                "unit_cost": "1",
+            },
+            headers=headers,
+        )
+        assert task_only_response.status_code == 201
+        assert task_only_response.json()["task_id"] == 1
+        assert task_only_response.json()["planned_date"] is None
+
+        # Neither set.
+        neither_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "cost_category_id": supply_category_id,
+                "label": "Câble sans date ni tâche",
+                "quantity": "1",
+                "unit_cost": "1",
+            },
+            headers=headers,
+        )
+        assert neither_response.status_code == 201
+        assert neither_response.json()["task_id"] is None
+        assert neither_response.json()["planned_date"] is None
+
+        # Both set.
+        both_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "task_id": 1,
+                "cost_category_id": supply_category_id,
+                "label": "Câble avec date et tâche",
+                "quantity": "1",
+                "unit_cost": "1",
+                "planned_date": "2026-11-15T08:30:00Z",
+            },
+            headers=headers,
+        )
+        assert both_response.status_code == 201
+        assert both_response.json()["task_id"] == 1
+        assert both_response.json()["planned_date"].startswith("2026-11-15T08:30:00")
+
+
+def test_estimate_cost_line_planned_date_is_editable_independently_of_task_id() -> None:
+    """Issue #66 (E6-05): `planned_date` is editable via PATCH independently of
+    `task_id`, and an explicit `null` clears it -- consistent with how `task_id`
+    already accepts an explicit `null` to detach a line from its task."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        _, supply_role_id = _seed_roles()
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            supply_category_id = (
+                session.query(ResourceRole)
+                .filter(ResourceRole.id == supply_role_id)
+                .one()
+                .cost_category_id
+            )
+
+        estimate_id = cast(
+            int,
+            client.post(
+                f"/projects/{project_id}/estimates",
+                json={"kind": "initial", "currency_code": "EUR"},
+                headers=headers,
+            ).json()["id"],
+        )
+
+        create_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "task_id": 1,
+                "cost_category_id": supply_category_id,
+                "label": "Câble",
+                "quantity": "1",
+                "unit_cost": "1",
+            },
+            headers=headers,
+        )
+        assert create_response.status_code == 201
+        cost_line_id = cast(int, create_response.json()["id"])
+        assert create_response.json()["planned_date"] is None
+
+        # Set planned_date without touching task_id.
+        set_date_response = client.patch(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines/{cost_line_id}",
+            json={"planned_date": "2026-12-01T00:00:00Z"},
+            headers=headers,
+        )
+        assert set_date_response.status_code == 200
+        assert set_date_response.json()["task_id"] == 1
+        assert set_date_response.json()["planned_date"].startswith("2026-12-01T00:00:00")
+
+        # Clear task_id without touching planned_date.
+        clear_task_response = client.patch(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines/{cost_line_id}",
+            json={"task_id": None},
+            headers=headers,
+        )
+        assert clear_task_response.status_code == 200
+        assert clear_task_response.json()["task_id"] is None
+        assert clear_task_response.json()["planned_date"].startswith("2026-12-01T00:00:00")
+
+        # Explicit null clears planned_date.
+        clear_date_response = client.patch(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines/{cost_line_id}",
+            json={"planned_date": None},
+            headers=headers,
+        )
+        assert clear_date_response.status_code == 200
+        assert clear_date_response.json()["planned_date"] is None
+
+
+def test_estimate_line_snapshot_carries_source_cost_code_id() -> None:
+    """Issue #63 (E6-02): calculate_estimate_lines copies `cost_code_id` from its
+    source (EstimateRoleAssignment for labor, EstimateCostLine for non-labor) onto
+    the frozen EstimateLine snapshot at validation time, independently of
+    `accounting_code`."""
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
+        labor_role_id, supply_role_id = _seed_roles()
+        root_id = _root_cost_code_id(client, headers, project_id)
+
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            supply_category_id = (
+                session.query(ResourceRole)
+                .filter(ResourceRole.id == supply_role_id)
+                .one()
+                .cost_category_id
+            )
+
+        labor_sub_code_response = client.post(
+            f"/projects/{project_id}/cost-codes",
+            json={"code": "LOT-MO-SNAP", "name": "Lot MO", "parent_id": root_id},
+            headers=headers,
+        )
+        assert labor_sub_code_response.status_code == 201
+        labor_sub_code_id = cast(int, labor_sub_code_response.json()["id"])
+
+        supply_sub_code_response = client.post(
+            f"/projects/{project_id}/cost-codes",
+            json={"code": "LOT-FOURN-SNAP", "name": "Lot fourniture", "parent_id": root_id},
+            headers=headers,
+        )
+        assert supply_sub_code_response.status_code == 201
+        supply_sub_code_id = cast(int, supply_sub_code_response.json()["id"])
+
+        estimate_response = client.post(
+            f"/projects/{project_id}/estimates",
+            json={"kind": "initial", "currency_code": "EUR"},
+            headers=headers,
+        )
+        estimate_id = cast(int, estimate_response.json()["id"])
+
+        _seed_estimate_role_assignment(
+            project_id,
+            estimate_id,
+            1001,
+            labor_role_id,
+            1,
+            1,
+            cost_code_id=labor_sub_code_id,
+        )
+
+        cost_line_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
+            json={
+                "cost_category_id": supply_category_id,
+                "label": "Fourniture snapshot",
+                "quantity": "1",
+                "unit_cost": "1",
+                "cost_code_id": supply_sub_code_id,
+            },
+            headers=headers,
+        )
+        assert cost_line_response.status_code == 201
+
+        validate_response = client.post(
+            f"/projects/{project_id}/estimates/{estimate_id}/validate",
+            headers=headers,
+        )
+        assert validate_response.status_code == 200
+
+        with session_factory() as session:
+            from waterfall.models.resources import EstimateLine
+
+            lines = (
+                session.query(EstimateLine)
+                .filter(EstimateLine.estimate_id == estimate_id)
+                .order_by(EstimateLine.role_id.is_(None))
+                .all()
+            )
+            cost_code_ids_by_role_presence = {
+                line.role_id is not None: line.cost_code_id for line in lines
+            }
+            assert cost_code_ids_by_role_presence[True] == labor_sub_code_id
+            assert cost_code_ids_by_role_presence[False] == supply_sub_code_id
+
+
 def test_forecast_estimate_requires_same_project_reference() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)
@@ -1981,53 +3641,6 @@ def test_forecast_estimate_requires_same_project_reference() -> None:
             headers=other_headers,
         )
         assert hidden_response.status_code == 404
-
-
-def test_task_role_assignment_lifecycle_and_labor_validation() -> None:
-    with TestClient(app) as client:
-        headers = _auth_headers(client)
-        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
-        labor_role_id, supply_role_id = _seed_roles()
-
-        rejected_response = client.post(
-            f"/projects/{project_id}/tasks/1001/role-assignments",
-            json={"role_id": supply_role_id, "quantity": "1", "hours": "7.4"},
-            headers=headers,
-        )
-        assert rejected_response.status_code == 400
-
-        create_response = client.post(
-            f"/projects/{project_id}/tasks/1001/role-assignments",
-            json={"role_id": labor_role_id, "quantity": "2", "hours": "7.4"},
-            headers=headers,
-        )
-        assert create_response.status_code == 201
-        assignment = cast(dict[str, Any], create_response.json())
-        assignment_id = cast(int, assignment["id"])
-        assert assignment["role_code"] == "Développeur"
-        assert assignment["accounting_code"] == "MO-DEV"
-
-        list_response = client.get(
-            f"/projects/{project_id}/tasks/1001/role-assignments",
-            headers=headers,
-        )
-        assert list_response.status_code == 200
-        assignments = cast(list[dict[str, Any]], list_response.json()["items"])
-        assert len(assignments) == 1
-
-        update_response = client.patch(
-            f"/projects/{project_id}/tasks/1001/role-assignments/{assignment_id}",
-            json={"hours": "14.8"},
-            headers=headers,
-        )
-        assert update_response.status_code == 200
-        assert update_response.json()["hours"] == "14.80"
-
-        delete_response = client.delete(
-            f"/projects/{project_id}/tasks/1001/role-assignments/{assignment_id}",
-            headers=headers,
-        )
-        assert delete_response.status_code == 204
 
 
 def test_role_filter_can_include_descendant_nodes() -> None:

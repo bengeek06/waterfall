@@ -202,6 +202,7 @@ def _append_calendar_weekday(
 def _append_task(
     tasks_node: ET.Element,
     task: MsTask | WfPlanningTaskSnapshot,
+    row_number: int,
     task_calendar_ids: dict[int, int],
     calendars_by_id: dict[int, Calendar],
     descriptions_by_uid: dict[int, str | None],
@@ -209,8 +210,11 @@ def _append_task(
 ) -> None:
     task_node = ET.SubElement(tasks_node, f"{{{MSP_NS}}}Task")
     ET.SubElement(task_node, f"{{{MSP_NS}}}UID").text = str(task.uid)
-    if task.id_display is not None:
-        ET.SubElement(task_node, f"{{{MSP_NS}}}ID").text = str(task.id_display)
+    # <ID> used to be filled from the now-removed id_display column (#146/E9-01), which was
+    # allocated once and never recalculated. It's now the computed row_number (#147/E9-02) --
+    # the task's 1-based rank in the exported document's own depth-first order, always in sync
+    # with the actual displayed order, never a stale round-tripped value from a prior import.
+    ET.SubElement(task_node, f"{{{MSP_NS}}}ID").text = str(row_number)
     ET.SubElement(task_node, f"{{{MSP_NS}}}Name").text = task.name
     if task.task_type is not None:
         ET.SubElement(task_node, f"{{{MSP_NS}}}Type").text = str(task.task_type)
@@ -267,6 +271,10 @@ def build_project_export_xml(
     tasks: list[MsTask] | list[WfPlanningTaskSnapshot],
     links: list[MsTaskLink] | list[WfPlanningLinkSnapshot],
 ) -> bytes:
+    """Caller contract: `tasks` must already be in the exact order to export -- each task's
+    exported `<ID>` is its 1-based position in this list (row_number, #147/E9-02), not
+    recomputed here. Callers should order with `order_snapshots_depth_first`/
+    `order_ms_tasks_depth_first` (planning_support.py) before calling this."""
     enrichments = db.query(WfTaskEnrichment).filter(WfTaskEnrichment.project_id == project.id).all()
     descriptions_by_uid: dict[int, str | None] = {
         enrichment.task_uid: enrichment.description for enrichment in enrichments
@@ -293,10 +301,11 @@ def build_project_export_xml(
     _append_calendars(root, exported_calendar_ids, calendars_by_id, weekdays_by_calendar_id)
 
     tasks_node = ET.SubElement(root, f"{{{MSP_NS}}}Tasks")
-    for task in tasks:
+    for row_number, task in enumerate(tasks, start=1):
         _append_task(
             tasks_node,
             task,
+            row_number,
             task_calendar_ids,
             calendars_by_id,
             descriptions_by_uid,

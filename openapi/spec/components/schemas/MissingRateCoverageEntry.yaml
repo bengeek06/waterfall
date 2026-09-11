@@ -1,0 +1,18 @@
+type: object
+required:
+- category_id
+- category_name
+- accounting_code
+- year
+properties:
+  category_id:
+    type: integer
+  category_name:
+    type: string
+  accounting_code:
+    type: string
+  year:
+    type: integer
+description: >-
+  Une combinaison (categorie de cout, annee) sans `CostRate`, element de
+  `MissingRateCoverage.detail.missing_cost_rates` (E6-11, #175).

@@ -752,8 +752,16 @@
   patch:
     tags:
     - projects
-    summary: Mettre a jour la description d'une tache
-    operationId: updateTaskDescription
+    summary: Mettre a jour le nom et/ou la description d'une tache
+    description: >-
+      Issue #290 (E12-08) a ajoute le champ optionnel `name`, en plus du
+      champ `description` preexistant. Quand un planning est affiche, le
+      renommage met a jour `WfPlanningTaskSnapshot.name` et son jumeau
+      `MsTask.name` dans la meme transaction ; sinon, `MsTask.name` seul.
+      Ce renommage est immediatement visible sur toutes les lignes de
+      taches d'un devis brouillon referencant cette tache (voir
+      `EstimateTaskRowRead`).
+    operationId: updateTask
     security:
     - bearerAuth: []
     parameters:
@@ -764,7 +772,7 @@
       content:
         application/json:
           schema:
-            $ref: ../components/schemas/TaskDescriptionUpdate.yaml
+            $ref: ../components/schemas/TaskUpdate.yaml
     responses:
       '200':
         description: Tache mise a jour
@@ -774,119 +782,6 @@
               $ref: ../components/schemas/TaskRead.yaml
       '400':
         $ref: ../components/responses/BadRequest.yaml
-      '401':
-        $ref: ../components/responses/Unauthorized.yaml
-      '404':
-        $ref: ../components/responses/TaskNotFound.yaml
-/projects/{projectId}/tasks/{taskUid}/role-assignments:
-  get:
-    tags:
-    - projects
-    summary: Lister les affectations de main-d'œuvre d'une tâche
-    description: 'Le parametre `q` recherche sur `role_name` (nom du role affecte).'
-    operationId: listTaskRoleAssignments
-    security:
-    - bearerAuth: []
-    parameters:
-    - $ref: ../components/parameters/ProjectId.yaml
-    - $ref: ../components/parameters/TaskUid.yaml
-    - $ref: ../components/parameters/Limit.yaml
-    - $ref: ../components/parameters/Offset.yaml
-    - $ref: ../components/parameters/Search.yaml
-    - name: sort
-      in: query
-      required: false
-      schema:
-        allOf:
-        - $ref: ../components/schemas/SortColumn.yaml
-        enum: [role_name, -role_name, quantity, -quantity, hours, -hours]
-    responses:
-      '200':
-        description: Affectations de rôles
-        content:
-          application/json:
-            schema:
-              $ref: ../components/schemas/TaskRoleAssignmentListRead.yaml
-      '400':
-        $ref: ../components/responses/BadRequest.yaml
-      '401':
-        $ref: ../components/responses/Unauthorized.yaml
-      '404':
-        $ref: ../components/responses/TaskNotFound.yaml
-  post:
-    tags:
-    - projects
-    summary: Affecter un rôle de main-d'œuvre à une tâche
-    operationId: createTaskRoleAssignment
-    security:
-    - bearerAuth: []
-    parameters:
-    - $ref: ../components/parameters/ProjectId.yaml
-    - $ref: ../components/parameters/TaskUid.yaml
-    requestBody:
-      required: true
-      content:
-        application/json:
-          schema:
-            $ref: ../components/schemas/TaskRoleAssignmentCreate.yaml
-    responses:
-      '201':
-        description: Affectation créée
-        content:
-          application/json:
-            schema:
-              $ref: ../components/schemas/TaskRoleAssignmentRead.yaml
-      '400':
-        $ref: ../components/responses/BadRequest.yaml
-      '401':
-        $ref: ../components/responses/Unauthorized.yaml
-      '404':
-        $ref: ../components/responses/TaskNotFound.yaml
-      '409':
-        $ref: ../components/responses/Conflict.yaml
-/projects/{projectId}/tasks/{taskUid}/role-assignments/{assignmentId}:
-  patch:
-    tags:
-    - projects
-    summary: Modifier une affectation de rôle
-    operationId: updateTaskRoleAssignment
-    security:
-    - bearerAuth: []
-    parameters:
-    - $ref: ../components/parameters/ProjectId.yaml
-    - $ref: ../components/parameters/TaskUid.yaml
-    - $ref: ../components/parameters/AssignmentId.yaml
-    requestBody:
-      required: true
-      content:
-        application/json:
-          schema:
-            $ref: ../components/schemas/TaskRoleAssignmentUpdate.yaml
-    responses:
-      '200':
-        description: Affectation modifiée
-        content:
-          application/json:
-            schema:
-              $ref: ../components/schemas/TaskRoleAssignmentRead.yaml
-      '401':
-        $ref: ../components/responses/Unauthorized.yaml
-      '404':
-        $ref: ../components/responses/TaskNotFound.yaml
-  delete:
-    tags:
-    - projects
-    summary: Supprimer une affectation de rôle
-    operationId: deleteTaskRoleAssignment
-    security:
-    - bearerAuth: []
-    parameters:
-    - $ref: ../components/parameters/ProjectId.yaml
-    - $ref: ../components/parameters/TaskUid.yaml
-    - $ref: ../components/parameters/AssignmentId.yaml
-    responses:
-      '204':
-        description: Affectation supprimée
       '401':
         $ref: ../components/responses/Unauthorized.yaml
       '404':
@@ -1010,6 +905,48 @@
         $ref: ../components/responses/Unauthorized.yaml
       '404':
         $ref: ../components/responses/ProjectNotFound.yaml
+/projects/{projectId}/estimates/{estimateId}/tasks:
+  post:
+    tags:
+    - projects
+    summary: Ajouter une tache au planning affiche depuis le devis
+    description: >-
+      Insere la tache dans le brouillon de planning affiche du projet (via
+      `create_planning_task`) et cree, dans la meme transaction, une ligne
+      `MsTask` jumelle partageant le meme `uid` ainsi que la ligne
+      `EstimateTaskRow` correspondante dans ce devis -- necessaire pour que la
+      tache puisse ensuite recevoir une affectation de role ou une ligne de
+      cout, toutes deux rattachees a `ms_task.id`. Le planning affiche doit
+      etre un brouillon (code `ESTIMATE_TASK_CREATE_REQUIRES_PLANNING_DRAFT`
+      sinon, a resoudre via `POST /{projectId}/planning-structure/reopen`) et
+      le devis doit etre a l'etat `draft`.
+    operationId: createEstimateTask
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/EstimateId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/EstimateTaskCreate.yaml
+    responses:
+      '201':
+        description: Tache creee et ligne de devis correspondante
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/EstimateTaskRowRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
 /projects/{projectId}/estimates/{estimateId}/cost-lines:
   get:
     tags:
@@ -1049,6 +986,10 @@
     tags:
     - projects
     summary: Ajouter une ligne Fourniture, Frais ou UO à un brouillon
+    description: >-
+      Sans `cost_code_id` explicite, la ligne est rattachée au code
+      d'imputation racine actif du projet ; un `cost_code_id` fourni doit
+      appartenir au projet, sous peine de `400`.
     operationId: createEstimateCostLine
     security:
     - bearerAuth: []
@@ -1129,6 +1070,221 @@
         $ref: ../components/responses/ProjectNotFound.yaml
       '409':
         $ref: ../components/responses/Conflict.yaml
+/projects/{projectId}/estimates/{estimateId}/cost-lines/{costLineId}/milestones:
+  post:
+    tags:
+    - projects
+    summary: Appliquer un gabarit de jalons chaînés à une ligne de coût
+    description: >-
+      Genere N+2 taches-jalons (`fourniture`: 2 ; `sous_traitance`: 2 +
+      `intermediate_milestones_count`) dans le brouillon de planning affiche
+      -- chacune avec sa ligne `MsTask` jumelle et sa ligne `EstimateTaskRow`,
+      comme `POST .../estimates/{estimateId}/tasks` -- puis les chaine par
+      N+1 liens Fin-a-Debut (`link_type=1`) portant tous le meme
+      `lag_minutes`. Le premier jalon devient l'enfant de la tache de la
+      ligne de coût (`task_id`) si elle en a une, sinon les jalons sont des
+      taches racines ; dans les deux cas ils sont ajoutes en fin de liste des
+      taches existantes, jamais en tete. Refuse une ligne de coût de
+      main-d'oeuvre (`cost_type.kind = 'labor'`), un devis non-brouillon, ou
+      un planning affiche non-brouillon (code
+      `ESTIMATE_TASK_CREATE_REQUIRES_PLANNING_DRAFT`, a resoudre via
+      `POST /{projectId}/planning-structure/reopen`).
+    operationId: createEstimateCostLineMilestones
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/EstimateId.yaml
+    - $ref: ../components/parameters/CostLineId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/EstimateCostLineMilestonesCreate.yaml
+    responses:
+      '201':
+        description: Jalons crees et liens Fin-a-Debut chaines correspondants
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/EstimateTaskRowListRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
+/projects/{projectId}/estimates/{estimateId}/role-assignments:
+  get:
+    tags:
+    - projects
+    summary: Lister les affectations de main-d'œuvre d'un devis
+    description: 'Le parametre `q` recherche sur `role_name` (nom du role affecte).'
+    operationId: listEstimateRoleAssignments
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/EstimateId.yaml
+    - $ref: ../components/parameters/Limit.yaml
+    - $ref: ../components/parameters/Offset.yaml
+    - $ref: ../components/parameters/Search.yaml
+    - name: sort
+      in: query
+      required: false
+      schema:
+        allOf:
+        - $ref: ../components/schemas/SortColumn.yaml
+        enum: [role_name, -role_name, quantity, -quantity, hours, -hours]
+    responses:
+      '200':
+        description: Affectations de rôles du devis
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/EstimateRoleAssignmentListRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+  post:
+    tags:
+    - projects
+    summary: Affecter un rôle de main-d'œuvre à une tâche, dans un devis brouillon
+    description: >-
+      `task_id` reference `MsTask.id` (jamais un uid de planning). Sans
+      `cost_code_id` explicite, l'affectation est rattachée au code
+      d'imputation racine actif du projet ; un `cost_code_id` fourni doit
+      appartenir au projet, sous peine de `400`. Refuse avec `409` si le
+      devis n'est pas un brouillon, ou si une affectation existe deja pour
+      ce couple tache/role sur ce devis (E12-01, #273).
+    operationId: createEstimateRoleAssignment
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/EstimateId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/EstimateRoleAssignmentCreate.yaml
+    responses:
+      '201':
+        description: Affectation créée
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/EstimateRoleAssignmentRead.yaml
+      '400':
+        $ref: ../components/responses/CreateEstimateRoleAssignmentBadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
+/projects/{projectId}/estimates/{estimateId}/role-assignments/{assignmentId}:
+  patch:
+    tags:
+    - projects
+    summary: Modifier une affectation de rôle d'un devis brouillon
+    description: >-
+      `task_id`/`role_id` sont immuables ; refuse avec `409` si le devis
+      n'est pas un brouillon.
+    operationId: updateEstimateRoleAssignment
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/EstimateId.yaml
+    - $ref: ../components/parameters/AssignmentId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/EstimateRoleAssignmentUpdate.yaml
+    responses:
+      '200':
+        description: Affectation modifiée
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/EstimateRoleAssignmentRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
+  delete:
+    tags:
+    - projects
+    summary: Supprimer une affectation de rôle d'un devis brouillon
+    description: Refuse avec `409` si le devis n'est pas un brouillon.
+    operationId: deleteEstimateRoleAssignment
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/EstimateId.yaml
+    - $ref: ../components/parameters/AssignmentId.yaml
+    responses:
+      '204':
+        description: Affectation supprimée
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
+/projects/{projectId}/estimates/{estimateId}/grid-nodes/move:
+  post:
+    tags:
+    - projects
+    summary: Deplacer ou reordonner des noeuds de la grille d'un devis brouillon
+    description: >-
+      Deplace une selection de lignes de coût/main-d'oeuvre (E12-07, #289) :
+      `node_uids` (toujours negatifs) sont normalises a leurs racines
+      selectionnees, puis inseres sous `target_parent_uid` a `position`. Le
+      `task_id` de chaque ligne affectee (et de ses descendants) est
+      recalcule a partir de la tache ancetre la plus proche.
+    operationId: moveEstimateGridNodes
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/EstimateId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/EstimateGridNodeMove.yaml
+    responses:
+      '200':
+        description: Devis mis a jour (revision incrementee)
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ProjectEstimateRead.yaml
+      '400':
+        $ref: ../components/responses/MoveEstimateGridNodesBadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/MoveEstimateGridNodesNotFound.yaml
+      '409':
+        $ref: ../components/responses/MoveEstimateGridNodesConflict.yaml
 /projects/{projectId}/estimates/{estimateId}/validate:
   post:
     tags:
@@ -1142,17 +1298,21 @@
     - $ref: ../components/parameters/EstimateId.yaml
     responses:
       '200':
-        description: Devis validé
+        description: >-
+          Devis validé. `warnings` (issue #65, E6-04) liste les tâches
+          "réelles" du planning (ni récapitulatives ni jalons) sans
+          affectation de rôle ni ligne de coût rattachée -- purement
+          informatif, n'a jamais empêché cette validation d'aboutir.
         content:
           application/json:
             schema:
-              $ref: ../components/schemas/ProjectEstimateRead.yaml
+              $ref: ../components/schemas/EstimateValidationRead.yaml
       '401':
         $ref: ../components/responses/Unauthorized.yaml
       '404':
         $ref: ../components/responses/ProjectNotFound.yaml
       '409':
-        $ref: ../components/responses/Conflict.yaml
+        $ref: ../components/responses/ValidateProjectEstimateConflict.yaml
 /projects/{projectId}/estimates/{estimateId}/aggregates:
   get:
     tags:
@@ -1198,6 +1358,274 @@
         $ref: ../components/responses/Unauthorized.yaml
       '404':
         $ref: ../components/responses/ProjectNotFound.yaml
+/projects/{projectId}/estimates/{estimateId}/export-reconciliation.xlsx:
+  get:
+    tags:
+    - projects
+    summary: Exporter le devis au format Excel réconciliable (E6-08)
+    description: >-
+      Export technique distinct de /export.xlsx, destiné à une réimportation
+      fidèle (E6-09) : une feuille par nature de ligne (Tâches, MO, Non-MO),
+      chacune portant l'identifiant interne stable de sa ligne source
+      (EstimateTaskRow.id / TaskRoleAssignment.id / EstimateCostLine.id) en
+      plus des libellés lisibles, permettant de distinguer une mise à jour
+      d'une création à la réimportation.
+    operationId: exportEstimateReconciliationExcel
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/EstimateId.yaml
+    responses:
+      '200':
+        description: Classeur Excel réconciliable du devis (feuilles Tâches / MO / Non-MO)
+        content:
+          application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+            schema:
+              type: string
+              format: binary
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+/projects/{projectId}/estimates/{estimateId}/import-reconciliation/preview:
+  post:
+    tags:
+    - projects
+    summary: Prévisualiser une réimportation Excel réconciliable (E6-09)
+    description: >-
+      Analyse le fichier réexporté par /export-reconciliation.xlsx (E6-08),
+      éventuellement édité, et calcule le diff (créations / mises à jour /
+      suppressions sur les feuilles Tâches, MO, Non-MO) sans rien écrire en
+      base. Le devis doit être à l'état `draft`. Exécute exactement la même
+      analyse que /confirm sur le même fichier, garantissant un diagnostic
+      identique -- seul `applied` (toujours `false` ici) distingue les deux
+      réponses.
+    operationId: previewEstimateReconciliationImport
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/EstimateId.yaml
+    requestBody:
+      required: true
+      content:
+        multipart/form-data:
+          schema:
+            type: object
+            required:
+            - file
+            properties:
+              file:
+                type: string
+                format: binary
+                description: Classeur Excel réconciliable (voir /export-reconciliation.xlsx)
+    responses:
+      '200':
+        description: Diagnostic de réconciliation (aperçu, rien n'est appliqué)
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ReconciliationPlanRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
+      '413':
+        description: Classeur de reconciliation trop volumineux
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/FastAPIErrorResponse.yaml
+/projects/{projectId}/estimates/{estimateId}/import-reconciliation/confirm:
+  post:
+    tags:
+    - projects
+    summary: Confirmer une réimportation Excel réconciliable (E6-09)
+    description: >-
+      Rejoue exactement la même analyse que /preview sur le fichier resoumis
+      (aucune session d'import stockée côté serveur) et applique le résultat
+      en une seule transaction si `blocking_issues` est vide. Ordre
+      d'application : suppressions (Non-MO, MO, puis Tâches), créations
+      (Tâches, puis MO/Non-MO), mises à jour (MO, puis Non-MO). Le devis doit
+      être à l'état `draft`. Si des problèmes bloquants sont trouvés, rien
+      n'est écrit et la réponse est un 409 portant le `ReconciliationPlanRead`
+      complet (`applied=false`), jamais un 2xx trompeur. Dans de rares cas, une
+      écriture concurrente entre le precheck (hors verrou) et l'application
+      réelle (sous verrou) peut aussi produire un 409 au format
+      `PlanningTaskDeleteConflict`, identique à celui de la suppression directe
+      de tâches du planning.
+    operationId: confirmEstimateReconciliationImport
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/EstimateId.yaml
+    requestBody:
+      required: true
+      content:
+        multipart/form-data:
+          schema:
+            type: object
+            required:
+            - file
+            properties:
+              file:
+                type: string
+                format: binary
+                description: Le même classeur Excel que celui soumis à /preview
+    responses:
+      '200':
+        description: Réconciliation appliquée
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ReconciliationPlanRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+      '409':
+        $ref: ../components/responses/EstimateReconciliationConfirmConflict.yaml
+      '413':
+        description: Classeur de reconciliation trop volumineux
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/FastAPIErrorResponse.yaml
+/projects/{projectId}/cost-codes:
+  get:
+    tags:
+    - projects
+    summary: Lister l'arbre des codes d'imputation d'un projet
+    operationId: listProjectCostCodes
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    responses:
+      '200':
+        description: >-
+          Arbre complet des codes d'imputation actifs du projet. Non
+          paginable (meme motif que GET /resources/nodes) : l'arbre doit
+          toujours etre renvoye en entier, jamais tronque. `limit` est
+          donc toujours `null` et `total` egale `items.length`.
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ProjectCostCodeListRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+  post:
+    tags:
+    - projects
+    summary: Creer un code d'imputation dans l'arbre du projet
+    operationId: createProjectCostCode
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/ProjectCostCodeCreate.yaml
+    responses:
+      '201':
+        description: Code d'imputation cree
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ProjectCostCodeRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
+/projects/{projectId}/cost-codes/{costCodeId}:
+  get:
+    tags:
+    - projects
+    summary: Lire un code d'imputation du projet
+    operationId: getProjectCostCode
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/CostCodeId.yaml
+    responses:
+      '200':
+        description: Code d'imputation
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ProjectCostCodeRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+  patch:
+    tags:
+    - projects
+    summary: Modifier ou desactiver un code d'imputation du projet
+    operationId: updateProjectCostCode
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/CostCodeId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/ProjectCostCodeUpdate.yaml
+    responses:
+      '200':
+        description: Code d'imputation modifie
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/ProjectCostCodeRead.yaml
+      '400':
+        $ref: ../components/responses/BadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
+  delete:
+    tags:
+    - projects
+    summary: Desactiver un code d'imputation du projet
+    operationId: deleteProjectCostCode
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/CostCodeId.yaml
+    responses:
+      '204':
+        description: Code d'imputation desactive
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/ProjectNotFound.yaml
+      '409':
+        $ref: ../components/responses/Conflict.yaml
 /projects/{projectId}/export.xml:
   get:
     tags:

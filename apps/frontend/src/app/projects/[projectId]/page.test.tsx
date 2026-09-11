@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError, SessionExpiredError, type Planning, type PlanningDetail, type Project } from "@/lib/backend";
@@ -8,6 +8,11 @@ const mocks = vi.hoisted(() => ({
   listProjectEstimates: vi.fn(),
   listPlannings: vi.fn(),
   getPlanning: vi.fn(),
+  exportProjectXml: vi.fn(),
+  listEstimateTaskRows: vi.fn(),
+  listEstimateCostLines: vi.fn(),
+  getEstimateAggregates: vi.fn(),
+  createEstimateTask: vi.fn(),
   createImportBatch: vi.fn(),
   uploadImportSourceXml: vi.fn(),
   runImportBatch: vi.fn(),
@@ -49,6 +54,11 @@ vi.mock("@/lib/backend", async () => {
     listProjectEstimates: mocks.listProjectEstimates,
     listPlannings: mocks.listPlannings,
     getPlanning: mocks.getPlanning,
+    exportProjectXml: mocks.exportProjectXml,
+    listEstimateTaskRows: mocks.listEstimateTaskRows,
+    listEstimateCostLines: mocks.listEstimateCostLines,
+    getEstimateAggregates: mocks.getEstimateAggregates,
+    createEstimateTask: mocks.createEstimateTask,
     createImportBatch: mocks.createImportBatch,
     uploadImportSourceXml: mocks.uploadImportSourceXml,
     runImportBatch: mocks.runImportBatch,
@@ -115,7 +125,7 @@ const detail = (version: Planning): PlanningDetail => ({
       id: 10,
       project_id: 1,
       uid: 10,
-      id_display: 10,
+      row_number: 0,
       structure_key: "post/lot/deliverable",
       structure_kind: "livrable",
       parent_uid: null,
@@ -136,6 +146,21 @@ const detail = (version: Planning): PlanningDetail => ({
   links: [],
 });
 
+// E6-06/#67: a single draft estimate, used by the "add a task from the Devis tab" tests below
+// to make canEditEstimate true.
+function draftEstimate() {
+  return {
+    id: 1,
+    project_id: 1,
+    planning_id: null,
+    version_number: 1,
+    kind: "initial",
+    status: "draft",
+    currency_code: "EUR",
+    created_at: "2026-01-01T00:00:00Z",
+  };
+}
+
 describe("ProjectDetailsPage planning lifecycle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -143,6 +168,11 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     mocks.listProjectEstimates.mockReset();
     mocks.listPlannings.mockReset();
     mocks.getPlanning.mockReset();
+    mocks.exportProjectXml.mockReset();
+    mocks.listEstimateTaskRows.mockReset();
+    mocks.listEstimateCostLines.mockReset();
+    mocks.getEstimateAggregates.mockReset();
+    mocks.createEstimateTask.mockReset();
     mocks.createImportBatch.mockReset();
     mocks.uploadImportSourceXml.mockReset();
     mocks.runImportBatch.mockReset();
@@ -209,6 +239,108 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     expect(screen.queryByText(/remise à jour/i)).not.toBeInTheDocument();
     expect(screen.queryByText("Planning affiché")).not.toBeInTheDocument();
     expect(mocks.getPlanning).not.toHaveBeenCalled();
+  });
+
+  // Regression test for #227: the initial load effect's catch guards on `cancelled`
+  // (set by the effect's cleanup, e.g. when the user navigates away before the
+  // request resolves) *before* checking for session expiry. Per issue #227, a
+  // request that became obsolete and failed precisely because the session expired
+  // must still force a logout -- otherwise the session would never get invalidated
+  // once the user has moved on. Unmounting before the pending request settles is
+  // the way this effect's `cancelled` flag becomes true (see the `useEffect`
+  // cleanup in page.tsx), simulating "the user navigated elsewhere".
+  it("still logs out when the initial load's now-cancelled request fails with a post-refresh 401", async () => {
+    let rejectLoad!: (cause: unknown) => void;
+    mocks.getProject.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectLoad = reject;
+        }),
+    );
+    mocks.listProjectEstimates.mockResolvedValue([]);
+    mocks.listPlannings.mockResolvedValue([]);
+
+    const { unmount } = render(<ProjectDetailsPage />);
+    await waitFor(() => expect(mocks.getProject).toHaveBeenCalledTimes(1));
+
+    // Simulates the user navigating away before the request resolves: the
+    // effect's cleanup runs, setting `cancelled = true`.
+    unmount();
+
+    rejectLoad(new ApiError(401, "Unauthorized"));
+    await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith("/login"));
+  });
+
+  // Regression test for #230: exportPlanningXml only checked SessionExpiredError, missing the
+  // ApiError(401) authFetch throws when a token refresh succeeds but the replayed request still
+  // 401s (same bug family as #216).
+  it("logs out when exporting the planning fails with a post-refresh 401", async () => {
+    mocks.getProject.mockResolvedValue(project({ status: "initialise" }));
+    mocks.listPlannings.mockResolvedValue([]);
+    mocks.exportProjectXml.mockRejectedValue(new ApiError(401, "Unauthorized"));
+
+    render(<ProjectDetailsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Export XML" }));
+
+    await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith("/login"));
+    // The fallback branch (`setError(cause instanceof ApiError ? cause.message : ...)`) would
+    // render the raw backend message, not the generic French string, for an ApiError -- assert
+    // against the string that could actually leak, not one this branch could never produce.
+    expect(screen.queryByText("Unauthorized")).not.toBeInTheDocument();
+  });
+
+  // Regression test for the Haute finding on #230's own review: two sibling effects in this
+  // file (loadEstimateDetails, loadAggregates) had the exact same missing-ApiError-401 defect
+  // as exportPlanningXml/preparePlanningImport, discovered only in review because the initial
+  // scoping of #230 didn't audit every catch block in this file.
+  it("logs out when loading the estimate details fails with a post-refresh 401", async () => {
+    mocks.getProject.mockResolvedValue(project({ status: "initialise" }));
+    mocks.listPlannings.mockResolvedValue([]);
+    mocks.listProjectEstimates.mockResolvedValue([
+      {
+        id: 1,
+        project_id: 1,
+        planning_id: null,
+        version_number: 1,
+        kind: "initial",
+        status: "draft",
+        currency_code: "EUR",
+        created_at: "2026-01-01T00:00:00Z",
+      },
+    ]);
+    mocks.listEstimateTaskRows.mockRejectedValue(new ApiError(401, "Unauthorized"));
+    mocks.listEstimateCostLines.mockResolvedValue([]);
+
+    render(<ProjectDetailsPage />);
+
+    await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith("/login"));
+    expect(screen.queryByText("Impossible de charger le devis.")).not.toBeInTheDocument();
+  });
+
+  it("logs out when loading the estimate aggregates fails with a post-refresh 401", async () => {
+    mocks.getProject.mockResolvedValue(project({ status: "initialise" }));
+    mocks.listPlannings.mockResolvedValue([]);
+    mocks.listProjectEstimates.mockResolvedValue([
+      {
+        id: 1,
+        project_id: 1,
+        planning_id: null,
+        version_number: 1,
+        kind: "initial",
+        status: "draft",
+        currency_code: "EUR",
+        created_at: "2026-01-01T00:00:00Z",
+      },
+    ]);
+    mocks.listEstimateTaskRows.mockResolvedValue([]);
+    mocks.listEstimateCostLines.mockResolvedValue([]);
+    mocks.getEstimateAggregates.mockRejectedValue(new ApiError(401, "Unauthorized"));
+
+    render(<ProjectDetailsPage />);
+    fireEvent.click(await screen.findByRole("tab", { name: "Analytique" }));
+
+    await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith("/login"));
+    expect(screen.queryByText("Impossible de charger les agrégats.")).not.toBeInTheDocument();
   });
 
   it("saves the structure draft without closing the form or generating a planning", async () => {
@@ -401,7 +533,7 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     const emptyDetail: PlanningDetail = { ...draftAfterSkip, tasks: [], links: [] };
     const updatedDetail: PlanningDetail = {
       ...draftAfterSkip,
-      tasks: [{ ...detail(draftAfterSkip).tasks[0], uid: 11, id_display: 11, name: "Première tâche", position: 1 }],
+      tasks: [{ ...detail(draftAfterSkip).tasks[0], uid: 11, name: "Première tâche", position: 1 }],
       links: [],
     };
     mocks.getProject.mockResolvedValue(project());
@@ -452,7 +584,7 @@ describe("ProjectDetailsPage planning lifecycle", () => {
           id: 20,
           project_id: 1,
           uid: 20,
-          id_display: 20,
+          row_number: 0,
           structure_key: "post/lot/deliverable",
           structure_kind: "livrable",
           parent_uid: null,
@@ -473,7 +605,7 @@ describe("ProjectDetailsPage planning lifecycle", () => {
           id: 21,
           project_id: 1,
           uid: 21,
-          id_display: 21,
+          row_number: 0,
           structure_key: null,
           structure_kind: null,
           parent_uid: null,
@@ -990,6 +1122,29 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     expect(screen.getByText("Fichier sélectionné : b.xml")).toBeInTheDocument();
   });
 
+  // Regression test for #230: preparePlanningImport only checked SessionExpiredError, missing
+  // the ApiError(401) authFetch throws when a token refresh succeeds but the replayed request
+  // still 401s (same bug family as #216).
+  it("logs out when previewing the import fails with a post-refresh 401", async () => {
+    const current = planning({ id: 2, version_number: 2, status: "validated" });
+    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: current.id }));
+    mocks.listPlannings.mockResolvedValue([current]);
+    mocks.getPlanning.mockResolvedValue(detail(current));
+    mocks.createImportBatch.mockRejectedValue(new ApiError(401, "Unauthorized"));
+
+    render(<ProjectDetailsPage />);
+    const file = new File(["<Project />"], "a.xml", { type: "application/xml" });
+    fireEvent.change(await screen.findByLabelText("Importer un planning MS Project (.xml)"), {
+      target: { files: [file] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Prévisualiser l'import" }));
+
+    await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith("/login"));
+    // Same reasoning as the export test above: the fallback branch would render the raw
+    // ApiError message, never the generic French string, so assert against what could leak.
+    expect(screen.queryByText("Unauthorized")).not.toBeInTheDocument();
+  });
+
   it("imports a dropped file the same way as a manually selected file", async () => {
     const current = planning({ id: 2, version_number: 2, status: "validated" });
     mocks.getProject
@@ -1184,8 +1339,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     const siblingsDetail: PlanningDetail = {
       ...draft,
       tasks: [
-        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second", position: 2, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, name: "Second", position: 2, parent_uid: null },
       ],
       links: [],
     };
@@ -1193,8 +1348,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
       ...draft,
       revision: 1,
       tasks: [
-        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 2, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, name: "Second", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 10, name: "Premier", position: 2, parent_uid: null },
       ],
       links: [],
     };
@@ -1202,8 +1357,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
       ...draft,
       revision: 2,
       tasks: [
-        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second", position: 2, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, name: "Second", position: 2, parent_uid: null },
       ],
       links: [],
     };
@@ -1254,8 +1409,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     const detailA: PlanningDetail = {
       ...draftA,
       tasks: [
-        { ...detail(draftA).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
-        { ...detail(draftA).tasks[0], uid: 11, id_display: 11, name: "Second", position: 2, parent_uid: null },
+        { ...detail(draftA).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draftA).tasks[0], uid: 11, name: "Second", position: 2, parent_uid: null },
       ],
       links: [],
     };
@@ -1303,8 +1458,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     const detailA: PlanningDetail = {
       ...draftA,
       tasks: [
-        { ...detail(draftA).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
-        { ...detail(draftA).tasks[0], uid: 11, id_display: 11, name: "Second", position: 2, parent_uid: null },
+        { ...detail(draftA).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draftA).tasks[0], uid: 11, name: "Second", position: 2, parent_uid: null },
       ],
       links: [],
     };
@@ -1344,8 +1499,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     const siblingsDetail: PlanningDetail = {
       ...draft,
       tasks: [
-        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second", position: 2, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, name: "Second", position: 2, parent_uid: null },
       ],
       links: [],
     };
@@ -1353,8 +1508,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
       ...draft,
       revision: 1,
       tasks: [
-        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 2, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, name: "Second", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 10, name: "Premier", position: 2, parent_uid: null },
       ],
       links: [],
     };
@@ -1362,8 +1517,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
       ...draft,
       revision: 2,
       tasks: [
-        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second", position: 2, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, name: "Second", position: 2, parent_uid: null },
       ],
       links: [],
     };
@@ -1412,8 +1567,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     const siblingsDetail: PlanningDetail = {
       ...draft,
       tasks: [
-        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second", position: 2, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, name: "Second", position: 2, parent_uid: null },
       ],
       links: [],
     };
@@ -1421,8 +1576,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
       ...draft,
       revision: 1,
       tasks: [
-        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier rechargé", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second rechargé", position: 2, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 10, name: "Premier rechargé", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, name: "Second rechargé", position: 2, parent_uid: null },
       ],
       links: [],
     };
@@ -1465,8 +1620,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     const siblingsDetail: PlanningDetail = {
       ...draft,
       tasks: [
-        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second", position: 2, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, name: "Second", position: 2, parent_uid: null },
       ],
       links: [],
     };
@@ -1474,8 +1629,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
       ...draft,
       revision: 1,
       tasks: [
-        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 2, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, name: "Second", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 10, name: "Premier", position: 2, parent_uid: null },
       ],
       links: [],
     };
@@ -1505,8 +1660,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     const siblingsDetail: PlanningDetail = {
       ...draft,
       tasks: [
-        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second", position: 2, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, name: "Second", position: 2, parent_uid: null },
       ],
       links: [],
     };
@@ -1514,8 +1669,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
       ...draft,
       revision: 1,
       tasks: [
-        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier rechargé", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second rechargé", position: 2, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 10, name: "Premier rechargé", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, name: "Second rechargé", position: 2, parent_uid: null },
       ],
       links: [],
     };
@@ -1561,7 +1716,7 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     const draft = planning({ id: 2, status: "draft" });
     const initialDetail: PlanningDetail = {
       ...draft,
-      tasks: [{ ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Tâche éditable", duration_minutes: 480 }],
+      tasks: [{ ...detail(draft).tasks[0], uid: 10, name: "Tâche éditable", duration_minutes: 480 }],
       links: [],
     };
     const updatedDetail: PlanningDetail = {
@@ -1595,22 +1750,25 @@ describe("ProjectDetailsPage planning lifecycle", () => {
 
   it("sends a predecessor links replace and replaces the planning detail with the full server response", async () => {
     const draft = planning({ id: 2, status: "draft" });
+    // uid and row_number are deliberately kept distinct (uid 10 -> row_number 5) so the
+    // "5 (FS)" assertion below cannot pass by accident if the predecessor label were still built
+    // from the raw predecessor_uid instead of its row_number (E9-04).
     const siblingsDetail: PlanningDetail = {
       ...draft,
       tasks: [
-        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second", position: 2, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 10, row_number: 5, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, row_number: 6, name: "Second", position: 2, parent_uid: null },
       ],
       links: [],
     };
     const updatedDetail: PlanningDetail = {
       ...draft,
       tasks: [
-        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 10, row_number: 5, name: "Premier", position: 1, parent_uid: null },
         {
           ...detail(draft).tasks[0],
           uid: 11,
-          id_display: 11,
+          row_number: 6,
           name: "Second",
           position: 2,
           parent_uid: null,
@@ -1646,7 +1804,7 @@ describe("ProjectDetailsPage planning lifecycle", () => {
       ),
     );
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    expect(screen.getByText("10 (FS)")).toBeInTheDocument();
+    expect(screen.getByText("5 (FS)")).toBeInTheDocument();
   });
 
   it("ignores a schedule update response for a planning that is no longer selected", async () => {
@@ -1654,7 +1812,7 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     const draftB = planning({ id: 6, status: "draft", version_number: 2 });
     const detailA: PlanningDetail = {
       ...draftA,
-      tasks: [{ ...detail(draftA).tasks[0], uid: 10, id_display: 10, name: "Tâche éditable", duration_minutes: 480 }],
+      tasks: [{ ...detail(draftA).tasks[0], uid: 10, name: "Tâche éditable", duration_minutes: 480 }],
       links: [],
     };
     const detailB = detail(draftB);
@@ -1702,8 +1860,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     const siblingsDetail: PlanningDetail = {
       ...draft,
       tasks: [
-        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "Second", position: 2, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draft).tasks[0], uid: 11, name: "Second", position: 2, parent_uid: null },
       ],
       links: [],
     };
@@ -1738,8 +1896,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     const detailA: PlanningDetail = {
       ...draftA,
       tasks: [
-        { ...detail(draftA).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null },
-        { ...detail(draftA).tasks[0], uid: 11, id_display: 11, name: "Second", position: 2, parent_uid: null },
+        { ...detail(draftA).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null },
+        { ...detail(draftA).tasks[0], uid: 11, name: "Second", position: 2, parent_uid: null },
       ],
       links: [],
     };
@@ -1790,14 +1948,14 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     const draft = planning({ id: 2, status: "draft" });
     const initialDetail: PlanningDetail = {
       ...draft,
-      tasks: [{ ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "Tâche existante" }],
+      tasks: [{ ...detail(draft).tasks[0], uid: 10, name: "Tâche existante" }],
       links: [],
     };
     const updatedDetail: PlanningDetail = {
       ...draft,
       tasks: [
         ...initialDetail.tasks,
-        { ...initialDetail.tasks[0], uid: 11, id_display: 11, name: "Nouvelle tâche", position: 2 },
+        { ...initialDetail.tasks[0], uid: 11, name: "Nouvelle tâche", position: 2 },
       ],
       links: [],
     };
@@ -1836,8 +1994,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     const initialDetail: PlanningDetail = {
       ...draft,
       tasks: [
-        { ...detail(draft).tasks[0], uid: 10, id_display: 10, name: "À conserver", position: 1 },
-        { ...detail(draft).tasks[0], uid: 11, id_display: 11, name: "À supprimer", position: 2 },
+        { ...detail(draft).tasks[0], uid: 10, name: "À conserver", position: 1 },
+        { ...detail(draft).tasks[0], uid: 11, name: "À supprimer", position: 2 },
       ],
       links: [],
     };
@@ -1875,7 +2033,7 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     const draftB = planning({ id: 6, status: "draft", version_number: 2 });
     const detailA: PlanningDetail = {
       ...draftA,
-      tasks: [{ ...detail(draftA).tasks[0], uid: 10, id_display: 10, name: "Premier", position: 1, parent_uid: null }],
+      tasks: [{ ...detail(draftA).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null }],
       links: [],
     };
     const detailB = detail(draftB);
@@ -1925,8 +2083,8 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     const detailA: PlanningDetail = {
       ...draftA,
       tasks: [
-        { ...detail(draftA).tasks[0], uid: 10, id_display: 10, name: "Poste", position: 1, parent_uid: null, is_summary: true },
-        { ...detail(draftA).tasks[0], uid: 11, id_display: 11, name: "Lot", position: 1, parent_uid: 10 },
+        { ...detail(draftA).tasks[0], uid: 10, name: "Poste", position: 1, parent_uid: null, is_summary: true },
+        { ...detail(draftA).tasks[0], uid: 11, name: "Lot", position: 1, parent_uid: 10 },
       ],
       links: [],
     };
@@ -1977,5 +2135,112 @@ describe("ProjectDetailsPage planning lifecycle", () => {
       expect.anything(),
       expect.anything(),
     );
+  });
+
+  // E6-06/#67 (Haute + Moyenne review findings): creating a task from the Devis tab must
+  // refresh `planningDetail` -- without a page reload -- so the "Tâche parente" selector in a
+  // second, consecutive "Ajouter une tâche au planning" can offer the task just created.
+  describe("adding a task to the planning from the Devis tab", () => {
+    it("creates the task and refreshes the parent-task selector without a page reload", async () => {
+      const draft = planning({ id: 3, status: "draft" });
+      const initialDetail = detail(draft);
+      const updatedDetail: PlanningDetail = {
+        ...initialDetail,
+        tasks: [
+          ...initialDetail.tasks,
+          { ...initialDetail.tasks[0], uid: 11, name: "Terrassement", outline_number: "2" },
+        ],
+      };
+      mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draft.id }));
+      mocks.listPlannings.mockResolvedValue([draft]);
+      mocks.getPlanning.mockResolvedValueOnce(initialDetail).mockResolvedValue(updatedDetail);
+      mocks.listProjectEstimates.mockResolvedValue([draftEstimate()]);
+      mocks.listEstimateTaskRows.mockResolvedValue([]);
+      mocks.listEstimateCostLines.mockResolvedValue([]);
+      mocks.createEstimateTask.mockResolvedValue({
+        id: 1,
+        estimate_id: 1,
+        task_id: 42,
+        parent_task_id: null,
+        position: 2,
+        task_name: "Terrassement",
+        outline_number: "2",
+        outline_level: 1,
+        is_milestone: false,
+      });
+
+      render(<ProjectDetailsPage />);
+
+      fireEvent.click(await screen.findByRole("tab", { name: "Devis" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Ajouter une tâche au planning" }));
+
+      const dialog = await screen.findByRole("dialog");
+      fireEvent.change(within(dialog).getByLabelText("Nom de la nouvelle tâche"), {
+        target: { value: "Terrassement" },
+      });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Ajouter" }));
+
+      await waitFor(() =>
+        expect(mocks.createEstimateTask).toHaveBeenCalledWith(
+          1,
+          1,
+          { name: "Terrassement", is_milestone: false, target_parent_uid: undefined },
+          expect.anything(),
+          expect.anything(),
+        ),
+      );
+      await waitFor(() =>
+        expect(mocks.getPlanning).toHaveBeenCalledWith(1, draft.id, expect.anything(), expect.anything()),
+      );
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+      // Re-open the dialog: the parent-task selector must now list the task just created,
+      // proving `planningDetail` was actually refreshed rather than left stale.
+      fireEvent.click(screen.getByRole("button", { name: "Ajouter une tâche au planning" }));
+      const reopenedDialog = await screen.findByRole("dialog");
+      expect(within(reopenedDialog).getByRole("option", { name: /Terrassement/ })).toBeInTheDocument();
+    });
+
+    it("closes the dialog, switches to the Planning tab, and reopens the structure on the draft-required 409", async () => {
+      const validated = planning({ id: 4, status: "validated" });
+      const reopened = planning({ id: 5, status: "draft" });
+      mocks.getProject.mockResolvedValue(
+        project({ status: "initialise", displayed_planning_id: validated.id, planning_reference_id: validated.id }),
+      );
+      mocks.listPlannings.mockResolvedValueOnce([validated]).mockResolvedValue([validated, reopened]);
+      mocks.getPlanning.mockImplementation(async (_projectId, planningId) =>
+        planningId === reopened.id ? detail(reopened) : detail(validated),
+      );
+      mocks.listProjectEstimates.mockResolvedValue([draftEstimate()]);
+      mocks.listEstimateTaskRows.mockResolvedValue([]);
+      mocks.listEstimateCostLines.mockResolvedValue([]);
+      mocks.createEstimateTask.mockRejectedValue(
+        new ApiError(
+          409,
+          "Le planning affiché n'est plus un brouillon : rouvre sa structure depuis l'onglet Planning avant d'ajouter une tâche depuis le devis.",
+          { code: "ESTIMATE_TASK_CREATE_REQUIRES_PLANNING_DRAFT" },
+        ),
+      );
+      mocks.reopenPlanningStructure.mockResolvedValue(
+        project({ status: "initialise", displayed_planning_id: reopened.id }),
+      );
+
+      render(<ProjectDetailsPage />);
+
+      fireEvent.click(await screen.findByRole("tab", { name: "Devis" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Ajouter une tâche au planning" }));
+
+      const dialog = await screen.findByRole("dialog");
+      fireEvent.change(within(dialog).getByLabelText("Nom de la nouvelle tâche"), {
+        target: { value: "Terrassement" },
+      });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Ajouter" }));
+
+      fireEvent.click(await within(dialog).findByRole("button", { name: "Rouvrir la structure" }));
+
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(await screen.findByRole("heading", { name: "Lotissement du projet" })).toBeInTheDocument();
+      expect(mocks.reopenPlanningStructure).toHaveBeenCalledTimes(1);
+    });
   });
 });

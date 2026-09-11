@@ -1,0 +1,40 @@
+type: object
+required:
+- task_id
+- role_id
+- quantity
+- hours
+properties:
+  task_id:
+    type: integer
+    minimum: 1
+  role_id:
+    type: integer
+    minimum: 1
+  cost_code_id:
+    type: [integer, "null"]
+    minimum: 1
+  quantity:
+    type: number
+    exclusiveMinimum: 0
+  hours:
+    type: number
+    minimum: 0
+  comment:
+    type: [string, "null"]
+    maxLength: 10000
+  target_parent_uid:
+    type: [integer, "null"]
+    not:
+      enum: [0]
+    description: |-
+      Position de la nouvelle ligne dans l'arbre du devis (E12-07/#289) :
+      positif = tache de ce devis (`EstimateTaskRow`), negatif = un autre
+      noeud de grille de ce devis, absent/null = racine du devis. Independant
+      de `task_id`.
+  insert_after_uid:
+    type: [integer, "null"]
+    maximum: -1
+    description: |-
+      Noeud de grille frere apres lequel inserer la nouvelle ligne ; absent =
+      dernier enfant du parent resolu.

@@ -28,7 +28,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Vérifier que l'API est prête */
+        /**
+         * Vérifier que l'API est prête
+         * @description Contrôle effectif des dépendances (Postgres, Redis, stockage objet), chacune sous un délai court : une dépendance qui ne répond pas est comptée en échec. Utilisé par le healthcheck Docker du service `api`. Ne pas confondre avec `GET /health`, qui est une sonde de vivacité et ne contacte volontairement aucune dépendance.
+         */
         get: operations["getReadiness"];
         put?: never;
         post?: never;
@@ -737,47 +740,11 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** Mettre a jour la description d'une tache */
-        patch: operations["updateTaskDescription"];
-        trace?: never;
-    };
-    "/projects/{projectId}/tasks/{taskUid}/role-assignments": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
         /**
-         * Lister les affectations de main-d'œuvre d'une tâche
-         * @description Le parametre `q` recherche sur `role_name` (nom du role affecte).
+         * Mettre a jour le nom et/ou la description d'une tache
+         * @description Issue #290 (E12-08) a ajoute le champ optionnel `name`, en plus du champ `description` preexistant. Quand un planning est affiche, le renommage met a jour `WfPlanningTaskSnapshot.name` et son jumeau `MsTask.name` dans la meme transaction ; sinon, `MsTask.name` seul. Ce renommage est immediatement visible sur toutes les lignes de taches d'un devis brouillon referencant cette tache (voir `EstimateTaskRowRead`).
          */
-        get: operations["listTaskRoleAssignments"];
-        put?: never;
-        /** Affecter un rôle de main-d'œuvre à une tâche */
-        post: operations["createTaskRoleAssignment"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/projects/{projectId}/tasks/{taskUid}/role-assignments/{assignmentId}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /** Supprimer une affectation de rôle */
-        delete: operations["deleteTaskRoleAssignment"];
-        options?: never;
-        head?: never;
-        /** Modifier une affectation de rôle */
-        patch: operations["updateTaskRoleAssignment"];
+        patch: operations["updateTask"];
         trace?: never;
     };
     "/projects/{projectId}/estimates": {
@@ -838,6 +805,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{projectId}/estimates/{estimateId}/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ajouter une tache au planning affiche depuis le devis
+         * @description Insere la tache dans le brouillon de planning affiche du projet (via `create_planning_task`) et cree, dans la meme transaction, une ligne `MsTask` jumelle partageant le meme `uid` ainsi que la ligne `EstimateTaskRow` correspondante dans ce devis -- necessaire pour que la tache puisse ensuite recevoir une affectation de role ou une ligne de cout, toutes deux rattachees a `ms_task.id`. Le planning affiche doit etre un brouillon (code `ESTIMATE_TASK_CREATE_REQUIRES_PLANNING_DRAFT` sinon, a resoudre via `POST /{projectId}/planning-structure/reopen`) et le devis doit etre a l'etat `draft`.
+         */
+        post: operations["createEstimateTask"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/projects/{projectId}/estimates/{estimateId}/cost-lines": {
         parameters: {
             query?: never;
@@ -851,7 +838,10 @@ export interface paths {
          */
         get: operations["listEstimateCostLines"];
         put?: never;
-        /** Ajouter une ligne Fourniture, Frais ou UO à un brouillon */
+        /**
+         * Ajouter une ligne Fourniture, Frais ou UO à un brouillon
+         * @description Sans `cost_code_id` explicite, la ligne est rattachée au code d'imputation racine actif du projet ; un `cost_code_id` fourni doit appartenir au projet, sous peine de `400`.
+         */
         post: operations["createEstimateCostLine"];
         delete?: never;
         options?: never;
@@ -875,6 +865,94 @@ export interface paths {
         head?: never;
         /** Modifier une ligne de coût d'un brouillon */
         patch: operations["updateEstimateCostLine"];
+        trace?: never;
+    };
+    "/projects/{projectId}/estimates/{estimateId}/cost-lines/{costLineId}/milestones": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Appliquer un gabarit de jalons chaînés à une ligne de coût
+         * @description Genere N+2 taches-jalons (`fourniture`: 2 ; `sous_traitance`: 2 + `intermediate_milestones_count`) dans le brouillon de planning affiche -- chacune avec sa ligne `MsTask` jumelle et sa ligne `EstimateTaskRow`, comme `POST .../estimates/{estimateId}/tasks` -- puis les chaine par N+1 liens Fin-a-Debut (`link_type=1`) portant tous le meme `lag_minutes`. Le premier jalon devient l'enfant de la tache de la ligne de coût (`task_id`) si elle en a une, sinon les jalons sont des taches racines ; dans les deux cas ils sont ajoutes en fin de liste des taches existantes, jamais en tete. Refuse une ligne de coût de main-d'oeuvre (`cost_type.kind = 'labor'`), un devis non-brouillon, ou un planning affiche non-brouillon (code `ESTIMATE_TASK_CREATE_REQUIRES_PLANNING_DRAFT`, a resoudre via `POST /{projectId}/planning-structure/reopen`).
+         */
+        post: operations["createEstimateCostLineMilestones"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{projectId}/estimates/{estimateId}/role-assignments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Lister les affectations de main-d'œuvre d'un devis
+         * @description Le parametre `q` recherche sur `role_name` (nom du role affecte).
+         */
+        get: operations["listEstimateRoleAssignments"];
+        put?: never;
+        /**
+         * Affecter un rôle de main-d'œuvre à une tâche, dans un devis brouillon
+         * @description `task_id` reference `MsTask.id` (jamais un uid de planning). Sans `cost_code_id` explicite, l'affectation est rattachée au code d'imputation racine actif du projet ; un `cost_code_id` fourni doit appartenir au projet, sous peine de `400`. Refuse avec `409` si le devis n'est pas un brouillon, ou si une affectation existe deja pour ce couple tache/role sur ce devis (E12-01, #273).
+         */
+        post: operations["createEstimateRoleAssignment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{projectId}/estimates/{estimateId}/role-assignments/{assignmentId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Supprimer une affectation de rôle d'un devis brouillon
+         * @description Refuse avec `409` si le devis n'est pas un brouillon.
+         */
+        delete: operations["deleteEstimateRoleAssignment"];
+        options?: never;
+        head?: never;
+        /**
+         * Modifier une affectation de rôle d'un devis brouillon
+         * @description `task_id`/`role_id` sont immuables ; refuse avec `409` si le devis n'est pas un brouillon.
+         */
+        patch: operations["updateEstimateRoleAssignment"];
+        trace?: never;
+    };
+    "/projects/{projectId}/estimates/{estimateId}/grid-nodes/move": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Deplacer ou reordonner des noeuds de la grille d'un devis brouillon
+         * @description Deplace une selection de lignes de coût/main-d'oeuvre (E12-07, #289) : `node_uids` (toujours negatifs) sont normalises a leurs racines selectionnees, puis inseres sous `target_parent_uid` a `position`. Le `task_id` de chaque ligne affectee (et de ses descendants) est recalcule a partir de la tache ancetre la plus proche.
+         */
+        post: operations["moveEstimateGridNodes"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/projects/{projectId}/estimates/{estimateId}/validate": {
@@ -926,6 +1004,103 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/projects/{projectId}/estimates/{estimateId}/export-reconciliation.xlsx": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Exporter le devis au format Excel réconciliable (E6-08)
+         * @description Export technique distinct de /export.xlsx, destiné à une réimportation fidèle (E6-09) : une feuille par nature de ligne (Tâches, MO, Non-MO), chacune portant l'identifiant interne stable de sa ligne source (EstimateTaskRow.id / TaskRoleAssignment.id / EstimateCostLine.id) en plus des libellés lisibles, permettant de distinguer une mise à jour d'une création à la réimportation.
+         */
+        get: operations["exportEstimateReconciliationExcel"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{projectId}/estimates/{estimateId}/import-reconciliation/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Prévisualiser une réimportation Excel réconciliable (E6-09)
+         * @description Analyse le fichier réexporté par /export-reconciliation.xlsx (E6-08), éventuellement édité, et calcule le diff (créations / mises à jour / suppressions sur les feuilles Tâches, MO, Non-MO) sans rien écrire en base. Le devis doit être à l'état `draft`. Exécute exactement la même analyse que /confirm sur le même fichier, garantissant un diagnostic identique -- seul `applied` (toujours `false` ici) distingue les deux réponses.
+         */
+        post: operations["previewEstimateReconciliationImport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{projectId}/estimates/{estimateId}/import-reconciliation/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirmer une réimportation Excel réconciliable (E6-09)
+         * @description Rejoue exactement la même analyse que /preview sur le fichier resoumis (aucune session d'import stockée côté serveur) et applique le résultat en une seule transaction si `blocking_issues` est vide. Ordre d'application : suppressions (Non-MO, MO, puis Tâches), créations (Tâches, puis MO/Non-MO), mises à jour (MO, puis Non-MO). Le devis doit être à l'état `draft`. Si des problèmes bloquants sont trouvés, rien n'est écrit et la réponse est un 409 portant le `ReconciliationPlanRead` complet (`applied=false`), jamais un 2xx trompeur. Dans de rares cas, une écriture concurrente entre le precheck (hors verrou) et l'application réelle (sous verrou) peut aussi produire un 409 au format `PlanningTaskDeleteConflict`, identique à celui de la suppression directe de tâches du planning.
+         */
+        post: operations["confirmEstimateReconciliationImport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{projectId}/cost-codes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lister l'arbre des codes d'imputation d'un projet */
+        get: operations["listProjectCostCodes"];
+        put?: never;
+        /** Creer un code d'imputation dans l'arbre du projet */
+        post: operations["createProjectCostCode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{projectId}/cost-codes/{costCodeId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lire un code d'imputation du projet */
+        get: operations["getProjectCostCode"];
+        put?: never;
+        post?: never;
+        /** Desactiver un code d'imputation du projet */
+        delete: operations["deleteProjectCostCode"];
+        options?: never;
+        head?: never;
+        /** Modifier ou desactiver un code d'imputation du projet */
+        patch: operations["updateProjectCostCode"];
         trace?: never;
     };
     "/projects/{projectId}/export.xml": {
@@ -1261,11 +1436,34 @@ export interface components {
             /** @example ok */
             status: string;
         };
+        /** @description État de préparation de l'API. Le corps est identique en 200 et en 503 : seul le code HTTP change, `checks` indique toujours quelle dépendance est en cause. */
         ReadinessStatus: {
-            /** @example ready */
-            status: string;
+            /**
+             * @example ready
+             * @enum {string}
+             */
+            status: "ready" | "unavailable";
+            checks: components["schemas"]["ReadinessChecks"];
             /** Format: date-time */
             timestamp: string;
+        };
+        /** @description Résultat par dépendance. Volontairement binaire (`ok`/`unavailable`) et sans message : `/health/ready` n'est pas authentifié, le détail de la panne reste dans les logs de l'API. */
+        ReadinessChecks: {
+            /**
+             * @example ok
+             * @enum {string}
+             */
+            database: "ok" | "unavailable";
+            /**
+             * @example ok
+             * @enum {string}
+             */
+            redis: "ok" | "unavailable";
+            /**
+             * @example ok
+             * @enum {string}
+             */
+            storage: "ok" | "unavailable";
         };
         UserCreate: {
             /** Format: email */
@@ -1405,14 +1603,6 @@ export interface components {
         ImportErrorListResponse: {
             items: components["schemas"]["ImportIssue"][];
         };
-        ErrorResponse: {
-            /** @example INVALID_XML */
-            error: string;
-            message: string;
-            details?: {
-                [key: string]: unknown;
-            };
-        };
         FastAPIErrorResponse: {
             detail: string | {
                 [key: string]: unknown;
@@ -1504,7 +1694,6 @@ export interface components {
         };
         PlanningTaskSnapshotWrite: {
             uid: number;
-            id_display: number | null;
             structure_key: string | null;
             /** @enum {string|null} */
             structure_kind: "poste" | "lot" | "livrable" | "milestone" | "task" | null;
@@ -1550,7 +1739,8 @@ export interface components {
             id: number;
             project_id: number;
             uid: number;
-            id_display?: number | null;
+            /** @description Rank of the task in the planning's current display order (flattened depth-first walk, siblings sorted the same way as `outline_number`). Recomputed on every read, never stored -- it changes whenever the task is moved, reparented, or another task is created/deleted ahead of it. Read-only: this field cannot be set by clients. */
+            readonly row_number: number;
             structure_key?: string | null;
             /** @enum {string|null} */
             structure_kind?: "poste" | "lot" | "livrable" | "milestone" | "task" | null;
@@ -1619,28 +1809,46 @@ export interface components {
         PlanningTaskTreeRead: components["schemas"]["TaskRead"] & {
             children: components["schemas"]["PlanningTaskTreeRead"][];
         };
-        TaskDescriptionUpdate: {
+        TaskUpdate: {
             description?: string | null;
+            name?: string | null;
         };
-        TaskRoleAssignmentCreate: {
+        EstimateRoleAssignmentCreate: {
+            task_id: number;
             role_id: number;
+            cost_code_id?: number | null;
             quantity: number;
             hours: number;
             comment?: string | null;
+            /**
+             * @description Position de la nouvelle ligne dans l'arbre du devis (E12-07/#289) :
+             *     positif = tache de ce devis (`EstimateTaskRow`), negatif = un autre
+             *     noeud de grille de ce devis, absent/null = racine du devis. Independant
+             *     de `task_id`.
+             */
+            target_parent_uid?: number | null;
+            /**
+             * @description Noeud de grille frere apres lequel inserer la nouvelle ligne ; absent =
+             *     dernier enfant du parent resolu.
+             */
+            insert_after_uid?: number | null;
         };
-        TaskRoleAssignmentUpdate: {
+        EstimateRoleAssignmentUpdate: {
+            cost_code_id?: number | null;
             quantity?: number;
             hours?: number;
             comment?: string | null;
         };
-        TaskRoleAssignmentRead: {
+        EstimateRoleAssignmentRead: {
             id: number;
-            task_id: number;
+            estimate_id: number;
+            task_id: number | null;
             role_id: number;
             role_code: string;
             role_name: string;
             cost_category_id: number;
             accounting_code: string;
+            cost_code_id?: number | null;
             quantity: number;
             hours: number;
             comment?: string | null;
@@ -1648,6 +1856,14 @@ export interface components {
             created_at: string;
             /** Format: date-time */
             updated_at: string;
+            /** @description This assignment's own EstimateGridNode uid (E12-07, #289), always negative. */
+            uid: number;
+            /** @description This assignment's grid-node parent_uid, exposed as-is (E12-09, #291): positif = tache de ce devis (`MsTask.id`), negatif = un autre noeud de grille de ce devis, absent/null = racine du devis -- meme convention que `EstimateGridNodeMove.target_parent_uid`, reutilisable telle quelle dans un appel ulterieur a grid-nodes/move. */
+            parent_uid?: number | null;
+            /** @description This assignment's local sibling position within its grid-node parent. */
+            position: number;
+            /** @description 1-based rank of this assignment in the devis's merged tasks+grid-node tree (E12-09, #291), recomputed on every read, never stored. */
+            readonly row_number: number;
         };
         ProjectEstimateCreate: {
             /** @enum {string} */
@@ -1667,6 +1883,7 @@ export interface components {
             /** @enum {string} */
             status: "draft" | "validated" | "superseded" | "archived";
             currency_code: string;
+            revision: number;
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
@@ -1677,6 +1894,9 @@ export interface components {
             id: number;
             estimate_id: number;
             task_id?: number | null;
+            task_uid?: number | null;
+            /** @description 1-based rank of this row in the devis's merged tasks+grid-node tree (E12-09, #291), recomputed on every read, never stored. `null` only in the same pre-existing degenerate case `task_uid` itself already falls back to `null` for (this row's task can no longer be resolved at all). */
+            readonly row_number?: number | null;
             parent_task_id?: number | null;
             position: number;
             task_name: string;
@@ -1689,18 +1909,36 @@ export interface components {
         EstimateCostLineCreate: {
             task_id?: number | null;
             cost_category_id: number;
+            cost_code_id?: number | null;
             label: string;
             quantity: number;
             unit_cost: number;
             supply_status?: components["schemas"]["SupplyStatus"] | null;
+            /** Format: date-time */
+            planned_date?: string | null;
+            /**
+             * @description Position de la nouvelle ligne dans l'arbre du devis (E12-07/#289) :
+             *     positif = tache de ce devis (`EstimateTaskRow`), negatif = un autre
+             *     noeud de grille de ce devis, absent/null = racine du devis. Independant
+             *     de `task_id`.
+             */
+            target_parent_uid?: number | null;
+            /**
+             * @description Noeud de grille frere apres lequel inserer la nouvelle ligne ; absent =
+             *     dernier enfant du parent resolu.
+             */
+            insert_after_uid?: number | null;
         };
         EstimateCostLineUpdate: {
             task_id?: number | null;
             cost_category_id?: number;
+            cost_code_id?: number | null;
             label?: string;
             quantity?: number;
             unit_cost?: number;
             supply_status?: components["schemas"]["SupplyStatus"] | null;
+            /** Format: date-time */
+            planned_date?: string | null;
         };
         EstimateCostLineRead: {
             id: number;
@@ -1708,6 +1946,7 @@ export interface components {
             task_id?: number | null;
             cost_type_id: number;
             cost_category_id: number;
+            cost_code_id?: number | null;
             cost_type_code: string;
             accounting_code: string;
             category_code?: string | null;
@@ -1716,6 +1955,16 @@ export interface components {
             unit_cost: number;
             purchase_cost: number;
             supply_status?: components["schemas"]["SupplyStatus"] | null;
+            /** Format: date-time */
+            planned_date?: string | null;
+            /** @description This line's own EstimateGridNode uid (E12-07, #289), always negative. */
+            uid: number;
+            /** @description This line's grid-node parent_uid, exposed as-is (E12-09, #291): positif = tache de ce devis (`MsTask.id`), negatif = un autre noeud de grille de ce devis, absent/null = racine du devis -- meme convention que `EstimateGridNodeMove.target_parent_uid`, reutilisable telle quelle dans un appel ulterieur a grid-nodes/move. */
+            parent_uid?: number | null;
+            /** @description This line's local sibling position within its grid-node parent. */
+            position: number;
+            /** @description 1-based rank of this line in the devis's merged tasks+grid-node tree (E12-09, #291), recomputed on every read, never stored. */
+            readonly row_number: number;
         };
         EstimateAggregatesRead: {
             total_labor_cost: number;
@@ -1972,8 +2221,8 @@ export interface components {
         EstimateCostLineListRead: components["schemas"]["PaginationMeta"] & {
             items: components["schemas"]["EstimateCostLineRead"][];
         };
-        TaskRoleAssignmentListRead: components["schemas"]["PaginationMeta"] & {
-            items: components["schemas"]["TaskRoleAssignmentRead"][];
+        EstimateRoleAssignmentListRead: components["schemas"]["PaginationMeta"] & {
+            items: components["schemas"]["EstimateRoleAssignmentRead"][];
         };
         UserAdminListRead: components["schemas"]["PaginationMeta"] & {
             items: components["schemas"]["UserAdminRead"][];
@@ -2033,6 +2282,129 @@ export interface components {
             links: components["schemas"]["TaskLinkWrite"][];
             expected_revision: number;
         };
+        EstimateTaskCreate: {
+            name: string;
+            /** @default false */
+            is_milestone: boolean;
+            target_parent_uid?: number | null;
+            insert_after_uid?: number | null;
+        };
+        /** @enum {string} */
+        MilestoneTemplate: "fourniture" | "sous_traitance";
+        EstimateCostLineMilestonesCreate: {
+            template: components["schemas"]["MilestoneTemplate"];
+            /** @default 0 */
+            intermediate_milestones_count: number;
+            /** @default 0 */
+            lag_minutes: number;
+        };
+        /** @description Une combinaison (categorie de cout, annee) sans `CostRate`, element de `MissingRateCoverage.detail.missing_cost_rates` (E6-11, #175). */
+        MissingRateCoverageEntry: {
+            category_id: number;
+            category_name: string;
+            accounting_code: string;
+            year: number;
+        };
+        /** @description Corps 400/409 structure pour `POST .../role-assignments` et `POST .../validate` quand une affectation de main-d'oeuvre couvre une (categorie de cout, annee) sans `CostRate`, ou une annee sans `InflationRate` (E6-11, #175). Liste chaque combinaison manquante trouvee, pas seulement la premiere. */
+        MissingRateCoverage: {
+            detail: {
+                /** @enum {string} */
+                code: "MISSING_RATE_COVERAGE";
+                /** @description Chaque combinaison (categorie de cout, annee) utilisee par une affectation de main-d'oeuvre sans `CostRate` correspondant -- dedupliquee et triee par `(accounting_code, year)`. Vide si seule la couverture `InflationRate` manque. */
+                missing_cost_rates: components["schemas"]["MissingRateCoverageEntry"][];
+                /** @description Chaque annee (dedupliquee, triee) utilisee par une affectation de main-d'oeuvre sans `InflationRate` correspondant, independamment de la categorie. Vide si seule la couverture `CostRate` manque. */
+                missing_inflation_years: number[];
+            };
+        };
+        EstimateGridNodeMove: {
+            node_uids: number[];
+            /**
+             * @description Positif = tache de ce devis (`EstimateTaskRow`), negatif = un autre
+             *     noeud de grille de ce devis, absent/null = racine du devis.
+             */
+            target_parent_uid?: number | null;
+            position: number;
+            /**
+             * @description Revision du devis sur laquelle cette mutation a ete calculee. Comparee a
+             *     la revision persistee ; un ecart renvoie un 409 ESTIMATE_REVISION_CONFLICT.
+             */
+            expected_revision: number;
+        };
+        /**
+         * @description Issue #65 (E6-04) : une tache "reelle" du planning (ni recapitulative ni
+         *     jalon) qui n'a ni affectation de role de ce devis (`EstimateRoleAssignment`,
+         *     scopee par `estimate_id`, E12-02/#274) ni ligne de cout de ce devis
+         *     (`EstimateCostLine.task_id`) la referencant -- c'est-a-dire une tache
+         *     probablement oubliee lors du chiffrage. Purement informatif : n'empeche
+         *     jamais la validation d'aboutir.
+         */
+        EstimateValidationWarning: {
+            task_uid: number;
+            task_name: string;
+        };
+        /**
+         * @description Reponse de `POST .../estimates/{estimateId}/validate` uniquement.
+         *     Volontairement distinct de `ProjectEstimateRead` (partage par
+         *     `listProjectEstimates`/`createProjectEstimate`/`setEstimateReference`, qui
+         *     ne calculent pas cet avertissement) : ces endpoints ne renvoient donc jamais
+         *     ce champ `warnings` toujours vide/absent dans leur contexte.
+         */
+        EstimateValidationRead: components["schemas"]["ProjectEstimateRead"] & {
+            warnings: components["schemas"]["EstimateValidationWarning"][];
+        };
+        /** @description Une entree structuree de `ReconciliationPlanRead.blocking_issues` ou `.warnings` (E6-09, #70). */
+        ReconciliationIssue: {
+            code: string;
+            message: string;
+            sheet?: string | null;
+            /** @description Numero de ligne Excel (1-based, en comptant l'entete). Absent pour un probleme qui ne pointe pas vers une ligne precise du fichier (ex : precondition globale, ou ligne existante proposee a la suppression, qui par definition n'apparait plus dans le fichier). */
+            row?: number | null;
+        };
+        /** @description Diagnostic + resultat d'un import de reconciliation de devis (E6-09, #70). `POST .../import-reconciliation/preview` et `POST .../import-reconciliation/confirm` executent exactement la meme analyse sur le meme fichier -- seul `applied` distingue les deux reponses. */
+        ReconciliationPlanRead: {
+            /** @description Non vide => rien n'est/ne sera applique, meme pour un confirm (voir `applied`). */
+            blocking_issues: components["schemas"]["ReconciliationIssue"][];
+            /** @description Changements ignores (ex : renommage d'une tache existante), lignes hors perimetre, etc. -- jamais bloquant. */
+            warnings: components["schemas"]["ReconciliationIssue"][];
+            tasks_to_create: number;
+            /** @description Identifiants `EstimateTaskRow.id` proposes a la suppression. */
+            tasks_to_delete: number[];
+            labor_to_create: number;
+            /** @description Identifiants `TaskRoleAssignment.id` a mettre a jour. */
+            labor_to_update: number[];
+            /** @description Identifiants `TaskRoleAssignment.id` proposes a la suppression. */
+            labor_to_delete: number[];
+            non_labor_to_create: number;
+            /** @description Identifiants `EstimateCostLine.id` a mettre a jour. */
+            non_labor_to_update: number[];
+            /** @description Identifiants `EstimateCostLine.id` proposes a la suppression. */
+            non_labor_to_delete: number[];
+            /** @description Toujours `false` pour un preview. Pour un confirm, `true` uniquement si `blocking_issues` etait vide et que les changements ont ete appliques. */
+            applied: boolean;
+        };
+        ProjectCostCodeCreate: {
+            code: string;
+            name: string;
+            parent_id?: number | null;
+        };
+        ProjectCostCodeRead: components["schemas"]["ProjectCostCodeCreate"] & {
+            id: number;
+            project_id: number;
+            is_active: boolean;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        ProjectCostCodeListRead: components["schemas"]["PaginationMeta"] & {
+            items: components["schemas"]["ProjectCostCodeRead"][];
+        };
+        ProjectCostCodeUpdate: {
+            code?: string;
+            name?: string;
+            parent_id?: number | null;
+            is_active?: boolean;
+        };
     };
     responses: {
         /** @description Requete invalide */
@@ -2041,7 +2413,7 @@ export interface components {
                 [name: string]: unknown;
             };
             content: {
-                "application/json": components["schemas"]["ErrorResponse"];
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
         /** @description Authentification requise */
@@ -2050,7 +2422,7 @@ export interface components {
                 [name: string]: unknown;
             };
             content: {
-                "application/json": components["schemas"]["ErrorResponse"];
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
         /** @description Droits administrateur requis */
@@ -2059,7 +2431,7 @@ export interface components {
                 [name: string]: unknown;
             };
             content: {
-                "application/json": components["schemas"]["ErrorResponse"];
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
         /** @description Conflit avec une valeur existante */
@@ -2068,7 +2440,7 @@ export interface components {
                 [name: string]: unknown;
             };
             content: {
-                "application/json": components["schemas"]["ErrorResponse"];
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
         /** @description Batch introuvable */
@@ -2077,7 +2449,7 @@ export interface components {
                 [name: string]: unknown;
             };
             content: {
-                "application/json": components["schemas"]["ErrorResponse"];
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
         /** @description Projet introuvable */
@@ -2086,7 +2458,7 @@ export interface components {
                 [name: string]: unknown;
             };
             content: {
-                "application/json": components["schemas"]["ErrorResponse"];
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
         /** @description Planning introuvable */
@@ -2095,7 +2467,7 @@ export interface components {
                 [name: string]: unknown;
             };
             content: {
-                "application/json": components["schemas"]["ErrorResponse"];
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
         /** @description Projet, planning ou tache introuvable */
@@ -2104,7 +2476,7 @@ export interface components {
                 [name: string]: unknown;
             };
             content: {
-                "application/json": components["schemas"]["ErrorResponse"];
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
         /** @description Requete de deplacement invalide */
@@ -2200,7 +2572,7 @@ export interface components {
                 [name: string]: unknown;
             };
             content: {
-                "application/json": components["schemas"]["ErrorResponse"];
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
         /** @description Tache introuvable */
@@ -2209,7 +2581,7 @@ export interface components {
                 [name: string]: unknown;
             };
             content: {
-                "application/json": components["schemas"]["ErrorResponse"];
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
         /** @description Ressource introuvable */
@@ -2218,7 +2590,7 @@ export interface components {
                 [name: string]: unknown;
             };
             content: {
-                "application/json": components["schemas"]["ErrorResponse"];
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
         /** @description Utilisateur introuvable */
@@ -2227,7 +2599,7 @@ export interface components {
                 [name: string]: unknown;
             };
             content: {
-                "application/json": components["schemas"]["ErrorResponse"];
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
         /** @description Combinaison mode/dates/duree invalide pour la tache */
@@ -2326,6 +2698,63 @@ export interface components {
                 "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
+        /** @description Requete invalide -- soit `task_id` ne correspond a aucune tache du projet, soit le role ne correspond pas a une categorie de cout main-d'oeuvre active (detail generique FastAPIErrorResponse), soit la tache est deja datee (start_at et finish_at renseignes) et au moins une (categorie de cout, annee) qu'elle couvre n'a pas de CostRate/InflationRate (detail.code=MISSING_RATE_COVERAGE, E6-11, #175). */
+        CreateEstimateRoleAssignmentBadRequest: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["MissingRateCoverage"] | components["schemas"]["FastAPIErrorResponse"];
+            };
+        };
+        /** @description Requete de deplacement invalide */
+        MoveEstimateGridNodesBadRequest: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
+            };
+        };
+        /** @description Projet, devis, tache ou noeud introuvable pendant le deplacement */
+        MoveEstimateGridNodesNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
+            };
+        };
+        /**
+         * @description Le deplacement entre en conflit avec l'arbre du devis, ou `expected_revision`
+         *     ne correspond plus a la revision persistee (code `ESTIMATE_REVISION_CONFLICT`).
+         */
+        MoveEstimateGridNodesConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["FastAPIErrorResponse"];
+            };
+        };
+        /** @description Le devis n'est pas un brouillon (detail generique FastAPIErrorResponse), ou au moins une (categorie de cout, annee) couverte par une affectation de main-d'oeuvre n'a pas de CostRate/InflationRate (detail.code= MISSING_RATE_COVERAGE, E6-11, #175) -- dans ce dernier cas, aucune EstimateLine n'est generee ni persistee et le devis reste un brouillon. */
+        ValidateProjectEstimateConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["MissingRateCoverage"] | components["schemas"]["FastAPIErrorResponse"];
+            };
+        };
+        /** @description Soit des problemes bloquants ont ete trouves et rien n'a ete applique -- le corps est alors le `ReconciliationPlanRead` complet (pas l'enveloppe `FastAPIErrorResponse` habituelle), avec `applied=false` ; soit le precheck (execute hors verrou) n'a rien trouve mais une ecriture concurrente a fait echouer la suppression de tache reelle une fois le verrou pris, auquel cas le corps est un `PlanningTaskDeleteConflict` (detail.code=CASCADE_CONFIRMATION_REQUIRED/TASK_REFERENCED), exactement comme la suppression directe de taches du planning (`DeletePlanningTasksConflict`). */
+        EstimateReconciliationConfirmConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ReconciliationPlanRead"] | components["schemas"]["PlanningTaskDeleteConflict"];
+            };
+        };
     };
     parameters: {
         /** @description Identifiant technique wf_import_batch.id */
@@ -2366,6 +2795,8 @@ export interface components {
         Offset: number;
         /** @description Recherche plein texte simple (sous-chaine, insensible a la casse), sur le sous-ensemble de colonnes documente par chaque ressource dans la description de ce parametre au niveau de l'operation. A distinguer des filtres structures deja existants sur certaines ressources (`include_inactive`, `node_id`, `role_id`, ...), qui restent des parametres dedies et se combinent avec `q`. */
         Search: string;
+        /** @description Identifiant technique du code d'imputation du projet */
+        CostCodeId: number;
     };
     requestBodies: never;
     headers: never;
@@ -2402,8 +2833,17 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description API prête */
+            /** @description API prête, toutes les dépendances répondent */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadinessStatus"];
+                };
+            };
+            /** @description Au moins une dépendance est injoignable. Même corps qu'en 200 : `checks` identifie la ou les dépendances en cause. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2495,7 +2935,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["FastAPIErrorResponse"];
                 };
             };
             /** @description Trop de tentatives de connexion */
@@ -2504,7 +2944,16 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["FastAPIErrorResponse"];
+                };
+            };
+            /** @description Le limiteur de tentatives de connexion (Redis) est injoignable; la connexion est refusée par défaut (fail-closed) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FastAPIErrorResponse"];
                 };
             };
         };
@@ -2807,7 +3256,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["FastAPIErrorResponse"];
                 };
             };
             /** @description Media type non supporte */
@@ -2816,7 +3265,16 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["FastAPIErrorResponse"];
+                };
+            };
+            /** @description Le stockage objet des sources d'import (Garage) est injoignable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FastAPIErrorResponse"];
                 };
             };
         };
@@ -2855,7 +3313,16 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["FastAPIErrorResponse"];
+                };
+            };
+            /** @description Le stockage objet des sources d'import (Garage) est injoignable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FastAPIErrorResponse"];
                 };
             };
         };
@@ -2885,6 +3352,15 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["BatchNotFound"];
             409: components["responses"]["Conflict"];
+            /** @description Le stockage objet des sources d'import (Garage) est injoignable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FastAPIErrorResponse"];
+                };
+            };
         };
     };
     getImportBatchV1: {
@@ -3721,7 +4197,7 @@ export interface operations {
             404: components["responses"]["ProjectNotFound"];
         };
     };
-    updateTaskDescription: {
+    updateTask: {
         parameters: {
             query?: never;
             header?: never;
@@ -3735,7 +4211,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["TaskDescriptionUpdate"];
+                "application/json": components["schemas"]["TaskUpdate"];
             };
         };
         responses: {
@@ -3749,135 +4225,6 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            404: components["responses"]["TaskNotFound"];
-        };
-    };
-    listTaskRoleAssignments: {
-        parameters: {
-            query?: {
-                /** @description Nombre maximum de lignes renvoyees. Absent, l'endpoint renvoie l'integralite des lignes du jeu filtre (voir PaginationMeta.yaml) : il n'y a pas de valeur par defaut qui tronquerait silencieusement une liste. */
-                limit?: components["parameters"]["Limit"];
-                /** @description Nombre de lignes a sauter avant le debut de la page. Requiert `limit` : fourni sans `limit`, il serait sous-specifie (voir la note "Regle offset/limit" dans PaginationMeta.yaml) et est donc rejete avec la reponse BadRequest.yaml. */
-                offset?: components["parameters"]["Offset"];
-                /** @description Recherche plein texte simple (sous-chaine, insensible a la casse), sur le sous-ensemble de colonnes documente par chaque ressource dans la description de ce parametre au niveau de l'operation. A distinguer des filtres structures deja existants sur certaines ressources (`include_inactive`, `node_id`, `role_id`, ...), qui restent des parametres dedies et se combinent avec `q`. */
-                q?: components["parameters"]["Search"];
-                sort?: "role_name" | "-role_name" | "quantity" | "-quantity" | "hours" | "-hours";
-            };
-            header?: never;
-            path: {
-                /** @description Identifiant technique ms_project.id */
-                projectId: components["parameters"]["ProjectId"];
-                /** @description UID fonctionnel de la tache dans un projet */
-                taskUid: components["parameters"]["TaskUid"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Affectations de rôles */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TaskRoleAssignmentListRead"];
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            404: components["responses"]["TaskNotFound"];
-        };
-    };
-    createTaskRoleAssignment: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Identifiant technique ms_project.id */
-                projectId: components["parameters"]["ProjectId"];
-                /** @description UID fonctionnel de la tache dans un projet */
-                taskUid: components["parameters"]["TaskUid"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TaskRoleAssignmentCreate"];
-            };
-        };
-        responses: {
-            /** @description Affectation créée */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TaskRoleAssignmentRead"];
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            404: components["responses"]["TaskNotFound"];
-            409: components["responses"]["Conflict"];
-        };
-    };
-    deleteTaskRoleAssignment: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Identifiant technique ms_project.id */
-                projectId: components["parameters"]["ProjectId"];
-                /** @description UID fonctionnel de la tache dans un projet */
-                taskUid: components["parameters"]["TaskUid"];
-                /** @description Identifiant technique de l'affectation de rôle */
-                assignmentId: components["parameters"]["AssignmentId"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Affectation supprimée */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            401: components["responses"]["Unauthorized"];
-            404: components["responses"]["TaskNotFound"];
-        };
-    };
-    updateTaskRoleAssignment: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Identifiant technique ms_project.id */
-                projectId: components["parameters"]["ProjectId"];
-                /** @description UID fonctionnel de la tache dans un projet */
-                taskUid: components["parameters"]["TaskUid"];
-                /** @description Identifiant technique de l'affectation de rôle */
-                assignmentId: components["parameters"]["AssignmentId"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TaskRoleAssignmentUpdate"];
-            };
-        };
-        responses: {
-            /** @description Affectation modifiée */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TaskRoleAssignmentRead"];
-                };
-            };
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["TaskNotFound"];
         };
@@ -4007,6 +4354,39 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["ProjectNotFound"];
+        };
+    };
+    createEstimateTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de devis */
+                estimateId: components["parameters"]["EstimateId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EstimateTaskCreate"];
+            };
+        };
+        responses: {
+            /** @description Tache creee et ligne de devis correspondante */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EstimateTaskRowRead"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     listEstimateCostLines: {
@@ -4141,6 +4521,206 @@ export interface operations {
             409: components["responses"]["Conflict"];
         };
     };
+    createEstimateCostLineMilestones: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de devis */
+                estimateId: components["parameters"]["EstimateId"];
+                /** @description Identifiant technique de la ligne de coût du devis */
+                costLineId: components["parameters"]["CostLineId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EstimateCostLineMilestonesCreate"];
+            };
+        };
+        responses: {
+            /** @description Jalons crees et liens Fin-a-Debut chaines correspondants */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EstimateTaskRowListRead"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    listEstimateRoleAssignments: {
+        parameters: {
+            query?: {
+                /** @description Nombre maximum de lignes renvoyees. Absent, l'endpoint renvoie l'integralite des lignes du jeu filtre (voir PaginationMeta.yaml) : il n'y a pas de valeur par defaut qui tronquerait silencieusement une liste. */
+                limit?: components["parameters"]["Limit"];
+                /** @description Nombre de lignes a sauter avant le debut de la page. Requiert `limit` : fourni sans `limit`, il serait sous-specifie (voir la note "Regle offset/limit" dans PaginationMeta.yaml) et est donc rejete avec la reponse BadRequest.yaml. */
+                offset?: components["parameters"]["Offset"];
+                /** @description Recherche plein texte simple (sous-chaine, insensible a la casse), sur le sous-ensemble de colonnes documente par chaque ressource dans la description de ce parametre au niveau de l'operation. A distinguer des filtres structures deja existants sur certaines ressources (`include_inactive`, `node_id`, `role_id`, ...), qui restent des parametres dedies et se combinent avec `q`. */
+                q?: components["parameters"]["Search"];
+                sort?: "role_name" | "-role_name" | "quantity" | "-quantity" | "hours" | "-hours";
+            };
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de devis */
+                estimateId: components["parameters"]["EstimateId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Affectations de rôles du devis */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EstimateRoleAssignmentListRead"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+        };
+    };
+    createEstimateRoleAssignment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de devis */
+                estimateId: components["parameters"]["EstimateId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EstimateRoleAssignmentCreate"];
+            };
+        };
+        responses: {
+            /** @description Affectation créée */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EstimateRoleAssignmentRead"];
+                };
+            };
+            400: components["responses"]["CreateEstimateRoleAssignmentBadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    deleteEstimateRoleAssignment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de devis */
+                estimateId: components["parameters"]["EstimateId"];
+                /** @description Identifiant technique de l'affectation de rôle */
+                assignmentId: components["parameters"]["AssignmentId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Affectation supprimée */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    updateEstimateRoleAssignment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de devis */
+                estimateId: components["parameters"]["EstimateId"];
+                /** @description Identifiant technique de l'affectation de rôle */
+                assignmentId: components["parameters"]["AssignmentId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EstimateRoleAssignmentUpdate"];
+            };
+        };
+        responses: {
+            /** @description Affectation modifiée */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EstimateRoleAssignmentRead"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    moveEstimateGridNodes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de devis */
+                estimateId: components["parameters"]["EstimateId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EstimateGridNodeMove"];
+            };
+        };
+        responses: {
+            /** @description Devis mis a jour (revision incrementee) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectEstimateRead"];
+                };
+            };
+            400: components["responses"]["MoveEstimateGridNodesBadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["MoveEstimateGridNodesNotFound"];
+            409: components["responses"]["MoveEstimateGridNodesConflict"];
+        };
+    };
     validateProjectEstimate: {
         parameters: {
             query?: never;
@@ -4155,18 +4735,18 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Devis validé */
+            /** @description Devis validé. `warnings` (issue #65, E6-04) liste les tâches "réelles" du planning (ni récapitulatives ni jalons) sans affectation de rôle ni ligne de coût rattachée -- purement informatif, n'a jamais empêché cette validation d'aboutir. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ProjectEstimateRead"];
+                    "application/json": components["schemas"]["EstimateValidationRead"];
                 };
             };
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["ProjectNotFound"];
-            409: components["responses"]["Conflict"];
+            409: components["responses"]["ValidateProjectEstimateConflict"];
         };
     };
     getEstimateAggregates: {
@@ -4221,6 +4801,271 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["ProjectNotFound"];
+        };
+    };
+    exportEstimateReconciliationExcel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de devis */
+                estimateId: components["parameters"]["EstimateId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Classeur Excel réconciliable du devis (feuilles Tâches / MO / Non-MO) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": string;
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+        };
+    };
+    previewEstimateReconciliationImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de devis */
+                estimateId: components["parameters"]["EstimateId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /**
+                     * Format: binary
+                     * @description Classeur Excel réconciliable (voir /export-reconciliation.xlsx)
+                     */
+                    file: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Diagnostic de réconciliation (aperçu, rien n'est appliqué) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconciliationPlanRead"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+            409: components["responses"]["Conflict"];
+            /** @description Classeur de reconciliation trop volumineux */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FastAPIErrorResponse"];
+                };
+            };
+        };
+    };
+    confirmEstimateReconciliationImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la version de devis */
+                estimateId: components["parameters"]["EstimateId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /**
+                     * Format: binary
+                     * @description Le même classeur Excel que celui soumis à /preview
+                     */
+                    file: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Réconciliation appliquée */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconciliationPlanRead"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+            409: components["responses"]["EstimateReconciliationConfirmConflict"];
+            /** @description Classeur de reconciliation trop volumineux */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FastAPIErrorResponse"];
+                };
+            };
+        };
+    };
+    listProjectCostCodes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Arbre complet des codes d'imputation actifs du projet. Non paginable (meme motif que GET /resources/nodes) : l'arbre doit toujours etre renvoye en entier, jamais tronque. `limit` est donc toujours `null` et `total` egale `items.length`. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectCostCodeListRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+        };
+    };
+    createProjectCostCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectCostCodeCreate"];
+            };
+        };
+        responses: {
+            /** @description Code d'imputation cree */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectCostCodeRead"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getProjectCostCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique du code d'imputation du projet */
+                costCodeId: components["parameters"]["CostCodeId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Code d'imputation */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectCostCodeRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+        };
+    };
+    deleteProjectCostCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique du code d'imputation du projet */
+                costCodeId: components["parameters"]["CostCodeId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Code d'imputation desactive */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    updateProjectCostCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique du code d'imputation du projet */
+                costCodeId: components["parameters"]["CostCodeId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectCostCodeUpdate"];
+            };
+        };
+        responses: {
+            /** @description Code d'imputation modifie */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectCostCodeRead"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ProjectNotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     exportProjectXml: {
@@ -4392,7 +5237,9 @@ export interface operations {
     };
     listResourceNodes: {
         parameters: {
-            query?: never;
+            query?: {
+                include_inactive?: boolean;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -4524,6 +5371,7 @@ export interface operations {
             query?: {
                 node_id?: number;
                 include_descendants?: boolean;
+                include_inactive?: boolean;
                 /** @description Nombre maximum de lignes renvoyees. Absent, l'endpoint renvoie l'integralite des lignes du jeu filtre (voir PaginationMeta.yaml) : il n'y a pas de valeur par defaut qui tronquerait silencieusement une liste. */
                 limit?: components["parameters"]["Limit"];
                 /** @description Nombre de lignes a sauter avant le debut de la page. Requiert `limit` : fourni sans `limit`, il serait sous-specifie (voir la note "Regle offset/limit" dans PaginationMeta.yaml) et est donc rejete avec la reponse BadRequest.yaml. */

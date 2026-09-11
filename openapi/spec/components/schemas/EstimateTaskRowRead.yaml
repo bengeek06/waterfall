@@ -15,6 +15,18 @@ properties:
   task_id:
     type: [integer, "null"]
     minimum: 1
+  task_uid:
+    type: [integer, "null"]
+    minimum: 1
+  row_number:
+    type: [integer, "null"]
+    minimum: 1
+    readOnly: true
+    description: >-
+      1-based rank of this row in the devis's merged tasks+grid-node tree
+      (E12-09, #291), recomputed on every read, never stored. `null` only in
+      the same pre-existing degenerate case `task_uid` itself already falls
+      back to `null` for (this row's task can no longer be resolved at all).
   parent_task_id:
     type: [integer, "null"]
     minimum: 1

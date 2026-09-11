@@ -118,6 +118,49 @@ class ResourceNode(Base):
     )
 
 
+class ProjectCostCode(Base):
+    """A project-scoped tree of user-defined cost-imputation codes (issue #62 / E6-01).
+
+    Structurally identical to `ResourceNode` (self-referencing `parent_id`, `code` +
+    `name` + `is_active`), but the uniqueness of `code` is scoped to `project_id`
+    rather than global: two different projects may freely reuse the same code, so the
+    unique constraint below is `(project_id, code)`, not a bare `code` unique index.
+    Exactly one root row (`parent_id IS NULL`) is allowed per project -- enforced by
+    the partial unique index below, the same pattern as
+    `uq_wf_calendar_is_default_true` (issue #51) -- and is created automatically when
+    the project itself is created (see `create_project` in api/routes/projects.py).
+    """
+
+    __tablename__ = "wf_project_cost_code"
+    __table_args__ = (
+        UniqueConstraint("project_id", "code", name="uq_wf_project_cost_code_project_code"),
+        Index("idx_wf_project_cost_code_project", "project_id"),
+        Index("idx_wf_project_cost_code_parent", "parent_id"),
+        Index(
+            "uq_wf_project_cost_code_single_root",
+            "project_id",
+            unique=True,
+            postgresql_where=text("parent_id IS NULL"),
+            sqlite_where=text("parent_id IS NULL"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("ms_project.id"), nullable=False)
+    parent_id: Mapped[int | None] = mapped_column(
+        ForeignKey("wf_project_cost_code.id"), nullable=True
+    )
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+
 class ResourceRole(Base):
     __tablename__ = "wf_resource_role"
     __table_args__ = (
@@ -279,14 +322,86 @@ class TaskRoleAssignment(Base):
         CheckConstraint("quantity > 0", name="ck_wf_task_role_quantity"),
         CheckConstraint("hours >= 0", name="ck_wf_task_role_hours"),
         Index("idx_wf_task_role_assignment_role", "role_id"),
+        Index("idx_wf_task_role_assignment_cost_code", "cost_code_id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     task_id: Mapped[int] = mapped_column(ForeignKey("ms_task.id"), nullable=False)
     role_id: Mapped[int] = mapped_column(ForeignKey("wf_resource_role.id"), nullable=False)
+    # Issue #63 (E6-02): the project cost-imputation code this line of labor cost is
+    # attached to. Nullable at the column level only because pre-existing rows have no
+    # value to backfill from other than the project's root (see the migration); every
+    # row created going forward always receives one -- either the caller's explicit
+    # choice or the project's active root code (see resolve_cost_code_id).
+    cost_code_id: Mapped[int | None] = mapped_column(
+        ForeignKey("wf_project_cost_code.id"), nullable=True
+    )
     quantity: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     hours: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+
+class EstimateRoleAssignment(Base):
+    """A devis-version-scoped labor role assignment (E12-01, issue #273).
+
+    Structurally mirrors `TaskRoleAssignment` (project-wide, one row per
+    task/role pair) but is scoped to a single `Estimate` instead: two draft
+    estimates of the same project may each carry their own, independently
+    editable assignment for the same task/role pair, which `TaskRoleAssignment`
+    -- unique on `(task_id, role_id)` alone -- cannot represent. `TaskRoleAssignment`
+    itself (and its use by `services/calendar_schedule.py`) is untouched by this
+    issue; a later issue (E12-02/#274) resynchronizes it from the validated
+    estimate's own `EstimateRoleAssignment` rows.
+    """
+
+    __tablename__ = "wf_estimate_role_assignment"
+    __table_args__ = (
+        # Issue #289 (E12-07) review finding (Finding Moyenne): task_id is
+        # nullable (see below), so two root-level assignments (task_id IS
+        # NULL, detached from any task) with the same role_id do NOT collide
+        # on this constraint -- SQL unique constraints treat NULL as distinct
+        # from any other NULL. This is intentional, not an oversight: a root
+        # role assignment behaves like a free-floating EstimateCostLine (which
+        # itself has never had a uniqueness constraint), so allowing duplicate
+        # (estimate_id, NULL, role_id) rows keeps the two node kinds symmetric.
+        UniqueConstraint(
+            "estimate_id", "task_id", "role_id", name="uq_wf_estimate_role_assignment"
+        ),
+        CheckConstraint("quantity > 0", name="ck_wf_estimate_role_assignment_quantity"),
+        CheckConstraint("hours >= 0", name="ck_wf_estimate_role_assignment_hours"),
+        Index("idx_wf_estimate_role_assignment_estimate", "estimate_id"),
+        Index("idx_wf_estimate_role_assignment_role", "role_id"),
+        Index("idx_wf_estimate_role_assignment_cost_code", "cost_code_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    estimate_id: Mapped[int] = mapped_column(ForeignKey("wf_estimate.id"), nullable=False)
+    # Nullable since issue #289 (E12-07): a role assignment detached from every
+    # task (its grid node unindented all the way to the devis root, see
+    # move_estimate_grid_nodes) has no ancestor task left to reference.
+    task_id: Mapped[int | None] = mapped_column(ForeignKey("ms_task.id"), nullable=True)
+    role_id: Mapped[int] = mapped_column(ForeignKey("wf_resource_role.id"), nullable=False)
+    # Same rationale as TaskRoleAssignment.cost_code_id/EstimateCostLine.cost_code_id
+    # (issue #63/E6-02): nullable at the column level only to allow a future backfill
+    # with no value to recover; every row created going forward always receives one
+    # via resolve_cost_code_id.
+    cost_code_id: Mapped[int | None] = mapped_column(
+        ForeignKey("wf_project_cost_code.id"), nullable=True
+    )
+    quantity: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    hours: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Issue #289 (E12-07): this row's own position in the devis-scoped grid
+    # node tree -- see EstimateGridNode.
+    node_id: Mapped[int] = mapped_column(
+        ForeignKey("wf_estimate_grid_node.id"), nullable=False, unique=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
     )
@@ -329,6 +444,11 @@ class Estimate(Base):
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft")
     currency_code: Mapped[str] = mapped_column(String(3), nullable=False)
+    # Issue #289 (E12-07): optimistic-concurrency counter for the devis's grid
+    # node tree, mirroring WfPlanning.revision -- see
+    # raise_on_estimate_revision_conflict (api/routes/project_access.py) and
+    # move_estimate_grid_nodes (services/estimate_grid.py).
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
     )
@@ -336,7 +456,57 @@ class Estimate(Base):
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class EstimateGridNode(Base):
+    """One position in a devis-scoped, freely reorderable tree of cost lines and
+    role assignments (E12-07, issue #289).
+
+    Structurally mirrors `WfPlanningTaskSnapshot`: `uid` is this node's own
+    stable identity within its `estimate_id`, allocated downward from -1 (see
+    `next_estimate_grid_node_uid`, services/estimate_grid.py) -- deliberately
+    negative so it can never collide with a positive `MsTask.id`, the same
+    integer space `parent_uid` also draws from when a node is attached
+    directly under a task of this estimate's own `EstimateTaskRow`s. Every
+    `parent_uid` is therefore exactly one of: positive (a task, `MsTask.id`),
+    negative (another `EstimateGridNode.uid` of the same estimate), or NULL
+    (root of the devis).
+
+    Carries no cost/labor data itself -- `kind` only discriminates which of
+    `EstimateCostLine`/`EstimateRoleAssignment` owns this node through its own
+    `node_id` FK back here.
+    """
+
+    __tablename__ = "wf_estimate_grid_node"
+    __table_args__ = (
+        UniqueConstraint("estimate_id", "uid", name="uq_wf_estimate_grid_node_uid"),
+        CheckConstraint("kind IN ('cost_line', 'labor')", name="ck_wf_estimate_grid_node_kind"),
+        Index("idx_wf_estimate_grid_node_estimate_parent", "estimate_id", "parent_uid"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    estimate_id: Mapped[int] = mapped_column(ForeignKey("wf_estimate.id"), nullable=False)
+    uid: Mapped[int] = mapped_column(Integer, nullable=False)
+    parent_uid: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+
+
 class EstimateTaskRow(Base):
+    """One task already priced by this estimate -- membership is fixed at row
+    creation time (see `create_project_estimate`/`_create_estimate_planning_task`,
+    `api/routes/estimates.py`) and never changes afterwards.
+
+    `task_name`/`outline_number`/`outline_level`/`parent_task_id`/`position`
+    are written once, at creation, and then read as-is only for a *validated*
+    estimate or as a defensive fallback -- for a *draft* estimate they are no
+    longer authoritative: `services.estimate_task_display.resolve_live_task_display`
+    resolves the current label/position live from `WfPlanningTaskSnapshot`/
+    `MsTask` instead (issue #290, E12-08), so a task rename or a Planning-tree
+    move is immediately visible on every draft estimate that already priced
+    it, without rewriting these columns or recreating the estimate. Kept
+    around (rather than dropped) precisely so a validated estimate keeps its
+    own frozen, never-drifting snapshot of what it was priced against.
+    """
+
     __tablename__ = "wf_estimate_task_row"
     __table_args__ = (
         UniqueConstraint("estimate_id", "task_id", name="uq_wf_estimate_task_row"),
@@ -403,11 +573,18 @@ class EstimateCostLine(Base):
             "id",
         ),
         Index("idx_wf_estimate_cost_line_estimate_created_at", "estimate_id", "created_at", "id"),
+        Index("idx_wf_estimate_cost_line_cost_code", "cost_code_id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     estimate_id: Mapped[int] = mapped_column(ForeignKey("wf_estimate.id"), nullable=False)
     task_id: Mapped[int | None] = mapped_column(ForeignKey("ms_task.id"), nullable=True)
+    # Issue #63 (E6-02): see TaskRoleAssignment.cost_code_id above for the same
+    # rationale -- nullable only because pre-existing rows are backfilled to the
+    # project's root, every new row gets one via resolve_cost_code_id.
+    cost_code_id: Mapped[int | None] = mapped_column(
+        ForeignKey("wf_project_cost_code.id"), nullable=True
+    )
     cost_type_id: Mapped[int] = mapped_column(ForeignKey("wf_cost_type.id"), nullable=False)
     cost_category_id: Mapped[int] = mapped_column(ForeignKey("wf_cost_category.id"), nullable=False)
     cost_type_code: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -418,6 +595,14 @@ class EstimateCostLine(Base):
     unit_cost: Mapped[Decimal] = mapped_column(Numeric(16, 2), nullable=False)
     purchase_cost: Mapped[Decimal] = mapped_column(Numeric(16, 2), nullable=False)
     supply_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # Issue #66 (E6-05): a forecast date for future cashflow curves, entirely
+    # independent from task_id -- either, both, or neither may be set.
+    planned_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Issue #289 (E12-07): this row's own position in the devis-scoped grid
+    # node tree -- see EstimateGridNode.
+    node_id: Mapped[int] = mapped_column(
+        ForeignKey("wf_estimate_grid_node.id"), nullable=False, unique=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
     )
@@ -437,12 +622,22 @@ class EstimateLine(Base):
         Index("idx_wf_estimate_line_estimate", "estimate_id"),
         Index("idx_wf_estimate_line_task", "task_id"),
         Index("idx_wf_estimate_line_role", "role_id"),
+        Index("idx_wf_estimate_line_cost_code", "cost_code_id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     estimate_id: Mapped[int] = mapped_column(ForeignKey("wf_estimate.id"), nullable=False)
     task_id: Mapped[int | None] = mapped_column(ForeignKey("ms_task.id"), nullable=True)
     role_id: Mapped[int | None] = mapped_column(ForeignKey("wf_resource_role.id"), nullable=True)
+    # Issue #63 (E6-02): frozen snapshot of the source line's cost_code_id at
+    # validation time. Estimates validated before this issue shipped have no source to
+    # retroactively recover this from, so those pre-existing EstimateLine rows are left
+    # NULL by the migration (see 20260909_0010's docstring) rather than backfilled to
+    # the project's root -- unlike TaskRoleAssignment/EstimateCostLine, which are still
+    # live rows with a project to resolve a root from.
+    cost_code_id: Mapped[int | None] = mapped_column(
+        ForeignKey("wf_project_cost_code.id"), nullable=True
+    )
     task_name: Mapped[str] = mapped_column(String(512), nullable=False)
     role_code: Mapped[str] = mapped_column(String(255), nullable=False)
     role_name: Mapped[str] = mapped_column(String(255), nullable=False)

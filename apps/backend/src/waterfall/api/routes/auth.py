@@ -1,14 +1,24 @@
 import logging
-from collections import defaultdict, deque
+from collections import deque
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
+from threading import Lock
+from typing import cast
+from urllib.parse import urlsplit
+from uuid import uuid4
 
+import redis
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
+from redis.backoff import ExponentialBackoff
+from redis.commands.core import Script
+from redis.exceptions import RedisError
+from redis.retry import Retry
 from sqlalchemy.orm import Session
 
 from waterfall.api.dependencies import get_current_active_user, get_current_admin_user
 from waterfall.api.pagination import ListParams, list_params
-from waterfall.core.config import get_settings
+from waterfall.core.config import MEMORY_REDIS_URL_SCHEME, get_settings
 from waterfall.core.security import (
     create_access_token,
     create_refresh_token,
@@ -35,24 +45,250 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
 REFRESH_COOKIE_NAME = "waterfall_refresh"
 
+# Short enough to never hold up a login request if Redis is unreachable or slow.
+_REDIS_SOCKET_TIMEOUT_SECONDS = 2
+# Detects a connection that died while idle (Redis restart, server-side idle timeout)
+# before it is handed to a login request, instead of surfacing it as a fail-closed 503.
+_REDIS_HEALTH_CHECK_INTERVAL_SECONDS = 30
+_RATE_LIMIT_KEY_PREFIX = "login_rate_limit:"
+# Key count above which the in-process backend reclaims elapsed windows. High enough that a
+# normal login load never sweeps, low enough to bound memory under a flood of one-shot keys.
+_MEMORY_SWEEP_WATERMARK = 1024
 
-class LoginRateLimiter:
+# Prune the window, count, and record the attempt in one atomic server-side step.
+# A read-modify-write over separate round-trips lets concurrent logins all observe the
+# same pre-increment count and be admitted together (measured: 16 grants for a limit of
+# 5 under 40 concurrent calls); it also leaves the key without a TTL, leaking forever,
+# if the process dies between ZADD and EXPIRE.
+#
+# Semantics are deliberately identical to the previous sequence: a *refused* attempt is
+# not recorded, so being rate limited does not extend the window.
+#   KEYS[1] = rate limit key
+#   ARGV[1] = window start score   ARGV[2] = max attempts   ARGV[3] = now (score)
+#   ARGV[4] = unique member id     ARGV[5] = key TTL in seconds
+# Returns 1 when the attempt is allowed (and recorded), 0 when it is refused.
+_RATE_LIMIT_LUA = """
+redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
+if redis.call('ZCARD', KEYS[1]) >= tonumber(ARGV[2]) then return 0 end
+redis.call('ZADD', KEYS[1], ARGV[3], ARGV[4])
+redis.call('EXPIRE', KEYS[1], ARGV[5])
+return 1
+"""
+
+
+class RateLimiterUnavailableError(Exception):
+    """Raised by LoginRateLimiter.allow() when its Redis backend can't be reached.
+
+    This is distinct from "rate limited": the caller must fail closed (reject the
+    login attempt, e.g. with a 503) rather than let a login through unchecked.
+    """
+
+
+class _InMemoryRateLimitBackend:
+    """Sliding-window limiter held in this process only, for `REDIS_URL=memory://`.
+
+    Counters are per-process and lost on restart, so this is for a single-instance
+    checkout without infrastructure -- the same trade-off as defaulting to sqlite. The
+    lock matters even there: sync endpoints run in a threadpool, so concurrent logins on
+    one key would otherwise all read the same pre-increment count and overshoot the
+    limit, which is exactly what the Redis backend uses an atomic Lua script to prevent.
+    """
+
     def __init__(self) -> None:
-        self._attempts: dict[str, deque[datetime]] = defaultdict(deque)
+        self._attempts: dict[str, deque[datetime]] = {}
+        self._lock = Lock()
 
     def allow(self, key: str, max_attempts: int, window_seconds: int) -> bool:
-        now = datetime.now(UTC)
-        window_start = now - timedelta(seconds=window_seconds)
-        attempts = self._attempts[key]
-        while attempts and attempts[0] < window_start:
-            attempts.popleft()
-        if len(attempts) >= max_attempts:
-            return False
-        attempts.append(now)
-        return True
+        with self._lock:
+            # Read the clock under the lock: two threads timestamping outside it can append
+            # out of order, and the prune below stops at the first non-expired entry, so an
+            # older attempt behind a newer one would outlive its window.
+            now = datetime.now(UTC)
+            window_start = now - timedelta(seconds=window_seconds)
+            attempts = self._attempts.get(key)
+            if attempts is None:
+                attempts = self._attempts[key] = deque()
+            while attempts and attempts[0] < window_start:
+                attempts.popleft()
+            if len(attempts) >= max_attempts:
+                return False
+            attempts.append(now)
+            if len(self._attempts) > _MEMORY_SWEEP_WATERMARK:
+                self._sweep_locked(window_start)
+            return True
+
+    def _sweep_locked(self, window_start: datetime) -> None:
+        """Drop keys whose window has fully elapsed. Caller must hold the lock.
+
+        The key embeds the caller-supplied `username`, so an anonymous caller posting a
+        fresh one each time would otherwise grow this dict forever -- the leak the Redis
+        backend avoids by letting EXPIRE reclaim the key. Sweeping above a watermark keeps
+        the cost amortized while bounding the dict to the keys active in the window.
+        """
+        for key in [k for k, v in self._attempts.items() if not v or v[-1] < window_start]:
+            del self._attempts[key]
+
+    def ping(self) -> None:
+        """No-op: an in-process dict has no backend that can be unreachable."""
 
     def clear(self) -> None:
-        self._attempts.clear()
+        with self._lock:
+            self._attempts.clear()
+
+
+class _RedisRateLimitBackend:
+    """Sliding-window login attempt limiter backed by a Redis sorted set.
+
+    Shared across processes/instances, unlike _InMemoryRateLimitBackend. Each
+    key maps to a sorted set of attempt timestamps (score = attempt time, member =
+    a random id to avoid collisions between attempts in the same instant).
+    `allow()` prunes entries older than the window, counts what's left, and either
+    records a new attempt or refuses -- the same functional behaviour as the
+    per-key deque, but shared, and executed as a single atomic Lua script so that
+    concurrent logins on the same key cannot all read a stale count and overshoot the
+    limit.
+
+    Connection failures raise RateLimiterUnavailableError (fail-closed for callers
+    such as `login()`). `clear()` is a test-only utility with the opposite policy; see
+    its docstring.
+    """
+
+    def __init__(self) -> None:
+        self._client: redis.Redis | None = None
+        self._allow_script: Script | None = None
+
+    def _get_client(self) -> redis.Redis:
+        # Lazy: reads the Redis settings on first use rather than at import time (this
+        # class is instantiated once, at module load), so it picks up whatever
+        # REDIS_URL/REDIS_PASSWORD the process actually starts with.
+        if self._client is None:
+            settings = get_settings()
+            self._client = redis.Redis.from_url(
+                settings.redis_url,
+                # redis-py keeps a password carried by the URL when this is None, so an
+                # existing `redis://:pwd@host` URL still works.
+                password=settings.redis_password,
+                socket_connect_timeout=_REDIS_SOCKET_TIMEOUT_SECONDS,
+                socket_timeout=_REDIS_SOCKET_TIMEOUT_SECONDS,
+                health_check_interval=_REDIS_HEALTH_CHECK_INTERVAL_SECONDS,
+                retry=Retry(ExponentialBackoff(), 1),
+            )
+        return self._client
+
+    def _get_allow_script(self) -> Script:
+        # register_script() only computes the SHA client-side; redis-py transparently
+        # falls back to EVAL on NOSCRIPT, so this survives a Redis restart flushing the
+        # script cache.
+        if self._allow_script is None:
+            self._allow_script = self._get_client().register_script(_RATE_LIMIT_LUA)
+        return self._allow_script
+
+    def allow(self, key: str, max_attempts: int, window_seconds: int) -> bool:
+        now = datetime.now(UTC).timestamp()
+        window_start = now - window_seconds
+        redis_key = f"{_RATE_LIMIT_KEY_PREFIX}{key}"
+        try:
+            script = self._get_allow_script()
+            allowed = script(
+                keys=[redis_key],
+                args=[window_start, max_attempts, now, uuid4().hex, window_seconds + 1],
+            )
+        # ValueError, not RedisError: redis-py raises it from from_url() for a malformed
+        # URL (e.g. a REDIS_URL with no scheme), the most banal misconfiguration there
+        # is. Letting it escape would turn the documented fail-closed 503 into a 500 that
+        # violates the OpenAPI contract.
+        except (RedisError, ValueError) as exc:
+            raise RateLimiterUnavailableError(
+                "Login rate limiter Redis backend is unreachable"
+            ) from exc
+        return bool(allowed)
+
+    def ping(self) -> None:
+        """Raise RateLimiterUnavailableError unless Redis answers PING. Read-only.
+
+        Exists for the readiness probe (`GET /health/ready`), which reports on the very
+        client the login path depends on rather than opening a connection of its own: a
+        probe on a separate client could stay green -- different pool, different socket
+        state -- while every login fails closed here.
+        """
+        try:
+            self._get_client().ping()
+        # Same two exception types, for the same reasons, as allow(): a malformed
+        # REDIS_URL surfaces from from_url() as ValueError, not RedisError.
+        except (RedisError, ValueError) as exc:
+            raise RateLimiterUnavailableError(
+                "Login rate limiter Redis backend is unreachable"
+            ) from exc
+
+    def clear(self) -> None:
+        """Drop every login rate limit counter. Test utility -- no production caller.
+
+        Two deliberate properties, neither of which suits production use:
+
+        - It swallows connection errors instead of failing closed like `allow()`, because
+          an autouse fixture calls it before every test in the suite, most of which have
+          nothing to do with auth.
+        - It deletes *all* `login_rate_limit:*` keys of the configured Redis database, so
+          running the tests against the same Redis database as a dev API wipes that API's
+          live counters. Point `TEST_REDIS_URL` at a separate database to avoid it.
+        """
+        try:
+            client = self._get_client()
+            # scan_iter, not keys(): KEYS blocks the Redis server for the whole scan.
+            keys = cast(
+                Iterable[bytes], client.scan_iter(match=f"{_RATE_LIMIT_KEY_PREFIX}*", count=500)
+            )
+            for key in keys:
+                client.delete(key)
+        except (RedisError, ValueError):
+            pass
+
+
+class LoginRateLimiter:
+    """Dispatches to the rate limit backend named by REDIS_URL's scheme.
+
+    `memory://` gets the in-process limiter, anything else a real Redis -- the same
+    URL-scheme selection the database layer uses to run on sqlite or Postgres from one
+    code path. Resolution is lazy so the process picks up the REDIS_URL it actually
+    starts with, not whatever was set when this module was imported.
+    """
+
+    def __init__(self) -> None:
+        self._backend: _InMemoryRateLimitBackend | _RedisRateLimitBackend | None = None
+        self._lock = Lock()
+
+    def _get_backend(self) -> _InMemoryRateLimitBackend | _RedisRateLimitBackend:
+        with self._lock:
+            if self._backend is None:
+                url = get_settings().redis_url
+                if urlsplit(url).scheme == MEMORY_REDIS_URL_SCHEME:
+                    # The readiness probe cannot surface this -- an in-process limiter is
+                    # never "down" -- so this log is the only signal that attempt counters
+                    # are per-process and reset on restart. Settings validation already
+                    # rejects memory:// outside dev/test; this covers dev itself.
+                    logger.warning(
+                        "Login rate limiter is in-process (REDIS_URL=%s): counters are not "
+                        "shared between workers and are lost on restart",
+                        MEMORY_REDIS_URL_SCHEME + "://",
+                    )
+                    self._backend = _InMemoryRateLimitBackend()
+                else:
+                    self._backend = _RedisRateLimitBackend()
+            return self._backend
+
+    def allow(self, key: str, max_attempts: int, window_seconds: int) -> bool:
+        return self._get_backend().allow(key, max_attempts, window_seconds)
+
+    def ping(self) -> None:
+        self._get_backend().ping()
+
+    def clear(self) -> None:
+        """Drop every login rate limit counter. Test utility -- no production caller.
+
+        Fails silently rather than closed, and on the Redis backend wipes the counters of
+        every app sharing that database; see _RedisRateLimitBackend.clear().
+        """
+        self._get_backend().clear()
 
 
 login_rate_limiter = LoginRateLimiter()
@@ -140,11 +376,30 @@ def login(
     client_ip = request.client.host if request.client is not None else "unknown"
     limiter_key = f"{client_ip}:{normalize_email(form_data.username)}"
 
-    if not login_rate_limiter.allow(
-        limiter_key,
-        max_attempts=settings.auth_rate_limit_attempts,
-        window_seconds=settings.auth_rate_limit_window_seconds,
-    ):
+    try:
+        rate_limit_allowed = login_rate_limiter.allow(
+            limiter_key,
+            max_attempts=settings.auth_rate_limit_attempts,
+            window_seconds=settings.auth_rate_limit_window_seconds,
+        )
+    except RateLimiterUnavailableError as exc:
+        # Fail-closed means a Redis misconfiguration blocks 100% of logins, so this log
+        # line is the only diagnostic available: carry the underlying cause and its
+        # traceback. Never the Redis URL itself -- it may embed a password.
+        logger.error(
+            "auth.login.rate_limiter_unavailable",
+            extra={
+                "email": normalize_email(form_data.username),
+                "error": str(exc.__cause__ or exc),
+            },
+            exc_info=exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Login temporarily unavailable",
+        ) from exc
+
+    if not rate_limit_allowed:
         logger.warning(
             "auth.login.rate_limited", extra={"email": normalize_email(form_data.username)}
         )

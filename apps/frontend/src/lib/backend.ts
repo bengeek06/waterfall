@@ -17,6 +17,8 @@ export type Project = components["schemas"]["ProjectRead"];
 export type ProjectEstimate = components["schemas"]["ProjectEstimateRead"];
 export type EstimateTaskRow = components["schemas"]["EstimateTaskRowRead"];
 export type EstimateCostLine = components["schemas"]["EstimateCostLineRead"];
+export type EstimateRoleAssignment = components["schemas"]["EstimateRoleAssignmentRead"];
+export type ProjectCostCode = components["schemas"]["ProjectCostCodeRead"];
 export type Task = components["schemas"]["TaskRead"];
 export type PlanningStructureCreate = components["schemas"]["PlanningStructureCreate"];
 export type PlanningStructureRead = components["schemas"]["PlanningStructureRead"];
@@ -34,7 +36,6 @@ type PlanningTaskDeleteConflictDetail = components["schemas"]["PlanningTaskDelet
 export type PlanningTaskScheduleUpdate = components["schemas"]["PlanningTaskScheduleUpdate"];
 export type TaskLinkWrite = components["schemas"]["TaskLinkWrite"];
 export type TaskLinksReplace = components["schemas"]["TaskLinksReplace"];
-export type TaskRoleAssignment = components["schemas"]["TaskRoleAssignmentRead"];
 export type ImportBatch = components["schemas"]["ImportBatchResponse"];
 export type ImportBatchStatus = components["schemas"]["ImportBatchStatusResponse"];
 export type ImportRunAcceptedResponse = components["schemas"]["ImportRunAcceptedResponse"];
@@ -105,6 +106,9 @@ function describeStructuredDetailCode(code: unknown): string | null {
   }
   if (code === "PLANNING_STRUCTURE_REOPEN_INTEGRITY_CONFLICT") {
     return "Cette structure ne peut pas être rouverte : son intégrité a été compromise depuis sa validation.";
+  }
+  if (code === "ESTIMATE_TASK_CREATE_REQUIRES_PLANNING_DRAFT") {
+    return "Le planning affiché n'est plus un brouillon : rouvre sa structure depuis l'onglet Planning avant d'ajouter une tâche depuis le devis.";
   }
   if (code === "GENERIC_ERROR") {
     return GENERIC_ERROR_MESSAGE;
@@ -271,6 +275,58 @@ export function getPlanningRevisionConflict(cause: unknown): {
   };
 }
 
+// E6-11/#175: the structured 400 body `POST .../role-assignments` raises when a labor
+// assignment covers a (cost category, year) with no `CostRate`, or a year with no
+// `InflationRate`, and the task it's attached to is already dated (start_at/finish_at set).
+// `describeStructuredDetailCode` above never learns this code (it has no fixed French sentence:
+// the message must list the actual missing combinations/years), so `cause.message` alone would
+// only carry the generic fallback -- callers needing the details go through
+// getMissingRateCoverage/describeMissingRateCoverage below instead, same precedent as
+// getPlanningTaskDeleteConflict/getPlanningRevisionConflict.
+export type MissingRateCoverageDetail = components["schemas"]["MissingRateCoverage"]["detail"];
+
+// Basse review finding #4 (E12-06/#278): the `409` branch below isn't dead code, even though
+// neither of this file's current callers (submitCreateRoleAssignment/saveRoleAssignment in
+// use-estimate-cost-lines.ts) ever actually gets a 409 with this code -- POST .../
+// role-assignments (create) only ever raises MISSING_RATE_COVERAGE as a 400, and PATCH .../
+// role-assignments/{id} (update) never raises it at all (task_id/role_id, the only fields the
+// rate-coverage check depends on, are immutable once created -- its own 409s are the generic
+// "estimate no longer a draft" conflict). It's kept because `validate_project_estimate`
+// (apps/backend/.../routes/estimates.py) *does* raise this exact structured detail as a 409
+// (see its own `responses` docstring: "au moins une (categorie de cout, annee) ... sans
+// CostRate/InflationRate (detail.code=MISSING_RATE_COVERAGE)") -- this helper is a small,
+// generic, cause-agnostic detector, not tied to one specific caller, so it stays able to
+// recognize that shape from any endpoint that might raise it this way, present or future.
+export function getMissingRateCoverage(cause: unknown): MissingRateCoverageDetail | null {
+  if (!(cause instanceof ApiError) || (cause.status !== 400 && cause.status !== 409)) {
+    return null;
+  }
+  const detail = cause.detail as { code?: string } | undefined;
+  if (!detail || detail.code !== "MISSING_RATE_COVERAGE") {
+    return null;
+  }
+  return detail as MissingRateCoverageDetail;
+}
+
+// Builds a readable French message listing every missing (cost category, year) hourly-rate
+// combination and every missing inflation year from a MissingRateCoverage detail -- rather than
+// only the generic "Une erreur est survenue..." fallback describeStructuredDetailCode would
+// otherwise produce for this code.
+export function describeMissingRateCoverage(detail: MissingRateCoverageDetail): string {
+  const parts: string[] = [];
+  if (detail.missing_cost_rates.length) {
+    const list = detail.missing_cost_rates
+      .map((entry) => `${entry.accounting_code} ${entry.category_name} (${entry.year})`)
+      .join(", ");
+    parts.push(`taux horaire manquant pour ${list}`);
+  }
+  if (detail.missing_inflation_years.length) {
+    parts.push(`taux d'inflation manquant pour ${detail.missing_inflation_years.join(", ")}`);
+  }
+  const suffix = parts.length ? ` : ${parts.join(" ; ")}.` : ".";
+  return `Couverture de taux incomplète pour cette tâche déjà datée${suffix}`;
+}
+
 export async function login(email: string, password: string): Promise<TokenResponse> {
   const body = new URLSearchParams();
   body.set("username", email);
@@ -383,9 +439,11 @@ export function deleteUser(
 export async function getResourceNodes(
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
+  includeInactive = false,
 ): Promise<ResourceNode[]> {
+  const query = includeInactive ? "?include_inactive=true" : "";
   const page = await authRequest<components["schemas"]["ResourceNodeListRead"]>(
-    "/resources/nodes",
+    `/resources/nodes${query}`,
     tokens,
     { method: "GET" },
     onSessionRefresh,
@@ -446,11 +504,17 @@ export async function getResourceRoles(
   nodeId?: number,
   includeDescendants = false,
   listParams: ListQueryParams = {},
+  includeInactive = false,
 ): Promise<ListPage<ResourceRole>> {
-  const extra = nodeId
-    ? { node_id: String(nodeId), include_descendants: String(includeDescendants) }
-    : undefined;
-  const query = buildListQuery(listParams, extra);
+  const extra: Record<string, string> = {};
+  if (nodeId) {
+    extra.node_id = String(nodeId);
+    extra.include_descendants = String(includeDescendants);
+  }
+  if (includeInactive) {
+    extra.include_inactive = "true";
+  }
+  const query = buildListQuery(listParams, Object.keys(extra).length > 0 ? extra : undefined);
   const page = await authRequest<components["schemas"]["ResourceRoleListRead"]>(
     `/resources/roles${query}`,
     tokens,
@@ -549,6 +613,24 @@ export async function getCalendars(
     onSessionRefresh,
   );
   return { items: page.items, total: page.total };
+}
+
+// E12-10/#292: fetches a single calendar (with its `weekdays`, `CalendarRead` embeds them
+// inline -- no separate weekday-listing endpoint) so the "Ajouter une ligne MO" dialog can
+// prefill "Heures" from the selected role's own calendar once `getResourceRoles` has resolved
+// its `calendar_id`. Deliberately a single-resource GET, not folded into `getCalendars` above:
+// this is fetched on demand per role selection, not as part of the calendar referential list.
+export function getCalendar(
+  calendarId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+): Promise<Calendar> {
+  return authRequest<Calendar>(
+    `/resources/calendars/${calendarId}`,
+    tokens,
+    { method: "GET" },
+    onSessionRefresh,
+  );
 }
 
 export function createCalendar(
@@ -927,6 +1009,45 @@ export async function listEstimateTaskRows(
   return page.items;
 }
 
+export type EstimateTaskCreate = components["schemas"]["EstimateTaskCreate"];
+
+// Adds a task directly from the Devis screen (E6-06/#67): creates a snapshot task in the
+// project's *displayed* planning (which must be a draft) and a matching EstimateTaskRow in
+// this estimate (which must also be a draft) in one backend transaction. `target_parent_uid`/
+// `insert_after_uid`, when set, must be uids of the displayed planning's own tasks -- never an
+// EstimateTaskRow id/task_id, which the read model doesn't expose a uid for.
+export function createEstimateTask(
+  projectId: number,
+  estimateId: number,
+  payload: EstimateTaskCreate,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<EstimateTaskRow>(
+    `/projects/${projectId}/estimates/${estimateId}/tasks`,
+    tokens,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    onSessionRefresh,
+  );
+}
+
+// Inspects an error thrown by createEstimateTask for the structured 409 raised when the
+// project's displayed planning is not a draft (most commonly because it was validated and no
+// draft has been reopened since). Distinct from reading cause.message (already a full French
+// sentence via describeStructuredDetailCode above) because the caller needs to know this
+// specific case to also offer a "reopen the structure" action, not just display text.
+export function isEstimateTaskCreateRequiresPlanningDraft(cause: unknown): boolean {
+  if (!(cause instanceof ApiError) || cause.status !== 409) {
+    return false;
+  }
+  const detail = cause.detail as { code?: string } | undefined;
+  return detail?.code === "ESTIMATE_TASK_CREATE_REQUIRES_PLANNING_DRAFT";
+}
+
 export async function listEstimateCostLines(
   projectId: number,
   estimateId: number,
@@ -999,18 +1120,208 @@ export function deleteEstimateCostLine(
   );
 }
 
+// E12-06/#278: CRUD for EstimateRoleAssignment ("MO"/labor) rows -- same shape as the
+// EstimateCostLine wrappers just above. `EstimateRoleAssignmentCreate`/`Update` distinguish
+// themselves from EstimateCostLine's own: `task_id`/`role_id` are only ever set at creation
+// (immutable afterward, see EstimateRoleAssignmentUpdate's own doc comment in the OpenAPI spec),
+// so `EstimateRoleAssignmentUpdate` doesn't carry either field at all.
+export type EstimateRoleAssignmentCreate = components["schemas"]["EstimateRoleAssignmentCreate"];
+export type EstimateRoleAssignmentUpdate = components["schemas"]["EstimateRoleAssignmentUpdate"];
+
+export async function listEstimateRoleAssignments(
+  projectId: number,
+  estimateId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+): Promise<EstimateRoleAssignment[]> {
+  const page = await authRequest<components["schemas"]["EstimateRoleAssignmentListRead"]>(
+    `/projects/${projectId}/estimates/${estimateId}/role-assignments`,
+    tokens,
+    { method: "GET" },
+    onSessionRefresh,
+  );
+  return page.items;
+}
+
+export function createEstimateRoleAssignment(
+  projectId: number,
+  estimateId: number,
+  payload: EstimateRoleAssignmentCreate,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<EstimateRoleAssignment>(
+    `/projects/${projectId}/estimates/${estimateId}/role-assignments`,
+    tokens,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    onSessionRefresh,
+  );
+}
+
+export function updateEstimateRoleAssignment(
+  projectId: number,
+  estimateId: number,
+  assignmentId: number,
+  payload: EstimateRoleAssignmentUpdate,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<EstimateRoleAssignment>(
+    `/projects/${projectId}/estimates/${estimateId}/role-assignments/${assignmentId}`,
+    tokens,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    onSessionRefresh,
+  );
+}
+
+export function deleteEstimateRoleAssignment(
+  projectId: number,
+  estimateId: number,
+  assignmentId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<void>(
+    `/projects/${projectId}/estimates/${estimateId}/role-assignments/${assignmentId}`,
+    tokens,
+    { method: "DELETE" },
+    onSessionRefresh,
+  );
+}
+
+export type EstimateCostLineMilestonesCreate = components["schemas"]["EstimateCostLineMilestonesCreate"];
+
+// Applies a chained-milestone template to a non-labor cost line (E6-07/#68): creates 2
+// ("fourniture") or `2 + intermediate_milestones_count` ("sous_traitance") milestone tasks in the
+// project's *displayed* draft planning -- same snapshot/MsTask-twin/EstimateTaskRow wiring as
+// createEstimateTask above, one call for the whole chain -- then chains them pairwise with
+// Finish-to-Start links all carrying `payload.lag_minutes`. Rejects a labor cost line, a
+// non-draft estimate, or a non-draft displayed planning
+// (ESTIMATE_TASK_CREATE_REQUIRES_PLANNING_DRAFT, the exact same code createEstimateTask raises --
+// see isEstimateTaskCreateRequiresPlanningDraft above, reusable as-is by this endpoint's callers
+// too). Returns the created rows directly (not the envelope) since no caller here ever paginates
+// this fixed-size, single-shot result.
+export async function applyEstimateCostLineMilestoneTemplate(
+  projectId: number,
+  estimateId: number,
+  lineId: number,
+  payload: EstimateCostLineMilestonesCreate,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+): Promise<EstimateTaskRow[]> {
+  const page = await authRequest<components["schemas"]["EstimateTaskRowListRead"]>(
+    `/projects/${projectId}/estimates/${estimateId}/cost-lines/${lineId}/milestones`,
+    tokens,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    onSessionRefresh,
+  );
+  return page.items;
+}
+
+// #65 (E6-04): `validate` returns `warnings` (unassigned real tasks) on top of the usual
+// `ProjectEstimateRead` fields -- distinct from `ProjectEstimate` since no other estimate
+// endpoint computes/returns this field.
+export type EstimateValidationWarning = components["schemas"]["EstimateValidationWarning"];
+export type EstimateValidationResult = components["schemas"]["EstimateValidationRead"];
+
 export function validateProjectEstimate(
   projectId: number,
   estimateId: number,
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
 ) {
-  return authRequest<ProjectEstimate>(
+  return authRequest<EstimateValidationResult>(
     `/projects/${projectId}/estimates/${estimateId}/validate`,
     tokens,
     { method: "POST" },
     onSessionRefresh,
   );
+}
+
+// E12-07/#289: moves/reorders a selection of a draft devis grid's cost-line/role-assignment
+// nodes (E12-10/#292's tree table toolbar) -- mirrors movePlanningTasks. Unlike that endpoint,
+// the response here is only the estimate's own metadata (`ProjectEstimateRead`, revision
+// incremented) -- not the moved rows themselves -- so a caller must follow a successful move
+// with a fresh `listEstimateCostLines`/`listEstimateRoleAssignments`/`listEstimateTaskRows` to
+// see the tree's new `row_number`/`position`/`parent_uid` (see this issue's own review note:
+// never recompute those client-side after a move).
+export type EstimateGridNodeMove = components["schemas"]["EstimateGridNodeMove"];
+
+export function moveEstimateGridNodes(
+  projectId: number,
+  estimateId: number,
+  payload: EstimateGridNodeMove,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<ProjectEstimate>(
+    `/projects/${projectId}/estimates/${estimateId}/grid-nodes/move`,
+    tokens,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    onSessionRefresh,
+  );
+}
+
+// Inspects an error thrown by moveEstimateGridNodes for the structured ESTIMATE_REVISION_CONFLICT
+// 409 body -- mirrors getPlanningRevisionConflict above, one level up (an estimate's own
+// `revision`, not a planning's).
+export function getEstimateRevisionConflict(cause: unknown): {
+  projectId: number;
+  estimateId: number;
+  expectedRevision: number;
+  currentRevision: number;
+} | null {
+  if (!(cause instanceof ApiError) || cause.status !== 409) {
+    return null;
+  }
+  const detail = cause.detail as
+    | {
+        code?: string;
+        project_id?: number;
+        estimate_id?: number;
+        expected_revision?: number;
+        current_revision?: number;
+      }
+    | undefined;
+  if (!detail || detail.code !== "ESTIMATE_REVISION_CONFLICT") {
+    return null;
+  }
+  return {
+    projectId: detail.project_id ?? 0,
+    estimateId: detail.estimate_id ?? 0,
+    expectedRevision: detail.expected_revision ?? 0,
+    currentRevision: detail.current_revision ?? 0,
+  };
+}
+
+export async function getProjectCostCodes(
+  projectId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+): Promise<ProjectCostCode[]> {
+  const page = await authRequest<components["schemas"]["ProjectCostCodeListRead"]>(
+    `/projects/${projectId}/cost-codes`,
+    tokens,
+    { method: "GET" },
+    onSessionRefresh,
+  );
+  return page.items;
 }
 
 export type EstimateAggregates = components["schemas"]["EstimateAggregatesRead"];
@@ -1580,63 +1891,29 @@ export function updateTaskDescription(
   );
 }
 
-export async function getTaskRoleAssignments(
+// E12-08/#290: renames a task straight from a Devis grid row (E12-10/#292) -- the same
+// `PATCH .../tasks/{taskUid}` endpoint as updateTaskDescription just above, generalized (the
+// backend's own `TaskUpdate` schema now carries an optional `name` alongside `description`), but
+// kept as its own function rather than a shared `{description, name}` signature: every existing
+// caller of updateTaskDescription only ever sends `description`, and a single combined function
+// would force those call sites to also pass a meaningless `name: undefined`.
+export function updateTaskName(
   projectId: number,
   taskUid: number,
-  tokens: SessionTokens,
-  onSessionRefresh: (next: SessionTokens) => void,
-): Promise<TaskRoleAssignment[]> {
-  const page = await authRequest<components["schemas"]["TaskRoleAssignmentListRead"]>(
-    `/projects/${projectId}/tasks/${taskUid}/role-assignments`,
-    tokens,
-    { method: "GET" },
-    onSessionRefresh,
-  );
-  return page.items;
-}
-
-export function createTaskRoleAssignment(
-  projectId: number,
-  taskUid: number,
-  payload: { role_id: number; quantity: number; hours: number; comment?: string | null },
+  name: string,
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
 ) {
-  return authRequest<TaskRoleAssignment>(
-    `/projects/${projectId}/tasks/${taskUid}/role-assignments`,
+  return authRequest<Task>(
+    `/projects/${projectId}/tasks/${taskUid}`,
     tokens,
-    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
-    onSessionRefresh,
-  );
-}
-
-export function updateTaskRoleAssignment(
-  projectId: number,
-  taskUid: number,
-  assignmentId: number,
-  payload: { quantity?: number; hours?: number; comment?: string | null },
-  tokens: SessionTokens,
-  onSessionRefresh: (next: SessionTokens) => void,
-) {
-  return authRequest<TaskRoleAssignment>(
-    `/projects/${projectId}/tasks/${taskUid}/role-assignments/${assignmentId}`,
-    tokens,
-    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
-    onSessionRefresh,
-  );
-}
-
-export function deleteTaskRoleAssignment(
-  projectId: number,
-  taskUid: number,
-  assignmentId: number,
-  tokens: SessionTokens,
-  onSessionRefresh: (next: SessionTokens) => void,
-) {
-  return authRequest<void>(
-    `/projects/${projectId}/tasks/${taskUid}/role-assignments/${assignmentId}`,
-    tokens,
-    { method: "DELETE" },
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ name }),
+    },
     onSessionRefresh,
   );
 }

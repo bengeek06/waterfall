@@ -1,11 +1,7 @@
 type: object
-required:
-- role_id
-- quantity
-- hours
 properties:
-  role_id:
-    type: integer
+  cost_code_id:
+    type: [integer, "null"]
     minimum: 1
   quantity:
     type: number

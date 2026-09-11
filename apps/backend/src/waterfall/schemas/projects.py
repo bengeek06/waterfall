@@ -3,7 +3,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from waterfall.schemas.pagination import PaginatedList
 
@@ -122,7 +122,15 @@ class TaskRead(BaseModel):
     id: int
     project_id: int
     uid: int
-    id_display: int | None
+    row_number: int = Field(
+        description=(
+            "Rank of the task in the planning's current display order (flattened "
+            "depth-first walk, siblings sorted the same way as `outline_number`). "
+            "Recomputed on every read, never stored -- it changes whenever the task "
+            "is moved, reparented, or another task is created/deleted ahead of it. "
+            "Read-only: this field cannot be set by clients."
+        )
+    )
     structure_key: str | None
     structure_kind: StructureKind | None
     parent_uid: int | None
@@ -186,8 +194,23 @@ class TaskLinksReplace(BaseModel):
     expected_revision: int = Field(ge=0)
 
 
-class TaskDescriptionUpdate(BaseModel):
+class TaskUpdate(BaseModel):
+    """`PATCH .../tasks/{task_uid}` (issue #290, E12-08, extends the pre-existing
+    description-only endpoint with `name`).
+
+    ``description`` keeps its pre-existing "always applied" semantics (an
+    absent/blank value clears it -- see ``normalize_description`` below,
+    unchanged since before E12-08): it is the endpoint's original, only field,
+    and every caller of this schema already always supplies it. ``name`` is
+    genuinely optional -- ``None`` means "leave the task's name untouched",
+    never "clear the name" (`MsTask.name`/`WfPlanningTaskSnapshot.name` are
+    both `NOT NULL`), so it deliberately does *not* reuse
+    ``normalize_description``'s blank-clears-to-``None`` behaviour: a blank
+    ``name`` is rejected outright by ``_optional_text`` instead.
+    """
+
     description: str | None = Field(default=None, max_length=10000)
+    name: str | None = Field(default=None, min_length=1, max_length=512)
 
     @field_validator("description", mode="before")
     @classmethod
@@ -196,6 +219,8 @@ class TaskDescriptionUpdate(BaseModel):
             return None
         normalized = value.strip()
         return normalized or None
+
+    _normalize_name = field_validator("name")(_optional_text)
 
 
 class PlanningDeliverableCreate(BaseModel):
@@ -303,11 +328,13 @@ class PlanningTaskSnapshotWrite(BaseModel):
     via ``TaskRead`` (plus the raw ``notes``, not exposed as ``description`` on
     reads for no particular reason other than naming): values are restored
     verbatim, never recalculated, since they were already valid when the
-    server originally computed and returned them.
+    server originally computed and returned them. Deliberately excludes
+    ``TaskRead.row_number``: it is never stored on ``WfPlanningTaskSnapshot`` and
+    is always recomputed at read time (see #147/E9-02), so there is nothing to
+    restore verbatim here.
     """
 
     uid: int = Field(ge=1)
-    id_display: int | None
     structure_key: str | None = Field(max_length=128)
     structure_kind: StructureKind | None
     parent_uid: int | None = Field(gt=0)
@@ -480,52 +507,39 @@ class PlanningTreeRead(BaseModel):
     tasks: list[PlanningTaskTreeRead]
 
 
-class TaskRoleAssignmentCreate(BaseModel):
-    role_id: int = Field(gt=0)
-    quantity: Decimal = Field(gt=0, max_digits=10, decimal_places=2)
-    hours: Decimal = Field(ge=0, max_digits=14, decimal_places=2)
-    comment: str | None = Field(default=None, max_length=10000)
+class MissingRateCoverageEntry(BaseModel):
+    """One missing (cost category, year) `CostRate` combination, part of
+    `MissingRateCoverageDetail.missing_cost_rates` (E6-11/#175)."""
 
-    @field_validator("comment", mode="before")
-    @classmethod
-    def normalize_comment(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        normalized = value.strip()
-        return normalized or None
-
-
-class TaskRoleAssignmentUpdate(BaseModel):
-    quantity: Decimal | None = Field(default=None, gt=0, max_digits=10, decimal_places=2)
-    hours: Decimal | None = Field(default=None, ge=0, max_digits=14, decimal_places=2)
-    comment: str | None = Field(default=None, max_length=10000)
-
-    @field_validator("comment", mode="before")
-    @classmethod
-    def normalize_comment(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        normalized = value.strip()
-        return normalized or None
-
-
-class TaskRoleAssignmentRead(BaseModel):
-    id: int
-    task_id: int
-    role_id: int
-    role_code: str
-    role_name: str
-    cost_category_id: int
+    category_id: int
+    category_name: str
     accounting_code: str
-    quantity: Decimal
-    hours: Decimal
-    comment: str | None
-    created_at: datetime
-    updated_at: datetime
+    year: int
 
 
-class TaskRoleAssignmentListRead(PaginatedList[TaskRoleAssignmentRead]):
-    pass
+class MissingRateCoverageDetail(BaseModel):
+    """Structured 400/409 `detail` for `create_estimate_role_assignment`
+    (``POST .../role-assignments``) and `validate_project_estimate`
+    (``POST .../validate``) when a labor assignment covers a (cost category,
+    year) with no `CostRate`, or a year with no `InflationRate` (E6-11/#175).
+
+    Lists every missing combination found (via
+    ``waterfall.services.estimate_calculation.collect_missing_rate_coverage``),
+    not just the first one, so a real HTTP client actually receives the
+    category/year detail the acceptance criteria calls for -- previously lost
+    because `_generic_http_exception_handler` rewrites any string/list
+    `HTTPException.detail` into a generic `{"code": "GENERIC_ERROR"}` before it
+    reaches the response; only a structured (dict) `detail`, like this one,
+    passes through unchanged.
+    """
+
+    code: Literal["MISSING_RATE_COVERAGE"]
+    missing_cost_rates: list[MissingRateCoverageEntry]
+    missing_inflation_years: list[int]
+
+
+class MissingRateCoverage(BaseModel):
+    detail: MissingRateCoverageDetail
 
 
 class ProjectEstimateCreate(BaseModel):
@@ -562,6 +576,10 @@ class ProjectEstimateRead(BaseModel):
     kind: str
     status: str
     currency_code: str
+    # Issue #289 (E12-07): optimistic-concurrency counter for the devis's grid
+    # node tree, mirroring PlanningRead.revision -- see
+    # EstimateGridNodeMove/move_estimate_grid_nodes.
+    revision: int
     created_at: datetime
     validated_at: datetime | None
     note: str | None
@@ -571,10 +589,67 @@ class ProjectEstimateListRead(PaginatedList[ProjectEstimateRead]):
     pass
 
 
+class EstimateValidationWarning(BaseModel):
+    """Issue #65 (E6-04): a "real" planning task with neither a labor
+    assignment nor a linked cost line at the moment an estimate is validated
+    -- i.e. a task the pricing exercise likely forgot. Purely advisory: it
+    never blocks validation, it only surfaces which tasks to double-check.
+    """
+
+    task_uid: int
+    task_name: str
+
+
+class EstimateValidationRead(ProjectEstimateRead):
+    """Response of ``POST .../estimates/{estimate_id}/validate`` only.
+
+    Deliberately not folded into ``ProjectEstimateRead`` itself: that schema
+    is shared by `list_project_estimates`/`create_project_estimate`/
+    `set_estimate_reference`, none of which compute this warning, so they
+    would otherwise carry an always-empty/absent `warnings` field with no
+    meaning in their context.
+    """
+
+    warnings: list[EstimateValidationWarning]
+
+
+class EstimateTaskCreate(BaseModel):
+    """Add a task to the project's displayed draft planning from the estimate screen (E6-06/#67).
+
+    Mirrors ``PlanningTaskCreate``'s own task-placement fields (``target_parent_uid``
+    identifies the parent by its planning uid, not by an ``EstimateTaskRow``/``MsTask``
+    id) so the same placement semantics apply regardless of which screen -- Planning
+    tree or Devis -- created the task; kept as its own schema (rather than reused
+    directly) since this is a distinct capability documented under the estimates
+    resource, with its own response shape (``EstimateTaskRowRead``, not
+    ``PlanningDetailRead``). Absence of ``insert_after_uid`` places the new task as
+    the first child of ``target_parent_uid`` -- or, when ``target_parent_uid`` is
+    itself absent, as the first root task -- identical to ``PlanningTaskCreate``.
+    """
+
+    name: str = Field(min_length=1, max_length=512)
+    is_milestone: bool = False
+    target_parent_uid: int | None = Field(default=None, gt=0)
+    insert_after_uid: int | None = Field(default=None, gt=0)
+
+    _normalize_name = field_validator("name")(_required_text)
+
+
 class EstimateTaskRowRead(BaseModel):
     id: int
     estimate_id: int
     task_id: int | None = None
+    # Issue #290 (E12-08): the task's own business `uid`, resolved live from
+    # WfPlanningTaskSnapshot/MsTask for a draft estimate (see
+    # services.estimate_task_display) -- exposed for E12-09's future
+    # tasks/cost-lines tree merge, not consumed by anything in this issue.
+    task_uid: int | None = None
+    # Issue #291 (E12-09): this row's 1-based rank in the devis's merged
+    # tasks+grid-node tree (see order_estimate_grid_depth_first),
+    # recomputed on every read, never stored. `None` only in the same
+    # pre-existing degenerate case `task_uid` itself already falls back to
+    # `None` for (this row's task can no longer be resolved at all).
+    row_number: int | None = None
     parent_task_id: int | None = None
     position: int
     task_name: str
@@ -587,16 +662,90 @@ class EstimateTaskRowListRead(PaginatedList[EstimateTaskRowRead]):
     pass
 
 
+class MilestoneTemplate(StrEnum):
+    """Fixed chained-milestone templates applied to a non-labor cost line (E6-07/#68).
+
+    Hard-coded, not an editable engine: ``FOURNITURE`` always yields exactly the
+    2 milestones "Commande" -> "Reception" linked by 1 FS link; ``SOUS_TRAITANCE``
+    always yields "Commande" -> N "Jalon intermediaire" milestones -> "Livraison"
+    (N+2 total, chained by N+1 FS links), N coming from
+    ``EstimateCostLineMilestonesCreate.intermediate_milestones_count``.
+    """
+
+    FOURNITURE = "fourniture"
+    SOUS_TRAITANCE = "sous_traitance"
+
+
+class EstimateCostLineMilestonesCreate(BaseModel):
+    """Apply a chained-milestone template to a non-labor cost line (E6-07/#68).
+
+    All milestones created by a single call share the exact same lag: the
+    template models a single supplier delay applied uniformly to every link in
+    the chain, not a per-link value the caller would otherwise have to repeat.
+    ``intermediate_milestones_count`` only applies to ``SOUS_TRAITANCE`` -- an
+    explicit non-zero value together with ``FOURNITURE`` is rejected rather
+    than silently ignored, since it can only reflect a caller/template mismatch.
+    """
+
+    template: MilestoneTemplate
+    # Bounded well above any realistic subcontracting chain, but still finite: an
+    # unbounded value would let a single call insert an arbitrarily large number of
+    # tasks/links into the draft planning within one request.
+    intermediate_milestones_count: int = Field(default=0, ge=0, le=50)
+    # Expressed in minutes -- like the rest of this schema's duration/lag fields
+    # (see PlanningTaskScheduleUpdate.duration_minutes) -- and converted to
+    # lag_tenth_minute (x10) plus a fixed lag_format=7 (MSPDI "d", working days,
+    # see services.planning_tree's own LagFormat convention comment), matching
+    # the convention already used by TaskLinkWrite-based predecessor edits (see
+    # apps/frontend/src/hooks/use-planning-task-links.ts). Bounded to the same
+    # ~15 years as PlanningTaskScheduleUpdate.duration_minutes.
+    lag_minutes: int = Field(default=0, ge=0, le=7_884_000)
+
+    @model_validator(mode="after")
+    def _validate_intermediate_count(self) -> "EstimateCostLineMilestonesCreate":
+        if (
+            self.template == MilestoneTemplate.FOURNITURE
+            and self.intermediate_milestones_count != 0
+        ):
+            raise ValueError(
+                "intermediate_milestones_count is only valid for the sous_traitance template"
+            )
+        return self
+
+
 SupplyStatus = Literal["planned", "ordered", "received", "cancelled"]
+
+
+def _nonzero_or_none(value: int | None) -> int | None:
+    """Shared `target_parent_uid` validator: 0 is never a valid grid node/task uid
+    (positive uids are `MsTask.id`, negative uids are `EstimateGridNode.uid` --
+    see EstimateGridNodeMove), unlike `None` (the devis root)."""
+    if value == 0:
+        raise ValueError("must not be 0")
+    return value
 
 
 class EstimateCostLineCreate(BaseModel):
     task_id: int | None = Field(default=None, gt=0)
     cost_category_id: int = Field(gt=0)
+    # Issue #63 (E6-02): see EstimateRoleAssignmentCreate.cost_code_id below for the
+    # same default-to-project-root / must-belong-to-project rules.
+    cost_code_id: int | None = Field(default=None, gt=0)
     label: str = Field(min_length=1, max_length=512)
     quantity: Decimal = Field(gt=0, max_digits=14, decimal_places=2)
     unit_cost: Decimal = Field(ge=0, max_digits=16, decimal_places=2)
     supply_status: SupplyStatus | None = None
+    # Issue #66 (E6-05): forecast date for future cashflow curves, independent
+    # from task_id -- either, both, or neither may be set.
+    planned_date: datetime | None = None
+    # Issue #289 (E12-07): the new grid node's position, same semantics as
+    # PlanningTaskCreate.target_parent_uid/insert_after_uid -- positive
+    # references a task of this estimate's own task-rows, negative another
+    # grid node of this estimate. Both absent places the new line as the last
+    # child of the devis root (unlike PlanningTaskCreate, which defaults to
+    # the first child -- see create_estimate_grid_node/move_estimate_grid_nodes).
+    target_parent_uid: int | None = Field(default=None)
+    insert_after_uid: int | None = Field(default=None, lt=0)
 
     @field_validator("supply_status", mode="before")
     @classmethod
@@ -610,14 +759,18 @@ class EstimateCostLineCreate(BaseModel):
     def normalize_label(cls, value: str) -> str:
         return _required_text(value)
 
+    _validate_target_parent_uid = field_validator("target_parent_uid")(_nonzero_or_none)
+
 
 class EstimateCostLineUpdate(BaseModel):
     task_id: int | None = Field(default=None, gt=0)
     cost_category_id: int | None = Field(default=None, gt=0)
+    cost_code_id: int | None = Field(default=None, gt=0)
     label: str | None = Field(default=None, min_length=1, max_length=512)
     quantity: Decimal | None = Field(default=None, gt=0, max_digits=14, decimal_places=2)
     unit_cost: Decimal | None = Field(default=None, ge=0, max_digits=16, decimal_places=2)
     supply_status: SupplyStatus | None = None
+    planned_date: datetime | None = None
 
     @field_validator("supply_status", mode="before")
     @classmethod
@@ -640,6 +793,7 @@ class EstimateCostLineRead(BaseModel):
     task_id: int | None
     cost_type_id: int
     cost_category_id: int
+    cost_code_id: int | None
     cost_type_code: str
     accounting_code: str
     category_code: str | None
@@ -648,10 +802,128 @@ class EstimateCostLineRead(BaseModel):
     unit_cost: Decimal
     purchase_cost: Decimal
     supply_status: SupplyStatus | None
+    planned_date: datetime | None
+    # Issue #289 (E12-07)/#291 (E12-09): this line's own EstimateGridNode,
+    # exposed as-is -- a positive `parent_uid` is a `MsTask.id` (see
+    # EstimateGridNode's own docstring), matching EstimateGridNodeMove's wire
+    # contract, so a value read here can be fed straight back into
+    # `target_parent_uid` on a later grid-nodes/move call without translation.
+    uid: int
+    parent_uid: int | None
+    position: int
+    # Issue #291 (E12-09): this line's 1-based rank in the devis's merged
+    # tasks+grid-node tree -- recomputed on every read, never stored. Always
+    # present (unlike EstimateTaskRowRead.row_number): every existing line
+    # owns exactly one grid node, always visited by the merged traversal.
+    row_number: int
 
 
 class EstimateCostLineListRead(PaginatedList[EstimateCostLineRead]):
     pass
+
+
+class EstimateRoleAssignmentCreate(BaseModel):
+    """A devis-version-scoped labor role assignment (E12-01/#273).
+
+    `task_id` refers to `MsTask.id` -- like `EstimateCostLineCreate.task_id` --
+    never a planning uid: the caller is expected to already have resolved a
+    task through the estimate's own task-rows/tasks endpoints.
+    """
+
+    task_id: int = Field(gt=0)
+    role_id: int = Field(gt=0)
+    # Issue #63 (E6-02): the project cost-imputation code this line of labor cost is
+    # attached to. Left unset, it defaults to the project's active root cost code
+    # (see resolve_cost_code_id); an explicit value must belong to the same project.
+    cost_code_id: int | None = Field(default=None, gt=0)
+    quantity: Decimal = Field(gt=0, max_digits=10, decimal_places=2)
+    hours: Decimal = Field(ge=0, max_digits=14, decimal_places=2)
+    comment: str | None = Field(default=None, max_length=10000)
+    # Issue #289 (E12-07): same grid-node positioning semantics as
+    # EstimateCostLineCreate.target_parent_uid/insert_after_uid above --
+    # entirely independent of `task_id`. Left unset, the new node lands at the
+    # devis root, regardless of `task_id`; a later move (move_estimate_grid_nodes)
+    # is what keeps `task_id` in sync with the node's actual tree position.
+    target_parent_uid: int | None = Field(default=None)
+    insert_after_uid: int | None = Field(default=None, lt=0)
+
+    @field_validator("comment", mode="before")
+    @classmethod
+    def normalize_comment(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    _validate_target_parent_uid = field_validator("target_parent_uid")(_nonzero_or_none)
+
+
+class EstimateRoleAssignmentUpdate(BaseModel):
+    """`task_id`/`role_id` are immutable once created -- only the fields below may
+    change, mirroring the removed `TaskRoleAssignmentUpdate`'s own contract."""
+
+    cost_code_id: int | None = Field(default=None, gt=0)
+    quantity: Decimal | None = Field(default=None, gt=0, max_digits=10, decimal_places=2)
+    hours: Decimal | None = Field(default=None, ge=0, max_digits=14, decimal_places=2)
+    comment: str | None = Field(default=None, max_length=10000)
+
+    @field_validator("comment", mode="before")
+    @classmethod
+    def normalize_comment(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+
+class EstimateRoleAssignmentRead(BaseModel):
+    id: int
+    estimate_id: int
+    # Nullable since issue #289 (E12-07): a role assignment unindented all the
+    # way to the devis root (see move_estimate_grid_nodes) has no ancestor
+    # task left to reference.
+    task_id: int | None
+    role_id: int
+    role_code: str
+    role_name: str
+    cost_category_id: int
+    accounting_code: str
+    cost_code_id: int | None
+    quantity: Decimal
+    hours: Decimal
+    comment: str | None
+    created_at: datetime
+    updated_at: datetime
+    # Issue #291 (E12-09): same EstimateGridNode-as-is contract as
+    # EstimateCostLineRead.uid/parent_uid/position above.
+    uid: int
+    parent_uid: int | None
+    position: int
+    # Issue #291 (E12-09): same always-present row_number contract as
+    # EstimateCostLineRead.row_number above.
+    row_number: int
+
+
+class EstimateRoleAssignmentListRead(PaginatedList[EstimateRoleAssignmentRead]):
+    pass
+
+
+class EstimateGridNodeMove(BaseModel):
+    """Move/reorder a selection of a devis grid's cost-line/role-assignment nodes
+    (E12-07, issue #289) -- structurally mirrors `PlanningTaskMove`.
+
+    `node_uids` addresses `EstimateGridNode.uid` values only (always negative,
+    see `EstimateGridNode`) -- never a task. `target_parent_uid` is one of:
+    positive (an existing task of this estimate's own task-rows), negative (an
+    existing grid node of this estimate), or `None` (the devis root).
+    """
+
+    node_uids: list[Annotated[int, Field(lt=0)]] = Field(min_length=1)
+    target_parent_uid: int | None = Field(default=None)
+    position: int = Field(ge=1)
+    expected_revision: int = Field(ge=0)
+
+    _validate_target_parent_uid = field_validator("target_parent_uid")(_nonzero_or_none)
 
 
 class EstimateAggregatesRead(BaseModel):
@@ -659,3 +931,91 @@ class EstimateAggregatesRead(BaseModel):
     total_purchase_cost: Decimal
     total_unburdened_cost: Decimal
     by_category: dict[str, Decimal]
+
+
+class ReconciliationIssue(BaseModel):
+    """One structured entry of a `ReconciliationPlanRead` list (E6-09/#70).
+
+    ``sheet``/``row`` let the caller point the user at the exact Excel cell a
+    problem or an ignored change came from (``row`` is the 1-based Excel row
+    number, i.e. counting the header row); both are `None` for an issue that
+    isn't scoped to a single file row (e.g. a precondition on the whole
+    import, or an existing-row deletion, which by definition has no row left
+    in the file to point at).
+    """
+
+    code: str
+    message: str
+    sheet: str | None = None
+    row: int | None = None
+
+
+class ReconciliationPlanRead(BaseModel):
+    """Diagnostic + outcome of an estimate reconciliation import (E6-09/#70).
+
+    Returned by both `POST .../import-reconciliation/preview` (always
+    `applied=False`, nothing written) and `POST .../import-reconciliation/confirm`
+    (`applied=True` once committed) -- the two endpoints run the exact same
+    analysis on the same file, so a preview accurately predicts what a
+    confirm on the same, unmodified file will do. `blocking_issues` non-empty
+    means nothing was, or will be, written: a `confirm` in that state reports
+    `applied=False` and responds with a non-2xx status instead of a
+    misleadingly successful one.
+
+    The `_to_create`/`_to_update`/`_to_delete` fields describe the plan as
+    computed from the file diff, independently of whether every individual
+    change could actually be applied -- an apply-time failure on one specific
+    row (e.g. a task deletion blocked by a cascade or a reference) is
+    reported as its own `blocking_issues` entry rather than by shrinking
+    these counts, since `blocking_issues` non-empty already means none of
+    them were kept.
+    """
+
+    blocking_issues: list[ReconciliationIssue] = Field(default_factory=list)
+    warnings: list[ReconciliationIssue] = Field(default_factory=list)
+    tasks_to_create: int = 0
+    tasks_to_delete: list[Annotated[int, Field(ge=1)]] = Field(default_factory=list)
+    labor_to_create: int = 0
+    labor_to_update: list[Annotated[int, Field(ge=1)]] = Field(default_factory=list)
+    labor_to_delete: list[Annotated[int, Field(ge=1)]] = Field(default_factory=list)
+    non_labor_to_create: int = 0
+    non_labor_to_update: list[Annotated[int, Field(ge=1)]] = Field(default_factory=list)
+    non_labor_to_delete: list[Annotated[int, Field(ge=1)]] = Field(default_factory=list)
+    applied: bool = False
+
+
+class ProjectCostCodeBase(BaseModel):
+    code: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=255)
+
+    _normalize_code = field_validator("code")(_required_text)
+    _normalize_name = field_validator("name")(_required_text)
+
+
+class ProjectCostCodeCreate(ProjectCostCodeBase):
+    parent_id: int | None = Field(default=None, gt=0)
+
+
+class ProjectCostCodeUpdate(BaseModel):
+    code: str | None = Field(default=None, min_length=1, max_length=64)
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    parent_id: int | None = Field(default=None, gt=0)
+    is_active: bool | None = None
+
+    _normalize_code = field_validator("code")(_optional_text)
+    _normalize_name = field_validator("name")(_optional_text)
+
+
+class ProjectCostCodeRead(ProjectCostCodeBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    project_id: int
+    parent_id: int | None
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProjectCostCodeListRead(PaginatedList[ProjectCostCodeRead]):
+    pass

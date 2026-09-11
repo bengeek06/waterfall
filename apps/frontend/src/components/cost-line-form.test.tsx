@@ -8,11 +8,21 @@ const costCategories = [{ id: 1, name: "Achats" }] as never;
 function renderForm(overrides: Partial<CostLineFormProps> = {}) {
   const props: CostLineFormProps = {
     costCategories,
-    costLineDraft: { categoryId: "1", label: "Achat licences", quantity: "2.00", unitCost: "150.00" },
+    estimateTaskRows: [],
+    costLineDraft: {
+      categoryId: "1",
+      label: "Achat licences",
+      quantity: "2.00",
+      unitCost: "150.00",
+      plannedDate: "",
+      taskId: "",
+    },
     onCategoryChange: vi.fn(),
     onLabelChange: vi.fn(),
     onQuantityChange: vi.fn(),
     onUnitCostChange: vi.fn(),
+    onPlannedDateChange: vi.fn(),
+    onTaskIdChange: vi.fn(),
     estimateBusy: false,
     onAdd: vi.fn(),
     ...overrides,
@@ -38,7 +48,7 @@ describe("CostLineForm", () => {
     // `min`/`step`/`required` constraints declared on this field entirely.
     const onAdd = vi.fn();
     renderForm({
-      costLineDraft: { categoryId: "1", label: "Achat licences", quantity: "-2", unitCost: "150.00" },
+      costLineDraft: { categoryId: "1", label: "Achat licences", quantity: "-2", unitCost: "150.00", plannedDate: "", taskId: "" },
       onAdd,
     });
 
@@ -55,7 +65,7 @@ describe("CostLineForm", () => {
     // rejected by the backend afterwards.
     const onAdd = vi.fn();
     renderForm({
-      costLineDraft: { categoryId: "1", label: "Achat licences", quantity: "0", unitCost: "150.00" },
+      costLineDraft: { categoryId: "1", label: "Achat licences", quantity: "0", unitCost: "150.00", plannedDate: "", taskId: "" },
       onAdd,
     });
 
@@ -68,7 +78,7 @@ describe("CostLineForm", () => {
     // Regression test for #201, symmetric with the quantity case above.
     const onAdd = vi.fn();
     renderForm({
-      costLineDraft: { categoryId: "1", label: "Achat licences", quantity: "2.00", unitCost: "-10" },
+      costLineDraft: { categoryId: "1", label: "Achat licences", quantity: "2.00", unitCost: "-10", plannedDate: "", taskId: "" },
       onAdd,
     });
 
@@ -85,7 +95,7 @@ describe("CostLineForm", () => {
     // silently coercing to `Number("") === 0` must not slip through either.
     const onAdd = vi.fn();
     renderForm({
-      costLineDraft: { categoryId: "1", label: "Achat licences", quantity: "", unitCost: "150.00" },
+      costLineDraft: { categoryId: "1", label: "Achat licences", quantity: "", unitCost: "150.00", plannedDate: "", taskId: "" },
       onAdd,
     });
 
@@ -97,7 +107,7 @@ describe("CostLineForm", () => {
   it("still adds when the unit cost is exactly 0, since 0 is a legitimate purchase cost", () => {
     const onAdd = vi.fn();
     renderForm({
-      costLineDraft: { categoryId: "1", label: "Achat licences", quantity: "2.00", unitCost: "0" },
+      costLineDraft: { categoryId: "1", label: "Achat licences", quantity: "2.00", unitCost: "0", plannedDate: "", taskId: "" },
       onAdd,
     });
 
@@ -109,7 +119,7 @@ describe("CostLineForm", () => {
   it("still adds when the unit cost is left blank, since 0 is a legitimate purchase cost", () => {
     const onAdd = vi.fn();
     renderForm({
-      costLineDraft: { categoryId: "1", label: "Achat licences", quantity: "2.00", unitCost: "" },
+      costLineDraft: { categoryId: "1", label: "Achat licences", quantity: "2.00", unitCost: "", plannedDate: "", taskId: "" },
       onAdd,
     });
 
@@ -121,12 +131,94 @@ describe("CostLineForm", () => {
   it("does not validate the free-text label field", () => {
     const onAdd = vi.fn();
     renderForm({
-      costLineDraft: { categoryId: "1", label: "", quantity: "2.00", unitCost: "150.00" },
+      costLineDraft: { categoryId: "1", label: "", quantity: "2.00", unitCost: "150.00", plannedDate: "", taskId: "" },
       onAdd,
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Ajouter la ligne" }));
 
     expect(onAdd).toHaveBeenCalledOnce();
+  });
+
+  // #66 (E6-05): planned_date is optional, independent from task_id -- an empty value must never
+  // block "Ajouter la ligne" (unlike quantity, it carries no `required`/HTML5 numeric constraint).
+  describe("planned date (E6-05)", () => {
+    it("still adds when the planned date is left blank, since the field is optional", () => {
+      const onAdd = vi.fn();
+      renderForm({
+        costLineDraft: { categoryId: "1", label: "Achat licences", quantity: "2.00", unitCost: "150.00", plannedDate: "", taskId: "" },
+        onAdd,
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Ajouter la ligne" }));
+
+      expect(onAdd).toHaveBeenCalledOnce();
+    });
+
+    it("reports a change to the planned date field", () => {
+      const onPlannedDateChange = vi.fn();
+      renderForm({ onPlannedDateChange });
+
+      fireEvent.change(screen.getByLabelText("Date prévisionnelle"), { target: { value: "2026-10-01" } });
+
+      expect(onPlannedDateChange).toHaveBeenCalledWith("2026-10-01");
+    });
+  });
+
+  // E12-04/#276: the "Tâche" selector, optional, wired to CostLineDraft.taskId (task_id in the
+  // create payload).
+  describe("task selector (E12-04)", () => {
+    const estimateTaskRows = [
+      {
+        id: 1,
+        estimate_id: 1,
+        task_id: 42,
+        parent_task_id: null,
+        position: 1,
+        task_name: "Terrassement",
+        outline_number: "1",
+        outline_level: 0,
+        is_milestone: false,
+      },
+      {
+        id: 2,
+        estimate_id: 1,
+        task_id: null,
+        parent_task_id: 42,
+        position: 2,
+        task_name: "Sous-tâche sans jumeau",
+        outline_number: "1.1",
+        outline_level: 1,
+        is_milestone: false,
+      },
+    ] as never;
+
+    it("always offers 'Aucune' and defaults to it", () => {
+      renderForm({ estimateTaskRows });
+
+      expect(screen.getByRole("combobox", { name: "Tâche" })).toHaveValue("");
+      expect(screen.getByRole("option", { name: "Aucune" })).toBeInTheDocument();
+    });
+
+    it("offers every task row that has a task_id (a MsTask twin)", () => {
+      renderForm({ estimateTaskRows });
+
+      expect(screen.getByRole("option", { name: "Terrassement" })).toBeInTheDocument();
+    });
+
+    it("does not offer a task row with no task_id (no MsTask twin)", () => {
+      renderForm({ estimateTaskRows });
+
+      expect(screen.queryByRole("option", { name: /Sous-tâche sans jumeau/ })).not.toBeInTheDocument();
+    });
+
+    it("reports a change to the selected task", () => {
+      const onTaskIdChange = vi.fn();
+      renderForm({ estimateTaskRows, onTaskIdChange });
+
+      fireEvent.change(screen.getByRole("combobox", { name: "Tâche" }), { target: { value: "42" } });
+
+      expect(onTaskIdChange).toHaveBeenCalledWith("42");
+    });
   });
 });

@@ -51,7 +51,6 @@ def test_sqlite_enforces_foreign_keys() -> None:
             MsTask(
                 project_id=999999,
                 uid=1,
-                id_display=1,
                 name="Orphan task",
                 task_type=0,
                 outline_number="1",
