@@ -56,6 +56,10 @@ Les colonnes cibles sont :
 
 Une ligne tâche référence `ms_task`. Elle est hiérarchique et est exportable vers MS Project.
 
+> **Renvoi E14** : dans le modèle cible, une ligne tâche ne référence plus `ms_task` — elle est un
+> nœud de révision portant une facette de planification, et `ms_task` disparaît. Voir
+> [`docs/revision-v0.1-specification.md`](revision-v0.1-specification.md).
+
 Waterfall doit permettre d'ajouter ou supprimer une tâche dans le devis. Une tâche ajoutée est une vraie tâche de planning, exportée vers MS Project. Pour v0.1, ses champs minimaux sont :
 
 - nom ;
@@ -67,7 +71,13 @@ Les dates, durées et dépendances restent principalement pilotées dans MS Proj
 
 ### Ligne de main-d'œuvre
 
-Une ligne MO est toujours rattachée à une tâche.
+Une ligne MO est normalement rattachée à une tâche.
+
+> **Renvoi E14** : ce rattachement n'est plus une contrainte. Une ligne de coût, MO comprise, placée
+> à la racine de l'arbre de révision est un coût global de projet, sans tâche porteuse
+> ([`docs/revision-v0.1-specification.md`](revision-v0.1-specification.md), INV-01). La tâche
+> porteuse n'est plus stockée sur la ligne : c'est son premier ancêtre portant une facette de
+> planification.
 
 Le choix suit le filtre :
 
@@ -128,30 +138,35 @@ Le code comptable est un paramétrage ERP. Il servira notamment aux analyses de 
 
 ## Modèle cible
 
+> **Le modèle cible de l'arborescence et des lignes de coût est désormais spécifié par
+> [`docs/revision-v0.1-specification.md`](revision-v0.1-specification.md)** (EPIC E14, issue #326).
+> Ce document y renvoie et n'est plus la référence sur ce point.
+>
+> - `EstimateTaskRow` est remplacé par le **nœud de révision** (`wf_revision_node`) : il n'existe
+>   plus d'arbre de tâches propre au devis, le devis et le planning partagent le même arbre, et la
+>   position comme le libellé d'une tâche ne sont plus recopiés dans une ligne de devis.
+> - `EstimateCostLine.source_line_id`, qui n'a jamais été implémenté, est remplacé par l'identité
+>   **`work_item`** : la comparaison entre un reste à engager et son budget de référence se fait par
+>   identité d'élément de travail, et non par une chaîne de pointeurs entre versions.
+> - `Estimate` et `WfPlanning` fusionnent en `ProjectRevision` : une version du projet porte à la
+>   fois sa planification et son chiffrage.
+> - Une ligne de coût devient une **facette coût** accrochée à un nœud ; sa tâche porteuse n'est plus
+>   stockée mais résolue par la position du nœud dans l'arbre.
+
+Le référentiel de coûts ci-dessous reste valable tel quel :
+
 ```text
 CostType
   id, code, name, is_active
 
 CostCategory
   id, cost_type_id, code, accounting_code, name, is_active
-
-Estimate
-  id, project_id, version_number, kind, status, currency_code
-  created_at, validated_at, reference_estimate_id, note
-
-EstimateTaskRow
-  id, estimate_id, task_id, parent_task_id, position
-  snapshot_task_name, snapshot_outline_number, snapshot_outline_level
-
-EstimateCostLine
-  id, estimate_id, task_id nullable, cost_type_id, cost_category_id nullable
-  role_id nullable, accounting_code, category_code, label
-  quantity, hours nullable, hourly_rate nullable, unit_cost nullable
-  labor_cost, purchase_cost, unburdened_unit_cost
-  source_line_id nullable, status nullable
 ```
 
-Une ligne MO impose `task_id`, `role_id`, `hours` et `hourly_rate`. Les lignes fourniture, frais et UO imposent un type, une catégorie et un débours. Les contraintes de base doivent empêcher les combinaisons incohérentes.
+Les règles de cohérence restent également valables, exprimées sur la facette coût : une ligne MO
+impose un rôle, des heures et un taux horaire ; les lignes fourniture, frais et UO imposent un type,
+une catégorie et un débours. Les contraintes de base doivent empêcher les combinaisons incohérentes
+(voir les invariants INV-19 et INV-20 de la spécification de révision).
 
 ## Versions de devis
 
@@ -168,7 +183,12 @@ Les statuts sont :
 - `superseded` : remplacé par une version plus récente ;
 - `archived` : conservé sans usage opérationnel.
 
-Le reste à faire utilise la même structure de lignes que le devis initial. Chaque ligne de prévision peut référencer la ligne budgétaire source afin de comparer :
+> **Renvoi E14** : ces natures et ces statuts deviennent ceux de la révision, qui porte planning et
+> devis ensemble. Le statut `archived` n'est pas repris : une révision remplacée est `superseded`.
+> Une variante de chiffrage n'est plus un second devis sur le même planning mais une variante
+> complète de révision.
+
+Le reste à faire utilise la même structure de lignes que le devis initial. Chaque ligne de prévision se rapproche de la ligne budgétaire correspondante — par identité `work_item`, et non par un pointeur `source_line_id` — afin de comparer :
 
 ```text
 budget de référence / engagé / reste à engager / prévision à terminaison
