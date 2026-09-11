@@ -340,6 +340,31 @@ Adresses par défaut :
 - Prometheus : `http://127.0.0.1:9090`
 - pgAdmin : `http://127.0.0.1:5050`
 
+Grafana arrive provisionné : la source de données Prometheus et deux dashboards du dossier
+`Waterfall` sont créés au démarrage depuis
+[infra/docker/grafana/provisioning](infra/docker/grafana/provisioning), monté en lecture seule.
+
+- **Waterfall — API & devis** (`/d/waterfall-api-estimates`) : débit et latence HTTP par route,
+  durée des calculs de devis.
+- **Waterfall — Dépendances** (`/d/waterfall-dependencies`) : état de PostgreSQL, Redis et Garage
+  tel que publié par `GET /health/ready`.
+
+Ces dashboards ne se modifient pas depuis l'interface (`allowUiUpdates: false` : Grafana refuse
+l'enregistrement) mais en éditant les JSON du dépôt. C'est ce qui garantit que supprimer le volume
+`grafana_data` et relancer `make up-full` les restaure à l'identique. Les panneaux restent vides
+tant que la métrique correspondante n'a pas été produite : le débit HTTP démarre à la première
+requête **applicative** servie, les durées de calcul au premier devis validé ou agrégé, et l'état
+des dépendances au premier appel de `/health/ready` (que le healthcheck du conteneur `api`
+déclenche toutes les 15 s).
+
+Les panneaux HTTP **agrégés** excluent les chemins de sonde (`path!~"/metrics|/health(/ready)?"`).
+La stack `up-full` s'appelle elle-même en permanence — scrape Prometheus toutes les 15 s,
+healthcheck Docker toutes les 15 s, soit un plancher d'environ 0,133 req/s — et une dépendance
+tombée ferait répondre `/health/ready` en 503 toutes les 15 s : sans ce filtre, le débit 5xx et la
+latence p95 passeraient au rouge pendant une panne que le dashboard « Dépendances » diagnostique
+déjà correctement. Les panneaux **par route** ne sont pas filtrés, c'est là qu'on lit le trafic de
+sonde.
+
 `docker-compose.yml` utilisé seul ne lance pas le frontend. Il fournit uniquement l’API et PostgreSQL.
 PostgreSQL et les outils d’observabilité sont limités à la VM par défaut. Utilisez un tunnel SSH
 ou définissez `ADMIN_BIND_ADDRESS` uniquement si ces interfaces doivent être accessibles à distance,

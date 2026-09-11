@@ -1,0 +1,761 @@
+{
+  "uid": "waterfall-api-estimates",
+  "title": "Waterfall — API & devis",
+  "description": "Débit et latence HTTP par route (http_requests_total, http_request_duration_seconds) et durée des calculs de devis (estimate_calculation_duration_seconds). Les panneaux agrégés excluent les chemins de sonde (path!~\"/metrics|/health(/ready)?\") : en Compose, Prometheus scrape /metrics et le healthcheck appelle /health/ready toutes les 15 s, soit un plancher permanent d'environ 0,133 req/s sans rapport avec l'usage applicatif, et un /health/ready en 503 pendant une panne de dépendance ferait virer au rouge le débit 5xx et la latence p95 alors qu'aucune requête utilisateur n'a échoué. Les panneaux par route ne sont pas filtrés, c'est là qu'on veut voir la sonde. Les séries n'existent qu'à partir de la première requête applicative servie, et celles des devis qu'à partir du premier calcul : un panneau vide sur une instance fraîchement démarrée est normal.",
+  "tags": ["waterfall", "api", "devis"],
+  "timezone": "browser",
+  "editable": false,
+  "graphTooltip": 1,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Débit HTTP",
+      "description": "Requêtes servies par seconde, toutes routes applicatives confondues. Les chemins de sonde (/metrics, /health, /health/ready) sont exclus, sinon le panneau afficherait en permanence le plancher d'environ 0,133 req/s produit par le scrape Prometheus et le healthcheck Docker. Vide tant qu'aucune requête applicative n'a été servie depuis le démarrage de l'API.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "decimals": 2,
+          "noValue": "Aucune requête",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(http_requests_total{path!~\"/metrics|/health(/ready)?\"}[$__rate_interval]))",
+          "legendFormat": "total",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Débit des réponses 5xx",
+      "description": "Part du débit applicatif répondue en 5xx (label status_code de http_requests_total). Les chemins de sonde sont exclus : sans cela, une dépendance tombée ferait répondre /health/ready en 503 toutes les 15 s, soit environ 0,067 req/s de 5xx, très au-dessus du seuil rouge, et ce panneau contredirait le dashboard « Dépendances » en désignant une panne applicative inexistante. Zéro est la valeur attendue ; « Aucune requête » signifie qu'aucune requête applicative n'a été servie sur la fenêtre, pas qu'il n'y a pas d'erreur.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "decimals": 2,
+          "noValue": "Aucune requête",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 0.0001
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(http_requests_total{status_code=~\"5..\", path!~\"/metrics|/health(/ready)?\"}[$__rate_interval])) or (sum(rate(http_requests_total{path!~\"/metrics|/health(/ready)?\"}[$__rate_interval])) * 0)",
+          "legendFormat": "5xx",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Latence HTTP p95 (fenêtre)",
+      "description": "Quantile 95 de http_request_duration_seconds sur toute la fenêtre du dashboard, toutes routes applicatives confondues. Les chemins de sonde sont exclus : sur une stack peu sollicitée ils constituent la quasi-totalité de l'échantillon, et un /health/ready qui attend jusqu'à 2 s sur une dépendance morte suffirait à pousser le p95 au seuil rouge sans qu'aucune requête utilisateur soit lente. Calculé sur les buckets (0,005 s à 10 s puis +Inf) : au-delà de 10 s le quantile est extrapolé sur le dernier bucket et n'est plus qu'un ordre de grandeur. « Aucune requête » tant qu'aucune requête applicative n'a été servie sur la fenêtre.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 3,
+          "noValue": "Aucune requête",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.5
+              },
+              {
+                "color": "red",
+                "value": 2
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{path!~\"/metrics|/health(/ready)?\"}[$__range])))",
+          "legendFormat": "p95",
+          "instant": true,
+          "range": false
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Calcul de devis p95 (fenêtre)",
+      "description": "Quantile 95 de estimate_calculation_duration_seconds sur toute la fenêtre, les deux fonctions confondues. L'histogramme n'apparaît qu'au premier appel de calculate_estimate_lines (validation d'un devis) ou calculate_estimate_aggregates (agrégats / export) : « Aucun calcul » sur une instance fraîche est normal, ce n'est pas une panne.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 3,
+          "noValue": "Aucun calcul",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(estimate_calculation_duration_seconds_bucket[$__range])))",
+          "legendFormat": "p95",
+          "instant": true,
+          "range": false
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Débit HTTP par route",
+      "description": "rate(http_requests_total) agrégé par méthode et par route. `path` est le gabarit de route FastAPI (par ex. /projects/{project_id}/estimates), pas l'URL concrète : les identifiants ne créent pas de séries. Les requêtes qui ne correspondent à aucune route apparaissent sous <unmatched>. Volontairement non filtré, contrairement aux panneaux agrégés : /metrics et /health/ready y apparaissent, et c'est ici qu'on veut pouvoir les voir.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "decimals": 2,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["mean", "max"]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (method, path) (rate(http_requests_total[$__rate_interval]))",
+          "legendFormat": "{{method}} {{path}}",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Latence HTTP p95 par route",
+      "description": "histogram_quantile sur rate(http_request_duration_seconds_bucket). Une route sans trafic sur l'intervalle ne trace rien : l'absence de courbe veut dire « pas de requête », pas « latence nulle ». Volontairement non filtré : la courbe /health/ready est le meilleur endroit pour voir une sonde qui s'allonge sur une dépendance en difficulté.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 3,
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["mean", "max"]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le, method, path) (rate(http_request_duration_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "{{method}} {{path}}",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Latence HTTP globale (p50 / p90 / p99)",
+      "description": "Mêmes buckets, toutes routes applicatives confondues (chemins de sonde exclus, comme les autres panneaux agrégés) : sert à lire la forme de la distribution. L'écart entre p50 et p99 dit s'il s'agit d'un ralentissement général ou d'une queue de distribution sur quelques requêtes. Pour voir la latence des sondes elles-mêmes, lire le panneau « Latence HTTP p95 par route », qui n'est pas filtré.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 13
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 3,
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(http_request_duration_seconds_bucket{path!~\"/metrics|/health(/ready)?\"}[$__rate_interval])))",
+          "legendFormat": "p50",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.9, sum by (le) (rate(http_request_duration_seconds_bucket{path!~\"/metrics|/health(/ready)?\"}[$__rate_interval])))",
+          "legendFormat": "p90",
+          "range": true
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{path!~\"/metrics|/health(/ready)?\"}[$__rate_interval])))",
+          "legendFormat": "p99",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Débit HTTP par code de statut",
+      "description": "Le même http_requests_total, découpé par status_code au lieu de la route, chemins de sonde exclus. Sert à répondre « est-ce que ça casse ? » quand le panneau par route dit seulement « est-ce que ça passe ? ». Sans le filtre, une pile de 503 de /health/ready s'empilerait ici pendant toute une panne de dépendance et se lirait comme des erreurs applicatives ; le panneau « Débit HTTP par route », lui, montre bien la sonde.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 13
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "decimals": 2,
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 20,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "axisPlacement": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["mean", "max"]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (status_code) (rate(http_requests_total{path!~\"/metrics|/health(/ready)?\"}[$__rate_interval]))",
+          "legendFormat": "{{status_code}}",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Durée des calculs de devis (p95 / p50)",
+      "description": "estimate_calculation_duration_seconds par fonction. calculate_estimate_lines s'exécute pendant la validation d'un devis, verrou ms_project tenu : sa durée est la fenêtre pendant laquelle les autres écritures du projet sont bloquées. calculate_estimate_aggregates est interactif (GET .../aggregates) et sert aussi à l'export Excel. Rien ne s'affiche tant qu'aucun calcul n'a eu lieu.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 22
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 3,
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*p50.*"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [8, 4]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["mean", "max"]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le, function) (rate(estimate_calculation_duration_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "{{function}} p95",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.5, sum by (le, function) (rate(estimate_calculation_duration_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "{{function}} p50",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Débit et durée moyenne des calculs de devis",
+      "description": "À gauche le nombre de calculs par seconde (_count), à droite leur durée moyenne (_sum / _count). La moyenne complète les quantiles : sur un volume d'appels faible, un seul calcul long la déplace visiblement alors que le p95 peut rester sur le même bucket.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 22
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "decimals": 3,
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*durée moyenne.*"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["mean", "max"]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (function) (rate(estimate_calculation_duration_seconds_count[$__rate_interval]))",
+          "legendFormat": "{{function}} calculs/s",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (function) (rate(estimate_calculation_duration_seconds_sum[$__rate_interval])) / sum by (function) (rate(estimate_calculation_duration_seconds_count[$__rate_interval]))",
+          "legendFormat": "{{function}} durée moyenne",
+          "range": true
+        }
+      ]
+    }
+  ]
+}

@@ -66,6 +66,11 @@ services:
     volumes:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      # Dashboards provisionnés au démarrage : le provider (dashboards.yml) et les
+      # dashboards eux-mêmes (*.json) vivent dans le même répertoire, monté en lecture
+      # seule pour que `grafana_data` ne puisse pas devenir une seconde source de vérité.
+      # Supprimer le volume et relancer restaure les deux dashboards à l'identique.
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
     depends_on:
       prometheus:
         condition: service_started
