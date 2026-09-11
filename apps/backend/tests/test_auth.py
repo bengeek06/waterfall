@@ -377,6 +377,10 @@ def test_registration_can_be_disabled_outside_dev(monkeypatch: pytest.MonkeyPatc
     os.environ["APP_ENV"] = "prod"
     os.environ["AUTH_ALLOW_PUBLIC_REGISTER"] = "false"
     os.environ["SECRET_KEY"] = "prod-secret-for-tests"
+    # Settings reject the in-process rate limiter outside dev/test, and this test boots the
+    # app as prod. Never connected to: registration is refused before any login path runs.
+    previous_redis_url = os.environ.get("REDIS_URL")
+    os.environ["REDIS_URL"] = "redis://localhost:6379/0"
     monkeypatch.setattr(main_module, "assert_database_schema_current", accept_schema_revision)
     _clear_settings_cache()
 
@@ -391,10 +395,14 @@ def test_registration_can_be_disabled_outside_dev(monkeypatch: pytest.MonkeyPatc
         os.environ["APP_ENV"] = "test"
         os.environ.pop("AUTH_ALLOW_PUBLIC_REGISTER", None)
         os.environ["SECRET_KEY"] = "test-secret"
+        if previous_redis_url is None:
+            os.environ.pop("REDIS_URL", None)
+        else:
+            os.environ["REDIS_URL"] = previous_redis_url
         _clear_settings_cache()
 
 
-def test_login_rate_limit(require_redis: None) -> None:
+def test_login_rate_limit() -> None:
     login_rate_limiter.clear()
     os.environ["AUTH_RATE_LIMIT_ATTEMPTS"] = "2"
     os.environ["AUTH_RATE_LIMIT_WINDOW_SECONDS"] = "60"
@@ -415,7 +423,7 @@ def test_login_rate_limit(require_redis: None) -> None:
         _clear_settings_cache()
 
 
-def test_login_lockout_after_failed_attempts(require_redis: None) -> None:
+def test_login_lockout_after_failed_attempts() -> None:
     login_rate_limiter.clear()
     os.environ["AUTH_MAX_FAILED_ATTEMPTS"] = "2"
     os.environ["AUTH_LOCKOUT_MINUTES"] = "15"
@@ -573,8 +581,74 @@ def test_login_rate_limiter_sets_a_ttl_on_the_key(require_redis: None) -> None:
 
     try:
         assert limiter.allow(key, max_attempts=5, window_seconds=60)
-        client = limiter._get_client()  # pyright: ignore[reportPrivateUsage]
+        # Going through _get_backend() also asserts the URL-scheme dispatch resolved to
+        # Redis: on the in-process backend there would be no client, and no TTL to read.
+        backend = limiter._get_backend()  # pyright: ignore[reportPrivateUsage]
+        assert isinstance(backend, auth_module._RedisRateLimitBackend)  # pyright: ignore[reportPrivateUsage]
+        client = backend._get_client()  # pyright: ignore[reportPrivateUsage]
         ttl = client.ttl(f"login_rate_limit:{key}")
         assert 0 < ttl <= 61
     finally:
         limiter.clear()
+
+
+def test_in_process_rate_limiter_grants_exactly_max_attempts_under_concurrency() -> None:
+    """Same atomicity guarantee as the Redis backend, which is why it holds a lock.
+
+    Sync endpoints run in a threadpool, so without the lock concurrent attempts on one key
+    all read the same pre-increment count and are all admitted.
+    """
+    backend = auth_module._InMemoryRateLimitBackend()  # pyright: ignore[reportPrivateUsage]
+    max_attempts = 5
+    concurrency = 40
+    barrier = threading.Barrier(concurrency)
+
+    def attempt() -> bool:
+        barrier.wait(timeout=30)
+        return backend.allow("concurrent", max_attempts=max_attempts, window_seconds=60)
+
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        futures = [pool.submit(attempt) for _ in range(concurrency)]
+        granted = sum(future.result() for future in futures)
+
+    assert granted == max_attempts
+
+
+def test_in_process_rate_limiter_does_not_extend_the_window_when_refusing() -> None:
+    """A refused attempt is not recorded, matching the Lua script's semantics."""
+    backend = auth_module._InMemoryRateLimitBackend()  # pyright: ignore[reportPrivateUsage]
+
+    results = [backend.allow("key", max_attempts=2, window_seconds=60) for _ in range(4)]
+
+    assert results == [True, True, False, False]
+
+
+def test_in_process_rate_limiter_forgets_an_elapsed_window() -> None:
+    backend = auth_module._InMemoryRateLimitBackend()  # pyright: ignore[reportPrivateUsage]
+
+    assert backend.allow("key", max_attempts=1, window_seconds=0)
+    assert backend.allow("key", max_attempts=1, window_seconds=0)
+
+
+def test_in_process_rate_limiter_never_fails_closed() -> None:
+    """Unlike the Redis backend, it has no backend that can be unreachable."""
+    backend = auth_module._InMemoryRateLimitBackend()  # pyright: ignore[reportPrivateUsage]
+
+    assert backend.allow("key", max_attempts=1, window_seconds=60)
+    backend.ping()
+    backend.clear()
+
+
+def test_in_process_rate_limiter_reclaims_elapsed_keys() -> None:
+    """The key embeds a caller-supplied username, so one-shot keys must not accumulate.
+
+    Redis reclaims them with EXPIRE; here a sweep above a watermark does, otherwise an
+    anonymous caller posting a fresh username each time grows the dict without bound.
+    """
+    backend = auth_module._InMemoryRateLimitBackend()  # pyright: ignore[reportPrivateUsage]
+    watermark = auth_module._MEMORY_SWEEP_WATERMARK  # pyright: ignore[reportPrivateUsage]
+
+    for index in range(watermark + 2):
+        assert backend.allow(f"flood-{index}", max_attempts=1, window_seconds=0)
+
+    assert len(backend._attempts) <= watermark  # pyright: ignore[reportPrivateUsage]

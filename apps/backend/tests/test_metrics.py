@@ -243,7 +243,7 @@ def test_track_duration_refuses_an_async_function() -> None:
         track_duration(probe)(async_calculation)
 
 
-def test_readiness_publishes_every_dependency_state(require_redis: None) -> None:
+def test_readiness_publishes_every_dependency_state() -> None:
     with TestClient(app) as client:
         ready: Response = client.get("/health/ready")
     assert ready.status_code == 200
@@ -279,9 +279,7 @@ def test_readiness_publishes_a_down_dependency_as_zero(monkeypatch: pytest.Monke
     assert set(cast(dict[str, Any], ready.json())) == {"status", "checks", "timestamp"}
 
 
-def test_scraping_metrics_never_probes_a_dependency(
-    require_redis: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_scraping_metrics_never_probes_a_dependency(monkeypatch: pytest.MonkeyPatch) -> None:
     """A scrape reads the last published state; it must not go touch Redis or Garage.
 
     /metrics is cheap and frequently polled. Probing on scrape would hand every scraper

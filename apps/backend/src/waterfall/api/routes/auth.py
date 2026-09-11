@@ -1,7 +1,10 @@
 import logging
+from collections import deque
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
+from threading import Lock
 from typing import cast
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 import redis
@@ -15,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from waterfall.api.dependencies import get_current_active_user, get_current_admin_user
 from waterfall.api.pagination import ListParams, list_params
-from waterfall.core.config import get_settings
+from waterfall.core.config import MEMORY_REDIS_URL_SCHEME, get_settings
 from waterfall.core.security import (
     create_access_token,
     create_refresh_token,
@@ -48,6 +51,9 @@ _REDIS_SOCKET_TIMEOUT_SECONDS = 2
 # before it is handed to a login request, instead of surfacing it as a fail-closed 503.
 _REDIS_HEALTH_CHECK_INTERVAL_SECONDS = 30
 _RATE_LIMIT_KEY_PREFIX = "login_rate_limit:"
+# Key count above which the in-process backend reclaims elapsed windows. High enough that a
+# normal login load never sweeps, low enough to bound memory under a flood of one-shot keys.
+_MEMORY_SWEEP_WATERMARK = 1024
 
 # Prune the window, count, and record the attempt in one atomic server-side step.
 # A read-modify-write over separate round-trips lets concurrent logins all observe the
@@ -78,14 +84,66 @@ class RateLimiterUnavailableError(Exception):
     """
 
 
-class LoginRateLimiter:
+class _InMemoryRateLimitBackend:
+    """Sliding-window limiter held in this process only, for `REDIS_URL=memory://`.
+
+    Counters are per-process and lost on restart, so this is for a single-instance
+    checkout without infrastructure -- the same trade-off as defaulting to sqlite. The
+    lock matters even there: sync endpoints run in a threadpool, so concurrent logins on
+    one key would otherwise all read the same pre-increment count and overshoot the
+    limit, which is exactly what the Redis backend uses an atomic Lua script to prevent.
+    """
+
+    def __init__(self) -> None:
+        self._attempts: dict[str, deque[datetime]] = {}
+        self._lock = Lock()
+
+    def allow(self, key: str, max_attempts: int, window_seconds: int) -> bool:
+        with self._lock:
+            # Read the clock under the lock: two threads timestamping outside it can append
+            # out of order, and the prune below stops at the first non-expired entry, so an
+            # older attempt behind a newer one would outlive its window.
+            now = datetime.now(UTC)
+            window_start = now - timedelta(seconds=window_seconds)
+            attempts = self._attempts.get(key)
+            if attempts is None:
+                attempts = self._attempts[key] = deque()
+            while attempts and attempts[0] < window_start:
+                attempts.popleft()
+            if len(attempts) >= max_attempts:
+                return False
+            attempts.append(now)
+            if len(self._attempts) > _MEMORY_SWEEP_WATERMARK:
+                self._sweep_locked(window_start)
+            return True
+
+    def _sweep_locked(self, window_start: datetime) -> None:
+        """Drop keys whose window has fully elapsed. Caller must hold the lock.
+
+        The key embeds the caller-supplied `username`, so an anonymous caller posting a
+        fresh one each time would otherwise grow this dict forever -- the leak the Redis
+        backend avoids by letting EXPIRE reclaim the key. Sweeping above a watermark keeps
+        the cost amortized while bounding the dict to the keys active in the window.
+        """
+        for key in [k for k, v in self._attempts.items() if not v or v[-1] < window_start]:
+            del self._attempts[key]
+
+    def ping(self) -> None:
+        """No-op: an in-process dict has no backend that can be unreachable."""
+
+    def clear(self) -> None:
+        with self._lock:
+            self._attempts.clear()
+
+
+class _RedisRateLimitBackend:
     """Sliding-window login attempt limiter backed by a Redis sorted set.
 
-    Shared across processes/instances, unlike the previous in-memory deque. Each
+    Shared across processes/instances, unlike _InMemoryRateLimitBackend. Each
     key maps to a sorted set of attempt timestamps (score = attempt time, member =
     a random id to avoid collisions between attempts in the same instant).
     `allow()` prunes entries older than the window, counts what's left, and either
-    records a new attempt or refuses -- the same functional behaviour as the prior
+    records a new attempt or refuses -- the same functional behaviour as the
     per-key deque, but shared, and executed as a single atomic Lua script so that
     concurrent logins on the same key cannot all read a stale count and overshoot the
     limit.
@@ -184,6 +242,53 @@ class LoginRateLimiter:
                 client.delete(key)
         except (RedisError, ValueError):
             pass
+
+
+class LoginRateLimiter:
+    """Dispatches to the rate limit backend named by REDIS_URL's scheme.
+
+    `memory://` gets the in-process limiter, anything else a real Redis -- the same
+    URL-scheme selection the database layer uses to run on sqlite or Postgres from one
+    code path. Resolution is lazy so the process picks up the REDIS_URL it actually
+    starts with, not whatever was set when this module was imported.
+    """
+
+    def __init__(self) -> None:
+        self._backend: _InMemoryRateLimitBackend | _RedisRateLimitBackend | None = None
+        self._lock = Lock()
+
+    def _get_backend(self) -> _InMemoryRateLimitBackend | _RedisRateLimitBackend:
+        with self._lock:
+            if self._backend is None:
+                url = get_settings().redis_url
+                if urlsplit(url).scheme == MEMORY_REDIS_URL_SCHEME:
+                    # The readiness probe cannot surface this -- an in-process limiter is
+                    # never "down" -- so this log is the only signal that attempt counters
+                    # are per-process and reset on restart. Settings validation already
+                    # rejects memory:// outside dev/test; this covers dev itself.
+                    logger.warning(
+                        "Login rate limiter is in-process (REDIS_URL=%s): counters are not "
+                        "shared between workers and are lost on restart",
+                        MEMORY_REDIS_URL_SCHEME + "://",
+                    )
+                    self._backend = _InMemoryRateLimitBackend()
+                else:
+                    self._backend = _RedisRateLimitBackend()
+            return self._backend
+
+    def allow(self, key: str, max_attempts: int, window_seconds: int) -> bool:
+        return self._get_backend().allow(key, max_attempts, window_seconds)
+
+    def ping(self) -> None:
+        self._get_backend().ping()
+
+    def clear(self) -> None:
+        """Drop every login rate limit counter. Test utility -- no production caller.
+
+        Fails silently rather than closed, and on the Redis backend wipes the counters of
+        every app sharing that database; see _RedisRateLimitBackend.clear().
+        """
+        self._get_backend().clear()
 
 
 login_rate_limiter = LoginRateLimiter()

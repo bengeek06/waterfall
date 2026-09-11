@@ -5,10 +5,10 @@ login rate limiter run against a real Redis rather than a mock, so behaviour sta
 honest with production, but skip cleanly with an actionable message when no Redis is
 reachable locally.
 
-Note this only spares *these* tests: the login rate limiter is fail-closed, so with no
-Redis running every test that authenticates through POST /auth/token gets a 503. Running
-the suite does require a reachable Redis; the skip here just keeps the failure mode of
-the Redis-specific tests from being a confusing assertion error.
+The rest of the suite needs no Redis at all: REDIS_URL defaults to `memory://`, the
+in-process limiter backend, so the fail-closed login path stays green on a checkout with
+no infrastructure. Only the tests below, which assert Redis-specific behaviour, need a
+real server -- and they skip unless TEST_REDIS_URL points the application at one.
 
 Deliberately not named test_*.py, for the same reason as _postgres_support.py: pytest's
 default collection would otherwise try to import it as a test module.
@@ -79,12 +79,25 @@ def redis_reachable(url: str) -> bool:
 
 @pytest.fixture
 def require_redis() -> None:
-    """Skip the requesting test if Redis is not reachable.
+    """Skip the requesting test unless the application itself is running on Redis.
 
     Requested by name (unused return value) rather than for a yielded resource: the
     tests that need this just exercise the application's own login_rate_limiter
     singleton, which already reads REDIS_URL from settings.
+
+    Reachability alone is not enough to let these tests run. Without TEST_REDIS_URL the
+    app is configured for the `memory://` backend, so a Redis that happens to listen on
+    localhost would leave these tests asserting Redis semantics against the in-process
+    limiter -- passing while covering nothing.
     """
+    if "TEST_REDIS_URL" not in os.environ:
+        pytest.skip(
+            "The application is configured for the in-process rate limiter "
+            "(REDIS_URL=memory://), so this test would not exercise Redis. Set "
+            "TEST_REDIS_URL to a reachable Redis to run it, e.g. "
+            "TEST_REDIS_URL=redis://localhost:6379/0 with "
+            "`docker run --rm -d -p 6379:6379 redis:7.4-alpine`."
+        )
     url = redis_test_url()
     if not redis_reachable(url):
         pytest.skip(

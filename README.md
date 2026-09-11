@@ -185,8 +185,9 @@ depuis un checkout Git. Pour les réinstaller seuls, utilisez `make hooks`.
 
 ### 3) Configuration A : développement natif
 
-Cette configuration lance l’API et le frontend directement sur la machine. PostgreSQL, Redis
-et Garage (stockage objet S3) restent lancés dans Docker.
+Cette configuration lance l’API et le frontend directement sur la machine. PostgreSQL et
+Garage (stockage objet S3) restent lancés dans Docker ; Redis est facultatif (voir plus bas
+`REDIS_URL=memory://`).
 Le backend démarre aussi le seed admin en mode `dev`; `WF_ADMIN_PASSWORD` doit donc être défini dans `.env`.
 
 Renseignez au minimum dans `.env` :
@@ -195,7 +196,6 @@ Renseignez au minimum dans `.env` :
 SECRET_KEY=<clé-secrète-générée>
 WF_ADMIN_PASSWORD=<mot-de-passe-local>
 REDIS_PASSWORD=<mot-de-passe-local>
-REDIS_URL=redis://localhost:6379/0
 GARAGE_ACCESS_KEY_ID=GK<24-caractères-hexadécimaux>
 GARAGE_SECRET_ACCESS_KEY=<64-caractères-hexadécimaux>
 GARAGE_RPC_SECRET=<64-caractères-hexadécimaux>
@@ -204,10 +204,10 @@ PGADMIN_DEFAULT_PASSWORD=<mot-de-passe-local>
 GRAFANA_ADMIN_PASSWORD=<mot-de-passe-local>
 ```
 
-`REDIS_PASSWORD` et les trois variables `GARAGE_*` sont obligatoires même ici : les services
-`redis` et `garage` du compose de base les exigent sans valeur par défaut, et Compose interpole
-tout le fichier avant de choisir les services — sans elles, `make db-up` et `make logs`
-échouent aussi.
+`REDIS_PASSWORD` et les trois variables `GARAGE_*` sont obligatoires même ici, et même si vous
+laissez `REDIS_URL` sur `memory://` : les services `redis` et `garage` du compose de base les
+exigent sans valeur par défaut, et Compose interpole tout le fichier avant de choisir les
+services — sans elles, `make db-up` et `make logs` échouent aussi.
 
 `PGADMIN_DEFAULT_PASSWORD` et `GRAFANA_ADMIN_PASSWORD` sont requis ici pour une autre raison :
 non pas parce que pgAdmin et Grafana tournent en Configuration A — ils ne tournent pas —, mais
@@ -229,10 +229,17 @@ Une clé d'accès n'est jamais réattribuable dans Garage : pour changer la clé
 aussi `GARAGE_ACCESS_KEY_ID` (le service d'initialisation refuse de démarrer, avec un message
 explicite, si l'identifiant existe déjà avec un autre secret).
 
-L'API refuse toute connexion si Redis est injoignable (limiteur de tentatives *fail-closed* :
-`503`, jamais un login accepté sans vérification). En dev natif, Redis doit donc tourner et
-`REDIS_URL`/`REDIS_PASSWORD` doivent être renseignés, sinon 100 % des `POST /auth/token`
-renvoient `503`. Laissez le mot de passe hors de l'URL : il n'est pas encodé en pourcents.
+L'API refuse toute connexion si le limiteur de tentatives est injoignable (*fail-closed* :
+`503`, jamais un login accepté sans vérification). Dès que `REDIS_URL` pointe sur un
+`redis://`, Redis doit donc tourner et `REDIS_URL`/`REDIS_PASSWORD` doivent être renseignés,
+sinon 100 % des `POST /auth/token` renvoient `503`. Laissez le mot de passe hors de l'URL :
+il n'est pas encodé en pourcents.
+
+`REDIS_URL` vaut `memory://` par défaut : le limiteur tourne alors dans le process, sans
+serveur, comme `DATABASE_URL` retombe sur SQLite. Les compteurs ne sont ni partagés entre
+instances ni conservés au redémarrage — réservez-le au poste de développement et à la suite de
+tests, et pointez `REDIS_URL` sur un vrai Redis partout ailleurs (c'est ce que fait
+`docker-compose.yml`).
 
 Les sources MS Project importées sont stockées dans Garage, plus sur disque : `POST
 /imports/v1/batches/{id}/xml`, `.../run` et `.../diff` renvoient `503` tant que le stockage
@@ -240,7 +247,8 @@ objet est injoignable (le batch reste `pending`, l'import est rejouable tel quel
 
 ```bash
 make db-up                  # Postgres dans Docker, pour le dev natif
-# Redis (requis par /auth/token) et Garage (requis par les imports). `garage-init`
+# Redis (facultatif : sans lui, REDIS_URL=memory://) et Garage (requis par les imports).
+# `garage-init`
 # crée le layout, la clé et le bucket ; il est idempotent et se relance sans risque.
 docker compose --env-file .env -f infra/docker/docker-compose.yml up -d redis garage garage-init
 make migrate-up             # applique les migrations Alembic sur la base de dev

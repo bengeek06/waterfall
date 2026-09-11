@@ -1,8 +1,12 @@
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# REDIS_URL scheme selecting the in-process rate limiter instead of a Redis server.
+MEMORY_REDIS_URL_SCHEME = "memory"
 
 
 def _find_env_file() -> Path | None:
@@ -36,7 +40,11 @@ class Settings(BaseSettings):
         default="sqlite+pysqlite:///./waterfall.db",
         alias="DATABASE_URL",
     )
-    redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
+    # `memory://` selects an in-process rate limiter needing no server, mirroring how
+    # database_url defaults to sqlite rather than the Postgres that docker-compose runs:
+    # a checkout with no infrastructure must stay runnable and testable. Deployments set
+    # REDIS_URL to a real redis:// instance (docker-compose.yml does).
+    redis_url: str = Field(default="memory://", alias="REDIS_URL")
     # Kept out of REDIS_URL on purpose: a password embedded in the URL must be
     # percent-encoded, and `openssl rand -base64 24` routinely emits `/`, `+` and `@`,
     # which silently corrupt the parsed host/password (redis-py would connect to the
@@ -101,6 +109,17 @@ def _validate_settings(settings: Settings) -> Settings:
     # opaque 503 on the first import, possibly hours after the misconfiguration.
     if not settings.garage_access_key_id or not settings.garage_secret_access_key:
         raise ValueError("GARAGE_ACCESS_KEY_ID and GARAGE_SECRET_ACCESS_KEY must be set")
+    # Fail at boot rather than let an unset REDIS_URL silently downgrade the login rate
+    # limiter to per-process counters: outside dev the failure would be invisible (the
+    # readiness probe still reports the limiter as up) while multiplying the attempts an
+    # attacker gets by the number of workers, and resetting them on every deploy.
+    if urlsplit(settings.redis_url).scheme == MEMORY_REDIS_URL_SCHEME and settings.app_env not in {
+        "dev",
+        "test",
+    }:
+        raise ValueError(
+            "REDIS_URL=memory:// is a development-only rate limiter; set a real redis:// URL"
+        )
     return settings
 
 

@@ -18,10 +18,12 @@ if str(SRC) not in sys.path:
 os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///./test.db")
 os.environ.setdefault("SECRET_KEY", "test-secret")
-# Same default as Settings.redis_url and the CI `redis` service; TEST_REDIS_URL lets a
-# developer point the whole app (not just _redis_support's reachability checks) at a
-# non-default Redis instance.
-os.environ.setdefault("REDIS_URL", os.environ.get("TEST_REDIS_URL", "redis://localhost:6379/0"))
+# Same default as Settings.redis_url: the in-process limiter, so the suite runs on a
+# checkout with no Redis. Without it the fail-closed login path would 503 in every test
+# that authenticates, not just the auth ones. TEST_REDIS_URL points the whole app (not
+# just _redis_support's reachability checks) at a real Redis; CI sets it so the Redis
+# backend itself stays covered.
+os.environ.setdefault("REDIS_URL", os.environ.get("TEST_REDIS_URL", "memory://"))
 os.environ.setdefault("JWT_ALGORITHM", "HS256")
 os.environ.setdefault("ACCESS_TOKEN_EXPIRE_MINUTES", "30")
 # The GARAGE_* object storage settings are defaulted by _object_storage_support (the
@@ -137,9 +139,10 @@ def reset_readiness_probe_state() -> None:
 
 @pytest.fixture(autouse=True)
 def reset_login_rate_limiter() -> None:
-    # login_rate_limiter.clear() is a Redis-backed no-op when Redis is unreachable (see
-    # its docstring), so this runs safely before every test in the suite -- most of
-    # which have nothing to do with auth -- even on a machine with no Redis running.
+    # Runs before every test in the suite -- most of which have nothing to do with auth --
+    # so it must never fail: on the default memory:// backend it empties an in-process
+    # dict, and on Redis it swallows connection errors rather than failing closed like
+    # allow() (see _RedisRateLimitBackend.clear()).
     from waterfall.api.routes.auth import login_rate_limiter
 
     login_rate_limiter.clear()

@@ -70,7 +70,7 @@ def test_liveness() -> None:
     assert response.json() == {"status": "ok"}
 
 
-def test_readiness_reports_every_dependency_when_all_are_up(require_redis: None) -> None:
+def test_readiness_reports_every_dependency_when_all_are_up() -> None:
     with TestClient(app) as client:
         status_code, payload = _readiness(client)
 
@@ -81,7 +81,7 @@ def test_readiness_reports_every_dependency_when_all_are_up(require_redis: None)
 
 
 def test_readiness_reports_the_database_as_the_failing_dependency(
-    require_redis: None, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # A real driver on an unopenable path, reached through the settings rather than by
     # patching an engine in: the probe builds its own engine (health._probe_engine), and
@@ -125,7 +125,7 @@ def test_readiness_reports_redis_as_the_failing_dependency(monkeypatch: pytest.M
 
 @pytest.mark.no_object_storage_mock
 def test_readiness_reports_object_storage_as_the_failing_dependency(
-    require_redis: None, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("GARAGE_ENDPOINT_URL", UNREACHABLE_ENDPOINT_URL)
     get_settings.cache_clear()
@@ -145,7 +145,7 @@ def test_readiness_reports_object_storage_as_the_failing_dependency(
 
 @pytest.mark.no_object_storage_mock
 def test_readiness_reports_a_missing_bucket_as_a_storage_outage(
-    require_redis: None, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A reachable store without the configured bucket is not "ready" either.
 
@@ -175,7 +175,7 @@ def test_readiness_reports_a_missing_bucket_as_a_storage_outage(
 
 
 def test_readiness_fails_a_dependency_that_does_not_answer_in_time(
-    require_redis: None, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A hanging dependency must produce a 503, not a request that never returns."""
     release = threading.Event()
@@ -238,7 +238,7 @@ def _tcp_tarpit() -> Generator[int]:
 
 
 def test_a_hung_database_never_consumes_the_application_connection_pool(
-    require_redis: None, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A database that hangs must cost the probe a socket, never a pool slot.
 
@@ -284,9 +284,7 @@ def test_a_hung_database_never_consumes_the_application_connection_pool(
             health.reset_probe_engine()
 
 
-def test_a_burst_of_readiness_calls_shares_one_probe_round(
-    require_redis: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_burst_of_readiness_calls_shares_one_probe_round(monkeypatch: pytest.MonkeyPatch) -> None:
     """/health/ready is anonymous and unthrottled, so it must not probe per request.
 
     Without the memoised result, a burst of callers during an outage spawns three threads
@@ -316,7 +314,7 @@ def test_a_burst_of_readiness_calls_shares_one_probe_round(
 
 
 def test_a_probe_round_in_flight_never_blocks_another_caller(
-    require_redis: None, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A caller arriving during a slow round serves the last answer, it does not queue.
 
@@ -360,9 +358,7 @@ def test_a_probe_round_in_flight_never_blocks_another_caller(
     }
 
 
-def test_two_cold_callers_share_a_single_probe_round(
-    require_redis: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_two_cold_callers_share_a_single_probe_round(monkeypatch: pytest.MonkeyPatch) -> None:
     """Cold start is the one case where a caller legitimately waits -- once, not twice.
 
     With no previous answer to serve there is nothing to do but wait for the round in
