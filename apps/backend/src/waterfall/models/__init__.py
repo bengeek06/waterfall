@@ -16,6 +16,14 @@ from waterfall.models.resources import (
     RoleCapacity,
     TaskRoleAssignment,
 )
+from waterfall.models.revision import (
+    ProjectRevision,
+    RevisionCostFacet,
+    RevisionNode,
+    RevisionNodeLink,
+    RevisionPlanFacet,
+    WorkItem,
+)
 from waterfall.models.user import User
 from waterfall.models.wf_core import (
     WfChargeLine,
@@ -45,6 +53,12 @@ __all__ = [
     "EstimateLine",
     "EstimateRoleAssignment",
     "EstimateTaskRow",
+    "WorkItem",
+    "ProjectRevision",
+    "RevisionNode",
+    "RevisionPlanFacet",
+    "RevisionCostFacet",
+    "RevisionNodeLink",
     "User",
     "WfChargeLine",
     "WfExcelImport",
