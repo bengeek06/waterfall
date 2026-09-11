@@ -44,6 +44,7 @@ par `work_item` et par rien d'autre.
 | `kind` | `task` ou `cost` : la nature de l'élément, invariable d'une révision à l'autre |
 | `description` | texte libre documentaire, commun à toutes les révisions (reprend la sémantique actuelle de `wf_task_enrichment`, déjà porté au niveau projet) |
 | `external_uid` | uid MS Project, identifiant **externe** de la couche import/export (voir [Ce que le modèle n'est pas](#ce-que-le-modèle-nest-pas)) ; nul pour un `work_item` de nature `cost`, nul également pour tout élément créé dans Waterfall et jamais exporté |
+| `breakdown_entry_id` | **PROVISOIRE — dépend de la [Règle 4](#règle-4--le-lotissement-vit-hors-de-la-révision-provisoire), ne rien construire dessus** : entrée de lotissement dont la tâche est issue ; c'est par elle qu'une regénération retombe sur la même identité ([Règle 4 d](#règle-4--le-lotissement-vit-hors-de-la-révision-provisoire)). En pratique la génération de squelette en est le seul rédacteur, mais ce n'est **pas** un invariant : ce qui est garanti est une **garde de création** — refusée sur un `work_item` de nature `cost`, et unique par projet, faute de quoi la seconde identité serait inatteignable dès sa création. Contrairement à l'`external_uid` ([INV-25](#inv-25)), aucune assertion d'état ne la contrôle, la Règle 4 étant provisoire |
 | `created_at`, `updated_at` | horodatages techniques |
 
 Le `work_item` **ne porte pas de libellé**. Le nom d'une tâche et le libellé d'une ligne de coût
@@ -241,15 +242,32 @@ détermine seul ce qui peut l'écraser, selon l'ordre `manual` > `role` > `proje
 | `role` | valeur reprise d'une affectation de rôle | oui |
 | `manual` | valeur fixée explicitement par l'utilisateur sur la facette | non |
 
-À chaque changement de l'ensemble des affectations MO portées par le sous-arbre d'une tâche —
-**affectation ajoutée, modifiée ou retirée** — le calendrier de cette tâche est resynchronisé si et
-seulement si `calendar_source` vaut `project` ou `role`. La resynchronisation prend le calendrier du
-rôle de la première facette MO, dans l'ordre depth-first du sous-arbre, dont le rôle porte un
-calendrier, et positionne `calendar_source` à `role`. S'il n'existe plus aucune facette MO dont le
-rôle porte un calendrier, la valeur retombe au calendrier du projet et `calendar_source` repasse à
-`project`.
+La resynchronisation prend le calendrier du rôle de la **première** facette MO, **dans l'ordre
+depth-first du sous-arbre**, dont le rôle porte un calendrier, et positionne `calendar_source` à
+`role`. S'il n'existe plus aucune facette MO dont le rôle porte un calendrier, la valeur retombe au
+calendrier du projet et `calendar_source` repasse à `project`.
 
-Les trois cas demandés se lisent donc ainsi :
+Le calendrier d'une tâche est resynchronisé — si et seulement si `calendar_source` vaut `project` ou
+`role` — à chaque changement de ce que cette résolution *lit*, c'est-à-dire :
+
+- à chaque changement de l'**ensemble** des affectations MO portées par son sous-arbre —
+  **affectation ajoutée, modifiée, retirée ou déplacée** ;
+- et à chaque changement de l'**ordre** de ce sous-arbre — **réordonnancement d'une fratrie**, même
+  à ensemble d'affectations rigoureusement constant.
+
+Le second cas n'est pas une précaution théorique : la résolution porte sur la *première* facette MO
+rencontrée, donc l'ordre des frères est une **entrée** de la règle au même titre que les
+affectations elles-mêmes. Permuter deux frères dont les sous-arbres portent des rôles à calendriers
+différents change la bonne réponse sans qu'aucune affectation n'ait bougé. C'est exactement ce que
+produit un réimport MS Project qui ne change *rien* : il replace les tâches du fichier avant les
+lignes de coût et avant les tâches locales de la même fratrie (voir
+[Règle 3](#règle-3--réimport-ms-project-dans-un-brouillon-tâche-disparue-du-fichier)). Un
+réimport resynchronise donc les parents touchés **inconditionnellement**, et **après** avoir
+réordonné les fratries ; conditionner la resynchronisation au déplacement d'une affectation laisse
+un calendrier périmé qu'aucun invariant d'état ne détecte, [INV-15](#inv-15) ne contrôlant que la
+présence d'un calendrier, pas sa fraîcheur.
+
+Les cas se lisent donc ainsi :
 
 1. **Un rôle est affecté** après que le calendrier a été fixé : si le calendrier était `manual`, il
    est conservé tel quel et l'affectation n'a aucun effet sur lui ; sinon il prend le calendrier
@@ -261,6 +279,21 @@ Les trois cas demandés se lisent donc ainsi :
 3. **Une affectation est retirée** : même règle. Retirer la dernière affectation MO dont le rôle
    portait un calendrier ramène la tâche au calendrier du projet, et non à une absence de
    calendrier — une tâche non chiffrée reste datable ([INV-15](#inv-15)).
+4. **Une affectation est déplacée** — déplacement direct d'une ligne MO, ou déplacement d'une tâche
+   qui en porte, y compris le reparentage opéré par un réimport
+   ([Règle 3](#règle-3--réimport-ms-project-dans-un-brouillon-tâche-disparue-du-fichier)) : un
+   déplacement change l'ensemble des affectations de **deux** sous-arbres, celui de l'ancien
+   ancêtre et celui du nouveau. **Les deux extrémités sont resynchronisées**, chacune selon la même
+   règle de précédence. C'est le seul cas où une opération resynchronise plus d'une tâche racine ;
+   l'omettre laisse un calendrier périmé qu'aucun invariant d'état ne détecte, [INV-15](#inv-15)
+   ne contrôlant que la présence d'un calendrier, pas sa fraîcheur.
+5. **Une fratrie est réordonnée**, sans qu'aucune affectation ne soit ajoutée, modifiée, retirée ni
+   déplacée : monter ou descendre un frère, et surtout le réordonnancement systématique qu'opère un
+   réimport. L'ensemble des affectations du sous-arbre est inchangé, mais la **première** dans
+   l'ordre depth-first peut ne plus être la même : les ancêtres du sous-arbre réordonné sont donc
+   resynchronisés comme dans les cas précédents. C'est le cas le plus facile à oublier, parce qu'il
+   se déclenche sur un réimport dont le diff est vide — l'utilisateur n'a rien modifié, il a
+   réimporté son fichier.
 
 Un utilisateur revient au comportement automatique en effaçant son choix explicite : `calendar_source`
 repasse alors à `project` ou `role` par application de la même resynchronisation.
@@ -296,6 +329,167 @@ des lignes de coût concernées avec son libellé, sa nature MO ou non-MO et son
 suppression de nœud sans chiffrage se signale comme aujourd'hui, par un simple item de diff
 `removed`. La sémantique de l'import ne change pas ; seule l'absence d'avertissement est corrigée.
 
+Le garde-fou n'a de valeur que si l'appliqué est **exactement** le diff confirmé. Trois précisions
+en découlent, à implémenter telles quelles (E14-06, #332) :
+
+**a. Un nœud de planification sans `external_uid` n'est jamais signalé comme supprimé.** Un nœud
+dont le `work_item` n'a pas d'`external_uid` a été créé dans Waterfall et jamais exporté : son
+absence du fichier ne porte **aucune information**, puisqu'il n'y a jamais été. Il n'est ni
+supprimé, ni remonté, ni listé dans le diff. Seuls les nœuds que le fichier a connus — ceux dont le
+`work_item` porte un `external_uid` — peuvent être déclarés disparus. Corollaire pour le calcul du
+diff : le déplacement d'une tâche doit se comparer sur le **nœud parent attendu**, jamais sur une
+paire d'uid, un parent local n'en ayant pas ; sinon « à la racine » et « sous un parent local » sont
+indiscernables et le diff sous-déclare un déplacement que l'application effectue pourtant.
+
+Un tel nœud conserve son parent, mais **pas nécessairement son rang** : le fichier ne porte aucune
+position pour lui. Les tâches locales sont donc replacées **après** les tâches importées de la même
+fratrie, dans leur ordre relatif d'avant l'import, exactement comme les lignes de coût (voir
+« Position des lignes de coût au réimport » ci-dessous). Descendre en fin de fratrie n'est pas une
+suppression et ne fait pas l'objet d'un item de diff.
+
+**b. Un récapitulatif qui disparaît alors que le fichier conserve ses enfants ailleurs.** Les
+enfants que le fichier liste encore, sous un autre parent, sont **reparentés** ; seul le reste du
+sous-arbre est détruit, et le garde-fou n'annonce que le chiffrage réellement perdu. L'ordre
+d'application est donc : créer les tâches ajoutées, reparenter toutes celles que le fichier porte
+encore, **puis** supprimer les disparues. L'ordre naïf — supprimer d'abord le sous-arbre disparu —
+recréait les enfants survivants avec de **nouveaux `work_item`**, perdant l'identité inter-version
+sur laquelle repose tout le modèle.
+
+**c. Un fichier qui nomme un parent qu'il ne liste pas lui-même est refusé.** Si un
+`parent_external_uid` désigne un nœud que la révision possède mais que le fichier ne liste pas, ce
+parent est précisément l'un de ceux que le réimport supprime : appliquer le fichier reparenterait un
+survivant dans un sous-arbre condamné, puis le détruirait avec lui — une perte de chiffrage que le
+diff confirmé n'annonçait pas. Le réimport est **refusé en bloc**, avant toute mutation, et non
+réparé en aval. Sont refusées de la même façon, et au même moment, une chaîne de parenté qui boucle
+(elle produirait un cycle, [INV-06](#inv-06)), un enfant listé **avant** son parent — MS Project
+écrit un fichier depth-first, l'ordre inverse signale une source malformée et n'est pas réordonné
+silencieusement — et un parent que ni le fichier ni la révision ne connaissent. Un export MSPDI
+valide ne produit aucune de ces quatre formes.
+
+Les trois premières sont des **erreurs de structure du fichier** : tout ce qu'elles nomment est
+connu, c'est l'agencement qui est inapplicable. Seule la dernière est une **entité absente**. La
+distinction est normative, car elle détermine la réponse de la couche transport (E14-05, E14-06) :
+une structure inapplicable se répond 422, une entité absente se répond 404.
+
+Le réimport valide donc **l'intégralité** de la structure du fichier avant d'écrire quoi que ce
+soit : une révision est soit entièrement réimportée, soit rigoureusement intacte, `lock_version`
+compris. Il n'existe pas d'état intermédiaire dans lequel un import refusé aurait déjà créé des
+nœuds.
+
+**Position des lignes de coût au réimport.** Le fichier ne dit rien de la place d'une ligne de coût
+dans une fratrie — elle n'y a pas d'image. Les enfants de coût d'un parent sont donc conservés
+**après** ses enfants de planification, dans leur ordre relatif d'avant l'import, ce qui préserve la
+contiguïté exigée par [INV-05](#inv-05) sans inventer d'ordre que le fichier ne porte pas.
+
+**Identité de projet, pas de révision.** Le réimport s'accroche à l'identité du **projet** :
+l'`external_uid` est unique par projet ([INV-25](#inv-25)) et le `work_item` est le seul lien entre
+deux révisions. Réimporter le même fichier dans une seconde révision du même projet doit donc
+retrouver les **mêmes** `work_item` et n'en créer que pour les uid que le projet ne connaît pas
+encore. Créer de nouveaux `work_item` casserait le rapprochement RAE ↔ budget de référence, qui ne
+joint que par `work_item_id`.
+
+### Règle 4 — Le lotissement vit hors de la révision (provisoire)
+
+> **Statut : provisoire. Ne rien construire sur cette règle.** Contrairement aux règles 1 à 3, celle-ci
+> n'est pas tranchée. Elle est issue d'un **lot de maquettage encore en cours**, qui produira sa propre
+> spécification puis ses propres EPIC et issues, et qui peut la faire évoluer d'ici sa passe de
+> cohérence. Elle est reprise ici **pour être éprouvée par le banc d'essai d'E14-02**, tant que rien
+> n'est écrit en base et que la remettre en cause ne coûte qu'une réécriture de test.
+>
+> Concrètement : le banc d'essai la transcrit et la vérifie, mais **aucune table, aucune migration et
+> aucune API de l'EPIC E14 ne doit être conçue en s'appuyant dessus**. Le périmètre définitif du
+> lotissement — son modèle, ses écrans, ses routes — relèvera du lot de maquettage, pas de la présente
+> spécification.
+
+Le **lotissement** — postes, lots, livrables — est une donnée de **projet**. Il n'est pas versionné,
+il n'a pas d'historique, et une révision validée ne le fige pas ([INV-26](#inv-26-provisoire)).
+
+*Motif* : si le lotissement était porté par la révision, une révision validée en interdirait la
+modification. Or il doit rester éditable à tout moment, ne serait-ce que pour corriger une coquille.
+Les deux propriétés sont incompatibles, et c'est l'immuabilité qui est la bonne : c'est le même
+raisonnement que celui appliqué à `wf_task_enrichment`, qui se résorbe dans `work_item` parce qu'il
+survit aux versions.
+
+Quatre conséquences, à implémenter telles quelles :
+
+**a. Modifier le lotissement ne propage rien au planning.** Aucun nœud n'est créé, modifié ni
+supprimé par l'enregistrement d'un lotissement, quelle que soit la révision et quel que soit son
+statut. Il n'existe aucune règle de propagation lotissement → arbre.
+
+**b. Le squelette n'est qu'une aide au démarrage.** Un planning se démarre de **trois** façons —
+génération d'un squelette depuis le lotissement, feuille blanche, import MS Project — toutes
+équivalentes et toutes facultatives. Le squelette généré est un arbre de tâches ordinaires : ses
+`work_item` ne portent pas d'`external_uid`, n'ayant jamais figuré dans un fichier, de sorte qu'un
+import ultérieur ne les lit pas comme disparus ([Règle 3 a](#règle-3--réimport-ms-project-dans-un-brouillon-tâche-disparue-du-fichier)).
+
+**c. La regénération n'est proposée que sur un squelette non retouché.** Le marqueur est une
+**empreinte portée par la révision**, calculée au moment de la génération sur le lotissement **et**
+sur l'arbre généré. « Non retouché » signifie : l'arbre courant a la même empreinte d'arbre que
+celle enregistrée.
+
+L'empreinte d'arbre porte sur **tout ce que l'utilisateur peut avoir mis dans l'arbre**, et jamais
+sur des identifiants — une copie de révision ([INV-07](#inv-07)) reproduit le même arbre sous de
+nouveaux identifiants et reste un squelette non retouché. Elle couvre :
+
+- la **forme** de l'arbre (chemins de positions) et les **libellés**, lignes de coût comprises ;
+- les **valeurs de planification** saisies sur une tâche : jalon, durée et format de durée, dates de
+  début et de fin, charge, avancement, planification manuelle ;
+- le **calendrier épinglé à la main** (`calendar_source = manual` et son `calendar_id`), et lui
+  seul : les sources `project` et `role` sont *dérivées* de la [Règle 1](#règle-1--origine-du-calendrier-dune-tâche),
+  les surveiller ferait passer pour retouché un squelette que personne n'a touché ;
+- les **liens d'antériorité**, retraduits en chemins de positions de leurs deux extrémités — ils
+  vivent hors de l'arbre, et les oublier rendrait regénérable un planning déjà ordonnancé.
+
+D'une ligne de coût, seul le libellé est retenu : un squelette généré est un arbre de **tâches**,
+donc la seule présence d'un nœud de coût distingue déjà l'empreinte de celle enregistrée.
+
+Ce n'est **ni** un horodatage comparé aux `updated_at`, **ni** un marqueur porté par les nœuds : les
+deux variantes ont été examinées et écartées.
+
+Les **deux moitiés de l'empreinte sont des condensés non réversibles** (SHA-256 d'une forme
+canonique) : une empreinte se compare, elle ne se relit pas, et une révision ne doit conserver ni le
+contenu du lotissement ni les libellés qui en sont issus ([INV-26](#inv-26-provisoire)).
+
+**Portée d'une empreinte, et ce qu'une non-correspondance signifie.** La forme canonique condensée
+est un rendu de structures Python : une empreinte n'a de sens **qu'à l'intérieur d'une version de
+code**, et rien ne garantit qu'une montée de version du langage ou une évolution du modèle produise
+le même condensé pour le même arbre. Ce qui rend ce risque acceptable est le **sens du refus** :
+une empreinte qui ne correspond plus fait conclure « squelette retouché », donc **refuse** la
+regénération — elle n'autorise jamais un écrasement à tort. La dégradation retire un bouton, elle ne
+détruit pas de travail. En conséquence, le jour où l'empreinte sera **persistée**, elle devra être
+étiquetée d'une **version de format** : une empreinte d'une version antérieure se lit comme absente
+(regénération non proposée), jamais comme une comparaison valide.
+
+La moitié « lotissement » n'est jamais comparée pour autoriser ou refuser une regénération — un
+lotissement modifié depuis la génération est la raison normale de regénérer, pas un motif de refus. Elle
+enregistre ce dont le squelette est issu, et sert uniquement à *signaler* que le lotissement a changé
+depuis la génération.
+
+**d. Une regénération vise nécessairement un brouillon.** Elle écrit, donc
+[INV-03](#inv-03) s'applique sans aménagement : sur une révision validée elle est refusée comme
+n'importe quelle autre écriture, et l'utilisateur passe par une copie brouillon. Il n'y a pas de
+contradiction avec la présente règle — la modification du lotissement est acceptée *parce qu'elle ne
+touche pas la révision*, et la regénération est refusée *parce qu'elle la touche*.
+
+**Les tâches reconstruites conservent le `work_item` de l'entrée de lotissement dont elles sont
+issues.** La génération s'accroche à l'identité de **projet** par entrée de lotissement, exactement
+comme le réimport s'y accroche par `external_uid` ([Règle 3 c](#règle-3--réimport-ms-project-dans-un-brouillon-tâche-disparue-du-fichier)) :
+générer le squelette du même lot deux fois — dans une seconde révision, ou de nouveau après une
+regénération — retombe sur le même `work_item`. En réallouer de nouveaux serait faux, car l'empreinte
+compare un **état**, pas un **historique** : annuler une retouche (supprimer l'unique ligne de coût
+qui avait été accrochée sous une tâche du squelette) rend la regénération de nouveau disponible sur
+un arbre dont une révision validée a déjà figé les identités. Ses `frozen_lines`, et le rapprochement
+qui ne joint que par `work_item_id`, n'auraient alors plus rien à joindre.
+
+**Transition de statut du projet.** L'enregistrement du lotissement fait passer le projet de `cree` à
+`initialise`, et c'est le **seul** déclencheur de cette transition.
+
+**Ce que cette règle rend inutile.** `ms_task.structure_key` et `ms_task.structure_kind` n'ont pas à
+être relogés dans le nouveau modèle. Leur seule raison d'être est le mécanisme de propriété de la
+génération — savoir quel nœud provient de quel élément de lotissement, pour décider ce qu'une
+regénération a le droit d'écraser. L'empreinte répond à la même question sans marquer les nœuds, et
+la réponse qu'elle donne est « tout ou rien », qui est la seule que la règle c autorise.
+
 ## Invariants
 
 Chaque invariant porte un identifiant stable, un énoncé vérifiable, une **portée** et une manière
@@ -318,8 +512,16 @@ Les huit invariants imposés par la spécification de l'issue #327, dans leur or
 planification ; elle est indéfinie — coût global — si la racine est atteinte sans en rencontrer.**
 La résolution remonte `parent_id` en excluant le nœud lui-même et s'arrête au premier ancêtre
 porteur d'une facette de planification. La tâche porteuse n'est jamais stockée.
-*Portée : état. Violation : mémoriser sur une ligne de coût une tâche porteuse qui n'est pas son
-premier ancêtre de planification, par exemple en la laissant inchangée après un déplacement.*
+*Portée : état, vérifiable sur les **lignes figées**. Violation : mémoriser sur une ligne de coût une
+tâche porteuse qui n'est pas son premier ancêtre de planification, par exemple en la laissant
+inchangée après un déplacement.*
+
+Précision de portée. Sur un **brouillon**, INV-01 n'est pas une assertion réfutable mais la
+*définition* de la fonction de résolution : la tâche porteuse n'y est mémorisée nulle part, donc
+rien ne peut diverger de la remontée d'ancêtres, et la fonction de contrôle d'invariants n'a rien à
+comparer. L'invariant ne devient vérifiable qu'à partir du moment où une tâche porteuse est
+**recopiée** quelque part, c'est-à-dire sur le `bearing_work_item_id` d'une ligne figée : c'est là,
+et là seulement, que le contrôle s'exerce.
 
 #### INV-02
 
@@ -442,6 +644,12 @@ retirer sa dernière affectation MO sans la ramener au calendrier du projet.*
 `node_id == predecessor_node_id`.
 *Portée : état. Violation : créer un lien d'un nœud vers lui-même.*
 
+INV-16 **implique strictement** [INV-18](#inv-18) : un auto-lien est un cycle de précédence à un
+seul nœud, donc toute violation de INV-16 est aussi une violation de INV-18. La redondance est
+assumée — l'auto-lien est le cas dégénéré le plus courant et mérite d'être nommé pour lui-même, avec
+son propre message d'erreur. Un test qui viole INV-16 doit donc s'attendre à voir les **deux**
+identifiants remontés, et asserter l'appartenance plutôt que l'égalité à un ensemble.
+
 ##### INV-17
 
 **Les deux extrémités d'un lien de précédence portent une facette de planification.** La précédence
@@ -459,9 +667,12 @@ sur un nœud déjà visité.
 ##### INV-19
 
 **Une facette de coût de nature `labor` porte un rôle et un nombre d'heures, et ne porte ni catégorie
-de coût propre ni débours.** `role_id` et `hours` sont renseignés ; `cost_type_id`,
-`cost_category_id` et `unit_cost` sont nuls — la catégorie d'une ligne MO est celle de son rôle.
-*Portée : état. Violation : saisir un débours sur une ligne MO, ou créer une ligne MO sans rôle.*
+de coût propre, ni débours, ni suivi de commande.** `role_id` et `hours` sont renseignés ;
+`cost_type_id`, `cost_category_id`, `unit_cost` et `supply_status` sont nuls — la catégorie d'une
+ligne MO est celle de son rôle, et `supply_status` est réservé aux fournitures (voir le tableau des
+attributs de la facette coût) : une ligne MO n'a pas de commande à suivre.
+*Portée : état. Violation : saisir un débours sur une ligne MO, marquer une ligne MO `ordered`, ou
+créer une ligne MO sans rôle.*
 
 ##### INV-20
 
@@ -512,6 +723,51 @@ renseigné.** Plusieurs `work_item` d'un même projet peuvent avoir un `external
 dans Waterfall et jamais exportés.
 *Portée : état. Violation : attribuer le même uid MS Project à deux `work_item` d'un même projet lors
 d'un réimport.*
+
+#### Lotissement
+
+##### INV-26 (provisoire)
+
+> **Statut : provisoire. Cet invariant n'a pas le même statut qu'INV-01..INV-25.** Les vingt-cinq
+> précédents sont **acquis** ; celui-ci découle de la
+> [Règle 4](#règle-4--le-lotissement-vit-hors-de-la-révision-provisoire), issue d'un lot de maquettage
+> encore en cours et susceptible d'évoluer. Le banc d'essai d'E14-02 le vérifie exactement comme les
+> autres — c'est précisément pour l'**éprouver** qu'il est énoncé ici — mais **aucune table, aucune
+> migration et aucune API de l'EPIC E14 ne doit être conçue en s'appuyant dessus** tant que le lot de
+> maquettage n'a pas publié sa propre spécification. Un test rouge sur INV-26 est donc à lire comme un
+> signal sur la règle, pas nécessairement comme un défaut du code.
+
+**Le lotissement est une donnée de projet, non versionnée, qu'une révision validée ne fige pas.**
+Aucune révision ne porte d'entrée de lotissement : les postes, lots et livrables sont portés par le
+projet et par lui seul, et restent modifiables quel que soit le statut de n'importe quelle révision
+du projet. Une révision ne conserve du lotissement que l'**empreinte** du squelette qui en a été
+généré ([Règle 4 c](#règle-4--le-lotissement-vit-hors-de-la-révision-provisoire)), jamais son
+contenu.
+
+« Jamais son contenu » vaut **quelle qu'en soit la forme** : ni les entrées elles-mêmes, ni un
+dictionnaire `id`/`kind`/`name`, ni une ligne champ par champ, ni une chaîne sérialisée.
+
+**Ce que la vérification garantit, et ce qu'elle ne garantit pas.** Les trois premières formes sont
+**structurelles** : elles se décident sur la forme de l'objet porté par la révision, et sont
+détectées de façon déterministe. La quatrième — la chaîne sérialisée — est détectée **au mieux** : le
+discriminant employé est le fait qu'une sérialisation *met le nom entre guillemets*, là où la copie
+parfaitement légitime d'un libellé de lot sur une tâche générée ne le fait pas. Les rendus qui ne
+citent pas leurs noms (CSV, séparé par barres verticales, bloc YAML, ligne de tableau markdown,
+phrase humaine, libellés seuls) passent donc inaperçus. **Un contrôle vert sur INV-26 ne vaut pas
+« aucun contenu de lotissement n'est porté »** : il vaut « aucune entrée, aucun dictionnaire, aucune
+ligne champ par champ, et aucune sérialisation manifeste ». Élargir l'heuristique ne ferait que
+déplacer la frontière des ratés ; c'est pourquoi elle est énoncée plutôt qu'affinée.
+
+C'est aussi pourquoi les deux moitiés de l'empreinte sont des condensés non réversibles : un rendu
+lisible du lotissement — ou des libellés qui en sont issus — porté par la révision est une
+violation, même s'il s'appelle « empreinte ». En revanche, un `work_item` du **projet** peut référencer l'entrée de
+lotissement dont il est issu ([Règle 4 d](#règle-4--le-lotissement-vit-hors-de-la-révision-provisoire)) :
+c'est une référence, pas une copie — aucun libellé, aucune nature, rien qu'une révision validée
+figerait.
+
+*Portée : état. Violation : recopier le lotissement sur la révision au moment de la génération du
+squelette — une révision validée le figerait alors, et une coquille dans un libellé de lot
+deviendrait incorrigible.*
 
 ### Propriétés délibérément non érigées en invariants
 
@@ -658,11 +914,19 @@ sous-jacent qui est abandonnée, délibérément.
 | `wf_estimate_role_assignment`, `wf_task_role_assignment` | facette coût de nature `labor` |
 | `wf_estimate_line` | `wf_revision_frozen_line` |
 | `wf_task_enrichment` | `work_item.description` |
+| `ms_task.structure_key`, `ms_task.structure_kind` | **PROVISOIRE — voir l'encadré sous la table** : supprimées, remplacées par l'empreinte de squelette ([Règle 4 c](#règle-4--le-lotissement-vit-hors-de-la-révision-provisoire)) |
 | `wf_charge_line` | supprimée |
 | `EstimateCostLine.source_line_id` (jamais créé) | identité `work_item` |
 | `MsProject.planning_reference_id`, `displayed_planning_id`, `reference_estimate_id`, `Estimate.planning_id` | pointeur unique de révision |
 | `WfPlanning.revision`, `Estimate.revision` | `ProjectRevision.lock_version` |
 | `services/task_references.py` | supprimé, remplacé par l'immuabilité d'une révision validée |
+
+> **Provisoire : la ligne `ms_task.structure_key` / `ms_task.structure_kind`.** Toutes les autres
+> lignes de cette table sont acquises. Celle-là seule découle de la
+> [Règle 4](#règle-4--le-lotissement-vit-hors-de-la-révision-provisoire), issue d'un lot de maquettage
+> encore en cours et susceptible d'évoluer. Le banc d'essai d'E14-02 l'éprouve ; **aucune table, aucune
+> migration et aucune API de l'EPIC E14 ne doit supprimer ni reloger ces deux colonnes sur cette seule
+> base.** Leur sort définitif relèvera de la spécification que produira le lot de maquettage.
 
 La création de ces tables est strictement additive (E14-03, #329) : les anciennes restent en place
 jusqu'à ce que tous leurs consommateurs soient migrés (E14-12, #339).

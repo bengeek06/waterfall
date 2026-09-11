@@ -23,3 +23,8 @@ node_modules/
 test.db
 apps/backend/waterfall.db
 apps/backend/test.db-journal
+
+# Uploaded MS Project files (import_storage_path). The test suite writes several
+# MB of XML there; the real fix -- not writing inside the working tree at all --
+# is tracked in #341, this line is only a guardrail against committing them.
+.waterfall-imports/
