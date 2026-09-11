@@ -28,7 +28,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Vérifier que l'API est prête */
+        /**
+         * Vérifier que l'API est prête
+         * @description Contrôle effectif des dépendances (Postgres, Redis, stockage objet), chacune sous un délai court : une dépendance qui ne répond pas est comptée en échec. Utilisé par le healthcheck Docker du service `api`. Ne pas confondre avec `GET /health`, qui est une sonde de vivacité et ne contacte volontairement aucune dépendance.
+         */
         get: operations["getReadiness"];
         put?: never;
         post?: never;
@@ -1433,11 +1436,34 @@ export interface components {
             /** @example ok */
             status: string;
         };
+        /** @description État de préparation de l'API. Le corps est identique en 200 et en 503 : seul le code HTTP change, `checks` indique toujours quelle dépendance est en cause. */
         ReadinessStatus: {
-            /** @example ready */
-            status: string;
+            /**
+             * @example ready
+             * @enum {string}
+             */
+            status: "ready" | "unavailable";
+            checks: components["schemas"]["ReadinessChecks"];
             /** Format: date-time */
             timestamp: string;
+        };
+        /** @description Résultat par dépendance. Volontairement binaire (`ok`/`unavailable`) et sans message : `/health/ready` n'est pas authentifié, le détail de la panne reste dans les logs de l'API. */
+        ReadinessChecks: {
+            /**
+             * @example ok
+             * @enum {string}
+             */
+            database: "ok" | "unavailable";
+            /**
+             * @example ok
+             * @enum {string}
+             */
+            redis: "ok" | "unavailable";
+            /**
+             * @example ok
+             * @enum {string}
+             */
+            storage: "ok" | "unavailable";
         };
         UserCreate: {
             /** Format: email */
@@ -2789,8 +2815,17 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description API prête */
+            /** @description API prête, toutes les dépendances répondent */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadinessStatus"];
+                };
+            };
+            /** @description Au moins une dépendance est injoignable. Même corps qu'en 200 : `checks` identifie la ou les dépendances en cause. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

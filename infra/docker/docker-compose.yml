@@ -38,6 +38,48 @@ services:
         condition: service_completed_successfully
     command: >-
       sh -c "python -m waterfall.scripts.prepare_alembic_dev_schema && alembic upgrade head && exec uvicorn waterfall.main:app --host 0.0.0.0 --port 8000 --app-dir src"
+    healthcheck:
+      # python, not curl/wget: the image is python:3.13-slim (apps/backend/Dockerfile),
+      # which ships neither, and installing a package just to make one HTTP call would
+      # grow the image -- the interpreter already serving the API can do it.
+      #
+      # The HTTPError branch is the point of this command, not boilerplate. urlopen
+      # *raises* on the 503 /health/ready answers when a dependency is down, and an
+      # uncaught raise puts a 15-line traceback ending in "HTTP Error 503: Service
+      # Unavailable" into `docker inspect .State.Health.Log` -- with the response body,
+      # i.e. the per-dependency breakdown this whole endpoint exists to produce, thrown
+      # away. Reading the body onto stdout is what lets `docker inspect` say
+      # `"storage": "unavailable"` instead of leaving on-call to exec into a container
+      # that has no HTTP client. The second branch does the same for the errors with no
+      # body (connection refused while uvicorn is still binding, read timeout): one line,
+      # no traceback.
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import sys, urllib.error, urllib.request
+          try:
+              with urllib.request.urlopen("http://127.0.0.1:8000/health/ready", timeout=8) as answer:
+                  sys.exit(0 if answer.status == 200 else 1)
+          except urllib.error.HTTPError as error:
+              sys.stdout.write(error.read(512).decode("utf-8", "replace"))
+              sys.exit(1)
+          except Exception as error:
+              sys.stdout.write(f"{type(error).__name__}: {error}")
+              sys.exit(1)
+      # Timeout budget, from the inside out: /health/ready spends at most 2s per
+      # dependency x 3 dependencies = 6s (see _CHECK_TIMEOUT_SECONDS in
+      # api/routes/health.py) < 8s on the urlopen call < 10s here. Ordered this way, the
+      # probe always gets to *answer* which dependency is down -- a shorter Docker
+      # timeout would cut the request off and reduce every outage to "unhealthy".
+      interval: 15s
+      timeout: 10s
+      retries: 6
+      # First boot runs `alembic upgrade head` (and seeds the admin in dev) before uvicorn
+      # binds; without this grace period the api would be reported unhealthy meanwhile,
+      # and anything waiting on service_healthy would see it flap.
+      start_period: 60s
 
   postgres:
     image: postgres:17

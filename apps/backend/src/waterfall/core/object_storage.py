@@ -18,7 +18,7 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
-from waterfall.core.config import get_settings
+from waterfall.core.config import Settings, get_settings
 
 if TYPE_CHECKING:  # pragma: no cover - typing-only import (boto3-stubs is a dev dep)
     from mypy_boto3_s3.client import S3Client
@@ -28,6 +28,15 @@ if TYPE_CHECKING:  # pragma: no cover - typing-only import (boto3-stubs is a dev
 _CONNECT_TIMEOUT_SECONDS = 5
 _READ_TIMEOUT_SECONDS = 30
 _MAX_ATTEMPTS = 3
+
+# `check_bucket` (the readiness probe, E13-03) gets its own, much tighter budget: it runs
+# behind a ~2s per-dependency deadline in api/routes/health.py, so the data-path values
+# above -- up to 3 attempts x 5s just to connect -- would guarantee the probe is cut off
+# by its deadline instead of returning a real answer, and would leave a socket-holding
+# thread behind on every poll. One attempt, fail fast, report honestly.
+_PROBE_CONNECT_TIMEOUT_SECONDS = 1
+_PROBE_READ_TIMEOUT_SECONDS = 1
+_PROBE_MAX_ATTEMPTS = 1
 
 # The one code that means "this object is gone", and nothing else. `NoSuchBucket` is
 # deliberately *not* here: a missing bucket is not a missing object, it is infrastructure
@@ -54,6 +63,7 @@ class ObjectStorage:
 
     def __init__(self) -> None:
         self._client: S3Client | None = None
+        self._probe_client: S3Client | None = None
         self._bucket: str | None = None
 
     def _connect(self) -> tuple[S3Client, str]:
@@ -62,34 +72,81 @@ class ObjectStorage:
         # at a mock endpoint.
         if self._client is None or self._bucket is None:
             settings = get_settings()
-            self._client = boto3.client(
-                "s3",
-                endpoint_url=settings.garage_endpoint_url,
-                aws_access_key_id=settings.garage_access_key_id,
-                aws_secret_access_key=settings.garage_secret_access_key,
-                region_name=settings.garage_region,
-                config=Config(
-                    # Garage serves path-style URLs only: boto3's default virtual-host
-                    # style would resolve `<bucket>.<endpoint>`, which no local DNS
-                    # answers, and every call would fail with a connection error.
-                    s3={"addressing_style": "path"},
-                    connect_timeout=_CONNECT_TIMEOUT_SECONDS,
-                    read_timeout=_READ_TIMEOUT_SECONDS,
-                    retries={"max_attempts": _MAX_ATTEMPTS, "mode": "standard"},
-                ),
+            self._client = _new_client(
+                settings,
+                connect_timeout=_CONNECT_TIMEOUT_SECONDS,
+                read_timeout=_READ_TIMEOUT_SECONDS,
+                max_attempts=_MAX_ATTEMPTS,
             )
             self._bucket = settings.garage_bucket
         return self._client, self._bucket
 
+    def _connect_probe(self) -> tuple[S3Client, str]:
+        """Same endpoint and credentials as `_connect`, fail-fast timeouts.
+
+        A separate client rather than a separate `Config` per call: botocore builds the
+        endpoint resolver and the signer once per client, so reusing one keeps the
+        readiness probe cheap enough to be polled every few seconds.
+
+        Deliberately does not populate `self._bucket`, unlike `_connect`: this runs on the
+        readiness probe's own thread (see api/routes/health.py), so writing that shared
+        attribute would race a concurrent `_connect`/`reset`, and a probe in flight when
+        `reset()` lands could read the `None` back and call `head_bucket(Bucket=None)`.
+        Reading the (cached) settings per call costs nothing and keeps the probe free of
+        shared mutable state.
+        """
+        settings = get_settings()
+        if self._probe_client is None:
+            self._probe_client = _new_client(
+                settings,
+                connect_timeout=_PROBE_CONNECT_TIMEOUT_SECONDS,
+                read_timeout=_PROBE_READ_TIMEOUT_SECONDS,
+                max_attempts=_PROBE_MAX_ATTEMPTS,
+            )
+        return self._probe_client, settings.garage_bucket
+
     def reset(self) -> None:
-        """Drop the cached client so the next call re-reads the settings.
+        """Close and drop the cached clients so the next call re-reads the settings.
 
         Test utility: the suite swaps the S3 backend (and the endpoint URL it points
         at) between tests, and a client bound to a previous backend would keep talking
         to it.
+
+        Closed, not just dropped: a botocore client owns an urllib3 `PoolManager` and its
+        open sockets, which only `close()` releases -- dropping the reference leaves them
+        to the garbage collector. This runs from an autouse fixture on every test of the
+        ~20 modules that touch object storage, twice each, so "the GC will get to it"
+        would mean hundreds of abandoned connection pools in a single pytest process.
         """
+        for client in (self._client, self._probe_client):
+            if client is not None:
+                client.close()
         self._client = None
+        self._probe_client = None
         self._bucket = None
+
+    def check_bucket(self) -> None:
+        """Raise unless the configured bucket is reachable right now (readiness probe).
+
+        `head_bucket`, not a listing: it is the cheapest call that exercises the whole
+        chain the import path depends on -- network, SigV4 with the configured region,
+        and the existence of *that* bucket for *these* credentials -- while transferring
+        no object data.
+
+        Every failure is an outage here, with no "missing" case to distinguish: a HEAD on
+        an absent bucket answers a bodiless 404 (botocore reports `Error.Code == "404"`,
+        not `NoSuchBucket`) and an invisible one answers 403, and both mean the store is
+        not in the state the API needs. So this deliberately does not consult
+        `_NOT_FOUND_CODES` -- which is also why "404" must stay out of that set: it is the
+        answer to "is this object gone?", and a bucket-level HEAD is not that question.
+        """
+        client, bucket = self._connect_probe()
+        try:
+            client.head_bucket(Bucket=bucket)
+        except (BotoCoreError, ClientError) as exc:
+            raise ObjectStorageUnavailableError(
+                f"Object storage bucket {bucket!r} is unreachable"
+            ) from exc
 
     def upload(self, key: str, content: IO[bytes]) -> None:
         """Upload a file-like object under `key`, replacing any existing object.
@@ -147,6 +204,27 @@ class ObjectStorage:
             client.delete_object(Bucket=bucket, Key=key)
         except (BotoCoreError, ClientError) as exc:
             raise _unavailable("delete", key) from exc
+
+
+def _new_client(
+    settings: Settings, *, connect_timeout: int, read_timeout: int, max_attempts: int
+) -> S3Client:
+    return boto3.client(
+        "s3",
+        endpoint_url=settings.garage_endpoint_url,
+        aws_access_key_id=settings.garage_access_key_id,
+        aws_secret_access_key=settings.garage_secret_access_key,
+        region_name=settings.garage_region,
+        config=Config(
+            # Garage serves path-style URLs only: boto3's default virtual-host style
+            # would resolve `<bucket>.<endpoint>`, which no local DNS answers, and every
+            # call would fail with a connection error.
+            s3={"addressing_style": "path"},
+            connect_timeout=connect_timeout,
+            read_timeout=read_timeout,
+            retries={"max_attempts": max_attempts, "mode": "standard"},
+        ),
+    )
 
 
 def _is_not_found(exc: ClientError) -> bool:

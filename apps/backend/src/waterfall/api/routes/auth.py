@@ -145,6 +145,23 @@ class LoginRateLimiter:
             ) from exc
         return bool(allowed)
 
+    def ping(self) -> None:
+        """Raise RateLimiterUnavailableError unless Redis answers PING. Read-only.
+
+        Exists for the readiness probe (`GET /health/ready`), which reports on the very
+        client the login path depends on rather than opening a connection of its own: a
+        probe on a separate client could stay green -- different pool, different socket
+        state -- while every login fails closed here.
+        """
+        try:
+            self._get_client().ping()
+        # Same two exception types, for the same reasons, as allow(): a malformed
+        # REDIS_URL surfaces from from_url() as ValueError, not RedisError.
+        except (RedisError, ValueError) as exc:
+            raise RateLimiterUnavailableError(
+                "Login rate limiter Redis backend is unreachable"
+            ) from exc
+
     def clear(self) -> None:
         """Drop every login rate limit counter. Test utility -- no production caller.
 

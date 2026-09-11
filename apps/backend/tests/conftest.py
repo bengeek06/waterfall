@@ -119,6 +119,23 @@ def reset_database() -> None:
 
 
 @pytest.fixture(autouse=True)
+def reset_readiness_probe_state() -> None:
+    """Drop the readiness probe's memoised result and its private engine (E13-03).
+
+    `check_dependencies()` caches for a few seconds so that a burst of anonymous
+    /health/ready calls cannot spawn three threads each; tests run far faster than that
+    window and simulate outages in-process, so without this a test would assert on the
+    previous test's answer. The probe engine is cached the same way as `get_engine()` and
+    is dropped for the same reason: a test repointing DATABASE_URL must not inherit an
+    engine built from the value before it.
+    """
+    from waterfall.api.routes.health import reset_dependency_cache, reset_probe_engine
+
+    reset_dependency_cache()
+    reset_probe_engine()
+
+
+@pytest.fixture(autouse=True)
 def reset_login_rate_limiter() -> None:
     # login_rate_limiter.clear() is a Redis-backed no-op when Redis is unreachable (see
     # its docstring), so this runs safely before every test in the suite -- most of

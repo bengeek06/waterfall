@@ -10,8 +10,18 @@ services:
     ports:
       - "3000:3000"
     depends_on:
+      # service_healthy, not service_started: the API process binds its port well before
+      # `alembic upgrade head` and its dependencies are usable, so the frontend used to
+      # come up against an API that answered 500s. /health/ready is what actually knows.
+      #
+      # Startup ordering only. Compose never stops or restarts an already-running
+      # dependent when `api` later flips to unhealthy, so this buys an orderly boot, not
+      # supervision. It does change a failure mode: `docker compose up --wait` (and any
+      # CI using it) now blocks until the API is ready and gives up after roughly
+      # start_period + retries x interval -- about 150s with the values in
+      # docker-compose.yml -- if Postgres, Redis or Garage never comes back.
       api:
-        condition: service_started
+        condition: service_healthy
 
   db-viewer:
     image: dpage/pgadmin4:8
@@ -38,8 +48,12 @@ services:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
     depends_on:
+      # Same reason as the frontend, and with the same two caveats: scraping /metrics on
+      # an API that is up but not ready produces a stretch of misleading series at every
+      # startup, but this only orders the boot -- Prometheus keeps running (and keeps
+      # scraping, which is what you want) if the API goes unhealthy afterwards.
       api:
-        condition: service_started
+        condition: service_healthy
 
   grafana:
     image: grafana/grafana:11.2.2

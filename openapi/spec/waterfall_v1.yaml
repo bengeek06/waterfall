@@ -197,6 +197,8 @@ components:
       $ref: ./components/schemas/HealthStatus.yaml
     ReadinessStatus:
       $ref: ./components/schemas/ReadinessStatus.yaml
+    ReadinessChecks:
+      $ref: ./components/schemas/ReadinessChecks.yaml
     UserCreate:
       $ref: ./components/schemas/UserCreate.yaml
     UserRead:

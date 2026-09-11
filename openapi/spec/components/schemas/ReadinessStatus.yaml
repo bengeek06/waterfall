@@ -1,11 +1,20 @@
 type: object
+description: >-
+  État de préparation de l'API. Le corps est identique en 200 et en 503 : seul le code
+  HTTP change, `checks` indique toujours quelle dépendance est en cause.
 required:
 - status
+- checks
 - timestamp
 properties:
   status:
     type: string
+    enum:
+    - ready
+    - unavailable
     example: ready
+  checks:
+    $ref: ./ReadinessChecks.yaml
   timestamp:
     type: string
     format: date-time

@@ -49,11 +49,18 @@ paths:
       tags:
         - health
       summary: Vérifier que l'API est prête
+      description: 'Contrôle effectif des dépendances (Postgres, Redis, stockage objet), chacune sous un délai court : une dépendance qui ne répond pas est comptée en échec. Utilisé par le healthcheck Docker du service `api`. Ne pas confondre avec `GET /health`, qui est une sonde de vivacité et ne contacte volontairement aucune dépendance.'
       operationId: getReadiness
       security: []
       responses:
         '200':
-          description: API prête
+          description: API prête, toutes les dépendances répondent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessStatus'
+        '503':
+          description: 'Au moins une dépendance est injoignable. Même corps qu''en 200 : `checks` identifie la ou les dépendances en cause.'
           content:
             application/json:
               schema:
@@ -3083,16 +3090,49 @@ components:
           example: ok
     ReadinessStatus:
       type: object
+      description: 'État de préparation de l''API. Le corps est identique en 200 et en 503 : seul le code HTTP change, `checks` indique toujours quelle dépendance est en cause.'
       required:
         - status
+        - checks
         - timestamp
       properties:
         status:
           type: string
+          enum:
+            - ready
+            - unavailable
           example: ready
+        checks:
+          $ref: '#/components/schemas/ReadinessChecks'
         timestamp:
           type: string
           format: date-time
+    ReadinessChecks:
+      type: object
+      description: 'Résultat par dépendance. Volontairement binaire (`ok`/`unavailable`) et sans message : `/health/ready` n''est pas authentifié, le détail de la panne reste dans les logs de l''API.'
+      required:
+        - database
+        - redis
+        - storage
+      properties:
+        database:
+          type: string
+          enum:
+            - ok
+            - unavailable
+          example: ok
+        redis:
+          type: string
+          enum:
+            - ok
+            - unavailable
+          example: ok
+        storage:
+          type: string
+          enum:
+            - ok
+            - unavailable
+          example: ok
     UserCreate:
       type: object
       required:
