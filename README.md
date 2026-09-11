@@ -200,12 +200,21 @@ GARAGE_ACCESS_KEY_ID=GK<24-caractères-hexadécimaux>
 GARAGE_SECRET_ACCESS_KEY=<64-caractères-hexadécimaux>
 GARAGE_RPC_SECRET=<64-caractères-hexadécimaux>
 GARAGE_ENDPOINT_URL=http://localhost:3900
+PGADMIN_DEFAULT_PASSWORD=<mot-de-passe-local>
+GRAFANA_ADMIN_PASSWORD=<mot-de-passe-local>
 ```
 
 `REDIS_PASSWORD` et les trois variables `GARAGE_*` sont obligatoires même ici : les services
 `redis` et `garage` du compose de base les exigent sans valeur par défaut, et Compose interpole
-tout le fichier avant de choisir les services — sans elles, `make db-up`, `make down` et
-`make logs` échouent aussi.
+tout le fichier avant de choisir les services — sans elles, `make db-up` et `make logs`
+échouent aussi.
+
+`PGADMIN_DEFAULT_PASSWORD` et `GRAFANA_ADMIN_PASSWORD` sont requis ici pour une autre raison :
+non pas parce que pgAdmin et Grafana tournent en Configuration A — ils ne tournent pas —, mais
+parce que les cibles d'arrêt et de nettoyage (`make down`, `make stop`, `make clean-docker`,
+`make distclean`) passent par le compose **complet**, donc Compose interpole aussi
+`docker-compose.full.yml`. Sans ces deux variables, `make db-up` et `make dev` fonctionnent,
+puis `make down` échoue sur `db-viewer`, un service jamais démarré.
 
 Garage impose le format de ses identifiants S3 : la clé d'accès est `GK` suivi de 24 caractères
 hexadécimaux, la clé secrète en compte exactement 64. Générez un jeu complet avec :
@@ -275,8 +284,9 @@ En local, remplacez `<IP_VM>` par `localhost` et utilisez les ports indiqués ci
 ### 4) Configuration B : stack Docker complet
 
 Cette configuration lance l’API, PostgreSQL, le frontend et les outils d’observabilité dans Docker.
-Elle combine [docker-compose.yml](infra/docker/docker-compose.yml), qui définit API + PostgreSQL,
-et [docker-compose.full.yml](infra/docker/docker-compose.full.yml), qui ajoute frontend et observabilité.
+Elle combine [docker-compose.yml](infra/docker/docker-compose.yml), qui définit l'API, PostgreSQL,
+Redis et Garage (`garage` + `garage-init`), et
+[docker-compose.full.yml](infra/docker/docker-compose.full.yml), qui ajoute frontend et observabilité.
 
 Depuis la racine du dépôt, renseignez au minimum dans `.env` :
 
@@ -294,9 +304,14 @@ GRAFANA_ADMIN_PASSWORD=<mot-de-passe-local>
 # ADMIN_BIND_ADDRESS=127.0.0.1
 ```
 
-Contrairement à `PGADMIN_DEFAULT_PASSWORD` et `GRAFANA_ADMIN_PASSWORD`, qui ne concernent que
-`make up-full`, `REDIS_PASSWORD` et les trois variables `GARAGE_*` sont exigés par le compose de
-base : ils conditionnent aussi `make db-up`, `make down` et `make logs`. Le compose transmet le
+Ces sept variables sont toutes obligatoires, mais pas au même titre. `REDIS_PASSWORD` et les
+trois variables `GARAGE_*` sont exigées par le compose de **base** : elles conditionnent aussi
+`make db-up` et `make logs`, qui ne lancent pourtant ni Redis ni Garage.
+`PGADMIN_DEFAULT_PASSWORD` et `GRAFANA_ADMIN_PASSWORD` ne sont lues que par le compose complet,
+donc par `make up-full` — mais aussi par `make down`, `make stop`, `make clean-docker` et
+`make distclean`, qui passent tous par ce même fichier. Aucune des sept n'est donc limitée aux
+services qu'elle configure : Compose interpole le fichier entier avant de choisir les services.
+Le compose transmet le
 mot de passe Redis à l'API via `REDIS_PASSWORD` (et non dans `REDIS_URL`), pour qu'un caractère
 `/`, `+` ou `@` issu d'un `openssl rand -base64 24` ne soit pas interprété comme un séparateur
 d'URL ; les identifiants S3 sont transmis de la même façon, hors de `GARAGE_ENDPOINT_URL`.
@@ -365,7 +380,8 @@ latence p95 passeraient au rouge pendant une panne que le dashboard « Dépendan
 déjà correctement. Les panneaux **par route** ne sont pas filtrés, c'est là qu'on lit le trafic de
 sonde.
 
-`docker-compose.yml` utilisé seul ne lance pas le frontend. Il fournit uniquement l’API et PostgreSQL.
+`docker-compose.yml` utilisé seul ne lance ni le frontend ni l’observabilité. Il fournit l’API,
+PostgreSQL, Redis et Garage (`garage` + `garage-init`).
 PostgreSQL et les outils d’observabilité sont limités à la VM par défaut. Utilisez un tunnel SSH
 ou définissez `ADMIN_BIND_ADDRESS` uniquement si ces interfaces doivent être accessibles à distance,
 avec un filtrage réseau adapté.

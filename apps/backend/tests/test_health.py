@@ -421,7 +421,7 @@ def test_check_bucket_reports_a_forbidden_bucket_as_an_outage(
     stubber.add_client_error("head_bucket", service_error_code="403", http_status_code=403)
 
     def stubbed_client(
-        settings: Settings, *, connect_timeout: int, read_timeout: int, max_attempts: int
+        settings: Settings, *, connect_timeout: int, read_timeout: int, total_max_attempts: int
     ) -> S3Client:
         return client
 

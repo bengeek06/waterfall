@@ -23,20 +23,49 @@ from waterfall.core.config import Settings, get_settings
 if TYPE_CHECKING:  # pragma: no cover - typing-only import (boto3-stubs is a dev dep)
     from mypy_boto3_s3.client import S3Client
 
-# Never let an unreachable store hang a request: a stuck upload would also hold the
-# project row lock in imports.upload_xml's final copy step.
+# Three budgets, one per call site, each sized by what waits on it. The attempt counts are
+# expressed as botocore's `total_max_attempts` (initial request included) rather than its
+# `max_attempts` alias, which counts *retries* -- `{"max_attempts": 3}` resolves to four
+# requests, so a budget written the other way reads a third lower than it really is.
+#
+# Data path (upload/download/delete). Never let an unreachable store hang a request, while
+# still tolerating a 25 MB PUT -- imports' own size ceiling -- over a slow link, which is
+# what the 30s read budget buys. All three calls run outside the project row lock (see
+# imports.upload_xml, which stages before locking, and imports.run_batch, which reads and
+# parses before locking), so this worst case -- 4 x (5s + 30s) = 140s, plus backoff -- only
+# ever delays the one request that hit it.
 _CONNECT_TIMEOUT_SECONDS = 5
 _READ_TIMEOUT_SECONDS = 30
-_MAX_ATTEMPTS = 3
+_TOTAL_MAX_ATTEMPTS = 4
 
-# `check_bucket` (the readiness probe, E13-03) gets its own, much tighter budget: it runs
-# behind a ~2s per-dependency deadline in api/routes/health.py, so the data-path values
-# above -- up to 3 attempts x 5s just to connect -- would guarantee the probe is cut off
+# Switchover (`copy`) gets its own, much tighter budget, for the same reason the probe does
+# below: it is the one storage call that *must* run inside the `ms_project` row lock. That
+# staging-to-final copy is what makes the upload atomic with respect to upload_xml's
+# `status != "pending"` re-check, so it cannot be moved out -- which means **this budget is
+# the maximum time every other writer on that project is blocked** (planning, devis, task),
+# with no bound of its own: `db/session.get_engine` sets no `lock_timeout`, so a waiter
+# queues indefinitely behind whatever this call takes. On the data-path values above, one
+# copy against a black-holed store (TCP accepted, nothing answered) would freeze the whole
+# project for those 140s; here the worst case is 2 x (2s + 10s) = 24s, plus botocore's
+# jittered backoff before the single retry (`standard` mode: rand(0,1) x min(2^0, 20), under
+# a second), so ~25s.
+#
+# A short read timeout is not a compromise here: `copy_object` is a server-side copy, so the
+# client transfers no object data at all and the response is a few hundred bytes. The 30s
+# read budget that a 25 MB PUT genuinely needs has no justification on this call, whatever
+# the object's size. Keep the two apart when tuning either.
+_SWITCHOVER_CONNECT_TIMEOUT_SECONDS = 2
+_SWITCHOVER_READ_TIMEOUT_SECONDS = 10
+_SWITCHOVER_TOTAL_MAX_ATTEMPTS = 2
+
+# `check_bucket` (the readiness probe, E13-03) gets the tightest budget of the three: it
+# runs behind a ~2s per-dependency deadline in api/routes/health.py, so the data-path values
+# above -- up to 4 attempts x 5s just to connect -- would guarantee the probe is cut off
 # by its deadline instead of returning a real answer, and would leave a socket-holding
 # thread behind on every poll. One attempt, fail fast, report honestly.
 _PROBE_CONNECT_TIMEOUT_SECONDS = 1
 _PROBE_READ_TIMEOUT_SECONDS = 1
-_PROBE_MAX_ATTEMPTS = 1
+_PROBE_TOTAL_MAX_ATTEMPTS = 1
 
 # The one code that means "this object is gone", and nothing else. `NoSuchBucket` is
 # deliberately *not* here: a missing bucket is not a missing object, it is infrastructure
@@ -63,6 +92,7 @@ class ObjectStorage:
 
     def __init__(self) -> None:
         self._client: S3Client | None = None
+        self._switchover_client: S3Client | None = None
         self._probe_client: S3Client | None = None
         self._bucket: str | None = None
 
@@ -76,10 +106,31 @@ class ObjectStorage:
                 settings,
                 connect_timeout=_CONNECT_TIMEOUT_SECONDS,
                 read_timeout=_READ_TIMEOUT_SECONDS,
-                max_attempts=_MAX_ATTEMPTS,
+                total_max_attempts=_TOTAL_MAX_ATTEMPTS,
             )
             self._bucket = settings.garage_bucket
         return self._client, self._bucket
+
+    def _connect_switchover(self) -> tuple[S3Client, str]:
+        """Same endpoint and credentials as `_connect`, lock-sized timeouts.
+
+        A separate client rather than a per-call `Config`, like `_connect_probe`: botocore
+        builds the endpoint resolver and the signer once per client, and this one is reused
+        by every upload.
+
+        Deliberately does not populate `self._bucket`, for `_connect_probe`'s reason: this
+        runs on an anyio worker thread (`run_in_threadpool` in `api/routes/imports.py`), so
+        writing that shared attribute would race a concurrent `_connect`/`reset`.
+        """
+        settings = get_settings()
+        if self._switchover_client is None:
+            self._switchover_client = _new_client(
+                settings,
+                connect_timeout=_SWITCHOVER_CONNECT_TIMEOUT_SECONDS,
+                read_timeout=_SWITCHOVER_READ_TIMEOUT_SECONDS,
+                total_max_attempts=_SWITCHOVER_TOTAL_MAX_ATTEMPTS,
+            )
+        return self._switchover_client, settings.garage_bucket
 
     def _connect_probe(self) -> tuple[S3Client, str]:
         """Same endpoint and credentials as `_connect`, fail-fast timeouts.
@@ -101,7 +152,7 @@ class ObjectStorage:
                 settings,
                 connect_timeout=_PROBE_CONNECT_TIMEOUT_SECONDS,
                 read_timeout=_PROBE_READ_TIMEOUT_SECONDS,
-                max_attempts=_PROBE_MAX_ATTEMPTS,
+                total_max_attempts=_PROBE_TOTAL_MAX_ATTEMPTS,
             )
         return self._probe_client, settings.garage_bucket
 
@@ -118,10 +169,11 @@ class ObjectStorage:
         ~20 modules that touch object storage, twice each, so "the GC will get to it"
         would mean hundreds of abandoned connection pools in a single pytest process.
         """
-        for client in (self._client, self._probe_client):
+        for client in (self._client, self._switchover_client, self._probe_client):
             if client is not None:
                 client.close()
         self._client = None
+        self._switchover_client = None
         self._probe_client = None
         self._bucket = None
 
@@ -182,8 +234,15 @@ class ObjectStorage:
             raise _unavailable("download", key) from exc
 
     def copy(self, source_key: str, destination_key: str) -> None:
-        """Server-side copy: S3 has no rename, and re-uploading would mean re-reading."""
-        client, bucket = self._connect()
+        """Server-side copy: S3 has no rename, and re-uploading would mean re-reading.
+
+        Runs on the fail-fast switchover client, not the data-path one: this is the only
+        storage call made while holding the `ms_project` row lock, so its timeout budget is
+        the window during which every other writer on the project is blocked (see
+        `_SWITCHOVER_*` above). Route any new call site that is *not* under a lock through
+        `_connect()` instead.
+        """
+        client, bucket = self._connect_switchover()
         try:
             client.copy_object(
                 Bucket=bucket,
@@ -207,7 +266,7 @@ class ObjectStorage:
 
 
 def _new_client(
-    settings: Settings, *, connect_timeout: int, read_timeout: int, max_attempts: int
+    settings: Settings, *, connect_timeout: int, read_timeout: int, total_max_attempts: int
 ) -> S3Client:
     return boto3.client(
         "s3",
@@ -222,7 +281,9 @@ def _new_client(
             s3={"addressing_style": "path"},
             connect_timeout=connect_timeout,
             read_timeout=read_timeout,
-            retries={"max_attempts": max_attempts, "mode": "standard"},
+            # `total_max_attempts`, not `max_attempts`: the latter is botocore's
+            # retry-count alias and resolves to one more request than it names.
+            retries={"total_max_attempts": total_max_attempts, "mode": "standard"},
         ),
     )
 

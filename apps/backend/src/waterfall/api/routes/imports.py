@@ -327,6 +327,17 @@ async def upload_xml(
             # S3 has no rename: this server-side copy is the switchover that os.replace
             # used to be. Concurrent uploads each own a distinct staging key, so the only
             # contended write is this one, and it happens under the project lock.
+            #
+            # It is the only network call left inside the locked section, and it has to
+            # stay there: it is what makes the switchover atomic with respect to the
+            # `status != "pending"` re-check just above. So its timeout budget *is the
+            # maximum time every other writer on this project is blocked* -- planning,
+            # devis and task writers all serialize on the same `ms_project` row, and
+            # `db/session.get_engine` sets no `lock_timeout`, so they wait indefinitely.
+            # `ObjectStorage.copy` therefore runs on a dedicated fail-fast client
+            # (`_SWITCHOVER_*` in core/object_storage.py: ~25s worst case, against the
+            # ~105s the data-path timeouts would allow). Anything added inside this
+            # section has to be accounted for the same way.
             try:
                 await run_in_threadpool(import_object_storage.copy, staging_key, final_key)
             # A staging object that vanished between the two calls is a storage anomaly,
