@@ -26,7 +26,8 @@ services:
   db-viewer:
     image: dpage/pgadmin4:8
     environment:
-      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@waterfall.local}
+      # pgAdmin validates this address and rejects a .local TLD, exiting 1 at startup.
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@example.com}
       PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:?PGADMIN_DEFAULT_PASSWORD must be set}
       PGADMIN_CONFIG_SERVER_MODE: "False"
     ports:
