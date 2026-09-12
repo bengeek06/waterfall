@@ -589,8 +589,9 @@ d'ordre qui est énoncée et qui se vérifie ; le rattachement s'en déduit.
 est refusée, comme pour l'indentation et les décalages haut/bas, parce qu'elle ferait franchir à un
 nœud non sélectionné les lignes qui l'entourent. Le bloc conserve son ordre relatif, et c'est son
 dernier nœud qui reçoit les frères suivants ; les nœuds précédents du bloc n'en reçoivent aucun.
-Les deux fratries réécrites — celle de l'ancien parent et celle du grand-parent — sont renumérotées
-contiguës ([INV-05](#inv-05)).
+Les trois fratries réécrites — celle de l'ancien parent, celle du grand-parent, et celle des enfants
+du dernier nœud désindenté où les frères suivants sont appendus — sont renumérotées contiguës
+([INV-05](#inv-05)).
 
 **Conséquence sur le chiffrage.** Il n'y a qu'un seul arbre et deux facettes : les frères suivants
 qui deviennent enfants emportent **toute leur facette coût**, puisque c'est le même nœud qui se
@@ -607,9 +608,10 @@ de coût qui ne peut pas contenir une tâche ([INV-14](#inv-14)). Ces refus ne s
 particuliers de la désindentation : elle réutilise le déplacement, donc ses gardes.
 
 **Portée : opération.** C'est une post-condition, qui se vérifie en comparant l'état avant et après,
-et non une assertion sur un état isolé : elle a donc sa place parmi les règles tranchées et non
-parmi les invariants, que la fonction de contrôle évalue sur un état seul. C'est aussi, comme les
-règles 1 à 3, un arbitrage produit assorti de son motif.
+et non une assertion sur un état isolé. Être une post-condition ne suffirait pas à l'exclure des
+invariants — INV-02, INV-03 et INV-07 en sont, et la fonction de contrôle ne les évalue
+délibérément pas. Ce qui la place ici est qu'elle est, comme les règles 1 à 3, un arbitrage produit
+assorti de son motif.
 
 **L'indentation est le symétrique, et elle est déjà conforme.** Indenter un bloc contigu le place
 sous le frère qui le **précède**, en dernière position parmi les enfants de celui-ci : là encore

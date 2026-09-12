@@ -1568,19 +1568,30 @@ def test_inv_27_outdenting_a_milestone_that_has_following_siblings_is_refused() 
     assert revision == before
 
 
-def test_inv_27_outdenting_a_milestone_with_nothing_after_it_stays_allowed(bench: Bench) -> None:
-    """The symmetric: no following sibling, no child handed over, no violation.
+def test_inv_27_outdenting_a_milestone_with_nothing_after_it_stays_allowed() -> None:
+    """The symmetric of the refusal above: last of its siblings, so no tail to bear.
 
-    The grandparent an outdent targets already holds the former parent, so it can
-    never be a milestone on a sound state -- that half of the guard is still the
-    belt it was before #344.
+    The jalon is the **last** child of its parent, so Règle 5 hands it no
+    following sibling and it stays a leaf: INV-27 has nothing to refuse. This is
+    the half of the outdent the new semantics must keep allowed -- a guard
+    hardened into "no milestone may ever be outdented" would be too strong, and
+    only this test says so.
+
+    The grandparent the outdent targets is the former parent's parent, which
+    already holds a child on a sound state and therefore can never be a jalon:
+    that half of the guard is still the belt it was before #344.
     """
-    project, revision = bench.project, bench.revision
-    update_plan_facet(project, revision, bench.root_c, is_milestone=True)
+    project = build_project()
+    revision = build_draft(project)
+    parent = add_task(project, revision, name="Parent")
+    add_task(project, revision, name="Avant", parent_id=parent.id)
+    jalon = add_task(project, revision, name="Jalon", parent_id=parent.id, is_milestone=True)
 
-    outdent_nodes(project, revision, [bench.labor])
+    outdent_nodes(project, revision, [jalon.id])
 
-    assert revision.nodes[bench.labor].parent_id == bench.root_a
+    assert revision.nodes[jalon.id].parent_id is None
+    assert children_of(revision, jalon.id) == []
+    assert revision.plan_facets[jalon.id].is_milestone
     assert_sound(project, revision)
 
 
