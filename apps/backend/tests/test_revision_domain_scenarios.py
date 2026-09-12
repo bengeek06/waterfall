@@ -5,31 +5,42 @@ checker **after every step**, not only at the end. Nothing here relaxes an
 invariant to make a scenario pass: a scenario that could only pass by loosening
 one would mean the specification is wrong, not the test.
 
-The MS Project file is parsed with the standard library *in this test module* --
-the domain itself knows nothing about MS Project, only about an ``external_uid``
-handed to it by the import layer.
+Le planning que le banc exerce est **généré**, pas lu d'un fichier du poste :
+``generate_mspdi`` produit un arbre profond, large, avec récapitulatifs, jalons
+et liens de précédence, dont le volume et la profondeur sont déclarés ici en
+toutes lettres. Un banc d'essai qui ne s'exécuterait que sur une machine
+particulière ne prouverait rien -- celui-ci tourne en CI, sur un document que le
+test fabrique lui-même.
+
+La lecture du MSPDI reste en dehors du domaine (elle vit dans
+``_mspdi_fixture_support``) : le domaine ne connaît pas MS Project, seulement un
+``external_uid`` que la couche d'import lui tend.
 """
 
 from __future__ import annotations
 
 import copy
-import re
-import xml.etree.ElementTree as ElementTree
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
-from pathlib import Path
 
 import pytest
 
-from _revision_domain_support import assert_sound, build_draft, build_project
+from _mspdi_fixture_support import MspdiPlanning, generate_mspdi, read_mspdi
+from _revision_domain_support import (
+    PlanningBench,
+    assert_sound,
+    build_draft,
+    build_planning_bench,
+    build_project,
+    imported_tasks,
+)
 from waterfall.domain.revision import (
     BreakdownEntry,
     BreakdownKind,
     CostNature,
     ImmutableRevisionError,
     ImportedTask,
-    Project,
     ProjectRevision,
     ProjectStatus,
     RevisionKind,
@@ -37,7 +48,6 @@ from waterfall.domain.revision import (
     SupplyStatus,
     WorkBreakdownError,
     add_cost_line,
-    add_link,
     add_task,
     apply_reimport,
     bearing_work_item_id,
@@ -61,117 +71,70 @@ from waterfall.domain.revision.facets import rename_task, set_cost_hours
 from waterfall.domain.revision.pricing import default_amount
 from waterfall.domain.revision.structure import is_milestone_node
 
-COBRA_XML = Path(__file__).resolve().parents[3] / "examples" / "planning_cobra.xml"
-MSPDI_NS = "{http://schemas.microsoft.com/project}"
-_DURATION = re.compile(r"^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$")
+#: Le planning de référence du banc. Déclaré ici plutôt que lu d'un fichier : ces
+#: trois nombres *sont* ce que les scénarios exercent, et un test peut les
+#: assertir au lieu de faire confiance au contenu d'un fichier qu'il n'écrit pas.
+#:
+#: 300 tâches sur 6 niveaux avec 3 enfants par récapitulatif : assez large pour
+#: qu'un récapitulatif ait toujours plusieurs frères sous lui (scénario 4 en
+#: indente un derrière un autre), assez profond pour qu'une tâche ait toujours un
+#: nœud intermédiaire au-dessus d'elle (scénario 5 le supprime), assez rapide pour
+#: que le module entier reste de l'ordre de la seconde. Le test de charge va bien
+#: plus haut, c'est son rôle et non celui du banc fonctionnel.
+REFERENCE_TASK_COUNT = 300
+REFERENCE_DEPTH = 6
+REFERENCE_BRANCHING = 3
+#: Une feuille sur cinq est un jalon, une sur deux porte un lien de précédence --
+#: et ces liens passent par les quatre types MSPDI, avec décalage positif, négatif
+#: et nul (voir ``_LINK_TYPE_CYCLE`` dans ``_mspdi_fixture_support``).
+REFERENCE_MILESTONE_EVERY = 5
+REFERENCE_LINK_EVERY = 2
+
+#: Le volume du test de charge : nettement plus gros et plus profond que le banc
+#: fonctionnel, et toujours fabriqué à la volée. 1500 tâches sur 7 niveaux, c'est
+#: plus que ce que porte le plus gros planning réel connu du projet, sans qu'un
+#: seul octet de celui-ci n'entre dans le dépôt. Repère de coût : moins d'une
+#: seconde, construction de l'arbre et vérification complète des invariants
+#: comprises.
+VOLUME_TASK_COUNT = 1500
+VOLUME_DEPTH = 7
+
+REFERENCE_MSPDI = generate_mspdi(
+    task_count=REFERENCE_TASK_COUNT,
+    depth=REFERENCE_DEPTH,
+    branching=REFERENCE_BRANCHING,
+    milestone_every=REFERENCE_MILESTONE_EVERY,
+    link_every=REFERENCE_LINK_EVERY,
+    name="Banc d'essai du modèle de révision",
+    guid="BENCH-REVISION-0001",
+)
 
 # Always passed in: the domain never reads a clock.
 NOW = datetime(2026, 9, 11, 12, 0, tzinfo=UTC)
 
 
-def _text(node: ElementTree.Element, tag: str) -> str:
-    return node.findtext(MSPDI_NS + tag) or ""
-
-
-def _integer(node: ElementTree.Element, tag: str) -> int:
-    raw = _text(node, tag)
-    return int(raw) if raw else 0
-
-
-def _duration_minutes(raw: str) -> int | None:
-    match = _DURATION.match(raw)
-    if match is None:
-        return None
-    hours, minutes, seconds = (int(part or 0) for part in match.groups())
-    return hours * 60 + minutes + seconds // 60
-
-
-def parse_msproject_tasks(path: Path) -> tuple[list[ImportedTask], list[tuple[int, int]]]:
-    """Parse an MSPDI file into ``(tasks, links)``, both keyed by external uid.
-
-    The parent of a task is the closest preceding task one outline level above
-    it -- the ordering MS Project itself writes. The uid-0 project summary row
-    (outline level 0) is not a task of the project and is skipped.
-    """
-    root = ElementTree.parse(path).getroot()
-    container = root.find(MSPDI_NS + "Tasks")
-    assert container is not None, f"{path} has no <Tasks> element"
-
-    tasks: list[ImportedTask] = []
-    links: list[tuple[int, int]] = []
-    open_parents: dict[int, int] = {}
-    for entry in container:
-        uid = _integer(entry, "UID")
-        level = _integer(entry, "OutlineLevel")
-        if uid == 0 and level == 0:
-            continue
-        open_parents[level] = uid
-        tasks.append(
-            ImportedTask(
-                external_uid=uid,
-                name=_text(entry, "Name"),
-                parent_external_uid=open_parents.get(level - 1) if level > 1 else None,
-                duration_minutes=_duration_minutes(_text(entry, "Duration")),
-                is_milestone=_text(entry, "Milestone") == "1",
-                percent_complete=_integer(entry, "PercentComplete"),
-            )
-        )
-        for predecessor in entry.findall(MSPDI_NS + "PredecessorLink"):
-            links.append((uid, _integer(predecessor, "PredecessorUID")))
-    return tasks, links
-
-
-@dataclass
-class Bench:
-    """A project whose draft revision carries the imported planning."""
-
-    project: Project
-    revision: ProjectRevision
-    node_by_uid: dict[int, int]
-
-
-def _build_planning(tasks: list[ImportedTask], links: list[tuple[int, int]]) -> Bench:
-    project = build_project()
-    revision = build_draft(project)
-    node_by_uid: dict[int, int] = {}
-    for task in tasks:
-        parent_id = (
-            None if task.parent_external_uid is None else node_by_uid[task.parent_external_uid]
-        )
-        node = add_task(
-            project,
-            revision,
-            name=task.name,
-            parent_id=parent_id,
-            external_uid=task.external_uid,
-            duration_minutes=task.duration_minutes,
-            is_milestone=task.is_milestone,
-        )
-        node_by_uid[task.external_uid] = node.id
-    for uid, predecessor_uid in links:
-        if uid in node_by_uid and predecessor_uid in node_by_uid:
-            add_link(
-                revision,
-                node_id=node_by_uid[uid],
-                predecessor_node_id=node_by_uid[predecessor_uid],
-            )
-    return Bench(project=project, revision=revision, node_by_uid=node_by_uid)
+def _tree_depth(revision: ProjectRevision) -> int:
+    """Profondeur réelle de l'arbre monté, comptée en remontant les parents."""
+    depths: dict[int, int] = {}
+    for node in depth_first(revision):
+        parent_id = node.parent_id
+        depths[node.id] = 1 if parent_id is None else depths[parent_id] + 1
+    return max(depths.values(), default=0)
 
 
 @pytest.fixture(scope="module")
-def cobra() -> tuple[list[ImportedTask], list[tuple[int, int]]]:
-    """Parse the 6 MB fixture once for the whole module."""
-    return parse_msproject_tasks(COBRA_XML)
+def reference_planning() -> MspdiPlanning:
+    """Le document généré, lu une fois pour tout le module."""
+    return read_mspdi(REFERENCE_MSPDI)
 
 
 @pytest.fixture(scope="module")
-def shared_planning(cobra: tuple[list[ImportedTask], list[tuple[int, int]]]) -> Bench:
-    tasks, links = cobra
-    return _build_planning(tasks, links)
+def shared_planning(reference_planning: MspdiPlanning) -> PlanningBench:
+    return build_planning_bench(reference_planning)
 
 
 @pytest.fixture
-def planning(shared_planning: Bench) -> Bench:
+def planning(shared_planning: PlanningBench) -> PlanningBench:
     """A private copy of the imported planning, so a scenario can mutate it freely."""
     return copy.deepcopy(shared_planning)
 
@@ -180,7 +143,7 @@ def planning(shared_planning: Bench) -> Bench:
 class Estimate:
     """The planning bench plus a small estimate built on top of it."""
 
-    bench: Bench
+    bench: PlanningBench
     task_x: int
     task_y: int
     task_z: int
@@ -190,16 +153,17 @@ class Estimate:
     global_cost: int
 
 
-def _leaf_task_ids(bench: Bench) -> list[int]:
+def _leaf_task_ids(bench: PlanningBench) -> list[int]:
     """Leaf tasks that hang under a parent and can bear a cost line, depth-first.
 
     Root-level leaves are excluded so that a scenario always has an intermediate
     node above the task it works on (scenario 5 deletes exactly that node).
 
     Milestones are excluded too, and for a rule rather than for convenience: a
-    jalon carries no child at all, cost line included (INV-27). The real file this
-    module imports is full of them, so the filter is what keeps the scenarios
-    about the model instead of about which task the fixture happened to land on.
+    jalon carries no child at all, cost line included (INV-27). Le planning de
+    référence en est truffé (une feuille sur cinq), donc ce filtre est ce qui
+    garde les scénarios sur le modèle au lieu de les faire dépendre de la case où
+    le générateur a posé un jalon.
 
     Asked through ``is_milestone_node`` and not by indexing ``plan_facets``:
     ``depth_first`` walks *every* node, cost facets included, so the index would
@@ -217,7 +181,7 @@ def _leaf_task_ids(bench: Bench) -> list[int]:
     ]
 
 
-def _build_estimate(bench: Bench) -> Estimate:
+def _build_estimate(bench: PlanningBench) -> Estimate:
     """Scenario 2: non-MO lines under tasks, MO lines with role and hours, one root line."""
     project, revision = bench.project, bench.revision
     leaves = _leaf_task_ids(bench)
@@ -276,7 +240,7 @@ def _build_estimate(bench: Bench) -> Estimate:
 
 
 @pytest.fixture(scope="module")
-def shared_estimate(shared_planning: Bench) -> Estimate:
+def shared_estimate(shared_planning: PlanningBench) -> Estimate:
     return _build_estimate(copy.deepcopy(shared_planning))
 
 
@@ -286,32 +250,109 @@ def estimate(shared_estimate: Estimate) -> Estimate:
 
 
 # --------------------------------------------------------------------------------------
-# Scenario 1 -- import the 542-task planning as a tree of nodes
+# Scenario 1 -- import a deep, varied planning as a tree of nodes
 # --------------------------------------------------------------------------------------
 
 
-def test_scenario_1_cobra_planning_imports_as_a_tree_of_542_nodes(
-    cobra: tuple[list[ImportedTask], list[tuple[int, int]]],
-    planning: Bench,
+def test_scenario_1_a_deep_planning_imports_as_a_tree_of_nodes(
+    reference_planning: MspdiPlanning,
+    planning: PlanningBench,
 ) -> None:
-    tasks, links = cobra
+    """Le document entier devient un arbre, dans son ordre et à sa profondeur.
+
+    Les nombres asservis ne sont pas des constantes magiques mais les paramètres
+    déclarés du générateur : si le banc cessait d'exercer la profondeur ou la
+    variété qu'il annonce, c'est ici que cela se verrait.
+    """
+    tasks = reference_planning.tasks
     project, revision = planning.project, planning.revision
 
-    assert len(tasks) == 542
-    assert len(revision.nodes) == 542
-    assert len(revision.plan_facets) == 542
+    assert len(tasks) == REFERENCE_TASK_COUNT
+    assert len(revision.nodes) == REFERENCE_TASK_COUNT
+    assert len(revision.plan_facets) == REFERENCE_TASK_COUNT
     assert not revision.cost_facets
+
+    # L'arbre monté a bien la profondeur du fichier, et elle est réellement > 2 :
+    # sans cela les scénarios 4 et 5 n'auraient pas de nœud intermédiaire à saisir.
+    assert reference_planning.max_outline_level() == REFERENCE_DEPTH
+    assert _tree_depth(revision) == REFERENCE_DEPTH
+    # Et il est varié : des récapitulatifs, des feuilles, des jalons, et des liens
+    # qui ne sont pas tous des fin-à-début à décalage nul.
+    assert len(reference_planning.leaf_uids()) < REFERENCE_TASK_COUNT
+    assert len(reference_planning.milestone_uids()) > 1
+    assert len({link.link_type for link in reference_planning.links}) == 4
+    assert any(link.lag_tenth_minute < 0 for link in reference_planning.links)
+    assert any(link.lag_tenth_minute > 0 for link in reference_planning.links)
+    # Les uids du fichier sont épars et non triés, comme MS Project les écrit : le
+    # nœud est retrouvé par son ``external_uid`` et jamais par le rang de sa ligne.
+    uids = [task.uid for task in tasks]
+    assert uids != sorted(uids)
+    assert max(uids) > REFERENCE_TASK_COUNT
 
     # Depth-first display order is exactly the order of the source file.
     ordered = depth_first(revision)
     assert [revision.plan_facets[node.id].name for node in ordered] == [task.name for task in tasks]
-    assert [node.id for node in ordered] == [
-        planning.node_by_uid[task.external_uid] for task in tasks
-    ]
+    assert [node.id for node in ordered] == [planning.node_by_uid[task.uid] for task in tasks]
 
     # Every precedence link of the file is a node -> node link of this revision.
-    assert len(revision.links) == len(links) == 585
+    assert len(revision.links) == len(reference_planning.links) > 1
     assert_sound(project, revision)
+
+
+def test_scenario_1_the_tree_holds_a_larger_and_deeper_planning() -> None:
+    """La charge et la profondeur, sur un document bien plus gros que le banc.
+
+    C'est ce qui remplace l'ancien scénario « importer le vrai fichier client de
+    542 tâches » : la propriété qui avait de la valeur n'était pas que *ce*
+    fichier-là passe, mais que l'arbre tienne le volume et la profondeur. Le
+    document est fabriqué ici, donc rien de gros n'entre dans le dépôt et la CI
+    l'exécute comme le poste.
+
+    Toutes les opérations d'arbre sont rejouées à cette échelle -- et l'invariant
+    complet est vérifié après chacune, pas seulement à la fin.
+    """
+    planning = read_mspdi(
+        generate_mspdi(
+            task_count=VOLUME_TASK_COUNT,
+            depth=VOLUME_DEPTH,
+            branching=3,
+            milestone_every=7,
+            link_every=4,
+            name="Planning de charge",
+            guid="BENCH-REVISION-VOLUME-01",
+        )
+    )
+    bench = build_planning_bench(planning)
+    project, revision = bench.project, bench.revision
+
+    assert len(revision.nodes) == VOLUME_TASK_COUNT
+    assert len(revision.plan_facets) == VOLUME_TASK_COUNT
+    assert _tree_depth(revision) == VOLUME_DEPTH
+    assert len(revision.links) == len(planning.links) > 1
+    # Le parcours préfixe visite tout l'arbre, sans dépendre de la pile d'appels.
+    assert len(depth_first(revision)) == VOLUME_TASK_COUNT
+    assert_sound(project, revision)
+
+    # Déplacer une branche entière depuis la profondeur maximale vers la racine.
+    deepest = next(
+        node.id
+        for node in depth_first(revision)
+        if node.parent_id is not None and children_of(revision, node.id)
+    )
+    moved = subtree_ids(revision, deepest)
+    move_nodes(project, revision, [deepest], target_parent_id=None)
+    assert_sound(project, revision)
+    assert revision.nodes[deepest].parent_id is None
+    assert set(subtree_ids(revision, deepest)) == set(moved)
+
+    # Puis supprimer un sous-arbre profond : tout part, et rien d'autre.
+    doomed = set(subtree_ids(revision, deepest))
+    assert len(doomed) > 1
+    report = delete_nodes(project, revision, [deepest])
+    assert_sound(project, revision)
+    assert set(report.removed_node_ids) == doomed
+    assert len(revision.nodes) == VOLUME_TASK_COUNT - len(doomed)
+    assert not doomed & set(revision.nodes)
 
 
 # --------------------------------------------------------------------------------------
@@ -322,7 +363,7 @@ def test_scenario_1_cobra_planning_imports_as_a_tree_of_542_nodes(
 def test_scenario_2_estimate_lines_hang_on_the_same_tree(estimate: Estimate) -> None:
     project, revision = estimate.bench.project, estimate.bench.revision
 
-    assert len(revision.nodes) == 542 + 4
+    assert len(revision.nodes) == REFERENCE_TASK_COUNT + 4
     assert len(revision.cost_facets) == 4
     # A non-MO line and an MO line under a task, resolving to it as bearing task.
     assert bearing_work_item_id(revision, estimate.labor_x) == (
@@ -553,17 +594,18 @@ def _modified_planning(
 
 
 def test_scenario_7_reimport_applies_added_moved_and_removed_tasks(
-    cobra: tuple[list[ImportedTask], list[tuple[int, int]]],
+    reference_planning: MspdiPlanning,
     estimate: Estimate,
 ) -> None:
-    tasks, _ = cobra
+    tasks = imported_tasks(reference_planning)
     project, revision = estimate.bench.project, estimate.bench.revision
     uid_of = {node_id: uid for uid, node_id in estimate.bench.node_by_uid.items()}
 
     removed_uid = uid_of[estimate.task_x]  # the task bearing two cost lines
     moved_uid = uid_of[estimate.task_y]
-    # Not a milestone: the file's first task happens to be one, and a jalon carries
-    # no child (INV-27), so re-importing the moved task under it would be refused.
+    # Not a milestone: a jalon carries no child (INV-27), so re-importing the moved
+    # task under one would be refused. The reference planning holds plenty of them,
+    # so this is a real filter and not a formality.
     new_parent_uid = next(
         task.external_uid
         for task in tasks
