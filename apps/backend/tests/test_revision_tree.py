@@ -8,7 +8,7 @@ and an in-memory assertion would not have caught it.
 The concurrency criterion runs on PostgreSQL only -- SQLAlchemy's SQLite dialect
 drops ``SELECT ... FOR UPDATE`` silently, so the SQLite session could never
 observe the row lock the optimistic guard rests on. Same pattern, and the same
-reasoning, as ``test_planning_revision_locking.py``.
+reasoning, as ``test_revision_locking_postgres.py``.
 """
 
 from __future__ import annotations
