@@ -1,0 +1,19 @@
+type: object
+required:
+- predecessor_node_id
+- link_type
+- lag_tenth_minute
+- lag_format
+properties:
+  predecessor_node_id:
+    type: integer
+  link_type:
+    type: integer
+  lag_tenth_minute:
+    type: integer
+  lag_format:
+    anyOf:
+    - type: integer
+    - type: 'null'
+description: Un lien de precedence arrivant sur le noeud, designe par identifiant de noeud et jamais par
+  uid.

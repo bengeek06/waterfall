@@ -10,6 +10,7 @@ from waterfall.api.routes.project_cost_codes import router as project_cost_codes
 from waterfall.api.routes.project_export import router as project_export_router
 from waterfall.api.routes.projects import router as projects_router
 from waterfall.api.routes.resources import router as resources_router
+from waterfall.api.routes.revisions import router as revisions_router
 from waterfall.api.routes.tasks import router as tasks_router
 
 api_router = APIRouter()
@@ -18,6 +19,7 @@ api_router.include_router(auth_router)
 api_router.include_router(imports_router)
 api_router.include_router(projects_router)
 api_router.include_router(plannings_router)
+api_router.include_router(revisions_router)
 api_router.include_router(estimates_router)
 api_router.include_router(project_cost_codes_router)
 api_router.include_router(project_export_router)

@@ -26,16 +26,143 @@ export type PlanningStructureDraftRead = components["schemas"]["PlanningStructur
 export type Planning = components["schemas"]["PlanningRead"];
 export type PlanningDetail = components["schemas"]["PlanningDetailRead"];
 export type PlanningCreate = components["schemas"]["PlanningCreate"];
-export type PlanningTaskMove = components["schemas"]["PlanningTaskMove"];
-export type PlanningTaskCreate = components["schemas"]["PlanningTaskCreate"];
-export type PlanningTaskDelete = components["schemas"]["PlanningTaskDelete"];
-export type PlanningTaskSnapshotWrite = components["schemas"]["PlanningTaskSnapshotWrite"];
-export type PlanningLinkSnapshotWrite = components["schemas"]["PlanningLinkSnapshotWrite"];
-export type PlanningSnapshotRestore = components["schemas"]["PlanningSnapshotRestore"];
 type PlanningTaskDeleteConflictDetail = components["schemas"]["PlanningTaskDeleteConflict"]["detail"];
-export type PlanningTaskScheduleUpdate = components["schemas"]["PlanningTaskScheduleUpdate"];
-export type TaskLinkWrite = components["schemas"]["TaskLinkWrite"];
-export type TaskLinksReplace = components["schemas"]["TaskLinksReplace"];
+
+// E14-05 (#331) removed the eight snapshot-based planning endpoints from the backend
+// and, with them, their request/response schemas from the OpenAPI contract. The
+// planning editor below still calls them and is rebuilt on the revision model by
+// E14-09/E14-10 (#335, #336); until then these payload shapes are declared here,
+// verbatim as the contract last generated them, so this wrapper keeps compiling
+// against a contract that no longer describes them. Nothing else in the file is
+// hand-typed -- every surviving endpoint still reads its types from `components`.
+/**
+ * @deprecated Hand-copied from the OpenAPI contract, which no longer describes `PlanningTaskMove`:
+ * E14-05 (#331) removed the snapshot-based planning endpoints. Rebuilt on the revision
+ * model by E14-09/E14-10 (#335, #336); this alias disappears with them.
+ */
+export type PlanningTaskMove = {
+  task_uids: number[];
+  target_parent_uid?: number | null;
+  position: number;
+  expected_revision: number;
+};
+/**
+ * @deprecated Hand-copied from the OpenAPI contract, which no longer describes `PlanningTaskCreate`:
+ * E14-05 (#331) removed the snapshot-based planning endpoints. Rebuilt on the revision
+ * model by E14-09/E14-10 (#335, #336); this alias disappears with them.
+ */
+export type PlanningTaskCreate = {
+  name: string;
+  is_milestone: boolean;
+  target_parent_uid?: number | null;
+  insert_after_uid?: number | null;
+  expected_revision: number;
+};
+/**
+ * @deprecated Hand-copied from the OpenAPI contract, which no longer describes `PlanningTaskDelete`:
+ * E14-05 (#331) removed the snapshot-based planning endpoints. Rebuilt on the revision
+ * model by E14-09/E14-10 (#335, #336); this alias disappears with them.
+ */
+export type PlanningTaskDelete = {
+  task_uids: number[];
+  confirm_cascade: boolean;
+  expected_revision: number;
+};
+/**
+ * @deprecated Hand-copied from the OpenAPI contract, which no longer describes `PlanningTaskSnapshotWrite`:
+ * E14-05 (#331) removed the snapshot-based planning endpoints. Rebuilt on the revision
+ * model by E14-09/E14-10 (#335, #336); this alias disappears with them.
+ */
+export type PlanningTaskSnapshotWrite = {
+  uid: number;
+  structure_key: string | null;
+  structure_kind: "poste" | "lot" | "livrable" | "milestone" | "task" | null;
+  parent_uid: number | null;
+  position: number | null;
+  name: string;
+  outline_number: string | null;
+  outline_level: number | null;
+  wbs: string | null;
+  start_at: string | null;
+  finish_at: string | null;
+  duration_minutes: number | null;
+  duration_format: number | null;
+  work_minutes: number | null;
+  task_type: number | null;
+  percent_complete: number | null;
+  is_summary: boolean;
+  is_milestone: boolean;
+  is_manual: boolean | null;
+  calendar_uid: number | null;
+  notes: string | null;
+};
+/**
+ * @deprecated Hand-copied from the OpenAPI contract, which no longer describes `PlanningLinkSnapshotWrite`:
+ * E14-05 (#331) removed the snapshot-based planning endpoints. Rebuilt on the revision
+ * model by E14-09/E14-10 (#335, #336); this alias disappears with them.
+ */
+export type PlanningLinkSnapshotWrite = {
+  task_uid: number;
+  predecessor_uid: number;
+  link_type: number;
+  lag_tenth_minute: number | null;
+  lag_format: number | null;
+};
+/**
+ * @deprecated Hand-copied from the OpenAPI contract, which no longer describes `PlanningSnapshotRestore`:
+ * E14-05 (#331) removed the snapshot-based planning endpoints. Rebuilt on the revision
+ * model by E14-09/E14-10 (#335, #336); this alias disappears with them.
+ */
+export type PlanningSnapshotRestore = {
+  tasks: PlanningTaskSnapshotWrite[];
+  links: PlanningLinkSnapshotWrite[];
+  expected_revision: number;
+};
+/**
+ * @deprecated Hand-copied from the OpenAPI contract, which no longer describes `PlanningTaskScheduleUpdate`:
+ * E14-05 (#331) removed the snapshot-based planning endpoints. Rebuilt on the revision
+ * model by E14-09/E14-10 (#335, #336); this alias disappears with them.
+ */
+export type PlanningTaskScheduleUpdate = {
+  is_manual: boolean;
+  start_at?: string | null;
+  finish_at?: string | null;
+  duration_minutes?: number | null;
+  expected_revision: number;
+};
+/**
+ * @deprecated Hand-copied from the OpenAPI contract, which no longer describes `TaskLinkWrite`:
+ * E14-05 (#331) removed the snapshot-based planning endpoints. Rebuilt on the revision
+ * model by E14-09/E14-10 (#335, #336); this alias disappears with them.
+ */
+export type TaskLinkWrite = {
+  predecessor_uid: number;
+  link_type: number;
+  lag_tenth_minute?: number | null;
+  lag_format?:
+    | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 19 | 20
+    | 35 | 36 | 37 | 38 | 39 | 40 | 41 | 42 | 43 | 44 | 51 | 52
+    | null;
+};
+/**
+ * @deprecated Hand-copied from the OpenAPI contract, which no longer describes `TaskLinksReplace`:
+ * E14-05 (#331) removed the snapshot-based planning endpoints. Rebuilt on the revision
+ * model by E14-09/E14-10 (#335, #336); this alias disappears with them.
+ */
+export type TaskLinksReplace = {
+  links: TaskLinkWrite[];
+  expected_revision: number;
+};
+/**
+ * @deprecated Body of `GET /projects/{id}/tasks`, an endpoint E14-05 (#331) removed.
+ * Kept only to type the dead `getProjectTasks` below; both go with E14-06 (#332).
+ */
+type LegacyTaskListRead = {
+  items: Task[];
+  total: number;
+  limit: number | null;
+  offset: number;
+};
 export type ImportBatch = components["schemas"]["ImportBatchResponse"];
 export type ImportBatchStatus = components["schemas"]["ImportBatchStatusResponse"];
 export type ImportRunAcceptedResponse = components["schemas"]["ImportRunAcceptedResponse"];
@@ -1537,12 +1664,18 @@ export function getImportBatchStatus(
   );
 }
 
+/**
+ * @deprecated Dead since E14-05 (#331): `GET /projects/{id}/tasks` no longer exists and
+ * this call answers 404. No component calls it. The replacement is the revision tree
+ * (`GET /projects/{id}/revisions/{id}/nodes`); E14-06 (#332) rewires the consumers and
+ * deletes this export. Do not add a caller.
+ */
 export async function getProjectTasks(
   projectId: number,
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
 ): Promise<Task[]> {
-  const page = await authRequest<components["schemas"]["TaskListRead"]>(
+  const page = await authRequest<LegacyTaskListRead>(
     `/projects/${projectId}/tasks`,
     tokens,
     { method: "GET" },

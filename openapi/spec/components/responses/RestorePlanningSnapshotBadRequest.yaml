@@ -1,5 +1,0 @@
-description: Snapshot de restauration invalide (uid/cle dupliques, lien inconnu)
-content:
-  application/json:
-    schema:
-      $ref: ../schemas/FastAPIErrorResponse.yaml

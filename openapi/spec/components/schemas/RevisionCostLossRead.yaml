@@ -1,0 +1,28 @@
+type: object
+required:
+- node_id
+- work_item_id
+- label
+- nature
+- amount
+- bearing_task_name
+properties:
+  node_id:
+    type: integer
+  work_item_id:
+    type: integer
+  label:
+    type: string
+  nature:
+    type: string
+    enum:
+    - labor
+    - non_labor
+  amount:
+    type: string
+    pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+  bearing_task_name:
+    anyOf:
+    - type: string
+    - type: 'null'
+description: Une facette cout emportee par une suppression, nommee plutot que perdue silencieusement.

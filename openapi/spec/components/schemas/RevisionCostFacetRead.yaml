@@ -1,0 +1,70 @@
+type: object
+required:
+- nature
+- label
+- quantity
+- role_id
+- hours
+- cost_type_id
+- cost_category_id
+- unit_cost
+- supply_status
+- planned_date
+- cost_code_id
+- comment
+properties:
+  nature:
+    type: string
+    enum:
+    - labor
+    - non_labor
+  label:
+    type: string
+  quantity:
+    type: string
+    pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+  role_id:
+    anyOf:
+    - type: integer
+    - type: 'null'
+  hours:
+    anyOf:
+    - type: string
+      pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+    - type: 'null'
+  cost_type_id:
+    anyOf:
+    - type: integer
+    - type: 'null'
+  cost_category_id:
+    anyOf:
+    - type: integer
+    - type: 'null'
+  unit_cost:
+    anyOf:
+    - type: string
+      pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+    - type: 'null'
+  supply_status:
+    anyOf:
+    - type: string
+      enum:
+      - planned
+      - ordered
+      - received
+      - cancelled
+    - type: 'null'
+  planned_date:
+    anyOf:
+    - type: string
+      format: date
+    - type: 'null'
+  cost_code_id:
+    anyOf:
+    - type: integer
+    - type: 'null'
+  comment:
+    anyOf:
+    - type: string
+    - type: 'null'
+description: 'Facette cout d''un noeud, en lecture seule ici : son edition releve de E14-07 (#333).'

@@ -1,0 +1,37 @@
+type: object
+required:
+- detail
+properties:
+  detail:
+    type: array
+    items:
+      type: object
+      required:
+      - type
+      - loc
+      - msg
+      properties:
+        type:
+          type: string
+          description: >-
+            Identifiant Pydantic du controle qui a echoue (`too_short`,
+            `less_than_equal`, `literal_error`, `value_error`, ...).
+        loc:
+          type: array
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          description: Chemin du champ fautif, depuis `body`.
+        msg:
+          type: string
+          description: >-
+            Message Pydantic, en anglais et non traduit. A ne pas afficher tel
+            quel : c'est `type` et `loc` qui sont exploitables.
+description: >-
+  Corps refuse avant que le domaine ne le voie : le JSON ne correspond pas au
+  schema de la requete. Volontairement distinct des refus 400 de
+  `RevisionBadRequest`, qui eux portent un `detail.code` stable -- 422 garde ici un
+  seul sens, « le corps n'a pas ete accepte par le schema », ce qui permet de
+  distinguer un corps malforme d'une operation refusee sans inspecter le corps.
+  Forme produite par FastAPI/Pydantic, non reecrite par la couche API.

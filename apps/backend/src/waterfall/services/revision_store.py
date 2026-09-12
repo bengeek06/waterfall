@@ -81,6 +81,28 @@ class MissingProjectCalendarError(RevisionStoreError):
     """The project has no calendar to hand a new planning facet (Règle 1, INV-15)."""
 
 
+class FrozenRevisionError(RevisionStoreError):
+    """INV-03, raised from this layer: the stored revision is validated or superseded.
+
+    Added by E14-05 (#331) to close the hazard the review of #330 reported, and
+    named by :mod:`waterfall.services.revision_tree`'s own docstring: INV-03 used
+    to come out of this module as a *bare* :class:`RevisionStoreError`, a class it
+    also uses for refusals that have nothing to do with INV-03 (frozen lines with
+    no table, an unreachable node, a position parked in the band). A transport
+    layer mapping "the revision is frozen" onto its own HTTP status therefore had
+    no way to tell the two apart short of matching on the message.
+
+    Deliberately still a :class:`RevisionStoreError`, so every existing
+    ``except RevisionStoreError`` keeps catching it; what changes is that the
+    INV-03 refusal is now *also* catchable on its own. Together with
+    :class:`~waterfall.domain.revision.ImmutableRevisionError`, which the domain
+    and the tree service raise for the same invariant, it is the complete set a
+    route catches -- see
+    :func:`waterfall.api.revision_errors.revision_http_exception`, which is the
+    single place either is translated.
+    """
+
+
 @dataclass(frozen=True)
 class LoadedRevision:
     """One revision, fully materialised, inside the project that owns it.
@@ -509,7 +531,7 @@ def _refuse_a_frozen_revision(
     """
     status = stored_status.get(revision.id)
     if status is not None and status != domain.RevisionStatus.DRAFT.value:
-        raise RevisionStoreError(
+        raise FrozenRevisionError(
             f"Revision {revision.id} is {status} in the database and no longer accepts a "
             "write (INV-03); copy it with copy_revision() and write the copy"
         )

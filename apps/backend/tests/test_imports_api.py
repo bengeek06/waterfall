@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 from httpx import Response
 
+from _legacy_planning_support import legacy_project_tasks
 from _object_storage_support import TEST_BUCKET, stored_object_keys
 from waterfall.core.config import get_settings
 from waterfall.core.object_storage import import_object_storage
@@ -177,9 +178,7 @@ def test_import_batch_minimal_flow() -> None:
         assert "counters" in status_payload
         assert "warnings" in status_payload
 
-        tasks_response: Response = client.get(f"/projects/{project_id}/tasks", headers=headers)
-        assert tasks_response.status_code == 200
-        assert tasks_response.json()["items"] == []
+        assert legacy_project_tasks(project_id) == []
 
         rerun_response: Response = client.post(
             f"/imports/v1/batches/{batch_id}/run",
@@ -224,7 +223,7 @@ def test_import_diff_is_non_mutating_and_requires_confirmation() -> None:
         )
         assert diff_response.status_code == 200
         assert diff_response.json()["items"][0]["kind"] == "added"
-        assert client.get(f"/projects/{project_id}/tasks", headers=headers).json()["items"] == []
+        assert legacy_project_tasks(project_id) == []
 
         confirmation_response = client.post(
             f"/imports/v1/batches/{batch_id}/run",

@@ -1,0 +1,53 @@
+type: object
+required:
+- predecessor_node_id
+properties:
+  predecessor_node_id:
+    type: integer
+    maximum: 2147483647
+    exclusiveMinimum: 0
+  link_type:
+    type: integer
+    maximum: 3
+    minimum: 0
+    default: 1
+  lag_tenth_minute:
+    type: integer
+    maximum: 2147483647
+    minimum: -2147483648
+    default: 0
+  lag_format:
+    anyOf:
+    - type: integer
+      enum:
+      - 3
+      - 4
+      - 5
+      - 6
+      - 7
+      - 8
+      - 9
+      - 10
+      - 11
+      - 12
+      - 19
+      - 20
+      - 35
+      - 36
+      - 37
+      - 38
+      - 39
+      - 40
+      - 41
+      - 42
+      - 43
+      - 44
+      - 51
+      - 52
+      - 53
+    - type: 'null'
+description: >-
+  Un lien de precedence a installer, designant son predecesseur par identifiant de
+  noeud. `lag_format` est un code MSPDI `LagFormat`, contraint a l'enumeration du
+  schema MS Project ; le prefixe `e` y denote un decalage en temps ecoule
+  (horloge) plutot qu'en temps ouvre.

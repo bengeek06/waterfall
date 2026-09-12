@@ -35,15 +35,16 @@ HTTP status code. Three families reach the caller, and E14-05/E14-07 map them:
 One caveat for whoever maps these onto HTTP statuses (#331, #333): **INV-03 comes
 out under two exception classes**, not one. The service guard and the domain's
 ``require_draft`` both raise
-:class:`~waterfall.domain.revision.ImmutableRevisionError`, but the store's own
+:class:`~waterfall.domain.revision.ImmutableRevisionError`, while the store's own
 last-ditch refusal (``_refuse_a_frozen_revision``, reached only by a caller
-bypassing this service) raises a
-:class:`~waterfall.services.revision_store.RevisionStoreError` -- a class it also
-uses for refusals that have nothing to do with INV-03. So "a validated revision
-was written" is ``except ImmutableRevisionError`` *plus* a subset of
-``RevisionStoreError``, and the three messages differ. Folding the three onto a
-single class is a change to :mod:`waterfall.services.revision_store` and belongs
-to the route work, not here.
+bypassing this service) raises
+:class:`~waterfall.services.revision_store.FrozenRevisionError`. The messages
+still differ -- they describe three different vantage points on the same
+invariant -- but the *classes* no longer have to be guessed at: E14-05 (#331)
+split that second refusal out of the bare ``RevisionStoreError`` it used to share
+with refusals that have nothing to do with INV-03, and
+:func:`waterfall.api.revision_errors.revision_http_exception` is the one place
+either class is turned into a response.
 
 Transactions and the optimistic lock
 ------------------------------------
@@ -186,6 +187,47 @@ class BearingTask:
     node_id: int
     work_item_id: int
     name: str
+
+
+@dataclass(frozen=True)
+class TreeRow:
+    """One node of a revision, as a read hands it out.
+
+    ``row_number`` and ``level`` are **computed here and stored nowhere** -- the
+    principle E9 (#145-#149) settled for the legacy planning and which the node
+    model makes structural rather than conventional: a positional identifier that
+    a move would have to renumber is a positional identifier that drifts, so it is
+    derived from the depth-first walk on every read instead. Both are 1-based:
+    ``row_number`` is the rank in that walk, ``level`` the depth of the node, a
+    root being at level 1.
+    """
+
+    node_id: int
+    work_item_id: int
+    kind: domain.WorkItemKind
+    parent_id: int | None
+    position: int
+    row_number: int
+    level: int
+    external_uid: int | None
+    description: str | None
+    plan: domain.PlanFacet | None
+    cost: domain.CostFacet | None
+    predecessors: tuple[domain.NodeLink, ...]
+
+
+@dataclass(frozen=True)
+class RevisionTree:
+    """A whole revision, read: its header and its nodes in depth-first order."""
+
+    revision_id: int
+    project_id: int
+    version_number: int
+    kind: domain.RevisionKind
+    status: domain.RevisionStatus
+    lock_version: int
+    note: str | None
+    rows: tuple[TreeRow, ...]
 
 
 def _now() -> datetime:
@@ -631,6 +673,136 @@ def compact_positions(
 # --------------------------------------------------------------------------------------
 # Reading the bearing task, copying a revision
 # --------------------------------------------------------------------------------------
+
+
+def read_revision_tree(db: Session, revision_id: int) -> RevisionTree:
+    """The whole tree of ``revision_id``, depth-first, with both facets and the links.
+
+    Read-only, so no lock and no ``expected_lock_version`` -- but the
+    ``lock_version`` it reports *is* the value the caller hands back on its next
+    write, which is why the header carries it.
+
+    A node the revision holds but no root reaches (INV-09) is absent from
+    :attr:`RevisionTree.rows`: the depth-first walk of the domain is what produces
+    the order, and it lists only what it reaches. That is the same thing
+    :func:`~waterfall.domain.revision.structure.depth_first` already does
+    everywhere else, and the alternative -- inventing a position for an orphan --
+    would hand a client a tree the server cannot write back.
+    """
+    loaded = load_revision(db, revision_id)
+    revision = loaded.revision
+    ordered = domain.depth_first(revision)
+    level_of = {
+        node.id: depth
+        for depth, level in enumerate(domain.levels(revision), start=1)
+        for node in level
+    }
+    predecessors: dict[int, list[domain.NodeLink]] = {}
+    for link in revision.links:
+        predecessors.setdefault(link.node_id, []).append(link)
+    rows = tuple(
+        TreeRow(
+            node_id=node.id,
+            work_item_id=node.work_item_id,
+            kind=loaded.project.work_items[node.work_item_id].kind,
+            parent_id=node.parent_id,
+            position=node.position,
+            row_number=row_number,
+            level=level_of[node.id],
+            external_uid=loaded.project.work_items[node.work_item_id].external_uid,
+            description=loaded.project.work_items[node.work_item_id].description,
+            plan=revision.plan_facets.get(node.id),
+            cost=revision.cost_facets.get(node.id),
+            predecessors=tuple(
+                sorted(
+                    predecessors.get(node.id, []),
+                    key=lambda link: (link.predecessor_node_id, link.link_type),
+                )
+            ),
+        )
+        for row_number, node in enumerate(ordered, start=1)
+    )
+    return RevisionTree(
+        revision_id=revision.id,
+        project_id=revision.project_id,
+        version_number=revision.version_number,
+        kind=revision.kind,
+        status=revision.status,
+        lock_version=revision.lock_version,
+        note=revision.note,
+        rows=rows,
+    )
+
+
+def update_plan_facet(
+    db: Session,
+    revision_id: int,
+    node_id: int,
+    *,
+    expected_lock_version: int,
+    name: str | domain.Unset = domain.UNSET,
+    duration_minutes: int | None | domain.Unset = domain.UNSET,
+    duration_format: int | None | domain.Unset = domain.UNSET,
+    start_at: datetime | None | domain.Unset = domain.UNSET,
+    finish_at: datetime | None | domain.Unset = domain.UNSET,
+    work_minutes: int | None | domain.Unset = domain.UNSET,
+    percent_complete: int | domain.Unset = domain.UNSET,
+    is_milestone: bool | domain.Unset = domain.UNSET,
+    is_manual: bool | domain.Unset = domain.UNSET,
+    calendar_id: int | None | domain.Unset = domain.UNSET,
+) -> TreeWrite:
+    """Edit the planning facet of one node: duration, dates, avancement, calendar.
+
+    One domain call, therefore one ``lock_version`` bump, whatever the number of
+    attributes the request carries -- see
+    :func:`~waterfall.domain.revision.facets.update_plan_facet` for why that is not
+    a detail. ``calendar_id=None`` drops an explicit calendar choice and lets Règle
+    1 pick one again; leaving it out touches neither the calendar nor its
+    provenance.
+    """
+    return _mutate(
+        db,
+        revision_id,
+        expected_lock_version,
+        lambda project, revision: domain.update_plan_facet(
+            project,
+            revision,
+            node_id,
+            name=name,
+            duration_minutes=duration_minutes,
+            duration_format=duration_format,
+            start_at=start_at,
+            finish_at=finish_at,
+            work_minutes=work_minutes,
+            percent_complete=percent_complete,
+            is_milestone=is_milestone,
+            is_manual=is_manual,
+            calendar_id=calendar_id,
+        ),
+    )
+
+
+def replace_predecessors(
+    db: Session,
+    revision_id: int,
+    node_id: int,
+    predecessors: Sequence[domain.NodeLink],
+    *,
+    expected_lock_version: int,
+) -> TreeWrite:
+    """Replace every precedence link arriving at ``node_id`` with ``predecessors``.
+
+    A predecessor the revision does not hold is refused as a
+    :class:`~waterfall.domain.revision.CrossRevisionError` (INV-08): a node id is
+    unique across revisions, so "not in this revision" and "belongs to another
+    revision" are the same refusal.
+    """
+    return _mutate(
+        db,
+        revision_id,
+        expected_lock_version,
+        lambda _project, revision: domain.replace_predecessors(revision, node_id, predecessors),
+    )
 
 
 def resolve_bearing_task(db: Session, revision_id: int, node_id: int) -> BearingTask | None:

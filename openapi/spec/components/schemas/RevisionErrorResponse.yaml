@@ -1,0 +1,22 @@
+type: object
+required:
+- detail
+properties:
+  detail:
+    type: object
+    required:
+    - code
+    properties:
+      code:
+        type: string
+        description: >-
+          Code stable de refus, traduit par la couche API depuis l'erreur de domaine
+          ou de service (voir `waterfall.api.revision_errors`). REVISION_IMMUTABLE
+          est le code d'INV-03 : il est identique sur la facette planification et
+          sur la facette cout.
+description: >-
+  Corps d'erreur structure des endpoints de revision. Toujours un objet portant un
+  `code` exploitable par le frontend, jamais un message libre :
+  `_generic_http_exception_handler` reecrit un `detail` textuel en
+  `{"code": "GENERIC_ERROR"}` precisement pour qu'aucun texte non traduit n'atteigne
+  un client.

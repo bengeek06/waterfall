@@ -1,0 +1,99 @@
+type: object
+required:
+- expected_lock_version
+properties:
+  expected_lock_version:
+    type: integer
+    maximum: 2147483647
+    minimum: 0
+  name:
+    anyOf:
+    - type: string
+      maxLength: 512
+      minLength: 1
+    - type: 'null'
+  duration_minutes:
+    anyOf:
+    - type: integer
+      maximum: 7884000
+      minimum: 0
+    - type: 'null'
+  duration_format:
+    anyOf:
+    - type: integer
+      enum:
+      - 3
+      - 4
+      - 5
+      - 6
+      - 7
+      - 8
+      - 9
+      - 10
+      - 11
+      - 12
+      - 19
+      - 20
+      - 21
+      - 35
+      - 36
+      - 37
+      - 38
+      - 39
+      - 40
+      - 41
+      - 42
+      - 43
+      - 44
+      - 51
+      - 52
+      - 53
+    - type: 'null'
+  start_at:
+    anyOf:
+    - type: string
+      format: date-time
+    - type: 'null'
+  finish_at:
+    anyOf:
+    - type: string
+      format: date-time
+    - type: 'null'
+  work_minutes:
+    anyOf:
+    - type: integer
+      maximum: 7884000
+      minimum: 0
+    - type: 'null'
+  percent_complete:
+    anyOf:
+    - type: integer
+      maximum: 100
+      minimum: 0
+    - type: 'null'
+  is_milestone:
+    anyOf:
+    - type: boolean
+    - type: 'null'
+  is_manual:
+    anyOf:
+    - type: boolean
+    - type: 'null'
+  calendar_id:
+    anyOf:
+    - type: integer
+      maximum: 2147483647
+      exclusiveMinimum: 0
+    - type: 'null'
+description: >-
+  Edition partielle de la facette planification : un champ absent est laisse tel
+  quel, `null` est une valeur (vider la duree, retirer l'epinglage du calendrier).
+  `calendar_id` porte la Regle 1 : un identifiant epingle le calendrier
+  (`manual`), `null` retire l'epinglage et laisse la regle rechoisir.
+  Exception : `name`, `percent_complete`, `is_milestone` et `is_manual` n'ont pas
+  d'etat « vide » (colonne NOT NULL) ; ils sont declares optionnels pour pouvoir
+  etre omis, et un `null` explicite sur l'un d'eux est refuse en 422 plutot
+  qu'avale silencieusement. `duration_format` est un code MSPDI `DurationFormat`,
+  contraint a l'enumeration du schema MS Project.
+  Un corps ne portant que `expected_lock_version` est legal et fait avancer
+  `lock_version` d'un cran : le compteur enregistre « une ecriture a eu lieu ».

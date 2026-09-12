@@ -1,0 +1,28 @@
+type: object
+required:
+- detail
+properties:
+  detail:
+    type: object
+    required:
+    - code
+    properties:
+      code:
+        type: string
+        description: >-
+          REVISION_LOCK_CONFLICT quand `expected_lock_version` est perime,
+          REVISION_IMMUTABLE quand la revision est figee (INV-03), ou l'un des
+          autres codes de conflit enumeres par la reponse.
+      revision_id:
+        type: integer
+        description: Present uniquement pour REVISION_LOCK_CONFLICT.
+      expected_lock_version:
+        type: integer
+        description: Valeur presentee par la requete refusee.
+      current_lock_version:
+        type: integer
+        description: Valeur reellement stockee ; a relire avant de rejouer l'ecriture.
+description: >-
+  Conflit d'ecriture sur une revision. Le conflit de verrou optimiste porte de quoi
+  se resynchroniser sans relecture devinee ; les autres conflits ne portent que leur
+  `code`.

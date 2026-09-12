@@ -1,8 +1,0 @@
-type: object
-required:
-- tasks
-properties:
-  tasks:
-    type: array
-    items:
-      $ref: PlanningTaskTreeRead.yaml

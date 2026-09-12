@@ -1,0 +1,21 @@
+type: object
+required:
+- revision_id
+- lock_version
+- removed_node_ids
+- cost_losses
+properties:
+  revision_id:
+    type: integer
+  lock_version:
+    type: integer
+  removed_node_ids:
+    items:
+      type: integer
+    type: array
+  cost_losses:
+    items:
+      $ref: RevisionCostLossRead.yaml
+    type: array
+description: Ce qu'une suppression en cascade a retire (INV-02), et le chiffrage qu'elle a emporte (garde-fou
+  de la Regle 3).

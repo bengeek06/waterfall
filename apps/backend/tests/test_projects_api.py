@@ -4,11 +4,19 @@ from io import BytesIO
 from typing import Any, cast
 from uuid import uuid4
 
+import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from httpx import Response
 from openpyxl import load_workbook
 
 from _estimate_grid_support import seed_root_grid_node
+from _legacy_planning_support import (
+    create_legacy_planning_task,
+    delete_legacy_planning_tasks,
+    legacy_project_tasks,
+    move_legacy_planning_tasks,
+)
 from waterfall.db.session import get_session_factory
 from waterfall.main import app
 from waterfall.models.ms_core import MsProject, MsTask
@@ -29,6 +37,7 @@ from waterfall.models.resources import (
     ResourceRole,
 )
 from waterfall.models.wf_core import WfTaskEnrichment
+from waterfall.services import PlanningTreeTaskReferencedError
 
 
 def _auth_headers(client: TestClient, email: str | None = None) -> dict[str, str]:
@@ -279,14 +288,7 @@ def test_get_projects_and_project_tasks() -> None:
         assert project_payload["id"] == project_id
         assert project_payload["name"] == "Project API Test"
 
-        tasks_response: Response = client.get(
-            f"/projects/{project_id}/tasks",
-            headers=headers,
-        )
-        assert tasks_response.status_code == 200
-        raw_tasks_body = tasks_response.json()
-        assert isinstance(raw_tasks_body, dict)
-        tasks_payload = cast(list[dict[str, Any]], raw_tasks_body["items"])
+        tasks_payload = legacy_project_tasks(project_id)
         assert len(tasks_payload) == expected_tasks
         assert tasks_payload[0]["project_id"] == project_id
         assert all("description" in task for task in tasks_payload)
@@ -314,12 +316,7 @@ def test_patch_task_description_and_read_back() -> None:
         assert patch_payload["uid"] == 1001
         assert patch_payload["description"] == "Description enrichie depuis Waterfall"
 
-        tasks_response: Response = client.get(
-            f"/projects/{project_id}/tasks",
-            headers=headers,
-        )
-        assert tasks_response.status_code == 200
-        tasks_payload = cast(list[dict[str, Any]], tasks_response.json()["items"])
+        tasks_payload = legacy_project_tasks(project_id)
 
         task_by_uid = {task["uid"]: task for task in tasks_payload}
         assert task_by_uid[1001]["description"] == "Description enrichie depuis Waterfall"
@@ -389,12 +386,7 @@ def test_project_tasks_row_number_ignores_lexicographic_outline_number_order() -
         headers = _auth_headers(client)
         project_id = _seed_ms_task_group_with_eleven_children(_current_user_id(client, headers))
 
-        tasks_response: Response = client.get(
-            f"/projects/{project_id}/tasks",
-            headers=headers,
-        )
-        assert tasks_response.status_code == 200
-        tasks_payload = cast(list[dict[str, Any]], tasks_response.json()["items"])
+        tasks_payload = legacy_project_tasks(project_id)
 
         assert [task["uid"] for task in tasks_payload] == list(range(100, 112))
         assert [task["row_number"] for task in tasks_payload] == list(range(1, 13))
@@ -481,8 +473,7 @@ def test_patch_task_name_without_displayed_planning_updates_legacy_task_only() -
             )
             assert task.name == "Task One Renamed"
 
-        tasks_response: Response = client.get(f"/projects/{project_id}/tasks", headers=headers)
-        task_by_uid = {task["uid"]: task for task in tasks_response.json()["items"]}
+        task_by_uid = {task["uid"]: task for task in legacy_project_tasks(project_id)}
         assert task_by_uid[1001]["name"] == "Task One Renamed"
         assert task_by_uid[1002]["name"] == "Task Two"
 
@@ -541,8 +532,7 @@ def test_patch_task_name_with_displayed_planning_updates_snapshot_twin_and_live_
         assert rename_response.json()["uid"] == 1001
 
         # Planning tree itself.
-        tasks_response: Response = client.get(f"/projects/{project_id}/tasks", headers=headers)
-        task_by_uid = {task["uid"]: task for task in tasks_response.json()["items"]}
+        task_by_uid = {task["uid"]: task for task in legacy_project_tasks(project_id)}
         assert task_by_uid[1001]["name"] == "Task One Renamed"
 
         # Legacy MsTask twin kept in sync in the same transaction.
@@ -652,8 +642,7 @@ def test_patch_task_name_does_not_affect_already_validated_estimate_task_rows() 
         assert "Task One Renamed" not in task_names
 
         # The Planning tree itself is unaffected by this distinction -- it is always live.
-        tasks_response: Response = client.get(f"/projects/{project_id}/tasks", headers=headers)
-        task_by_uid = {task["uid"]: task for task in tasks_response.json()["items"]}
+        task_by_uid = {task["uid"]: task for task in legacy_project_tasks(project_id)}
         assert task_by_uid[1001]["name"] == "Task One Renamed"
 
 
@@ -807,17 +796,7 @@ def test_estimate_task_row_position_follows_live_planning_move() -> None:
         position_by_uid_before = {row["task_uid"]: row["position"] for row in rows_before}
         assert position_by_uid_before == {1001: 1, 1002: 2}
 
-        move_response: Response = client.post(
-            f"/projects/{project_id}/plannings/{planning_id}/tasks/move",
-            json={
-                "task_uids": [1002],
-                "target_parent_uid": None,
-                "position": 1,
-                "expected_revision": 0,
-            },
-            headers=headers,
-        )
-        assert move_response.status_code == 200
+        move_legacy_planning_tasks(project_id, planning_id, [1002], position=1)
 
         rows_after = client.get(
             f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
@@ -845,11 +824,8 @@ def test_delete_planning_task_referenced_by_cost_line_conflicts_without_mutation
             session.commit()
             cost_category_id = cost_category.id
 
-        tasks_response: Response = client.get(f"/projects/{project_id}/tasks", headers=headers)
         task_id = next(
-            task["id"]
-            for task in cast(list[dict[str, Any]], tasks_response.json()["items"])
-            if task["uid"] == 1001
+            task["id"] for task in legacy_project_tasks(project_id) if task["uid"] == 1001
         )
 
         # Creating a draft planning without a source copies the legacy MsTask
@@ -883,15 +859,9 @@ def test_delete_planning_task_referenced_by_cost_line_conflicts_without_mutation
         )
         assert cost_line_response.status_code == 201
 
-        delete_response: Response = client.post(
-            f"/projects/{project_id}/plannings/{planning_id}/tasks/delete",
-            json={"task_uids": [1001], "expected_revision": 0},
-            headers=headers,
-        )
-        assert delete_response.status_code == 409
-        detail = cast(dict[str, Any], delete_response.json())["detail"]
-        assert detail["code"] == "TASK_REFERENCED"
-        assert detail["task_uids"] == [1001]
+        with pytest.raises(PlanningTreeTaskReferencedError) as refusal:
+            delete_legacy_planning_tasks(project_id, planning_id, [1001])
+        assert refusal.value.task_uids == [1001]
 
         with session_factory() as session:
             remaining = (
@@ -908,8 +878,7 @@ def test_delete_planning_task_referenced_by_parent_task_row_conflicts_without_mu
         headers = _auth_headers(client)
         project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
 
-        tasks_response: Response = client.get(f"/projects/{project_id}/tasks", headers=headers)
-        task_rows = cast(list[dict[str, Any]], tasks_response.json()["items"])
+        task_rows = legacy_project_tasks(project_id)
         parent_task_id = cast(int, next(task["id"] for task in task_rows if task["uid"] == 1001))
         child_task_id = cast(int, next(task["id"] for task in task_rows if task["uid"] == 1002))
 
@@ -939,15 +908,9 @@ def test_delete_planning_task_referenced_by_parent_task_row_conflicts_without_mu
             row.parent_task_id = parent_task_id
             session.commit()
 
-        delete_response: Response = client.post(
-            f"/projects/{project_id}/plannings/{planning_id}/tasks/delete",
-            json={"task_uids": [1001], "expected_revision": 0},
-            headers=headers,
-        )
-        assert delete_response.status_code == 409
-        detail = cast(dict[str, Any], delete_response.json())["detail"]
-        assert detail["code"] == "TASK_REFERENCED"
-        assert detail["task_uids"] == [1001]
+        with pytest.raises(PlanningTreeTaskReferencedError) as refusal:
+            delete_legacy_planning_tasks(project_id, planning_id, [1001])
+        assert refusal.value.task_uids == [1001]
 
 
 def test_estimate_aggregates_on_draft_are_zero() -> None:
@@ -1086,11 +1049,7 @@ def _sheet_records(sheet: Any) -> list[dict[str, Any]]:
 def _fetch_task_id_by_uid(
     client: TestClient, headers: dict[str, str], project_id: int
 ) -> dict[int, int]:
-    response: Response = client.get(f"/projects/{project_id}/tasks", headers=headers)
-    assert response.status_code == 200
-    return {
-        task["uid"]: task["id"] for task in cast(list[dict[str, Any]], response.json()["items"])
-    }
+    return {task["uid"]: task["id"] for task in legacy_project_tasks(project_id)}
 
 
 def _seed_reconciliation_fixture(client: TestClient, headers: dict[str, str]) -> dict[str, Any]:
@@ -1738,9 +1697,6 @@ def test_delete_project_cascades_related_data() -> None:
         project_response: Response = client.get(f"/projects/{project_id}", headers=headers)
         assert project_response.status_code == 404
 
-        tasks_response: Response = client.get(f"/projects/{project_id}/tasks", headers=headers)
-        assert tasks_response.status_code == 404
-
 
 def test_delete_project_with_displayed_planning_snapshot() -> None:
     # Regression test: fk_ms_project_displayed_planning rejected the raw `DELETE FROM
@@ -2076,7 +2032,6 @@ def test_projects_are_isolated_by_owner() -> None:
 
         for path in (
             f"/projects/{project_id}",
-            f"/projects/{project_id}/tasks",
             f"/projects/{project_id}/export.xml",
         ):
             response: Response = client.get(path, headers=other_headers)
@@ -2107,7 +2062,7 @@ def test_user_can_create_manual_project() -> None:
         assert payload["currency_code"] == "EUR"
 
 
-def test_project_pagination_reports_total_and_task_listing_is_never_truncated() -> None:
+def test_project_pagination_reports_total() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)
         owner_id = _current_user_id(client, headers)
@@ -2136,22 +2091,11 @@ def test_project_pagination_reports_total_and_task_listing_is_never_truncated() 
         assert without_limit_body["limit"] is None
         assert without_limit_body["total"] == len(without_limit_body["items"]) == 2
 
-        # /projects/{project_id}/tasks is intentionally not paginated (EPIC E7,
-        # issue #115): it feeds the planning editor, which needs the whole task
-        # tree, so any stray limit/offset a caller sends must be ignored rather
-        # than silently truncating the response.
-        task_page = client.get(
-            f"/projects/{first_project_id}/tasks?limit=1&offset=1",
-            headers=headers,
-        )
-        assert task_page.status_code == 200
-        task_body = cast(dict[str, Any], task_page.json())
-        assert task_body["limit"] is None
-        assert task_body["offset"] == 0
-        tasks = cast(list[dict[str, Any]], task_body["items"])
-        assert len(tasks) == expected_tasks == task_body["total"]
-
+        # The "a task listing is never truncated" half of this test moved with its
+        # endpoint to test_revision_planning_api (E14-05, #331): the tree read of a
+        # revision is unpaginated for the very same reason (EPIC E7, issue #115).
         assert first_project_id != second_project_id
+        assert expected_tasks > 0
 
 
 def test_list_projects_sort_and_rejects_unknown_sort_column() -> None:
@@ -2451,12 +2395,7 @@ def test_validate_estimate_warns_about_uncovered_tasks_only() -> None:
             session.add_all([summary_task, milestone_task, uncovered_task])
             session.commit()
 
-        tasks_response = client.get(f"/projects/{project_id}/tasks", headers=headers)
-        assert tasks_response.status_code == 200
-        tasks_by_uid = {
-            task["uid"]: task["id"]
-            for task in cast(list[dict[str, Any]], tasks_response.json()["items"])
-        }
+        tasks_by_uid = {task["uid"]: task["id"] for task in legacy_project_tasks(project_id)}
 
         estimate_response = client.post(
             f"/projects/{project_id}/estimates",
@@ -2512,12 +2451,7 @@ def test_validate_estimate_reports_no_warnings_when_all_tasks_are_covered() -> N
         project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
         labor_role_id, supply_role_id = _seed_roles()
 
-        tasks_response = client.get(f"/projects/{project_id}/tasks", headers=headers)
-        assert tasks_response.status_code == 200
-        tasks_by_uid = {
-            task["uid"]: task["id"]
-            for task in cast(list[dict[str, Any]], tasks_response.json()["items"])
-        }
+        tasks_by_uid = {task["uid"]: task["id"] for task in legacy_project_tasks(project_id)}
 
         estimate_response = client.post(
             f"/projects/{project_id}/estimates",
@@ -2664,9 +2598,7 @@ def test_planning_lifecycle_snapshots_reference_and_display_selection() -> None:
             f"/projects/{project_id}/plannings/{planning_id}/display", headers=headers
         )
         assert displayed.status_code == 200
-        tasks = client.get(f"/projects/{project_id}/tasks", headers=headers)
-        assert tasks.status_code == 200
-        assert tasks.json()["items"][0]["name"] == "Task One"
+        assert legacy_project_tasks(project_id)[0]["name"] == "Task One"
 
 
 def test_project_status_requires_references_and_excludes_archived_by_default() -> None:
@@ -2808,7 +2740,7 @@ def test_en_cours_transition_rejects_project_initialised_without_structure_via_s
             ).status_code
             == 200
         )
-        assert client.get(f"/projects/{project_id}/tasks", headers=headers).json()["items"] == []
+        assert legacy_project_tasks(cast(int, project_id)) == []
 
         estimate = client.post(
             f"/projects/{project_id}/estimates",
@@ -2874,13 +2806,8 @@ def test_en_cours_transition_rejects_structure_in_unrelated_draft_not_referenced
 
         v2 = client.post(f"/projects/{project_id}/plannings", json={}, headers=headers)
         assert v2.status_code == 201
-        v2_id = v2.json()["id"]
-        task_created = client.post(
-            f"/projects/{project_id}/plannings/{v2_id}/tasks",
-            json={"name": "Structure elsewhere", "expected_revision": 0},
-            headers=headers,
-        )
-        assert task_created.status_code == 200
+        v2_id = cast(int, v2.json()["id"])
+        create_legacy_planning_task(cast(int, project_id), v2_id, name="Structure elsewhere")
 
         assert (
             client.post(
@@ -3869,10 +3796,7 @@ def test_planning_tasks_are_returned_depth_first() -> None:
         )
         assert generated.status_code == 201
 
-        tasks = cast(
-            list[dict[str, Any]],
-            client.get(f"/projects/{project_id}/tasks", headers=headers).json()["items"],
-        )
+        tasks = legacy_project_tasks(project_id)
         outlines = [task["outline_number"] for task in tasks]
         # Parent immediately followed by its children, in local position order.
         assert outlines[:4] == ["1", "1.1", "1.1.1", "1.1.2"]
@@ -4019,3 +3943,45 @@ class TestProjectSetupWarnings:
                 "/projects", json={"name": "Created despite warnings"}, headers=headers
             )
             assert created.status_code == 201
+
+
+def test_the_legacy_task_window_still_carries_the_removed_route_guards() -> None:
+    """#331 review: ``_legacy_planning_support`` claimed a fidelity it did not have.
+
+    ``GET /projects/{id}/tasks`` is gone (E14-05), and the helper that replaced it
+    for the suites still observing `ms_task`/`wf_planning_task_snapshot` had dropped
+    both of the route's guards -- the ownership filter of ``get_project_or_404`` and
+    the project scoping of ``get_planning_or_404``. The scoping is back
+    unconditionally; the ownership filter runs whenever a caller supplies
+    ``owner_id``, and this is the test that supplies it, so the claim is exercised
+    rather than written down.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        owner_id = _current_user_id(client, headers)
+        project_id, _ = _seed_projects_and_tasks(owner_id)
+        intruder_id = _current_user_id(client, _auth_headers(client))
+
+        # The owner sees the tasks the removed endpoint would have returned.
+        assert legacy_project_tasks(project_id, owner_id=owner_id)
+
+        with pytest.raises(HTTPException) as not_owned:
+            legacy_project_tasks(project_id, owner_id=intruder_id)
+        assert not_owned.value.status_code == 404
+
+        # And a planning id belonging to no project of ours is scoped out the same way.
+        other_project_id, _ = _seed_projects_and_tasks(intruder_id)
+        with get_session_factory()() as session:
+            foreign_planning = WfPlanning(
+                project_id=other_project_id,
+                version_number=1,
+                status="draft",
+                created_at=datetime.now(UTC),
+            )
+            session.add(foreign_planning)
+            session.commit()
+            foreign_planning_id = foreign_planning.id
+
+        with pytest.raises(HTTPException) as wrong_project:
+            legacy_project_tasks(project_id, foreign_planning_id, owner_id=owner_id)
+        assert wrong_project.value.status_code == 404

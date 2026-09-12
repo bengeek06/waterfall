@@ -1,0 +1,7 @@
+name: revisionId
+in: path
+required: true
+schema:
+  type: integer
+  minimum: 1
+description: Identifiant technique de la revision (arbre + facettes planification et cout)

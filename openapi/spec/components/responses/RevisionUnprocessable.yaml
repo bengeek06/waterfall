@@ -1,0 +1,11 @@
+description: >-
+  Corps de requete invalide au sens du schema : selection vide, entier hors des
+  bornes de sa colonne, code MSPDI hors enumeration, `null` explicite sur un champ
+  qui n'a pas d'etat « vide » (`name`, `percent_complete`, `is_milestone`,
+  `is_manual` de la facette planification), ou `target_parent_id`/`position`
+  fournis avec un `mode` qui calcule lui-meme sa destination. Rien n'a ete ecrit et
+  `lock_version` n'a pas bouge.
+content:
+  application/json:
+    schema:
+      $ref: ../schemas/RevisionValidationError.yaml

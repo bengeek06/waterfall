@@ -80,18 +80,18 @@ paths:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1plannings
   /projects/{projectId}/plannings/{planningId}:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1plannings~1{planningId}
-  /projects/{projectId}/plannings/{planningId}/tasks/move:
-    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1plannings~1{planningId}~1tasks~1move
-  /projects/{projectId}/plannings/{planningId}/tasks:
-    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1plannings~1{planningId}~1tasks
-  /projects/{projectId}/plannings/{planningId}/tasks/delete:
-    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1plannings~1{planningId}~1tasks~1delete
-  /projects/{projectId}/plannings/{planningId}/tasks/{taskUid}:
-    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1plannings~1{planningId}~1tasks~1{taskUid}
-  /projects/{projectId}/plannings/{planningId}/tasks/{taskUid}/links:
-    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1plannings~1{planningId}~1tasks~1{taskUid}~1links
-  /projects/{projectId}/plannings/{planningId}/tasks/restore:
-    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1plannings~1{planningId}~1tasks~1restore
+  /projects/{projectId}/revisions/{revisionId}/nodes:
+    $ref: ./paths/revisions.yaml#/~1projects~1{projectId}~1revisions~1{revisionId}~1nodes
+  /projects/{projectId}/revisions/{revisionId}/tasks:
+    $ref: ./paths/revisions.yaml#/~1projects~1{projectId}~1revisions~1{revisionId}~1tasks
+  /projects/{projectId}/revisions/{revisionId}/nodes/move:
+    $ref: ./paths/revisions.yaml#/~1projects~1{projectId}~1revisions~1{revisionId}~1nodes~1move
+  /projects/{projectId}/revisions/{revisionId}/nodes/delete:
+    $ref: ./paths/revisions.yaml#/~1projects~1{projectId}~1revisions~1{revisionId}~1nodes~1delete
+  /projects/{projectId}/revisions/{revisionId}/nodes/{nodeId}/planning:
+    $ref: ./paths/revisions.yaml#/~1projects~1{projectId}~1revisions~1{revisionId}~1nodes~1{nodeId}~1planning
+  /projects/{projectId}/revisions/{revisionId}/nodes/{nodeId}/predecessors:
+    $ref: ./paths/revisions.yaml#/~1projects~1{projectId}~1revisions~1{revisionId}~1nodes~1{nodeId}~1predecessors
   /projects/{projectId}/plannings/{planningId}/validate:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1plannings~1{planningId}~1validate
   /projects/{projectId}/plannings/{planningId}/reference:
@@ -100,8 +100,6 @@ paths:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1plannings~1{planningId}~1display
   /projects/{projectId}/estimates/{estimateId}/reference:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1reference
-  /projects/{projectId}/tasks:
-    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1tasks
   /projects/{projectId}/planning-structure:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1planning-structure
   /projects/{projectId}/planning-structure/draft:
@@ -110,8 +108,6 @@ paths:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1planning-structure~1reopen
   /projects/{projectId}/planning-structure/skip:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1planning-structure~1skip
-  /projects/{projectId}/planning-tree:
-    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1planning-tree
   /projects/{projectId}/tasks/{taskUid}:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1tasks~1{taskUid}
   /projects/{projectId}/estimates:
@@ -255,18 +251,6 @@ components:
       $ref: ./components/schemas/PlanningRead.yaml
     PlanningCreate:
       $ref: ./components/schemas/PlanningCreate.yaml
-    PlanningTaskMove:
-      $ref: ./components/schemas/PlanningTaskMove.yaml
-    PlanningTaskCreate:
-      $ref: ./components/schemas/PlanningTaskCreate.yaml
-    PlanningTaskDelete:
-      $ref: ./components/schemas/PlanningTaskDelete.yaml
-    PlanningTaskSnapshotWrite:
-      $ref: ./components/schemas/PlanningTaskSnapshotWrite.yaml
-    PlanningLinkSnapshotWrite:
-      $ref: ./components/schemas/PlanningLinkSnapshotWrite.yaml
-    PlanningSnapshotRestore:
-      $ref: ./components/schemas/PlanningSnapshotRestore.yaml
     PlanningDetailRead:
       $ref: ./components/schemas/PlanningDetailRead.yaml
     TaskRead:
@@ -287,12 +271,44 @@ components:
       $ref: ./components/schemas/PlanningStructureRead.yaml
     PlanningStructureDraftRead:
       $ref: ./components/schemas/PlanningStructureDraftRead.yaml
-    PlanningTreeRead:
-      $ref: ./components/schemas/PlanningTreeRead.yaml
-    PlanningTaskTreeRead:
-      $ref: ./components/schemas/PlanningTaskTreeRead.yaml
     TaskUpdate:
       $ref: ./components/schemas/TaskUpdate.yaml
+    RevisionTreeRead:
+      $ref: ./components/schemas/RevisionTreeRead.yaml
+    RevisionNodeRead:
+      $ref: ./components/schemas/RevisionNodeRead.yaml
+    RevisionPlanFacetRead:
+      $ref: ./components/schemas/RevisionPlanFacetRead.yaml
+    RevisionCostFacetRead:
+      $ref: ./components/schemas/RevisionCostFacetRead.yaml
+    RevisionPredecessorRead:
+      $ref: ./components/schemas/RevisionPredecessorRead.yaml
+    RevisionWriteRead:
+      $ref: ./components/schemas/RevisionWriteRead.yaml
+    RevisionNodeWriteRead:
+      $ref: ./components/schemas/RevisionNodeWriteRead.yaml
+    RevisionNodeDeleteRead:
+      $ref: ./components/schemas/RevisionNodeDeleteRead.yaml
+    RevisionCostLossRead:
+      $ref: ./components/schemas/RevisionCostLossRead.yaml
+    RevisionTaskCreate:
+      $ref: ./components/schemas/RevisionTaskCreate.yaml
+    RevisionNodeMove:
+      $ref: ./components/schemas/RevisionNodeMove.yaml
+    RevisionNodeDelete:
+      $ref: ./components/schemas/RevisionNodeDelete.yaml
+    RevisionPlanFacetUpdate:
+      $ref: ./components/schemas/RevisionPlanFacetUpdate.yaml
+    RevisionPredecessorWrite:
+      $ref: ./components/schemas/RevisionPredecessorWrite.yaml
+    RevisionPredecessorsReplace:
+      $ref: ./components/schemas/RevisionPredecessorsReplace.yaml
+    RevisionErrorResponse:
+      $ref: ./components/schemas/RevisionErrorResponse.yaml
+    RevisionLockConflict:
+      $ref: ./components/schemas/RevisionLockConflict.yaml
+    RevisionValidationError:
+      $ref: ./components/schemas/RevisionValidationError.yaml
     EstimateRoleAssignmentCreate:
       $ref: ./components/schemas/EstimateRoleAssignmentCreate.yaml
     EstimateRoleAssignmentUpdate:
@@ -389,8 +405,6 @@ components:
       $ref: ./components/schemas/SortColumn.yaml
     ProjectListRead:
       $ref: ./components/schemas/ProjectListRead.yaml
-    TaskListRead:
-      $ref: ./components/schemas/TaskListRead.yaml
     PlanningListRead:
       $ref: ./components/schemas/PlanningListRead.yaml
     ProjectEstimateListRead:
@@ -416,6 +430,10 @@ components:
       $ref: ./components/parameters/EstimateId.yaml
     PlanningId:
       $ref: ./components/parameters/PlanningId.yaml
+    RevisionId:
+      $ref: ./components/parameters/RevisionId.yaml
+    RevisionNodeId:
+      $ref: ./components/parameters/RevisionNodeId.yaml
     CostLineId:
       $ref: ./components/parameters/CostLineId.yaml
     NodeId:
@@ -457,26 +475,16 @@ components:
       $ref: ./components/responses/ProjectNotFound.yaml
     PlanningNotFound:
       $ref: ./components/responses/PlanningNotFound.yaml
+    RevisionBadRequest:
+      $ref: ./components/responses/RevisionBadRequest.yaml
+    RevisionNotFound:
+      $ref: ./components/responses/RevisionNotFound.yaml
+    RevisionConflict:
+      $ref: ./components/responses/RevisionConflict.yaml
+    RevisionUnprocessable:
+      $ref: ./components/responses/RevisionUnprocessable.yaml
     ProjectPlanningTaskNotFound:
       $ref: ./components/responses/ProjectPlanningTaskNotFound.yaml
-    MovePlanningTasksBadRequest:
-      $ref: ./components/responses/MovePlanningTasksBadRequest.yaml
-    MovePlanningTasksNotFound:
-      $ref: ./components/responses/MovePlanningTasksNotFound.yaml
-    MovePlanningTasksConflict:
-      $ref: ./components/responses/MovePlanningTasksConflict.yaml
-    CreatePlanningTaskBadRequest:
-      $ref: ./components/responses/CreatePlanningTaskBadRequest.yaml
-    CreatePlanningTaskNotFound:
-      $ref: ./components/responses/CreatePlanningTaskNotFound.yaml
-    CreatePlanningTaskConflict:
-      $ref: ./components/responses/CreatePlanningTaskConflict.yaml
-    DeletePlanningTasksBadRequest:
-      $ref: ./components/responses/DeletePlanningTasksBadRequest.yaml
-    DeletePlanningTasksNotFound:
-      $ref: ./components/responses/DeletePlanningTasksNotFound.yaml
-    DeletePlanningTasksConflict:
-      $ref: ./components/responses/DeletePlanningTasksConflict.yaml
     EstimateNotFound:
       $ref: ./components/responses/EstimateNotFound.yaml
     TaskNotFound:

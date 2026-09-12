@@ -1,0 +1,57 @@
+type: object
+required:
+- name
+- calendar_id
+- calendar_source
+- is_milestone
+- duration_minutes
+- duration_format
+- start_at
+- finish_at
+- work_minutes
+- percent_complete
+- is_manual
+properties:
+  name:
+    type: string
+  calendar_id:
+    anyOf:
+    - type: integer
+    - type: 'null'
+  calendar_source:
+    anyOf:
+    - type: string
+      enum:
+      - project
+      - role
+      - manual
+    - type: 'null'
+  is_milestone:
+    type: boolean
+  duration_minutes:
+    anyOf:
+    - type: integer
+    - type: 'null'
+  duration_format:
+    anyOf:
+    - type: integer
+    - type: 'null'
+  start_at:
+    anyOf:
+    - type: string
+      format: date-time
+    - type: 'null'
+  finish_at:
+    anyOf:
+    - type: string
+      format: date-time
+    - type: 'null'
+  work_minutes:
+    anyOf:
+    - type: integer
+    - type: 'null'
+  percent_complete:
+    type: integer
+  is_manual:
+    type: boolean
+description: 'Facette planification d''un noeud : ce qui en fait une tache.'

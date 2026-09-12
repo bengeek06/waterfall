@@ -11,9 +11,7 @@ from waterfall.api.dependencies import get_current_active_user
 from waterfall.api.pagination import ListParams, list_params
 from waterfall.api.routes.planning_support import (
     _planning_detail,
-    _PlanningTaskBodyValidationRoute,
     _to_planning_read,
-    _to_task_reads,
     get_mutable_project_with_latest_draft_lock,
     order_snapshots_depth_first,
     to_project_read,
@@ -25,7 +23,6 @@ from waterfall.api.routes.project_access import (
     get_mutable_project_lock,
     get_planning_or_404,
     get_project_or_404,
-    raise_on_planning_revision_conflict,
 )
 from waterfall.db.session import get_db
 from waterfall.models.ms_core import MsTask, MsTaskLink
@@ -33,46 +30,21 @@ from waterfall.models.planning import WfPlanning, WfPlanningLinkSnapshot, WfPlan
 from waterfall.models.user import User
 from waterfall.models.wf_core import WfTaskEnrichment
 from waterfall.schemas.projects import (
-    FastAPIErrorResponse,
     PlanningCreate,
     PlanningDetailRead,
     PlanningListRead,
     PlanningRead,
-    PlanningSnapshotRestore,
     PlanningStructureCreate,
     PlanningStructureDraftRead,
     PlanningStructureRead,
-    PlanningTaskCreate,
-    PlanningTaskDelete,
-    PlanningTaskDeleteConflict,
-    PlanningTaskMove,
-    PlanningTaskScheduleUpdate,
-    PlanningTaskTreeRead,
-    PlanningTreeRead,
     ProjectRead,
-    TaskLinksReplace,
 )
 from waterfall.services import (
-    PlanningLinkError,
-    PlanningLinkInvariantError,
-    PlanningLinkNotFoundError,
-    PlanningTaskScheduleError,
-    PlanningTreeCascadeConfirmationRequiredError,
-    PlanningTreeInvariantError,
-    PlanningTreeMoveError,
-    PlanningTreeMoveNotFoundError,
-    PlanningTreeTaskReferencedError,
     apply_pagination,
-    create_planning_task,
-    delete_planning_tasks,
     generate_planning_snapshot,
     generate_planning_structure,
     load_planning_structure_draft,
-    move_planning_tasks,
-    replace_task_predecessor_links,
-    restore_planning_snapshot,
     save_planning_structure_draft,
-    update_planning_task_schedule,
 )
 from waterfall.services.project_lifecycle import validate_project_status_transition
 
@@ -303,394 +275,6 @@ def get_planning(
     )
 
 
-def move_planning_tasks_route(
-    project_id: int,
-    planning_id: int,
-    payload: PlanningTaskMove,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-) -> PlanningDetailRead:
-    _, planning = get_mutable_draft_planning_with_locks(
-        db, project_id, planning_id, current_user.id
-    )
-    raise_on_planning_revision_conflict(project_id, planning, payload.expected_revision)
-    try:
-        move_planning_tasks(db, planning, payload)
-        planning.revision += 1
-        db.add(planning)
-        # Capture the response while the row locks are still held so a concurrent
-        # writer cannot make us return a later transaction's state.
-        detail = _planning_detail(db, planning)
-        db.commit()
-    except PlanningTreeMoveNotFoundError as exc:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    except PlanningTreeInvariantError as exc:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    except PlanningTreeMoveError as exc:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except IntegrityError as exc:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Planning hierarchy conflicts with existing planning data",
-        ) from exc
-    return detail
-
-
-router.add_api_route(
-    "/{project_id}/plannings/{planning_id}/tasks/move",
-    move_planning_tasks_route,
-    methods=["POST"],
-    response_model=PlanningDetailRead,
-    responses={
-        status.HTTP_400_BAD_REQUEST: {
-            "model": FastAPIErrorResponse,
-            "description": "Requete de deplacement invalide",
-        },
-        status.HTTP_404_NOT_FOUND: {
-            "model": FastAPIErrorResponse,
-            "description": "Projet, planning ou tache introuvable pendant le deplacement",
-        },
-        status.HTTP_409_CONFLICT: {
-            "model": FastAPIErrorResponse,
-            "description": "Le deplacement entre en conflit avec le planning",
-        },
-    },
-    route_class_override=_PlanningTaskBodyValidationRoute,
-)
-
-
-def create_planning_task_route(
-    project_id: int,
-    planning_id: int,
-    payload: PlanningTaskCreate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-) -> PlanningDetailRead:
-    _, planning = get_mutable_draft_planning_with_locks(
-        db, project_id, planning_id, current_user.id
-    )
-    raise_on_planning_revision_conflict(project_id, planning, payload.expected_revision)
-    try:
-        create_planning_task(db, planning, payload)
-        planning.revision += 1
-        db.add(planning)
-        # Capture the response while the row locks are still held so a concurrent
-        # writer cannot make us return a later transaction's state.
-        detail = _planning_detail(db, planning)
-        db.commit()
-    except PlanningTreeMoveNotFoundError as exc:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    except PlanningTreeInvariantError as exc:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    except PlanningTreeMoveError as exc:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except IntegrityError as exc:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Planning hierarchy conflicts with existing planning data",
-        ) from exc
-    return detail
-
-
-router.add_api_route(
-    "/{project_id}/plannings/{planning_id}/tasks",
-    create_planning_task_route,
-    methods=["POST"],
-    response_model=PlanningDetailRead,
-    responses={
-        status.HTTP_400_BAD_REQUEST: {
-            "model": FastAPIErrorResponse,
-            "description": "Requete de creation invalide",
-        },
-        status.HTTP_404_NOT_FOUND: {
-            "model": FastAPIErrorResponse,
-            "description": "Projet, planning ou tache parent introuvable",
-        },
-        status.HTTP_409_CONFLICT: {
-            "model": FastAPIErrorResponse,
-            "description": "La creation entre en conflit avec le planning",
-        },
-    },
-    route_class_override=_PlanningTaskBodyValidationRoute,
-)
-
-
-def delete_planning_tasks_route(
-    project_id: int,
-    planning_id: int,
-    payload: PlanningTaskDelete,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-) -> PlanningDetailRead:
-    _, planning = get_mutable_draft_planning_with_locks(
-        db, project_id, planning_id, current_user.id
-    )
-    raise_on_planning_revision_conflict(project_id, planning, payload.expected_revision)
-    try:
-        delete_planning_tasks(db, planning, payload)
-        planning.revision += 1
-        db.add(planning)
-        # Capture the response while the row locks are still held so a concurrent
-        # writer cannot make us return a later transaction's state.
-        detail = _planning_detail(db, planning)
-        db.commit()
-    except PlanningTreeCascadeConfirmationRequiredError as exc:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "CASCADE_CONFIRMATION_REQUIRED",
-                "descendant_uids": exc.descendant_uids,
-            },
-        ) from exc
-    except PlanningTreeTaskReferencedError as exc:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={"code": "TASK_REFERENCED", "task_uids": exc.task_uids},
-        ) from exc
-    except PlanningTreeMoveNotFoundError as exc:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    except PlanningTreeInvariantError as exc:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    except PlanningTreeMoveError as exc:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except IntegrityError as exc:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Planning hierarchy conflicts with existing planning data",
-        ) from exc
-    return detail
-
-
-router.add_api_route(
-    "/{project_id}/plannings/{planning_id}/tasks/delete",
-    delete_planning_tasks_route,
-    methods=["POST"],
-    response_model=PlanningDetailRead,
-    responses={
-        status.HTTP_400_BAD_REQUEST: {
-            "model": FastAPIErrorResponse,
-            "description": "Requete de suppression invalide",
-        },
-        status.HTTP_404_NOT_FOUND: {
-            "model": FastAPIErrorResponse,
-            "description": "Projet, planning ou tache introuvable pendant la suppression",
-        },
-        status.HTTP_409_CONFLICT: {
-            "model": PlanningTaskDeleteConflict | FastAPIErrorResponse,
-            "description": (
-                "Suppression en cascade non confirmee (detail.code="
-                "CASCADE_CONFIRMATION_REQUIRED, avec detail.descendant_uids), "
-                "tache referencee par un devis, une affectation ou une "
-                "charge (detail.code=TASK_REFERENCED, avec detail.task_uids), "
-                "ou expected_revision obsolete (detail.code="
-                "PLANNING_REVISION_CONFLICT)"
-            ),
-        },
-    },
-    route_class_override=_PlanningTaskBodyValidationRoute,
-)
-
-
-def update_planning_task_schedule_route(
-    project_id: int,
-    planning_id: int,
-    task_uid: int,
-    payload: PlanningTaskScheduleUpdate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-) -> PlanningDetailRead:
-    _, planning = get_mutable_draft_planning_with_locks(
-        db, project_id, planning_id, current_user.id
-    )
-    raise_on_planning_revision_conflict(project_id, planning, payload.expected_revision)
-    try:
-        update_planning_task_schedule(db, planning, task_uid, payload)
-        planning.revision += 1
-        db.add(planning)
-        # Capture the response while the row locks are still held so a concurrent
-        # writer cannot make us return a later transaction's state.
-        detail = _planning_detail(db, planning)
-        db.commit()
-    except PlanningTreeMoveNotFoundError as exc:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    except PlanningTaskScheduleError as exc:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except IntegrityError as exc:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Task schedule conflicts with existing planning data",
-        ) from exc
-    return detail
-
-
-router.add_api_route(
-    "/{project_id}/plannings/{planning_id}/tasks/{task_uid}",
-    update_planning_task_schedule_route,
-    methods=["PATCH"],
-    response_model=PlanningDetailRead,
-    responses={
-        status.HTTP_400_BAD_REQUEST: {
-            "model": FastAPIErrorResponse,
-            "description": "Combinaison mode/dates/duree invalide",
-        },
-        status.HTTP_404_NOT_FOUND: {
-            "model": FastAPIErrorResponse,
-            "description": "Projet, planning ou tache introuvable",
-        },
-        status.HTTP_409_CONFLICT: {
-            "model": FastAPIErrorResponse,
-            "description": "La mise a jour du planning entre en conflit avec les donnees",
-        },
-    },
-    route_class_override=_PlanningTaskBodyValidationRoute,
-)
-
-
-def replace_task_predecessor_links_route(
-    project_id: int,
-    planning_id: int,
-    task_uid: int,
-    payload: TaskLinksReplace,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-) -> PlanningDetailRead:
-    _, planning = get_mutable_draft_planning_with_locks(
-        db, project_id, planning_id, current_user.id
-    )
-    raise_on_planning_revision_conflict(project_id, planning, payload.expected_revision)
-    try:
-        replace_task_predecessor_links(db, planning, task_uid, payload.links)
-        planning.revision += 1
-        db.add(planning)
-        # Capture the response while the row locks are still held so a concurrent
-        # writer cannot make us return a later transaction's state.
-        detail = _planning_detail(db, planning)
-        db.commit()
-    except PlanningLinkNotFoundError as exc:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    except PlanningLinkInvariantError as exc:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    except PlanningLinkError as exc:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except IntegrityError as exc:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Planning links conflict with existing planning data",
-        ) from exc
-    return detail
-
-
-router.add_api_route(
-    "/{project_id}/plannings/{planning_id}/tasks/{task_uid}/links",
-    replace_task_predecessor_links_route,
-    methods=["PUT"],
-    response_model=PlanningDetailRead,
-    responses={
-        status.HTTP_400_BAD_REQUEST: {
-            "model": FastAPIErrorResponse,
-            "description": "Requete de mise a jour des liens invalide",
-        },
-        status.HTTP_404_NOT_FOUND: {
-            "model": FastAPIErrorResponse,
-            "description": "Projet, planning ou tache introuvable pendant la mise a jour des liens",
-        },
-        status.HTTP_409_CONFLICT: {
-            "model": FastAPIErrorResponse,
-            "description": "La mise a jour des liens entre en conflit avec le planning",
-        },
-    },
-    route_class_override=_PlanningTaskBodyValidationRoute,
-)
-
-
-def restore_planning_snapshot_route(
-    project_id: int,
-    planning_id: int,
-    payload: PlanningSnapshotRestore,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-) -> PlanningDetailRead:
-    _, planning = get_mutable_draft_planning_with_locks(
-        db, project_id, planning_id, current_user.id
-    )
-    raise_on_planning_revision_conflict(project_id, planning, payload.expected_revision)
-    try:
-        restore_planning_snapshot(db, planning, payload)
-        planning.revision += 1
-        db.add(planning)
-        # Capture the response while the row locks are still held so a concurrent
-        # writer cannot make us return a later transaction's state.
-        detail = _planning_detail(db, planning)
-        db.commit()
-    except PlanningTreeInvariantError as exc:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    except PlanningTreeTaskReferencedError as exc:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={"code": "TASK_REFERENCED", "task_uids": exc.task_uids},
-        ) from exc
-    except PlanningTreeMoveError as exc:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except IntegrityError as exc:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Planning snapshot conflicts with existing planning data",
-        ) from exc
-    return detail
-
-
-router.add_api_route(
-    "/{project_id}/plannings/{planning_id}/tasks/restore",
-    restore_planning_snapshot_route,
-    methods=["PUT"],
-    response_model=PlanningDetailRead,
-    responses={
-        status.HTTP_400_BAD_REQUEST: {
-            "model": FastAPIErrorResponse,
-            "description": "Snapshot de restauration invalide (uid/cle dupliques, lien inconnu)",
-        },
-        status.HTTP_404_NOT_FOUND: {
-            "model": FastAPIErrorResponse,
-            "description": "Projet ou planning introuvable",
-        },
-        status.HTTP_409_CONFLICT: {
-            "model": FastAPIErrorResponse,
-            "description": (
-                "Le snapshot entre en conflit avec le planning (cycle, parent orphelin, "
-                "milestone avec enfants), ou expected_revision ne correspond plus a la "
-                "revision persistee (code PLANNING_REVISION_CONFLICT)"
-            ),
-        },
-    },
-    route_class_override=_PlanningTaskBodyValidationRoute,
-)
-
-
 @router.post("/{project_id}/plannings/{planning_id}/validate", response_model=PlanningRead)
 def validate_planning(
     project_id: int,
@@ -899,33 +483,6 @@ def reopen_planning_structure(
         ) from exc
     db.refresh(project)
     return to_project_read(project)
-
-
-@router.get("/{project_id}/planning-tree", response_model=PlanningTreeRead)
-def get_planning_tree(
-    project_id: int,
-    planning_id: int | None = Query(default=None, gt=0),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-) -> PlanningTreeRead:
-    project = get_project_or_404(db, project_id, current_user.id)
-    selected_id = planning_id or project.displayed_planning_id
-    if selected_id is not None:
-        detail = _planning_detail(db, get_planning_or_404(db, project_id, selected_id))
-        tasks = detail.tasks
-    else:
-        # Ordering is applied inside _to_task_reads (depth-first, same sibling sort as
-        # row_number -- E9-02/#147), so the query itself need not order the rows.
-        stored_tasks = db.query(MsTask).filter(MsTask.project_id == project_id).all()
-        tasks = _to_task_reads(db, project_id, stored_tasks)
-    tree_by_uid = {task.uid: PlanningTaskTreeRead(**task.model_dump()) for task in tasks}
-    roots: list[PlanningTaskTreeRead] = []
-    for task in tree_by_uid.values():
-        if task.parent_uid is not None and task.parent_uid in tree_by_uid:
-            tree_by_uid[task.parent_uid].children.append(task)
-        else:
-            roots.append(task)
-    return PlanningTreeRead(tasks=roots)
 
 
 @router.post(
