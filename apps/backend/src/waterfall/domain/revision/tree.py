@@ -957,6 +957,79 @@ def replace_predecessors(
     touch(revision)
 
 
+def _reject_link_cycles(links: Sequence[NodeLink]) -> None:
+    """Refuse a candidate precedence graph that closes a cycle anywhere (INV-18).
+
+    One traversal of the whole graph rather than
+    :func:`_would_cycle_in` once per link: the caller is replacing every link at
+    once, so "does this one link close a cycle against the others" is not the
+    question -- "is the resulting graph acyclic" is, and answering it link by link
+    is quadratic for no gain.
+    """
+    successors: dict[int, list[int]] = {}
+    for link in links:
+        successors.setdefault(link.predecessor_node_id, []).append(link.node_id)
+    #: 0 = untouched, 1 = on the current path, 2 = fully explored.
+    state: dict[int, int] = {}
+    for root in sorted(successors):
+        stack: list[tuple[int, bool]] = [(root, False)]
+        while stack:
+            node_id, leaving = stack.pop()
+            if leaving:
+                state[node_id] = 2
+                continue
+            if state.get(node_id, 0) == 2:
+                continue
+            if state.get(node_id, 0) == 1:
+                raise LinkError(
+                    f"The precedence links reaching node {node_id} close a cycle (INV-18); "
+                    "no link of this write is applied"
+                )
+            state[node_id] = 1
+            stack.append((node_id, True))
+            stack.extend((successor, False) for successor in successors.get(node_id, []))
+
+
+def replace_links(revision: ProjectRevision, links: Sequence[NodeLink]) -> None:
+    """Replace the **whole** precedence graph of a revision, as a single write.
+
+    What a re-import needs and what neither :func:`add_link` nor
+    :func:`replace_predecessors` gives: the file carries the predecessors of every
+    task it lists, so the re-import states the resulting graph rather than editing
+    it node by node. Calling :func:`replace_predecessors` once per task would bump
+    the lock counter once per task, re-scan every link each time, and -- worse --
+    validate each node's links against a graph that is still half old and half new.
+
+    Every rule of :func:`add_link` still holds, checked against the *candidate*
+    graph before a single link is stored: both endpoints are planning nodes of this
+    revision (INV-08, INV-17), no node is its own predecessor (INV-16), no
+    ``(node, predecessor, type)`` triple appears twice, and the resulting graph is
+    acyclic (INV-18). A refusal therefore leaves the revision, ``lock_version``
+    included, exactly as it was -- which is what lets a re-import be all-or-nothing
+    on the precedence side as well as on the structural one (Rule 3).
+    """
+    require_draft(revision)
+    seen: set[tuple[int, int, int]] = set()
+    for link in links:
+        require_node(revision, link.node_id)
+        if not is_plan_node(revision, link.node_id):
+            raise LinkError(
+                f"Node {link.node_id} carries no planning facet: a cost line has neither "
+                "predecessor nor successor (INV-17)"
+            )
+        _check_link_endpoints(revision, link.node_id, link.predecessor_node_id)
+        key = (link.node_id, link.predecessor_node_id, link.link_type)
+        if key in seen:
+            raise LinkError(
+                f"Link {link.predecessor_node_id} -> {link.node_id} of type {link.link_type} "
+                "is listed twice"
+            )
+        seen.add(key)
+    _reject_link_cycles(links)
+    revision.links[:] = list(links)
+    touch(revision)
+
+
 def _check_link_endpoints(
     revision: ProjectRevision, node_id: int, predecessor_node_id: int
 ) -> None:

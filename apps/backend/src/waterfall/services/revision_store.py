@@ -178,10 +178,41 @@ def load_revision(db: Session, revision_id: int) -> LoadedRevision:
     return LoadedRevision(project=project, revision=revision, stubs=stubs)
 
 
-def _load_project(db: Session, project_id: int) -> domain.Project:
-    project_row = db.get(MsProject, project_id)
-    if project_row is None:
-        raise RevisionNotFoundError(f"Project {project_id} does not exist")
+def load_project(db: Session, project_id: int) -> domain.Project:
+    """Materialise a project, its work items, its roles and its revision *stubs*.
+
+    The half of :func:`load_revision` that does not need a revision, for the one
+    caller that has no revision to load yet: the MS Project import (E14-06, #332),
+    which creates the first revision of a project it has just finished parsing.
+    Every revision of the project comes back without its tree, exactly as
+    :attr:`LoadedRevision.stubs` describes them, so the domain can allocate a
+    version number (INV-21) against the numbers already taken.
+
+    A revision the domain creates in the returned project is written back by
+    handing :func:`save_revision` a ``LoadedRevision(project, created, stubs=...)``
+    whose ``stubs`` are the revisions this call loaded -- they have no tree in
+    memory and writing one back would read that emptiness as "every node was
+    deleted".
+    """
+    return _load_project(db, project_id)
+
+
+def ensure_project_calendar(db: Session) -> int:
+    """Id of the calendar a new planning facet inherits, refused when there is none.
+
+    Règle 1 makes the calendar a *stored* attribute of every planning facet,
+    initialised to the project's -- which, until a project carries one of its own,
+    is the active `wf_calendar` flagged ``is_default``. Without it a load cannot
+    produce a domain :class:`~waterfall.domain.revision.entities.Project` at all,
+    so :func:`_load_project` asks here.
+
+    Public because a caller may need the answer **before** it starts anything it
+    would have to undo: the MS Project import asks it in its pre-flight
+    (:func:`waterfall.services.revision_import.ensure_importable`), so a refusal
+    leaves its batch pending and replayable once a default calendar exists, instead
+    of burning it. See the ``PROJECT_CALENDAR_MISSING`` row of
+    :mod:`waterfall.api.revision_errors`.
+    """
     calendar_id = resolve_default_calendar_id(db)
     if calendar_id is None:
         raise MissingProjectCalendarError(
@@ -189,6 +220,14 @@ def _load_project(db: Session, project_id: int) -> domain.Project:
             "would have no calendar to inherit (Règle 1, INV-15); flag one on "
             "GET /resources/calendars first"
         )
+    return calendar_id
+
+
+def _load_project(db: Session, project_id: int) -> domain.Project:
+    project_row = db.get(MsProject, project_id)
+    if project_row is None:
+        raise RevisionNotFoundError(f"Project {project_id} does not exist")
+    calendar_id = ensure_project_calendar(db)
     project = domain.Project(
         id=project_row.id,
         name=project_row.name,

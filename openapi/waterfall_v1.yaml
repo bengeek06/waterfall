@@ -482,13 +482,17 @@ paths:
               schema:
                 $ref: '#/components/schemas/ImportRunAcceptedResponse'
         '400':
-          $ref: '#/components/responses/BadRequest'
+          description: 'Fichier refuse. Soit la validation MSPDI a echoue, soit la structure du fichier est inapplicable a la revision cible et le refus porte le code REVISION_IMPORT_STRUCTURE_INVALID : uid liste deux fois, enfant listant son parent avant lui, ou parent que le fichier ne liste pas lui-meme (Regle 3 c). Un fichier illisible est juge en premier, avant les refus 409 ci-dessous : il est signale comme tel meme si la revision cible est validee ou qu''aucun calendrier par defaut n''existe, et le batch passe alors en failed (le rejouer relirait les memes octets). Les issues detaillees se lisent sur GET /imports/v1/batches/{batchId}/errors.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FastAPIErrorResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/BatchNotFound'
         '409':
-          description: Etat du batch incompatible avec l'operation
+          description: 'Refus decide avant que le batch ne passe en cours d''execution, qui reste donc reutilisable tel quel. Trois familles : l''etat du batch est incompatible avec l''operation (batch deja execute, source remplacee entre-temps, confirmation absente) ; la derniere revision du projet est validee ou remplacee et refuse toute ecriture (REVISION_IMMUTABLE) ; aucun calendrier actif n''est marque par defaut, donc une tache importee n''aurait pas de calendrier a heriter (PROJECT_CALENDAR_MISSING, Regle 1). Ces deux derniers refus supposent un fichier lisible : un MSPDI malforme repond 400 avant d''etre confronte a l''etat du projet.'
           content:
             application/json:
               schema:
@@ -517,13 +521,21 @@ paths:
               schema:
                 $ref: '#/components/schemas/ImportDiffResponse'
         '400':
-          $ref: '#/components/responses/BadRequest'
+          description: 'Fichier refuse, comme il le serait par POST .../run. Soit la validation MSPDI a echoue (IMPORT_VALIDATION_FAILED), soit la structure du fichier est inapplicable a la revision cible (REVISION_IMPORT_STRUCTURE_INVALID) : la previsualisation refuse alors le fichier entier plutot que de rendre un diff d''un import qui ne pourra jamais aboutir, et dont les costLosses seraient vides sans que cela signifie "rien a perdre".'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FastAPIErrorResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/BatchNotFound'
         '409':
-          $ref: '#/components/responses/Conflict'
+          description: Aucun calendrier actif n'est marque par defaut, donc la revision du projet ne peut pas etre chargee (PROJECT_CALENDAR_MISSING, Regle 1).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FastAPIErrorResponse'
         '503':
           description: Le stockage objet des sources d'import (Garage) est injoignable
           content:
@@ -2133,6 +2145,15 @@ paths:
               - integer
               - 'null'
             minimum: 1
+        - name: revision_id
+          in: query
+          required: false
+          description: 'Exporte la revision designee plutot que le planning de l''ancien socle (E14-06, #332). Les uid MS Project du document sont alors les external_uid portes par les work_item, ce qui rend le couple export/reimport stable. Exclusif avec planning_id : fournir les deux est refuse en 400 (EXPORT_SELECTION_AMBIGUOUS) plutot que d''ignorer silencieusement planning_id.'
+          schema:
+            type:
+              - integer
+              - 'null'
+            minimum: 1
       responses:
         '200':
           description: XML du projet
@@ -2140,10 +2161,26 @@ paths:
             application/xml:
               schema:
                 type: string
+        '400':
+          description: 'Soit planning_id et revision_id ont ete fournis ensemble (EXPORT_SELECTION_AMBIGUOUS) : les deux selecteurs sont exclusifs. Soit, sur la branche revision_id uniquement, le domaine de revision a refuse le chargement : detail.code porte alors un des codes 400 de la famille revision, dont le fourre-tout REVISION_REFUSED et REVISION_FACET_CONTRACT (voir la reponse RevisionBadRequest pour la liste complete). Le 409 PROJECT_CALENDAR_MISSING ci-dessous est le membre de cette meme famille qui est attendu en pratique.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FastAPIErrorResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
-          $ref: '#/components/responses/ProjectNotFound'
+          description: Projet introuvable ou n'appartenant pas a l'appelant (PROJECT_NOT_FOUND), planning introuvable pour ce projet, ou revision introuvable pour ce projet (REVISION_NOT_FOUND).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FastAPIErrorResponse'
+        '409':
+          description: 'Export d''une revision alors qu''aucun calendrier actif n''est marque par defaut pour l''organisation (PROJECT_CALENDAR_MISSING) : la revision ne peut pas etre chargee, la Regle 1 faisant du calendrier un attribut stocke de chaque facette de planification (INV-15). Marquer un calendrier par defaut, puis rejouer l''export. Ne concerne que revision_id : l''export de l''ancien socle lit des snapshots et ne charge aucune revision.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FastAPIErrorResponse'
   /resources/calendars:
     get:
       tags:
@@ -3282,6 +3319,7 @@ components:
         - uid
         - message
         - fields
+        - costLosses
       properties:
         kind:
           type: string
@@ -3289,7 +3327,6 @@ components:
             - added
             - modified
             - removed
-            - conflict
             - calendar_mismatch
         uid:
           type: integer
@@ -3308,6 +3345,11 @@ components:
           anyOf:
             - $ref: '#/components/schemas/ImportCalendarMismatch'
             - type: 'null'
+        costLosses:
+          type: array
+          items:
+            $ref: '#/components/schemas/ImportCostLoss'
+      description: 'Un element de la previsualisation d''import. Cas particulier des elements "removed" : les pertes de chiffrage sont calculees sur la revision et les suppressions sur le planning de l''ancien socle actuellement affiche, deux sources qu''un utilisateur peut desynchroniser (reafficher un planning anterieur a celui qu''a cree le dernier import). Une perte dont l''uid n''existe pas dans le planning affiche recoit alors un element "removed" synthetise plutot que d''etre jetee, car la jeter sous-estimerait silencieusement la somme en jeu (Regle 3). Un tel element compte et se somme comme n''importe quel "removed", mais il n''a par construction aucune ligne correspondante dans le planning affiche : son uid n''y existe pas, donc une jointure sur uid pour en recuperer le libelle ne rend rien. Un client qui affiche le nom de la tache doit se rabattre sur le message de l''element.'
     ImportLinkChange:
       type: object
       required:
@@ -3341,6 +3383,7 @@ components:
         - batchId
         - identicalSource
         - items
+        - costLosses
       properties:
         batchId:
           type: integer
@@ -3355,12 +3398,20 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ImportDiffItem'
+        costLosses:
+          type: array
+          description: 'Total dedoublonne du chiffrage que la confirmation de cet import detruirait (Regle 3). C''est le seul montant sommable : les listes costLosses portees par chaque item de diff attribuent la meme perte a chaque tache disparue qui l''emporte, donc un noeud de cout condamne par deux suppressions imbriquees y figure deux fois.'
+          items:
+            $ref: '#/components/schemas/ImportCostLoss'
+      description: 'Previsualisation d''un import, avec le garde-fou de la Regle 3 sous ses deux formes : attribue par tache disparue sur chaque item, et totalise ici.'
     ImportRunAcceptedResponse:
       type: object
       required:
         - batchId
         - status
         - acceptedAt
+        - revisionId
+        - revisionCreated
       properties:
         batchId:
           type: integer
@@ -3370,6 +3421,17 @@ components:
         acceptedAt:
           type: string
           format: date-time
+        revisionId:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
+          description: 'Revision dans laquelle le fichier a ete importe. L''import vise toujours la derniere revision du projet par numero de version et le client ne la choisit pas : sans cette information, un utilisateur qui croit alimenter un brouillon alors qu''un plus recent existe ne l''apprendrait jamais. null sur un dry run, qui n''ecrit rien.'
+        revisionCreated:
+          type:
+            - boolean
+            - 'null'
+          description: true quand l'import a cree la revision designee par revisionId (le projet n'en avait aucune), false quand il a reimporte dans une revision existante. null sur un dry run.
     ImportCounters:
       type: object
       required:
@@ -5803,6 +5865,38 @@ components:
         expectedDurationMinutes:
           type: integer
           minimum: 0
+    ImportCostLoss:
+      type: object
+      required:
+        - nodeId
+        - workItemId
+        - label
+        - nature
+        - amount
+        - bearingTaskName
+      properties:
+        nodeId:
+          type: integer
+        workItemId:
+          type: integer
+        label:
+          type: string
+        nature:
+          type: string
+          enum:
+            - labor
+            - non_labor
+        amount:
+          type: string
+          pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+        bearingTaskName:
+          anyOf:
+            - type: string
+            - type: 'null'
+      description: |-
+        Une facette cout que la confirmation de cet import detruirait (Regle 3). Portee par l'item de diff "removed" de la tache disparue qui l'emporte, avec son libelle, sa nature MO ou non-MO, son montant courant et la tache porteuse, pour que la suppression ne soit jamais silencieuse.
+
+        ATTENTION : les listes costLosses portees par les items de diff NE SONT PAS SOMMABLES. Un noeud de cout condamne par deux suppressions imbriquees (un recapitulatif et l'un de ses enfants, tous deux absents du fichier) figure sous chacun des deux items, car chaque disparition l'emporte reellement et doit le nommer. Additionner les montants d'un item a l'autre compte donc ce chiffrage plusieurs fois. Le total dedoublonne a afficher dans une confirmation est ImportDiffResponse.costLosses.
     ProjectSetupWarningCode:
       type: string
       enum:

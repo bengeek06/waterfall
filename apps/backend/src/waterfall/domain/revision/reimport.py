@@ -61,16 +61,33 @@ class ImportedTask:
 
 @dataclass(frozen=True)
 class ImportDiffItem:
-    """One structural change the re-import would apply."""
+    """One structural change the re-import would apply.
+
+    ``cost_losses`` is empty on everything but a ``removed`` item, and on a
+    ``removed`` item it names the chiffrage *this* disappearance takes away --
+    the cost facets of the vanished task's own subtree, minus the branches the
+    file keeps elsewhere. It is the per-item half of Rule 3's safeguard: the flat
+    :attr:`ImportDiff.cost_losses` says *what* is lost, this says *whose
+    disappearance loses it*, which is what a confirmation dialog has to show next
+    to the task it is about to remove.
+    """
 
     external_uid: int
     name: str
     node_id: int | None
+    cost_losses: tuple[CostLoss, ...] = ()
 
 
 @dataclass(frozen=True)
 class ImportDiff:
-    """What a re-import changes, computed before it is applied."""
+    """What a re-import changes, computed before it is applied.
+
+    ``cost_losses`` is the project-wide, deduplicated total of the chiffrage the
+    re-import destroys; :attr:`ImportDiffItem.cost_losses` is the same information
+    attributed to the vanished task that causes it. See
+    :class:`ImportDiffItem` for why the two are not the concatenation of one
+    another.
+    """
 
     added: tuple[ImportDiffItem, ...]
     moved: tuple[ImportDiffItem, ...]
@@ -78,10 +95,18 @@ class ImportDiff:
     cost_losses: tuple[CostLoss, ...]
 
 
-def _existing_by_external_uid(
+def planning_nodes_by_external_uid(
     project: Project, revision: ProjectRevision
 ) -> dict[int, RevisionNode]:
-    """Planning nodes of ``revision`` reachable by their work item's ``external_uid``."""
+    """Planning nodes of ``revision`` reachable by their work item's ``external_uid``.
+
+    Public because the import/export layer needs the very same index to hang the
+    precedence links of the file onto nodes (E14-06, #332): the file names both
+    ends of a link by external uid, and this is the only mapping from that uid to
+    a node. Rebuilding it in the service would be a second, driftable answer to
+    "which node is uid 42" -- and the rule that a work item carrying no
+    ``external_uid`` is invisible to the file (Rule 3 a) is stated here, once.
+    """
     mapping: dict[int, RevisionNode] = {}
     for node in revision.nodes.values():
         if not is_plan_node(revision, node.id):
@@ -152,13 +177,34 @@ def _reject_parent_cycles(tasks: list[ImportedTask]) -> None:
             current = parents[current]
 
 
+def _reject_duplicate_external_uids(tasks: list[ImportedTask]) -> None:
+    """Refuse a file listing the same ``external_uid`` twice (#345).
+
+    The whole re-import indexes the file by ``external_uid``, so without this
+    check the last occurrence would silently win and the others would vanish from
+    the imported tree -- a task quietly missing, which is exactly the class of
+    accident Rule 3's "a removal is never silent" safeguard exists to rule out.
+    It is a *structure* fault and not a missing entity: everything the file names
+    is there, it is named twice.
+    """
+    seen: set[int] = set()
+    for task in tasks:
+        if task.external_uid in seen:
+            raise ImportStructureError(
+                f"Imported task {task.external_uid} is listed twice: an external uid identifies "
+                "one element of work, and the duplicate is not silently dropped (INV-25)"
+            )
+        seen.add(task.external_uid)
+
+
 def _validate_import_structure(
     existing: dict[int, RevisionNode], tasks: list[ImportedTask]
 ) -> None:
     """Refuse a file that cannot be applied, *before* a single node is touched.
 
-    Four shapes are rejected, all of which a valid MSPDI export never produces:
+    Five shapes are rejected, none of which a valid MSPDI export ever produces:
 
+    * the same ``external_uid`` listed twice (:class:`ImportStructureError`, #345);
     * a parent chain closing a cycle (:class:`TreeCycleError`, INV-06);
     * a task naming as parent a task the file lists only *after* it -- MS Project
       writes a depth-first file, so this signals a malformed source rather than
@@ -174,6 +220,7 @@ def _validate_import_structure(
     * a task naming as parent a uid neither the file nor the revision knows: that
       one is genuinely missing (:class:`NotFoundError`).
     """
+    _reject_duplicate_external_uids(tasks)
     _reject_parent_cycles(tasks)
     incoming = {task.external_uid for task in tasks}
     defined: set[int] = set()
@@ -213,11 +260,19 @@ def plan_reimport(
     Waterfall and never exported -- is never reported as removed: its absence
     from the file carries no information, since it was never in it.
 
+    "Never *reported* as removed" is not "never removed", and the difference is a
+    deliberate part of Rule 3 rather than a gap in it: such a node sitting inside
+    the subtree of a vanished task goes with it, unannounced, having no identity
+    the file could name. What it *bears* is still announced -- a cost line under it
+    comes back as a :class:`CostLoss` of the vanished task, named, priced and
+    attributed. The safeguard covers the chiffrage, not the structure. See
+    ``docs/revision-v0.1-specification.md``, Règle 3 a.
+
     The whole structure of the file is validated here, so that
     :func:`apply_reimport` only ever writes behind a diff that is both complete
     and applicable: it never starts mutating a revision and gives up halfway.
     """
-    existing = _existing_by_external_uid(project, revision)
+    existing = planning_nodes_by_external_uid(project, revision)
     _validate_import_structure(existing, tasks)
     incoming = {task.external_uid: task for task in tasks}
 
@@ -248,19 +303,28 @@ def plan_reimport(
         for external_uid, node in sorted(existing.items())
         if external_uid not in incoming
     ]
+    doomed_by_root = {
+        node.id: _doomed_node_ids(project, revision, node.id, incoming) for _, node in removed_nodes
+    }
+    # Per item as well as flattened, and the two are computed separately on
+    # purpose. The item's list is what a confirmation dialog shows *next to the
+    # task it is about to remove*, so it covers that task's whole doomed subtree
+    # -- including the part a removed descendant would also claim, since both
+    # disappearances are real. The flat list is the project-wide total, so it
+    # deduplicates that overlap (``cost_losses_of`` does), and a caller must not
+    # rebuild it by concatenating the items.
     removed = tuple(
         ImportDiffItem(
             external_uid=external_uid,
             name=revision.plan_facets[node.id].name,
             node_id=node.id,
+            cost_losses=tuple(
+                cost_losses_of(project, revision, doomed_by_root[node.id], amount_of=amount_of)
+            ),
         )
         for external_uid, node in removed_nodes
     )
-    doomed = [
-        node_id
-        for _, node in removed_nodes
-        for node_id in _doomed_node_ids(project, revision, node.id, incoming)
-    ]
+    doomed = [node_id for _, node in removed_nodes for node_id in doomed_by_root[node.id]]
     losses = cost_losses_of(project, revision, doomed, amount_of=amount_of)
     return ImportDiff(added=added, moved=moved, removed=removed, cost_losses=tuple(losses))
 
@@ -480,7 +544,7 @@ def apply_reimport(
     require_draft(revision)
     diff = plan_reimport(project, revision, tasks, amount_of=amount_of)
 
-    existing = _existing_by_external_uid(project, revision)
+    existing = planning_nodes_by_external_uid(project, revision)
     _create_missing_nodes(project, revision, tasks, existing, now)
     touched_parents, file_children = _reparent_and_refresh(revision, tasks, existing)
     _apply_removals(project, revision, diff, touched_parents, amount_of)

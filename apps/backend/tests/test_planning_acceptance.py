@@ -10,6 +10,7 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 from httpx import Response
 
+from _calendar_support import ensure_default_calendar
 from _legacy_planning_support import legacy_project_tasks
 from waterfall.main import app
 
@@ -56,6 +57,10 @@ def _import_xml(
     *,
     confirm: bool = True,
 ) -> int:
+    # An import lands in a revision, and a planning facet always carries a calendar
+    # (Règle 1, INV-15): without the organisation default the run is refused with
+    # PROJECT_CALENDAR_MISSING. See tests/_calendar_support.py.
+    ensure_default_calendar()
     batch_response = client.post(
         "/imports/v1/batches",
         json={"projectId": project_id, "importMode": "standard"},
@@ -142,6 +147,8 @@ def test_planning_version_and_draft_lifecycle() -> None:
 def test_import_diff_confirmation_and_export_lifecycle() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)
+        # See _import_xml above: an import needs the organisation's default calendar.
+        ensure_default_calendar()
         project_response = client.post(
             "/projects", json={"name": "Import acceptance"}, headers=headers
         )

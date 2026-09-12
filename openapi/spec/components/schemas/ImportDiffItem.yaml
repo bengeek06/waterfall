@@ -4,6 +4,7 @@ required:
 - uid
 - message
 - fields
+- costLosses
 properties:
   kind:
     type: string
@@ -11,7 +12,6 @@ properties:
     - added
     - modified
     - removed
-    - conflict
     - calendar_mismatch
   uid:
     type: integer
@@ -30,3 +30,20 @@ properties:
     anyOf:
     - $ref: ImportCalendarMismatch.yaml
     - type: "null"
+  costLosses:
+    type: array
+    items:
+      $ref: ImportCostLoss.yaml
+description: >-
+  Un element de la previsualisation d'import. Cas particulier des elements
+  "removed" : les pertes de chiffrage sont calculees sur la revision et les
+  suppressions sur le planning de l'ancien socle actuellement affiche, deux
+  sources qu'un utilisateur peut desynchroniser (reafficher un planning
+  anterieur a celui qu'a cree le dernier import). Une perte dont l'uid n'existe
+  pas dans le planning affiche recoit alors un element "removed" synthetise
+  plutot que d'etre jetee, car la jeter sous-estimerait silencieusement la somme
+  en jeu (Regle 3). Un tel element compte et se somme comme n'importe quel
+  "removed", mais il n'a par construction aucune ligne correspondante dans le
+  planning affiche : son uid n'y existe pas, donc une jointure sur uid pour en
+  recuperer le libelle ne rend rien. Un client qui affiche le nom de la tache doit
+  se rabattre sur le message de l'element.

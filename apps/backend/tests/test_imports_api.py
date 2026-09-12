@@ -2,16 +2,15 @@ from __future__ import annotations
 
 import json
 import xml.etree.ElementTree as ET
-from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import patch
-from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 from httpx import Response
 
+from _calendar_support import ensure_default_calendar
 from _legacy_planning_support import legacy_project_tasks
 from _object_storage_support import TEST_BUCKET, stored_object_keys
 from waterfall.core.config import get_settings
@@ -20,7 +19,8 @@ from waterfall.db.session import get_session_factory
 from waterfall.main import app
 from waterfall.models.ms_core import MsProject, MsTask
 from waterfall.models.planning import WfPlanning, WfPlanningLinkSnapshot, WfPlanningTaskSnapshot
-from waterfall.models.resources import Calendar, CalendarWeekday, CostCategory, CostType
+from waterfall.models.resources import Calendar, CalendarWeekday
+from waterfall.models.revision import ProjectRevision, RevisionNode, RevisionPlanFacet, WorkItem
 from waterfall.models.wf_core import WfChargeLine, WfImportBatch
 from waterfall.services.calendar_schedule import resolve_calendars_for_tasks
 
@@ -79,6 +79,10 @@ def _auth_headers(client: TestClient, email: str = "import.tester@example.com") 
 
 
 def _create_project(client: TestClient, headers: dict[str, str]) -> int:
+    # Every import in this module lands in a revision, and a planning facet always
+    # carries a calendar (Règle 1, INV-15): without a default calendar the run is
+    # refused with PROJECT_CALENDAR_MISSING. See tests/_calendar_support.py.
+    ensure_default_calendar()
     response: Response = client.post(
         "/projects",
         json={"name": "Import target"},
@@ -303,6 +307,20 @@ def _seed_displayed_draft_with_snapshot(project_id: int, uid: int, *, referenced
         session.commit()
 
 
+def _revision_external_uids(project_id: int) -> set[int]:
+    """Every ``external_uid`` a planning node of the project's revisions carries."""
+    with get_session_factory()() as session:
+        rows = (
+            session.query(WorkItem.external_uid)
+            .join(RevisionNode, RevisionNode.work_item_id == WorkItem.id)
+            .join(RevisionPlanFacet, RevisionPlanFacet.node_id == RevisionNode.id)
+            .join(ProjectRevision, ProjectRevision.id == RevisionNode.revision_id)
+            .filter(ProjectRevision.project_id == project_id)
+            .all()
+        )
+    return {uid for (uid,) in rows if uid is not None}
+
+
 def _prepare_pending_batch(
     client: TestClient, headers: dict[str, str], project_id: int, xml: bytes
 ) -> int:
@@ -322,7 +340,27 @@ def _prepare_pending_batch(
     return batch_id
 
 
-def test_confirmation_rejects_referenced_task_removal_conflict() -> None:
+def test_confirmation_applies_the_removal_of_a_referenced_task() -> None:
+    """The exact opposite of what this test used to assert, and deliberately so.
+
+    Until E14-06 (#332) a re-import dropping a task that something else referenced
+    was refused with 409 ``IMPORT_CONFLICT``, raised from ``is_task_referenced``.
+    The EPIC (#326) established that the guard protects the wrong thing: a
+    re-import targets a **draft**, which is precisely where the user is entitled to
+    remove anything, and the only refusal left is INV-03 -- a validated revision
+    accepts no write. The removal is now applied, and the diff names the chiffrage
+    it takes away rather than forbidding it. Resolves #325.
+
+    What it pins is the **transport**, not the domain, and the #332 review (B6) was
+    right to insist the docstring say so. ``_seed_displayed_draft_with_snapshot``
+    seeds legacy snapshots only: the project has no revision at all, so this
+    re-import *creates* its first one from the file and the snapshot count falling
+    to zero comes from the legacy clear-and-rebuild, not from ``apply_reimport``.
+    The final assertion states exactly that -- the revision the run created knows
+    uid 2 and has never heard of uid 1. The domain-level removal, against a
+    revision that really did hold the dropped task, is pinned by
+    ``test_revision_import.test_reimport_removes_a_task_of_a_project_that_already_carries_an_estimate``.
+    """
     with TestClient(app) as client:
         headers = _auth_headers(client, "import.conflict@example.com")
         project_id = _create_project(client, headers)
@@ -332,28 +370,33 @@ def test_confirmation_rejects_referenced_task_removal_conflict() -> None:
         xml = b'<Project xmlns="http://schemas.microsoft.com/project"><SaveVersion>16</SaveVersion><ScheduleFromStart>1</ScheduleFromStart><StartDate>2026-01-01T08:00:00</StartDate><Tasks><Task><UID>2</UID><ID>1</ID><Name>Incoming</Name></Task></Tasks></Project>'
         batch_id = _prepare_pending_batch(client, headers, project_id, xml)
 
+        diff = client.get(f"/imports/v1/batches/{batch_id}/diff", headers=headers)
+        assert diff.status_code == 200
+        kinds = {item["kind"] for item in diff.json()["items"]}
+        assert "conflict" not in kinds
+        assert {"uid": 1, "kind": "removed"} in [
+            {"uid": item["uid"], "kind": item["kind"]} for item in diff.json()["items"]
+        ]
+
         run = client.post(
             f"/imports/v1/batches/{batch_id}/run",
             json={"dryRun": False, "confirm": True},
             headers=headers,
         )
 
-        assert run.status_code == 409
-        detail = run.json()["detail"]
-        assert detail["code"] == "IMPORT_CONFLICT"
-        assert detail["conflicts"] == [1]
-
-        status_response = client.get(f"/imports/v1/batches/{batch_id}", headers=headers)
-        assert status_response.status_code == 200
-        assert status_response.json()["status"] == "pending"
+        assert run.status_code == 202
+        assert run.json()["status"] == "success"
 
         with get_session_factory()() as session:
-            preserved = (
+            removed = (
                 session.query(WfPlanningTaskSnapshot)
                 .filter(WfPlanningTaskSnapshot.uid == 1)
                 .count()
             )
-            assert preserved == 1
+            assert removed == 0
+        # See the docstring: the revision side never held uid 1 -- the run created
+        # the project's first revision straight from the file.
+        assert _revision_external_uids(project_id) == {2}
 
 
 def test_confirmation_succeeds_when_removed_task_is_not_referenced() -> None:
@@ -375,154 +418,23 @@ def test_confirmation_succeeds_when_removed_task_is_not_referenced() -> None:
         assert run.json()["status"] == "success"
 
 
-def _seed_supply_category() -> int:
-    """An active supply `CostCategory`, the minimum needed to create a cost line."""
-    with get_session_factory()() as session:
-        cost_type = CostType(code=f"FOURN-{uuid4().hex[:8]}", name="Fourniture", kind="supply")
-        session.add(cost_type)
-        session.flush()
-        category = CostCategory(
-            cost_type_id=cost_type.id,
-            accounting_code=f"FO-{uuid4().hex[:8]}",
-            category_code="ACHAT",
-            name="Cables",
-        )
-        session.add(category)
-        session.commit()
-        return category.id
-
-
-def _tasks_xml(*uids: int) -> bytes:
-    tasks = "".join(
-        f"<Task><UID>{uid}</UID><ID>{uid}</ID><Name>T{uid}</Name>"
-        f"<OutlineNumber>{uid}</OutlineNumber><OutlineLevel>1</OutlineLevel></Task>"
-        for uid in uids
-    )
-    return (
-        '<Project xmlns="http://schemas.microsoft.com/project"><SaveVersion>16</SaveVersion>'
-        "<ScheduleFromStart>1</ScheduleFromStart><StartDate>2026-01-01T08:00:00</StartDate>"
-        f"<Tasks>{tasks}</Tasks></Project>"
-    ).encode()
-
-
-def test_reimport_conflicts_on_a_task_priced_by_an_existing_estimate() -> None:
-    """Contract change introduced by issue #313, locked here on purpose.
-
-    Now that the XML import writes the canonical `MsTask` rows, the
-    `ms_task.id`-keyed branches of `is_task_referenced` (reached through
-    `build_import_diff`) actually bite on an imported project: re-importing a
-    file that drops a task already carrying an `EstimateCostLine` is rejected
-    with 409 `IMPORT_CONFLICT` instead of silently deleting the priced task's
-    planning side. Before the fix, an imported project had no `MsTask` at all,
-    so those branches could never match.
-
-    Note the conflict surface is wider than the cost line alone: creating a
-    devis also fills `EstimateTaskRow.task_id`, itself a referencing column.
-    """
-    with TestClient(app) as client:
-        headers = _auth_headers(client, "import.estimate.conflict@example.com")
-        project_id = _create_project(client, headers)
-
-        batch_id = _prepare_pending_batch(client, headers, project_id, _tasks_xml(1, 2))
-        first_run = client.post(
-            f"/imports/v1/batches/{batch_id}/run",
-            json={"dryRun": False, "confirm": True},
-            headers=headers,
-        )
-        assert first_run.status_code == 202
-        assert first_run.json()["status"] == "success"
-
-        estimate = client.post(
-            f"/projects/{project_id}/estimates",
-            json={"kind": "initial", "currency_code": "EUR"},
-            headers=headers,
-        )
-        assert estimate.status_code == 201
-        estimate_id = cast(int, estimate.json()["id"])
-
-        rows = client.get(
-            f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
-        )
-        assert rows.status_code == 200
-        task_id_by_uid = {
-            cast(int, row["task_uid"]): cast(int, row["task_id"])
-            for row in cast(list[dict[str, Any]], rows.json()["items"])
-        }
-        assert set(task_id_by_uid) == {1, 2}
-
-        cost_line = client.post(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
-            json={
-                "task_id": task_id_by_uid[2],
-                "cost_category_id": _seed_supply_category(),
-                "label": "Cable",
-                "quantity": "2.00",
-                "unit_cost": "10.00",
-            },
-            headers=headers,
-        )
-        assert cost_line.status_code == 201
-
-        second_batch_id = _prepare_pending_batch(client, headers, project_id, _tasks_xml(1))
-        rerun = client.post(
-            f"/imports/v1/batches/{second_batch_id}/run",
-            json={"dryRun": False, "confirm": True},
-            headers=headers,
-        )
-
-        assert rerun.status_code == 409
-        detail = rerun.json()["detail"]
-        assert detail["code"] == "IMPORT_CONFLICT"
-        assert detail["conflicts"] == [2]
-
-        # The batch stays reusable, and nothing of the priced task was touched.
-        batch_status = client.get(f"/imports/v1/batches/{second_batch_id}", headers=headers)
-        assert batch_status.status_code == 200
-        assert batch_status.json()["status"] == "pending"
-        with get_session_factory()() as session:
-            assert (
-                session.query(MsTask)
-                .filter(MsTask.project_id == project_id, MsTask.uid == 2)
-                .count()
-                == 1
-            )
-            assert (
-                session.query(WfPlanningTaskSnapshot)
-                .filter(WfPlanningTaskSnapshot.uid == 2)
-                .count()
-                == 1
-            )
-
-
 def test_confirmed_run_never_resolves_calendars_under_the_project_lock() -> None:
-    """Issue #176 regression: _reject_diff_conflicts (called from
-    _run_confirmed_import while still holding the project-row lock taken by
-    _relock_pending_batch) must never trigger the calendar-mismatch
-    diagnostic's calendar resolution -- it only ever reads "conflict" items,
-    and resolving calendars for a result it never consumes would hold that
-    lock longer for nothing (see build_import_diff's include_calendar_mismatch
-    parameter). Spies on resolve_calendars_for_tasks to prove the confirmed
-    run path never calls it, while the unlocked GET .../diff preview endpoint
-    (which does need the diagnostic) still does."""
+    """Issue #176 regression: the confirmed run must never resolve calendars while
+    holding the project-row lock taken by _relock_pending_batch.
+
+    The pre-flight that used to run under that lock -- _reject_diff_conflicts, whose
+    409 IMPORT_CONFLICT E14-06 (#332) removed -- called build_import_diff with an
+    include_calendar_mismatch=False flag for exactly this reason. Both are gone, so
+    the run resolves even less than before; the spy stays, because what is pinned
+    here is the property, not the implementation that used to threaten it. The
+    unlocked GET .../diff preview endpoint (which does need the diagnostic) still
+    resolves."""
     with TestClient(app) as client:
         headers = _auth_headers(client, "import.calendar.lock@example.com")
+        # 8h Mon-Fri, nothing at the weekend -- the calendar _create_project seeds
+        # (see tests/_calendar_support.py), which is exactly the week this test
+        # needs to make the file's duration diverge from the computed one.
         project_id = _create_project(client, headers)
-
-        with get_session_factory()() as session:
-            calendar = Calendar(
-                code="STANDARD", name="Standard", weeks_per_year=52, is_default=True
-            )
-            session.add(calendar)
-            session.flush()
-            session.add_all(
-                CalendarWeekday(
-                    calendar_id=calendar.id,
-                    day_type=day_type,
-                    hours_per_day=Decimal("0.00") if day_type in (1, 7) else Decimal("8.00"),
-                )
-                for day_type in range(1, 8)
-            )
-            session.commit()
 
         # Start/Finish spans two working days (Mon 08:00 -> Tue 16:00) but
         # Duration only claims one (480 min) -- a genuine calendar_mismatch
@@ -768,13 +680,16 @@ def test_import_batch_real_examples_via_api_with_counters(xml_path: Path) -> Non
 
 def test_import_of_custom_calendars_is_ignored_but_reported_as_warning() -> None:
     session_factory = get_session_factory()
-    with session_factory() as session:
-        calendar_count_before = session.query(Calendar).count()
-        weekday_count_before = session.query(CalendarWeekday).count()
-
     with TestClient(app) as client:
         headers = _auth_headers(client, "import.calendars@example.com")
+        # Counted *after* the project is created, not before: an import now needs
+        # the organisation's default calendar to exist (Règle 1), and
+        # _create_project seeds it. What this test pins is that the file's own
+        # calendars add nothing to the referential -- not that it is empty.
         project_id = _create_project(client, headers)
+        with session_factory() as session:
+            calendar_count_before = session.query(Calendar).count()
+            weekday_count_before = session.query(CalendarWeekday).count()
 
         create_response: Response = client.post(
             "/imports/v1/batches",
