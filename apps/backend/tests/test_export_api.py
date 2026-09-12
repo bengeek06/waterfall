@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from httpx import Response
 from sqlalchemy import func
 
+from _calendar_support import ensure_default_calendar
 from _legacy_planning_support import legacy_project_tasks
 from waterfall.db.session import get_session_factory
 from waterfall.main import app
@@ -215,6 +216,10 @@ def _auth_headers(client: TestClient) -> dict[str, str]:
 def test_export_xml_contains_task_notes_from_description() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)
+        # An import lands in a revision, and a planning facet always carries a
+        # calendar (Règle 1, INV-15): without the organisation default the run is
+        # refused with PROJECT_CALENDAR_MISSING. See tests/_calendar_support.py.
+        ensure_default_calendar()
         project_response: Response = client.post(
             "/projects",
             json={"name": "Export target"},
@@ -707,6 +712,8 @@ def test_export_of_imported_project_preserves_original_dates_without_a_move() ->
     keeps its original Start/Finish dates exactly, byte-for-byte."""
     with TestClient(app) as client:
         headers = _admin_headers(client, "export.no_move.calendars@example.com")
+        # See test_export_xml_contains_task_notes_from_description.
+        ensure_default_calendar()
 
         project_response: Response = client.post(
             "/projects",

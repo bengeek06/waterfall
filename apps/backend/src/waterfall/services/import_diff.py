@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
+from collections.abc import Mapping
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import datetime
 
 from sqlalchemy.orm import Session
 
-from waterfall.models.ms_core import MsProject, MsTask
+from waterfall.models.ms_core import MsProject
 from waterfall.models.planning import WfPlanning, WfPlanningLinkSnapshot, WfPlanningTaskSnapshot
 from waterfall.services.calendar_schedule import (
     NoUsableCalendarError,
@@ -16,7 +19,8 @@ from waterfall.services.calendar_schedule import (
     resolve_calendars_for_tasks,
 )
 from waterfall.services.msproject_xml import ParsedProject, ParsedTask, outline_parent_uids
-from waterfall.services.task_references import is_task_referenced
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -191,23 +195,36 @@ def build_import_diff(
     project: MsProject,
     parsed: ParsedProject,
     *,
-    include_calendar_mismatch: bool = True,
+    cost_losses: Mapping[int, list[dict[str, object]]] | None = None,
 ) -> list[dict[str, object]]:
-    """Build the full import diff (issue #109 lock-safety note, issue #176):
+    """Build the full import diff (issue #176, E14-06/#332).
 
-    ``include_calendar_mismatch`` defaults to ``True`` for the actual
-    ``GET /imports/{batch_id}/diff`` preview endpoint (``get_batch_diff``,
-    unlocked), but must be passed ``False`` by
-    ``api.routes.imports._reject_diff_conflicts`` -- called from
-    ``_run_confirmed_import`` while still holding the ``SELECT ... FOR
-    UPDATE`` project-row lock taken by ``_relock_pending_batch`` -- which only
-    ever reads ``kind == "conflict"`` items and would otherwise pay for
-    calendar resolution (plus a DB round trip per unresolvable task, see
-    :func:`_resolve_calendars_omitting_unusable`) entirely under that lock for
-    a result it never consumes. This is the exact anti-pattern already
-    documented elsewhere in ``imports.py`` (see the comments guarding against
-    avoidable costly work while holding this same lock).
+    ``cost_losses`` carries Règle 3's safeguard, keyed by the external uid of the
+    vanished task it belongs to: the cost facets that confirming this import would
+    destroy, named so the removal is never silent. It is computed against the
+    **revision** by :func:`waterfall.services.revision_import.plan_import` and
+    injected rather than read here, because this function still describes the
+    legacy snapshots -- the two tables the import writes in parallel until #333
+    migrates the devis stack off `ms_task`. Unifying the whole diff onto the
+    revision waits for the calendar-mismatch diagnostic below, which resolves
+    calendars per legacy task uid and moves to the planning facet with its
+    consumers.
+
+    One caller, one mode
+    --------------------
+
+    This function used to take an ``include_calendar_mismatch`` flag, passed
+    ``False`` by ``api.routes.imports._reject_diff_conflicts`` so that the
+    calendar-mismatch diagnostic (and its round trip per unresolvable task, see
+    :func:`_resolve_calendars_omitting_unusable`) would not run while that
+    pre-flight held the ``SELECT ... FOR UPDATE`` project-row lock. E14-06 removed
+    the pre-flight along with its 409 ``IMPORT_CONFLICT`` (#325), so the only
+    caller left is the unlocked ``GET /imports/{batch_id}/diff`` preview, which
+    wants the diagnostic. The flag went with the caller it existed for; the
+    property it protected is still pinned by
+    ``test_confirmed_run_never_resolves_calendars_under_the_project_lock``.
     """
+    losses: Mapping[int, list[dict[str, object]]] = {} if cost_losses is None else cost_losses
     displayed = (
         db.query(WfPlanning)
         .filter(WfPlanning.project_id == project.id)
@@ -261,28 +278,16 @@ def build_import_diff(
                 "fields": [],
             }
         )
-    for uid in sorted(current.keys() - incoming.keys()):
-        legacy_task_id = (
-            db.query(MsTask.id).filter(MsTask.project_id == project.id, MsTask.uid == uid).scalar()
-        )
-        referenced = is_task_referenced(
-            db,
-            project_id=project.id,
-            task_uid=uid,
-            task_id=legacy_task_id,
-        )
-        items.append(
-            {
-                "kind": "conflict" if referenced else "removed",
-                "uid": uid,
-                "message": (
-                    f"Task UID {uid} is referenced and cannot be removed"
-                    if referenced
-                    else f"Task UID {uid} will be removed"
-                ),
-                "fields": [],
-            }
-        )
+    # No reference guard, on purpose (EPIC #326, resolves #325): a re-import targets a
+    # **draft**, which is precisely where the user is entitled to remove anything. What
+    # used to be a 409 ``IMPORT_CONFLICT`` raised by ``is_task_referenced`` is replaced
+    # by the only rule left -- a validated revision refuses every write -- plus Règle
+    # 3's safeguard, which names the chiffrage the removal takes away instead of
+    # forbidding it.
+    removed_uids = current.keys() - incoming.keys()
+    orphaned_uids = _unattributable_loss_uids(losses, removed_uids, project.id)
+    for uid in sorted(removed_uids | orphaned_uids):
+        items.append(_removed_item(uid, losses.get(uid, []), synthesised=uid in orphaned_uids))
     fields = ("name", "start_at", "finish_at", "duration_minutes", "task_type", "is_milestone")
     for uid in sorted(current.keys() & incoming.keys()):
         old = current[uid]
@@ -323,6 +328,96 @@ def build_import_diff(
                     ],
                 }
             )
-    if include_calendar_mismatch:
-        items.extend(_calendar_mismatch_items(db, project.id, parsed.tasks))
+    items.extend(_calendar_mismatch_items(db, project.id, parsed.tasks))
     return items
+
+
+def _removed_item(
+    uid: int, cost_losses: list[dict[str, object]], *, synthesised: bool
+) -> dict[str, object]:
+    """One ``removed`` diff item, real or synthesised.
+
+    ``synthesised`` marks the degraded case of
+    :func:`_unattributable_loss_uids`: the **revision** removes this uid, the
+    displayed legacy planning never carried it, so there is no snapshot row the item
+    could have been derived from. The ``kind`` stays ``removed`` all the same,
+    because the statement is true of the import as a whole -- confirming this batch
+    does delete that node and does destroy the chiffrage listed here. Only the
+    message says where it comes from.
+    """
+    message = (
+        f"Task UID {uid} will be removed from the revision (the displayed planning does "
+        "not carry it)"
+        if synthesised
+        else f"Task UID {uid} will be removed"
+    )
+    return {
+        "kind": "removed",
+        "uid": uid,
+        "message": message,
+        "fields": [],
+        "cost_losses": cost_losses,
+    }
+
+
+def _unattributable_loss_uids(
+    losses: Mapping[int, list[dict[str, object]]],
+    removed_uids: AbstractSet[int],
+    project_id: int,
+) -> set[int]:
+    """Uids whose Règle 3 warning has no ``removed`` item of its own to appear on.
+
+    The safeguard joins two sources of truth by an external uid: the losses come
+    from the **revision** the confirmed run writes into, the ``removed`` items from
+    the **displayed legacy planning**. A uid the revision knows and the snapshot does
+    not has no item to hang its warning on, so without this the warning would simply
+    not be rendered -- money about to be destroyed, silently absent from the dialog
+    that confirms destroying it.
+
+    Reachable, through public endpoints answering 200/202 only
+    ---------------------------------------------------------
+
+    An earlier reading of this seam called the condition unreachable, on the grounds
+    that creating a planning copies the tasks so its snapshot carries every uid the
+    revision does. That is true and beside the point: ``set_displayed_planning``
+    (``POST /projects/{id}/plannings/{planning_id}/display``) accepts **any** planning
+    of the project, including an older one with a different uid set. Import ``(1, 2)``,
+    validate the planning, import ``(1, 2, 3)`` -- a second planning is created and
+    displayed -- then display the first again, and the revision knows uid 3 while the
+    displayed snapshot does not. It is pinned end to end by
+    ``test_a_loss_the_displayed_planning_cannot_attribute_is_degraded_not_five_hundred``.
+
+    No route writes a ``RevisionCostFacet`` yet, so nothing in production reaches it
+    today; #333 is the issue that opens that write.
+
+    Degrade, do not refuse
+    ----------------------
+
+    This used to raise, and a raise meant a 500 on the preview. That destroys more
+    than it protects: ``ImportDiffResponse.cost_losses`` -- the deduplicated total,
+    the only summable figure Règle 3 has -- is read straight off the revision diff and
+    never passes through this join, so it *survives* a degradation and does **not**
+    survive a 500. Refusing therefore leaves the confirmation screen with neither the
+    total nor the items, which is a worse under-report than the one it was guarding
+    against. So the preview is served, the losses are attributed to a synthesised
+    ``removed`` item (see :func:`_removed_item`) rather than dropped, and the failure
+    is made loud **for the developer** -- a WARNING naming the uids -- instead of loud
+    for the user.
+
+    ``WARNING`` and not ``ERROR`` (#332 review, B-2), precisely because the section
+    above shows the condition is reached by a *supported* user action: redisplaying an
+    older planning answers 200, and after #333 a user who then refreshes the preview
+    five times would emit five ``ERROR`` records without a stack, for a state neither
+    the operator nor the platform can repair -- it is the user's display choice. Any
+    alerting rule keyed on ``ERROR`` would fire on legitimate product usage. The
+    record says exactly the same thing to a developer without also claiming an
+    incident.
+    """
+    orphaned = set(losses) - set(removed_uids)
+    if orphaned:
+        logger.warning(
+            "import_diff.cost_loss_unattributed uids=%s",
+            sorted(orphaned),
+            extra={"project_id": project_id, "orphaned_task_uids": sorted(orphaned)},
+        )
+    return orphaned

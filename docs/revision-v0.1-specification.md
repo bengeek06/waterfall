@@ -213,6 +213,12 @@ nœuds et ses propres facettes et n'est pas touchée. Le service `services/task_
 alimente disparaissent : ils protégeaient le brouillon, c'est-à-dire précisément l'endroit où
 l'utilisateur doit avoir tous les droits.
 
+> **État au terme d'E14-06 (#332).** Le 409 `IMPORT_CONFLICT` **est supprimé** : plus aucun chemin
+> d'import ne consulte de garde de référence, et un réimport retire une tâche chiffrée d'un
+> brouillon sans erreur (#325). Le module `services/task_references.py` subsiste en revanche, encore
+> appelé par `planning_structure.py` et `planning_tree.py`, c'est-à-dire par l'ancien socle : il
+> disparaît avec eux, à E14-12 (#339).
+
 ## Règles tranchées
 
 ### Règle 1 — Origine du calendrier d'une tâche
@@ -298,6 +304,23 @@ Les cas se lisent donc ainsi :
 Un utilisateur revient au comportement automatique en effaçant son choix explicite : `calendar_source`
 repasse alors à `project` ou `role` par application de la même resynchronisation.
 
+**Départage : la Règle 1 est la seule vérité sur le chemin de révision.** Acté par E14-06 (#332),
+la divergence étant jusqu'ici documentée et pinnée sans être tranchée. L'ancien chemin
+(`services/calendar_schedule.resolve_task_calendar_ids`) départage deux affectations concurrentes en
+gardant le **plus petit `role_id`** ; la Règle 1 garde la **première facette MO dans l'ordre
+depth-first**. Les deux réponses diffèrent dès que la tâche porte plusieurs rôles à calendriers
+distincts. À partir de cette issue, **aucun code du chemin de révision n'appelle
+`resolve_task_calendar_ids`** : l'import initialise le calendrier au calendrier du projet et le
+resynchronise selon la règle ci-dessus, et l'export d'une révision lit le calendrier **sur la
+facette**, jamais depuis les rôles. L'ancien départage survit uniquement sur l'ancien socle, jusqu'à
+sa suppression par E14-12 (#339).
+
+Corollaire, assumé lui aussi : le `<CalendarUID>` que MS Project porte par tâche n'est **pas**
+honoré sur le chemin de révision. C'est un identifiant de calendrier MS Project, donc un identifiant
+externe, sans correspondance dans `wf_calendar` — il reste enregistré tel quel sur les tables de
+l'ancien socle, que l'import alimente encore. Lui donner un sens supposerait une table de
+correspondance que le modèle ne porte pas.
+
 Le recalcul des durées et des dates consécutif à un changement de calendrier relève du moteur de
 planification et n'est pas un invariant de ce document. Ce qui est invariant, c'est que le
 calendrier applicable est toujours lisible sur la facette, sans consulter aucun rôle.
@@ -347,6 +370,17 @@ fratrie, dans leur ordre relatif d'avant l'import, exactement comme les lignes d
 « Position des lignes de coût au réimport » ci-dessous). Descendre en fin de fratrie n'est pas une
 suppression et ne fait pas l'objet d'un item de diff.
 
+*Contrepartie assumée, explicitée par la revue d'E14-06 (#332).* « Jamais signalé comme supprimé »
+n'est pas « jamais supprimé ». Un nœud local situé **dans le sous-arbre** d'une tâche que le fichier
+fait disparaître est détruit avec elle, et il ne figure dans aucun item de diff : il n'a pas
+d'`external_uid`, donc pas d'item `removed` (règle a), et s'il ne porte pas de facette coût il ne
+produit pas non plus de `CostLoss`. L'utilisateur qui avait ajouté une sous-tâche à la main sous une
+tâche importée la perd donc sans confirmation nominative. C'est **voulu** et non un trou : le nœud
+local n'a jamais eu d'identité que le fichier puisse nommer, et son sort suit celui de son parent
+comme n'importe quel descendant — la même collatéralité structurelle que le garde-fou couvre déjà
+pour l'argent, puisque la ligne de coût portée par ce nœud local, elle, est bien annoncée. Le
+garde-fou porte sur le **chiffrage**, pas sur la structure ; ce qui coûte est toujours nommé.
+
 **b. Un récapitulatif qui disparaît alors que le fichier conserve ses enfants ailleurs.** Les
 enfants que le fichier liste encore, sous un autre parent, sont **reparentés** ; seul le reste du
 sous-arbre est détruit, et le garde-fou n'annonce que le chiffrage réellement perdu. L'ordre
@@ -363,18 +397,59 @@ diff confirmé n'annonçait pas. Le réimport est **refusé en bloc**, avant tou
 réparé en aval. Sont refusées de la même façon, et au même moment, une chaîne de parenté qui boucle
 (elle produirait un cycle, [INV-06](#inv-06)), un enfant listé **avant** son parent — MS Project
 écrit un fichier depth-first, l'ordre inverse signale une source malformée et n'est pas réordonné
-silencieusement — et un parent que ni le fichier ni la révision ne connaissent. Un export MSPDI
-valide ne produit aucune de ces quatre formes.
+silencieusement —, un parent que ni le fichier ni la révision ne connaissent, et — ajout d'E14-06,
+issue #345 — un fichier qui **liste deux fois le même `external_uid`**. Un export MSPDI valide ne
+produit aucune de ces cinq formes.
 
-Les trois premières sont des **erreurs de structure du fichier** : tout ce qu'elles nomment est
-connu, c'est l'agencement qui est inapplicable. Seule la dernière est une **entité absente**. La
-distinction est normative, car elle détermine la réponse de la couche transport (E14-05, E14-06) :
-une structure inapplicable se répond 422, une entité absente se répond 404.
+Le doublon d'`external_uid` est refusé pour la raison même qui fonde le garde-fou : le réimport
+indexe le fichier par uid, donc sans refus la dernière occurrence l'emporterait silencieusement et
+la tâche précédente disparaîtrait de l'arbre importé sans aucun item de diff — exactement la
+suppression silencieuse que la Règle 3 proscrit. C'est une erreur de structure et non une entité
+absente : tout ce que le fichier nomme existe, il le nomme deux fois.
+
+Les quatre premières sont des **erreurs de structure du fichier** : tout ce qu'elles nomment est
+connu, c'est l'agencement qui est inapplicable. Seule la dernière — un parent inconnu du fichier
+comme de la révision — est une **entité absente**. La distinction est normative, car elle détermine
+la réponse de la couche transport (E14-05, E14-06) : une structure inapplicable et une entité
+absente ne se répondent jamais pareil.
+
+> **Amendement E14-05 (#331), repris tel quel par E14-06 (#332).** La rédaction initiale fixait 422
+> pour une structure inapplicable. La couche transport livrée répond **400**
+> (`REVISION_IMPORT_STRUCTURE_INVALID`) et non 422, et **404** (`REVISION_NODE_NOT_FOUND`) pour
+> l'entité absente. Motif : 422 est réservé, dans tout ce dépôt, au seul cas « le corps de la requête
+> n'a pas parsé », que FastAPI produit lui-même ; peindre en 422 un refus métier obligerait un client
+> à distinguer deux 422 de nature opposée. Ce qui était normatif — les deux familles ne se répondent
+> pas de la même façon — est tenu ; le code retenu pour la première a changé. Voir
+> `apps/backend/src/waterfall/api/revision_errors.py`, qui est la table de traduction unique.
 
 Le réimport valide donc **l'intégralité** de la structure du fichier avant d'écrire quoi que ce
 soit : une révision est soit entièrement réimportée, soit rigoureusement intacte, `lock_version`
 compris. Il n'existe pas d'état intermédiaire dans lequel un import refusé aurait déjà créé des
 nœuds.
+
+**d. Un fichier dont les liens de précédence forment un cycle est refusé en bloc.** Tranché par
+E14-06 (#332), la question étant restée ouverte par les revues précédentes : [INV-18](#inv-18)
+(acyclicité de la précédence) est un invariant *nouveau*, qu'aucune des deux tables jumelles ne
+vérifiait. Le choix est le **refus global**, jamais le rejet du seul lien fautif avec signalement
+dans le diff, pour trois raisons :
+
+1. c'est la seule réponse cohérente avec le garde-fou : l'appliqué doit être **exactement** le diff
+   confirmé, et écarter un lien que le diff n'énumère pas — le diff porte sur des nœuds, pas sur des
+   liens pris un à un — produirait un planning dont l'ordonnancement diffère du fichier que
+   l'utilisateur croit avoir importé ;
+2. un fichier MSPDI valide n'en contient pas : MS Project refuse lui-même de créer un cycle de
+   précédence. Un cycle relève donc de la source malformée, au même titre que les quatre formes
+   ci-dessus, et se traite comme elles ;
+3. le dépôt le fait déjà : le parseur MSPDI signale `DEPENDENCY_CYCLE` et fait échouer l'import
+   entier avant toute écriture. La décision consiste donc à **conserver** ce comportement et à
+   l'étendre au graphe *résultant* — les liens du fichier fusionnés avec ceux que le fichier ne
+   connaît pas — vérifié en une seule passe avant la moindre mutation.
+
+Corollaire sur le périmètre du remplacement : le fichier fait autorité sur les prédécesseurs des
+**tâches qu'il liste** et ne dit rien des autres. Un lien entre deux nœuds créés dans Waterfall
+survit donc au réimport, exactement comme le nœud sans `external_uid` de la Règle 3 a ; un lien
+arrivant sur une tâche du fichier est remplacé par ce que le fichier dit, ce qui est ce qui fait
+qu'une dépendance retirée du fichier disparaît réellement.
 
 **Position des lignes de coût au réimport.** Le fichier ne dit rien de la place d'une ligne de coût
 dans une fratrie — elle n'y a pas d'image. Les enfants de coût d'un parent sont donc conservés
@@ -661,6 +736,10 @@ est une notion de la facette planification : une ligne de coût n'a ni prédéce
 **Le graphe de précédence est acyclique.** En suivant les liens de précédence, on ne revient jamais
 sur un nœud déjà visité.
 *Portée : état. Violation : créer les liens A → B et B → A.*
+
+À l'import, cet invariant se traduit par un **refus global** du fichier, avant toute mutation, et non
+par le rejet du seul lien fautif : voir [Règle 3 d](#règle-3--réimport-ms-project-dans-un-brouillon-tâche-disparue-du-fichier),
+qui porte l'arbitrage et son motif.
 
 #### Facette coût
 

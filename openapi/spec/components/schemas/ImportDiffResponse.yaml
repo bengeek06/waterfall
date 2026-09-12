@@ -3,6 +3,7 @@ required:
 - batchId
 - identicalSource
 - items
+- costLosses
 properties:
   batchId:
     type: integer
@@ -15,3 +16,16 @@ properties:
     type: array
     items:
       $ref: ImportDiffItem.yaml
+  costLosses:
+    type: array
+    description: >-
+      Total dedoublonne du chiffrage que la confirmation de cet import detruirait
+      (Regle 3). C'est le seul montant sommable : les listes costLosses portees par
+      chaque item de diff attribuent la meme perte a chaque tache disparue qui
+      l'emporte, donc un noeud de cout condamne par deux suppressions imbriquees y
+      figure deux fois.
+    items:
+      $ref: ImportCostLoss.yaml
+description: >-
+  Previsualisation d'un import, avec le garde-fou de la Regle 3 sous ses deux
+  formes : attribue par tache disparue sur chaque item, et totalise ici.

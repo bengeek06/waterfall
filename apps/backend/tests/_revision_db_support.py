@@ -230,6 +230,44 @@ def insert_labor_line(
     return node
 
 
+def insert_purchase_line(
+    session: Session,
+    reference: ReferenceData,
+    revision: ProjectRevision,
+    *,
+    label: str = "Purchase",
+    parent_id: int | None = None,
+    position: int = 1,
+    quantity: Decimal = Decimal("2"),
+    unit_cost: Decimal = Decimal("150"),
+) -> RevisionNode:
+    """A non-labour cost line, the one shape that carries a **non-zero** amount.
+
+    ``default_amount`` prices a non-labour line as ``quantity x unit_cost``, both
+    stored on the facet itself, so the figure Règle 3's safeguard reports is real
+    end to end. Its labour counterpart cannot be, yet: the store deliberately
+    leaves ``Role.hourly_rate`` unset (a rate is per year and belongs to the
+    pricing engine), so an MO line is priced at 0 until E14-07 plugs the real
+    resolver in. Tests that need to pin money use this one.
+    """
+    work_item = insert_work_item(session, reference, kind="cost")
+    node = insert_node(session, revision, work_item, parent_id=parent_id, position=position)
+    session.add(
+        RevisionCostFacet(
+            node_id=node.id,
+            node_kind="cost",
+            nature="non_labor",
+            label=label,
+            quantity=quantity,
+            cost_type_id=reference.cost_type_id,
+            cost_category_id=reference.cost_category_id,
+            unit_cost=unit_cost,
+        )
+    )
+    session.flush()
+    return node
+
+
 def insert_link(
     session: Session,
     revision: ProjectRevision,

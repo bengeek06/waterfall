@@ -3,6 +3,8 @@ required:
 - batchId
 - status
 - acceptedAt
+- revisionId
+- revisionCreated
 properties:
   batchId:
     type: integer
@@ -12,3 +14,18 @@ properties:
   acceptedAt:
     type: string
     format: date-time
+  revisionId:
+    type: [integer, "null"]
+    minimum: 1
+    description: >-
+      Revision dans laquelle le fichier a ete importe. L'import vise toujours la
+      derniere revision du projet par numero de version et le client ne la choisit
+      pas : sans cette information, un utilisateur qui croit alimenter un brouillon
+      alors qu'un plus recent existe ne l'apprendrait jamais. null sur un dry run,
+      qui n'ecrit rien.
+  revisionCreated:
+    type: [boolean, "null"]
+    description: >-
+      true quand l'import a cree la revision designee par revisionId (le projet
+      n'en avait aucune), false quand il a reimporte dans une revision existante.
+      null sur un dry run.

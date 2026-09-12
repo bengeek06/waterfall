@@ -1,0 +1,41 @@
+type: object
+required:
+- nodeId
+- workItemId
+- label
+- nature
+- amount
+- bearingTaskName
+properties:
+  nodeId:
+    type: integer
+  workItemId:
+    type: integer
+  label:
+    type: string
+  nature:
+    type: string
+    enum:
+    - labor
+    - non_labor
+  amount:
+    type: string
+    pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+  bearingTaskName:
+    anyOf:
+    - type: string
+    - type: 'null'
+description: >-
+  Une facette cout que la confirmation de cet import detruirait (Regle 3). Portee
+  par l'item de diff "removed" de la tache disparue qui l'emporte, avec son
+  libelle, sa nature MO ou non-MO, son montant courant et la tache porteuse, pour
+  que la suppression ne soit jamais silencieuse.
+
+
+  ATTENTION : les listes costLosses portees par les items de diff NE SONT PAS
+  SOMMABLES. Un noeud de cout condamne par deux suppressions imbriquees (un
+  recapitulatif et l'un de ses enfants, tous deux absents du fichier) figure sous
+  chacun des deux items, car chaque disparition l'emporte reellement et doit le
+  nommer. Additionner les montants d'un item a l'autre compte donc ce chiffrage
+  plusieurs fois. Le total dedoublonne a afficher dans une confirmation est
+  ImportDiffResponse.costLosses.

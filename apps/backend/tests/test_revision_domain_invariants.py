@@ -79,6 +79,7 @@ from waterfall.domain.revision import (
     move_nodes_down,
     move_nodes_up,
     outdent_nodes,
+    replace_links,
     replace_predecessors,
     subtree_ids,
     tree,
@@ -251,6 +252,13 @@ def _write_attempts(bench: Bench) -> list[tuple[str, Callable[[], object]]]:
             lambda: replace_predecessors(
                 revision,
                 bench.child_b,
+                [NodeLink(node_id=bench.child_b, predecessor_node_id=bench.root_c)],
+            ),
+        ),
+        (
+            "replace_links",
+            lambda: replace_links(
+                revision,
                 [NodeLink(node_id=bench.child_b, predecessor_node_id=bench.root_c)],
             ),
         ),

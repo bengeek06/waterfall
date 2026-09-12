@@ -8,9 +8,12 @@ duration_minutes combinations without fighting the XML schema.
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, cast
+
+import pytest
 
 from waterfall.db.session import get_session_factory
 from waterfall.models.ms_core import MsProject
@@ -322,3 +325,62 @@ def test_consistent_file_produces_no_calendar_mismatch_items() -> None:
         items = build_import_diff(session, project, _parsed_project(tasks))
 
     assert _mismatch_items(items) == []
+
+
+def test_a_cost_loss_with_no_removed_item_to_appear_on_is_still_served(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """#332 review, M1 and its round-3 correction: degrade, do not answer 500.
+
+    The safeguard joins two sources of truth by an external uid: the losses are
+    computed against the **revision** the confirmed run writes into, the ``removed``
+    items against the **displayed legacy planning**. A uid the first knows and the
+    second does not has no item of its own to hang its warning on.
+
+    An earlier version of this test claimed the state was unreachable through the
+    API. It is not: ``POST /projects/{id}/plannings/{planning_id}/display`` puts back
+    any planning of the project, older uid set included, and
+    ``test_a_loss_the_displayed_planning_cannot_attribute_is_degraded_not_five_hundred``
+    in ``test_revision_import.py`` walks the whole sequence through endpoints
+    answering 200/202 only.
+
+    What is pinned here is the *shape* of the degradation on the function's own
+    seam: the loss is attributed to a synthesised ``removed`` item instead of being
+    dropped, nothing raises, and a WARNING names the uids for whoever has to fix the
+    join -- #333 is the issue that rebuilds it.
+    """
+    _create_default_calendar()
+    project_id = _create_project()
+    tasks = (_task(uid=1, outline_number="1"),)
+    orphaned_losses: dict[int, list[dict[str, object]]] = {
+        7: [
+            {
+                "node_id": 42,
+                "work_item_id": 7,
+                "label": "Cables",
+                "nature": "non_labor",
+                "amount": Decimal("300.00"),
+                "bearing_task_name": "T7",
+            }
+        ]
+    }
+
+    with get_session_factory()() as session:
+        project = session.query(MsProject).filter(MsProject.id == project_id).one()
+        with caplog.at_level(logging.WARNING, logger="waterfall.services.import_diff"):
+            items = build_import_diff(
+                session, project, _parsed_project(tasks), cost_losses=orphaned_losses
+            )
+
+    removed = [item for item in items if item["kind"] == "removed"]
+    assert [item["uid"] for item in removed] == [7]
+    assert removed[0]["cost_losses"] == orphaned_losses[7]
+    assert "displayed planning does not carry it" in cast(str, removed[0]["message"])
+    # WARNING, not ERROR (#332 review, B-2): the condition is reached by a supported
+    # user action (redisplaying an older planning), so it must not trip an
+    # ERROR-keyed alerting rule. The level is asserted, not just the message, so a
+    # future promotion back to ERROR fails here rather than in production alerting.
+    assert [
+        record.getMessage() for record in caplog.records if record.levelno == logging.WARNING
+    ] == ["import_diff.cost_loss_unattributed uids=[7]"]
+    assert not [record for record in caplog.records if record.levelno >= logging.ERROR]

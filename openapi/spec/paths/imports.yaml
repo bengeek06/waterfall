@@ -101,13 +101,35 @@
             schema:
               $ref: ../components/schemas/ImportRunAcceptedResponse.yaml
       '400':
-        $ref: ../components/responses/BadRequest.yaml
+        description: >-
+          Fichier refuse. Soit la validation MSPDI a echoue, soit la structure du
+          fichier est inapplicable a la revision cible et le refus porte le code
+          REVISION_IMPORT_STRUCTURE_INVALID : uid liste deux fois, enfant listant
+          son parent avant lui, ou parent que le fichier ne liste pas lui-meme
+          (Regle 3 c). Un fichier illisible est juge en premier, avant les refus
+          409 ci-dessous : il est signale comme tel meme si la revision cible est
+          validee ou qu'aucun calendrier par defaut n'existe, et le batch passe
+          alors en failed (le rejouer relirait les memes octets). Les issues
+          detaillees se lisent sur GET /imports/v1/batches/{batchId}/errors.
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/FastAPIErrorResponse.yaml
       '401':
         $ref: ../components/responses/Unauthorized.yaml
       '404':
         $ref: ../components/responses/BatchNotFound.yaml
       '409':
-        description: Etat du batch incompatible avec l'operation
+        description: >-
+          Refus decide avant que le batch ne passe en cours d'execution, qui reste
+          donc reutilisable tel quel. Trois familles : l'etat du batch est
+          incompatible avec l'operation (batch deja execute, source remplacee
+          entre-temps, confirmation absente) ; la derniere revision du projet est
+          validee ou remplacee et refuse toute ecriture (REVISION_IMMUTABLE) ;
+          aucun calendrier actif n'est marque par defaut, donc une tache importee
+          n'aurait pas de calendrier a heriter (PROJECT_CALENDAR_MISSING, Regle 1).
+          Ces deux derniers refus supposent un fichier lisible : un MSPDI malforme
+          repond 400 avant d'etre confronte a l'etat du projet.
         content:
           application/json:
             schema:
@@ -136,13 +158,30 @@
             schema:
               $ref: ../components/schemas/ImportDiffResponse.yaml
       '400':
-        $ref: ../components/responses/BadRequest.yaml
+        description: >-
+          Fichier refuse, comme il le serait par POST .../run. Soit la validation
+          MSPDI a echoue (IMPORT_VALIDATION_FAILED), soit la structure du fichier
+          est inapplicable a la revision cible
+          (REVISION_IMPORT_STRUCTURE_INVALID) : la previsualisation refuse alors le
+          fichier entier plutot que de rendre un diff d'un import qui ne pourra
+          jamais aboutir, et dont les costLosses seraient vides sans que cela
+          signifie "rien a perdre".
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/FastAPIErrorResponse.yaml
       '401':
         $ref: ../components/responses/Unauthorized.yaml
       '404':
         $ref: ../components/responses/BatchNotFound.yaml
       '409':
-        $ref: ../components/responses/Conflict.yaml
+        description: >-
+          Aucun calendrier actif n'est marque par defaut, donc la revision du
+          projet ne peut pas etre chargee (PROJECT_CALENDAR_MISSING, Regle 1).
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/FastAPIErrorResponse.yaml
       '503':
         description: Le stockage objet des sources d'import (Garage) est injoignable
         content:

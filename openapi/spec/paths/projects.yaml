@@ -1389,6 +1389,19 @@
       schema:
         type: [integer, "null"]
         minimum: 1
+    - name: revision_id
+      in: query
+      required: false
+      description: >-
+        Exporte la revision designee plutot que le planning de l'ancien socle
+        (E14-06, #332). Les uid MS Project du document sont alors les
+        external_uid portes par les work_item, ce qui rend le couple
+        export/reimport stable. Exclusif avec planning_id : fournir les deux est
+        refuse en 400 (EXPORT_SELECTION_AMBIGUOUS) plutot que d'ignorer
+        silencieusement planning_id.
+      schema:
+        type: [integer, "null"]
+        minimum: 1
     responses:
       '200':
         description: XML du projet
@@ -1396,7 +1409,41 @@
           application/xml:
             schema:
               type: string
+      '400':
+        description: >-
+          Soit planning_id et revision_id ont ete fournis ensemble
+          (EXPORT_SELECTION_AMBIGUOUS) : les deux selecteurs sont exclusifs. Soit,
+          sur la branche revision_id uniquement, le domaine de revision a refuse le
+          chargement : detail.code porte alors un des codes 400 de la famille
+          revision, dont le fourre-tout REVISION_REFUSED et
+          REVISION_FACET_CONTRACT (voir la reponse RevisionBadRequest pour la liste
+          complete). Le 409 PROJECT_CALENDAR_MISSING ci-dessous est le membre de
+          cette meme famille qui est attendu en pratique.
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/FastAPIErrorResponse.yaml
+      '404':
+        description: >-
+          Projet introuvable ou n'appartenant pas a l'appelant
+          (PROJECT_NOT_FOUND), planning introuvable pour ce projet, ou revision
+          introuvable pour ce projet (REVISION_NOT_FOUND).
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/FastAPIErrorResponse.yaml
+      '409':
+        description: >-
+          Export d'une revision alors qu'aucun calendrier actif n'est marque par
+          defaut pour l'organisation (PROJECT_CALENDAR_MISSING) : la revision ne
+          peut pas etre chargee, la Regle 1 faisant du calendrier un attribut
+          stocke de chaque facette de planification (INV-15). Marquer un
+          calendrier par defaut, puis rejouer l'export. Ne concerne que
+          revision_id : l'export de l'ancien socle lit des snapshots et ne charge
+          aucune revision.
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/FastAPIErrorResponse.yaml
       '401':
         $ref: ../components/responses/Unauthorized.yaml
-      '404':
-        $ref: ../components/responses/ProjectNotFound.yaml

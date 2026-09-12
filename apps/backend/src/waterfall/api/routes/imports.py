@@ -5,8 +5,9 @@ import hashlib
 import json
 import logging
 import tempfile
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, cast
+from typing import Any, NoReturn, cast
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
@@ -15,6 +16,7 @@ from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 from waterfall.api.dependencies import get_current_active_user
+from waterfall.api.revision_errors import revision_operation
 from waterfall.api.routes.project_access import get_mutable_project_lock
 from waterfall.core.config import get_settings
 from waterfall.core.object_storage import (
@@ -23,6 +25,7 @@ from waterfall.core.object_storage import (
     import_object_storage,
 )
 from waterfall.db.session import get_db
+from waterfall.domain import revision as domain
 from waterfall.models.ms_core import MsProject
 from waterfall.models.planning import WfPlanning, WfPlanningLinkSnapshot, WfPlanningTaskSnapshot
 from waterfall.models.user import User
@@ -32,6 +35,7 @@ from waterfall.schemas.imports import (
     ImportBatchCreateRequest,
     ImportBatchResponse,
     ImportBatchStatusResponse,
+    ImportCostLoss,
     ImportCounters,
     ImportDiffItem,
     ImportDiffResponse,
@@ -42,6 +46,7 @@ from waterfall.schemas.imports import (
     ImportRunRequest,
 )
 from waterfall.schemas.projects import FastAPIErrorResponse
+from waterfall.services import revision_import
 from waterfall.services.import_diff import build_import_diff
 from waterfall.services.msproject_xml import (
     MsProjectValidationError,
@@ -462,31 +467,51 @@ def _run_dry_validation(
     return ImportRunAcceptedResponse(batchId=batch.id, status="pending", acceptedAt=accepted_at)
 
 
-def _reject_diff_conflicts(
-    db: Session, project: MsProject, parsed_project: ParsedProject | None
-) -> None:
-    # Reject referenced tasks that the diff preview flagged as conflicts before
-    # mutating any state, keeping the batch reusable (still pending). Called
-    # while still holding the project-row lock taken by _relock_pending_batch
-    # (see _run_confirmed_import), so include_calendar_mismatch=False skips
-    # issue #176's calendar-mismatch diagnostic here: only "conflict" items
-    # are ever read below, and computing the mismatch diagnostic anyway would
-    # resolve calendars (and pay a DB round trip per unresolvable task) for a
-    # result never consumed, entirely under this lock -- the exact
-    # avoidable-costly-work-under-lock anti-pattern already guarded against
-    # elsewhere in this module.
-    if parsed_project is None:
-        return
-    conflicting_uids = [
-        item["uid"]
-        for item in build_import_diff(db, project, parsed_project, include_calendar_mismatch=False)
-        if item.get("kind") == "conflict"
-    ]
-    if conflicting_uids:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={"code": "IMPORT_CONFLICT", "conflicts": conflicting_uids},
-        )
+def _loss_payload(loss: domain.CostLoss) -> dict[str, object]:
+    return {
+        "node_id": loss.node_id,
+        "work_item_id": loss.work_item_id,
+        "label": loss.label,
+        "nature": loss.nature.value,
+        "amount": loss.amount,
+        "bearing_task_name": loss.bearing_task_name,
+    }
+
+
+@dataclass(frozen=True)
+class _RevisionCostLosses:
+    """Règle 3's safeguard for the diff preview, in the two shapes it has.
+
+    ``per_uid`` is what a confirmation dialog shows *next to* each vanished task,
+    so a cost node doomed by two nested removals appears under both -- both
+    disappearances are real, and the lists are therefore **not summable**.
+    ``total`` is the project-wide, deduplicated amount at stake, which is the only
+    figure a "you are about to lose X" headline may use.
+    """
+
+    per_uid: dict[int, list[dict[str, object]]]
+    total: list[dict[str, object]]
+
+
+def _revision_cost_losses(
+    db: Session, project_id: int, parsed: ParsedProject
+) -> _RevisionCostLosses:
+    """Read straight off the revision the confirmed run would write into.
+
+    So what the user confirms is what gets applied. Empty for a project that has no
+    revision yet -- nothing can be lost from a planning that does not exist.
+    """
+    diff = revision_import.plan_import(db, project_id, parsed)
+    if diff is None:
+        return _RevisionCostLosses(per_uid={}, total=[])
+    return _RevisionCostLosses(
+        per_uid={
+            item.external_uid: [_loss_payload(loss) for loss in item.cost_losses]
+            for item in diff.removed
+            if item.cost_losses
+        },
+        total=[_loss_payload(loss) for loss in diff.cost_losses],
+    )
 
 
 def _mark_batch_running(db: Session, batch: WfImportBatch, accepted_at: datetime) -> None:
@@ -527,19 +552,14 @@ def _apply_confirmed_import(
     project_id: int,
     owner_id: int,
     xml_bytes: bytes,
-    parsed_project: ParsedProject | None,
-    parse_error: MsProjectValidationError | None,
+    parsed_project: ParsedProject,
     stored_payload: dict[str, Any],
-) -> None:
+) -> revision_import.RevisionImport:
     try:
         # The status commit above released the project row lock; re-acquire it
         # immediately before mutating snapshots so a concurrent writer cannot
         # change displayed_planning_id/status between the two transactions.
         project = get_mutable_project_lock(db, project_id, owner_id)
-        if parse_error is not None:
-            # Already parsed unlocked; re-raise instead of letting
-            # import_tasks_and_links parse the same invalid XML again.
-            raise parse_error
         identical_source = (
             db.query(WfImportBatch.id)
             .filter(WfImportBatch.project_id == project_id)
@@ -552,6 +572,21 @@ def _apply_confirmed_import(
         task_count, link_count, import_warnings = import_tasks_and_links(
             db, xml_bytes, project, parsed_project
         )
+        # The revision path, in the *same* transaction as the legacy tables above
+        # (E14-06, #332). Both are written until #333 migrates the devis stack off
+        # `ms_task`: dropping the legacy write now would make every newly imported
+        # project unchiffrable, which is #313 reintroduced backwards. A refusal here
+        # -- a validated revision (REVISION_IMMUTABLE), an inapplicable file
+        # structure -- rolls the legacy write back with it, so **no write can
+        # succeed on one side and fail on the other**.
+        #
+        # That is the whole of the guarantee, and the #332 review (B1) was right to
+        # strike the stronger claim this comment used to make: the two tables *can*
+        # hold different uids. The legacy upsert never deletes, so a re-import that
+        # drops uid 2 leaves `ms_task` carrying it while the revision no longer
+        # does. Both behaviours are intended; only the sentence was wrong.
+        with revision_operation(db):
+            outcome = revision_import.apply_import(db, project.id, parsed_project)
         batch.status = "success"
         batch.finished_at = datetime.now(UTC)
         stored_payload["counters"] = {"tasks": task_count, "links": link_count}
@@ -563,6 +598,7 @@ def _apply_confirmed_import(
         batch.log_json = json.dumps(stored_payload)
         db.add(batch)
         db.commit()
+        return outcome
     except HTTPException as exc:
         # Preserve the precise status/detail (e.g. project became read-only
         # concurrently) instead of masking it as a generic import failure.
@@ -589,6 +625,34 @@ def _apply_confirmed_import(
         ) from exc
 
 
+def _reject_unreadable_source(
+    db: Session,
+    batch_id: int,
+    owner_id: int,
+    parse_error: MsProjectValidationError | None,
+) -> NoReturn:
+    """Fail a batch whose XML never parsed, and answer the 400 that says so.
+
+    The file was parsed once, unlocked, by ``run_batch``; this is where that result
+    is acted on. The batch is marked ``failed`` rather than left pending because
+    replaying it would parse the very same bytes to the very same error -- nothing
+    the operator can repair on this side -- and its ``issues`` are recorded in
+    ``log_json`` so ``GET /imports/v1/batches/{id}/errors`` can list them, which is
+    where a client reads them from -- and not ``GET /imports/v1/batches/{id}``, which
+    returns ``warnings`` only and would show an empty list for this batch.
+
+    ``parse_error`` is ``None`` only if ``run_batch`` produced neither a result nor
+    an error, which it cannot; the fallback exists so this function narrows
+    ``parsed_project`` for the caller instead of asserting.
+    """
+    error = parse_error or MsProjectValidationError(
+        [{"code": "IMPORT_FAILED", "message": "The uploaded XML was never parsed"}]
+    )
+    db.rollback()
+    _mark_batch_failed(db, batch_id, owner_id, str(error), error.issues)
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Import failed") from error
+
+
 def _run_confirmed_import(
     db: Session,
     batch: WfImportBatch,
@@ -602,10 +666,28 @@ def _run_confirmed_import(
     stored_payload: dict[str, Any],
     accepted_at: datetime,
 ) -> ImportRunAcceptedResponse:
-    project = _relock_pending_batch(db, batch, project_id, owner_id, expected_sha256)
-    _reject_diff_conflicts(db, project, parsed_project)
+    _relock_pending_batch(db, batch, project_id, owner_id, expected_sha256)
+    # First refusal of all, and deliberately ahead of ``ensure_importable`` (#332
+    # review, B7). E14-06 inserted that pre-flight in front of the parse result and
+    # silently changed which complaint a user hears: a malformed MSPDI dropped on a
+    # project whose latest revision is validated -- or which has no default calendar
+    # -- answered 409, the user repaired the *configuration*, replayed, and only then
+    # learned the file itself was broken. Two round trips to hear the fault that was
+    # true from the start. The file is unusable whatever the target's state, so it is
+    # judged first, which is also the precedence that held before this issue.
+    if parsed_project is None:
+        _reject_unreadable_source(db, batch_id, owner_id, parse_error)
+    # Asked before the batch is marked running, so a refusal leaves it reusable --
+    # the one thing worth keeping from the ``IMPORT_CONFLICT`` pre-flight this
+    # replaces. What is *not* kept is the refusal itself: a re-import into a draft
+    # removes whatever the file dropped, referenced or not (#325). Two refusals are
+    # asked here and both are of the "fix the configuration, then replay this very
+    # file" family: a validated target revision (INV-03) and a missing default
+    # calendar (Règle 1/INV-15) -- see ``revision_import.ensure_importable``.
+    with revision_operation(db):
+        revision_import.ensure_importable(db, project_id)
     _mark_batch_running(db, batch, accepted_at)
-    _apply_confirmed_import(
+    outcome = _apply_confirmed_import(
         db,
         batch,
         batch_id,
@@ -613,11 +695,21 @@ def _run_confirmed_import(
         owner_id,
         xml_bytes,
         parsed_project,
-        parse_error,
         stored_payload,
     )
 
-    return ImportRunAcceptedResponse(batchId=batch.id, status="success", acceptedAt=accepted_at)
+    return ImportRunAcceptedResponse(
+        batchId=batch.id,
+        status="success",
+        acceptedAt=accepted_at,
+        # Which revision the file actually landed in, and whether the import had to
+        # create it. The import targets the *latest* revision by version number and
+        # the client cannot name one (#332 review, M2), so without this a user who
+        # meant to feed draft v2 but had since opened v3 would be told nothing at
+        # all -- v2's ``lock_version`` would not even move to raise a 409 later.
+        revisionId=outcome.revision_id,
+        revisionCreated=outcome.created_revision,
+    )
 
 
 @router.post(
@@ -683,13 +775,38 @@ def run_batch(
 @router.get(
     "/{batch_id}/diff",
     response_model=ImportDiffResponse,
-    responses={503: {"model": FastAPIErrorResponse}},
+    responses={
+        400: {"model": FastAPIErrorResponse},
+        401: {"model": FastAPIErrorResponse},
+        404: {"model": FastAPIErrorResponse},
+        409: {"model": FastAPIErrorResponse},
+        503: {"model": FastAPIErrorResponse},
+    },
 )
 def get_batch_diff(
     batch_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> ImportDiffResponse:
+    """Preview what confirming this batch would change, writing nothing.
+
+    Refuses the whole file -- 400 ``REVISION_IMPORT_STRUCTURE_INVALID``, raised by
+    ``plan_import`` through ``revision_operation`` -- when its structure is
+    inapplicable to the target revision. The #332 review (M3) asked for that call
+    to be made explicitly, degrading gracefully being the alternative: render the
+    legacy diff with ``cost_losses = {}``.
+
+    It is refused, for two reasons. An empty ``costLosses`` on a ``removed`` item
+    is indistinguishable from "this removal costs nothing" -- the preview would
+    *understate money*, which is the one thing Règle 3's safeguard exists to rule
+    out, and it would do so on the very screen where the user is asked to confirm.
+    And the fault is not one the diff helps with: the file lists a child before its
+    parent, so the remedy is to re-export it from MS Project, not to review the
+    tasks one by one. ``REVISION_IMPORT_STRUCTURE_INVALID`` names that family, and
+    ``POST .../run`` refuses the same file identically (both go through
+    ``plan_reimport``), so nothing is lost but the preview of an import that could
+    never complete.
+    """
     batch = _get_batch_or_404(db, batch_id, current_user.id)
     xml_bytes = _read_source_xml(batch)
     try:
@@ -708,15 +825,18 @@ def get_batch_diff(
         .filter(WfImportBatch.id != batch.id)
         .first()
     )
+    with revision_operation(db):
+        cost_losses = _revision_cost_losses(db, project.id, parsed)
     items = [
         ImportDiffItem(**cast(dict[str, Any], item))
-        for item in build_import_diff(db, project, parsed)
+        for item in build_import_diff(db, project, parsed, cost_losses=cost_losses.per_uid)
     ]
     return ImportDiffResponse(
         batchId=batch.id,
         sourceSha256=batch.source_sha256,
         identicalSource=previous is not None,
         items=items,
+        costLosses=[ImportCostLoss(**cast(dict[str, Any], loss)) for loss in cost_losses.total],
     )
 
 

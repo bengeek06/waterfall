@@ -94,6 +94,7 @@ from waterfall.domain.revision.reimport import (
     ImportedTask,
     apply_reimport,
     plan_reimport,
+    planning_nodes_by_external_uid,
 )
 from waterfall.domain.revision.structure import (
     ancestors_of,
@@ -126,6 +127,7 @@ from waterfall.domain.revision.tree import (
     move_nodes_down,
     move_nodes_up,
     outdent_nodes,
+    replace_links,
     replace_predecessors,
     require_node,
     selection_roots,
@@ -219,9 +221,11 @@ __all__ = [
     "node_by_work_item",
     "outdent_nodes",
     "plan_reimport",
+    "planning_nodes_by_external_uid",
     "reconcile_forecast_to_budget",
     "regenerate_skeleton",
     "rename_task",
+    "replace_links",
     "replace_predecessors",
     "require_node",
     "resolve_bearing_task",
