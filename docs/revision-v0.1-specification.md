@@ -741,6 +741,22 @@ sur un nœud déjà visité.
 par le rejet du seul lien fautif : voir [Règle 3 d](#règle-3--réimport-ms-project-dans-un-brouillon-tâche-disparue-du-fichier),
 qui porte l'arbitrage et son motif.
 
+##### INV-27
+
+**Un jalon ne porte aucun enfant.** Aucun nœud n'a pour parent un nœud dont la facette de
+planification porte `is_milestone` à vrai. Un jalon est un point daté, pas un conteneur : la règle ne
+regarde pas la facette de l'enfant, et interdit donc aussi bien une sous-tâche qu'une ligne de coût.
+*Portée : état. Violation : indenter une tâche sous un jalon, rattacher une ligne de coût à une tâche
+jalon, ou marquer comme jalon une tâche qui porte déjà des enfants.*
+
+L'invariant se lit dans les deux sens, et chacun des deux sens est refusé **avant toute mutation**,
+avec l'état laissé rigoureusement inchangé : on ne rattache rien sous un jalon — création,
+déplacement, indentation, réimport — et on ne marque pas comme jalon une tâche qui porte déjà des
+enfants. Au réimport, il vaut comme [INV-18](#inv-18) **refus global** du fichier : y compris lorsque
+le fichier marque comme jalon une tâche sous laquelle survit un nœud qu'il ne nomme pas — une ligne
+de coût, ou une tâche créée dans Waterfall et jamais exportée — auquel cas rien dans le fichier ne
+trahit la violation qu'il s'apprête à créer.
+
 #### Facette coût
 
 ##### INV-19
@@ -807,8 +823,8 @@ d'un réimport.*
 
 ##### INV-26 (provisoire)
 
-> **Statut : provisoire. Cet invariant n'a pas le même statut qu'INV-01..INV-25.** Les vingt-cinq
-> précédents sont **acquis** ; celui-ci découle de la
+> **Statut : provisoire. Cet invariant n'a pas le même statut qu'INV-01..INV-25 ni
+> qu'[INV-27](#inv-27).** Les vingt-six autres sont **acquis** ; celui-ci découle de la
 > [Règle 4](#règle-4--le-lotissement-vit-hors-de-la-révision-provisoire), issue d'un lot de maquettage
 > encore en cours et susceptible d'évoluer. Le banc d'essai d'E14-02 le vérifie exactement comme les
 > autres — c'est précisément pour l'**éprouver** qu'il est énoncé ici — mais **aucune table, aucune

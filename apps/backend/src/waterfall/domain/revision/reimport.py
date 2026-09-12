@@ -27,6 +27,7 @@ from waterfall.domain.revision.entities import (
 )
 from waterfall.domain.revision.errors import (
     ImportStructureError,
+    MilestoneChildError,
     NotFoundError,
     TreeCycleError,
 )
@@ -247,6 +248,71 @@ def _validate_import_structure(
         defined.add(task.external_uid)
 
 
+def _stays_under_its_current_parent(
+    project: Project, revision: ProjectRevision, child: RevisionNode
+) -> bool:
+    """Whether ``child`` is still hanging where it hangs now once the file is applied.
+
+    A cost line is never named by the file, so it always is. A planning node the
+    file *can* name -- one whose work item carries an ``external_uid`` -- never is:
+    the file either lists it, and then dictates its parent, or it does not, and
+    then the re-import removes it (Rule 3). What is left is a planning node created
+    in Waterfall and never exported, which the file cannot address and therefore
+    cannot move either.
+    """
+    if not is_plan_node(revision, child.id):
+        return True
+    return _external_uid_of(project, child) is None
+
+
+def _reject_milestone_parents(
+    project: Project,
+    revision: ProjectRevision,
+    existing: dict[int, RevisionNode],
+    tasks: list[ImportedTask],
+) -> None:
+    """Refuse a file that would leave a child under a milestone (INV-27).
+
+    Two ways a re-import gets there, and the check has to cover both because the
+    file is applied as a whole:
+
+    * the file itself hangs a task under one it marks as a milestone;
+    * the file marks as a milestone a task the revision already holds, under which
+      something the file does not move survives -- a cost line, or a task created
+      in Waterfall that was never exported. Neither is named by the file, so
+      nothing in the file betrays the violation it is about to create.
+
+    Runs inside :func:`plan_reimport`, before a single node is touched, so the
+    refusal leaves the revision rigorously unchanged -- and so the safeguard diff
+    of Rule 3 is never shown for a file that cannot be applied.
+    """
+    incoming = {task.external_uid: task for task in tasks}
+    for task in tasks:
+        parent_uid = task.parent_external_uid
+        # Total: ``_validate_import_structure`` has already proved the parent is
+        # listed by the file, before this very task.
+        if parent_uid is not None and incoming[parent_uid].is_milestone:
+            raise MilestoneChildError(
+                f"Imported task {task.external_uid} names parent {parent_uid}, which the file "
+                "marks as a milestone: a milestone cannot contain children (INV-27)"
+            )
+        node = existing.get(task.external_uid)
+        if not task.is_milestone or node is None:
+            continue
+        kept = [
+            child.id
+            for child in children_of(revision, node.id)
+            if _stays_under_its_current_parent(project, revision, child)
+        ]
+        if kept:
+            raise MilestoneChildError(
+                f"Imported task {task.external_uid} is marked as a milestone, but node "
+                f"{node.id} keeps {len(kept)} child(ren) the file does not move "
+                f"({', '.join(str(child_id) for child_id in kept)}): a milestone cannot "
+                "contain children (INV-27)"
+            )
+
+
 def plan_reimport(
     project: Project,
     revision: ProjectRevision,
@@ -274,6 +340,7 @@ def plan_reimport(
     """
     existing = planning_nodes_by_external_uid(project, revision)
     _validate_import_structure(existing, tasks)
+    _reject_milestone_parents(project, revision, existing, tasks)
     incoming = {task.external_uid: task for task in tasks}
 
     file_rank: dict[int, int] = {}
@@ -378,6 +445,35 @@ def _work_item_for(project: Project, external_uid: int, now: datetime | None) ->
         if work_item.external_uid == external_uid:
             return work_item
     return create_work_item(project, WorkItemKind.TASK, external_uid=external_uid, now=now)
+
+
+def _settle_incoming_milestone_flags(
+    revision: ProjectRevision,
+    tasks: list[ImportedTask],
+    existing: dict[int, RevisionNode],
+) -> None:
+    """Put the milestone flags the file dictates on the nodes the revision already holds.
+
+    Runs **before** :func:`_create_missing_nodes`, and the order is the whole
+    point: creation goes through :func:`~waterfall.domain.revision.tree.insert_node`,
+    whose INV-27 guard reads the *current* flag of the parent. Without this step
+    it would read a flag the very same file is in the process of clearing, and a
+    perfectly ordinary MS Project edit -- "this jalon becomes a lot": uid 1 stops
+    being a milestone and gains a sub-task in one go -- would be accepted by
+    :func:`plan_reimport` and then refused halfway through :func:`apply_reimport`,
+    with a message asking the user to do what the file already does.
+
+    Safe precisely *because* :func:`_reject_milestone_parents` has already proved
+    the file's final flags are compatible with the file's final tree: a node this
+    step marks as a milestone is one no task of the file hangs anything under, and
+    whose surviving children the file takes away. The flags are written again,
+    identically, by :func:`_apply_plan_facet` in the next phase; this step only
+    moves the moment they become visible to the placement guard.
+    """
+    for task in tasks:
+        node = existing.get(task.external_uid)
+        if node is not None:
+            revision.plan_facets[node.id].is_milestone = task.is_milestone
 
 
 def _create_missing_nodes(
@@ -527,7 +623,10 @@ def apply_reimport(
 
     Five phases, in this order and for these reasons:
 
-    1. create the tasks the file adds;
+    1. settle the milestone flags the file dictates on the nodes the revision
+       already holds, then create the tasks the file adds. The two belong to the
+       same phase and in that order -- see
+       :func:`_settle_incoming_milestone_flags`, which owns the reason;
     2. reparent and refresh every task the file still carries;
     3. **then** delete the vanished ones with their subtree and both facets
        (Rule 3 / INV-02). Deleting after the reparenting is what makes a "summary
@@ -539,12 +638,15 @@ def apply_reimport(
        :func:`_recompute_derived_state`, which owns the reasons it comes last.
 
     Atomic: :func:`plan_reimport` validates the whole file first, so the revision
-    is either fully re-imported or rigorously untouched.
+    is either fully re-imported or rigorously untouched. Keeping that true is a
+    constraint on every guard the write phases go through -- none of them may
+    refuse a file the planner accepted, which is what phase 1's ordering is for.
     """
     require_draft(revision)
     diff = plan_reimport(project, revision, tasks, amount_of=amount_of)
 
     existing = planning_nodes_by_external_uid(project, revision)
+    _settle_incoming_milestone_flags(revision, tasks, existing)
     _create_missing_nodes(project, revision, tasks, existing, now)
     touched_parents, file_children = _reparent_and_refresh(revision, tasks, existing)
     _apply_removals(project, revision, diff, touched_parents, amount_of)

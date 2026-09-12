@@ -6,7 +6,8 @@ Nothing in this module knows about a database, a session or a request.
 
 Every operation refuses a command that *would* violate an invariant -- moving a
 node under one of its own descendants (INV-06), indenting a task under a cost
-line (INV-14), writing on a validated revision (INV-03) -- by raising a domain
+line (INV-14), hanging anything under a milestone (INV-27), writing on a
+validated revision (INV-03) -- by raising a domain
 exception *before* touching the state, rather than producing an invalid state for
 :func:`~waterfall.domain.revision.invariants.check_invariants` to report
 afterwards.
@@ -40,6 +41,7 @@ from waterfall.domain.revision.errors import (
     FacetContractError,
     FacetPlacementError,
     LinkError,
+    MilestoneChildError,
     NotFoundError,
     PositionError,
     ProjectMismatchError,
@@ -54,6 +56,7 @@ from waterfall.domain.revision.structure import (
     children_of,
     depth_first,
     is_cost_node,
+    is_milestone_node,
     is_plan_node,
     resolve_bearing_task,
     subtree_ids,
@@ -274,7 +277,24 @@ def _validate_insert_slot(
         raise FacetPlacementError(
             f"Node {parent_id} carries a cost facet and cannot hold a task (INV-14)"
         )
+    _reject_milestone_parent(revision, parent_id)
     return _resolve_position(revision, parent_id, position)
+
+
+def _reject_milestone_parent(revision: ProjectRevision, parent_id: int | None) -> None:
+    """Refuse to hang anything under a task marked as a milestone (INV-27).
+
+    The single statement of the rule for the whole module, called by both
+    placement guards -- :func:`_validate_insert_slot` for a creation and
+    :func:`_validate_move_target` for a move, an indentation or an outdent. A
+    jalon is a dated point, not a container: it carries neither a sub-task nor a
+    cost line, which is why the refusal does not look at the facet of the child.
+    """
+    if parent_id is not None and is_milestone_node(revision, parent_id):
+        raise MilestoneChildError(
+            f"Node {parent_id} is a milestone and cannot contain children (INV-27); "
+            "clear its milestone flag first, or pick another parent"
+        )
 
 
 def _renumber_children(revision: ProjectRevision, parent_id: int | None) -> None:
@@ -577,6 +597,7 @@ def _validate_move_target(
         raise FacetPlacementError(
             f"Node {target_parent_id} carries a cost facet and cannot hold a task (INV-14)"
         )
+    _reject_milestone_parent(revision, target_parent_id)
 
 
 def carries_labor(revision: ProjectRevision, roots: list[RevisionNode]) -> bool:

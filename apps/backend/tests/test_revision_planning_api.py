@@ -12,6 +12,7 @@ nothing to the endpoints being tested).
 
 from __future__ import annotations
 
+import re
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
@@ -25,6 +26,7 @@ from sqlalchemy.exc import DataError, IntegrityError
 from sqlalchemy.orm import Session
 
 from _revision_db_support import ReferenceData, insert_revision, insert_task
+from waterfall.api import revision_errors
 from waterfall.api.revision_errors import (
     _TRANSLATIONS,  # pyright: ignore[reportPrivateUsage]
     REVISION_IMMUTABLE,
@@ -1532,6 +1534,30 @@ def test_every_emitted_error_code_is_documented_in_the_contract() -> None:
         cited = {word.strip(".,;:()`") for word in description.split()}
         cited = {word for word in cited if word.isupper() and "_" in word}
         assert codes == cited, status_code
+
+
+def test_the_docstring_table_is_the_inventory_it_claims_to_be() -> None:
+    """B-1: the module docstring presents a table of reference; nothing held it to it.
+
+    The check above asserts ``_TRANSLATIONS`` against the OpenAPI descriptions and
+    never reads the docstring, so a new code could be -- and was, for
+    ``REVISION_MILESTONE_HAS_CHILDREN`` -- emitted and documented on the wire while
+    missing from the inventory a reader consults first. The drift is silent by
+    construction and repeats with every code, which #333 will add by the dozen.
+    """
+    docstring = revision_errors.__doc__
+    assert docstring is not None
+    tabled = {
+        (int(match.group(1)), match.group(2))
+        for match in re.finditer(r"\s(\d{3})\s+``([A-Z_]+)``", docstring)
+    }
+
+    emitted = {(status_code, code) for _error_type, status_code, code in _TRANSLATIONS}
+    # Not a translation of a domain exception: the routes raise it directly, but it
+    # is a revision code and the table carries it.
+    emitted.add((409, "REVISION_LOCK_CONFLICT"))
+
+    assert tabled == emitted
 
 
 def test_the_six_operations_document_the_422_they_can_answer() -> None:

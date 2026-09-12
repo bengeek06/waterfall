@@ -28,9 +28,14 @@ from waterfall.domain.revision.entities import (
     ProjectRevision,
     SupplyStatus,
 )
-from waterfall.domain.revision.errors import FacetContractError, NotFoundError
+from waterfall.domain.revision.errors import (
+    FacetContractError,
+    MilestoneChildError,
+    NotFoundError,
+)
 from waterfall.domain.revision.guards import require_draft, touch
 from waterfall.domain.revision.invariants import check_cost_facet_shape
+from waterfall.domain.revision.structure import children_of
 
 
 class _Unset(Enum):
@@ -166,6 +171,16 @@ def update_plan_facet(
     """
     require_draft(revision)
     facet = _plan_facet(revision, node_id)
+    # INV-27, and the only way into it this module has: marking a task that
+    # already holds children as a milestone would build the forbidden state from
+    # the other end, without a single node ever moving. Refused before the first
+    # assignment, so a rejected patch leaves the whole facet untouched rather than
+    # half applied.
+    if not isinstance(is_milestone, _Unset) and is_milestone and children_of(revision, node_id):
+        raise MilestoneChildError(
+            f"Node {node_id} holds children and cannot become a milestone (INV-27); "
+            "move or delete them first"
+        )
     if not isinstance(name, _Unset):
         facet.name = name
     if not isinstance(duration_minutes, _Unset):

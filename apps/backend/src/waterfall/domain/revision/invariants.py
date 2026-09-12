@@ -36,6 +36,7 @@ from waterfall.domain.revision.structure import (
     bearing_work_item_id,
     children_of,
     is_cost_node,
+    is_milestone_node,
     is_plan_node,
     node_by_work_item,
 )
@@ -66,6 +67,7 @@ STATE_SCOPED_INVARIANTS: Final[tuple[str, ...]] = (
     "INV-24",
     "INV-25",
     "INV-26",
+    "INV-27",
 )
 
 
@@ -694,6 +696,18 @@ def _check_inv_26(project: Project, revision: ProjectRevision) -> list[Invariant
     ]
 
 
+def _check_inv_27(revision: ProjectRevision) -> list[InvariantViolation]:
+    """A task marked as a milestone carries no child, of either facet."""
+    return [
+        _violation(
+            "INV-27",
+            f"milestone node {node.parent_id} has child node {node.id}",
+        )
+        for node in sorted(revision.nodes.values(), key=lambda item: item.id)
+        if node.parent_id is not None and is_milestone_node(revision, node.parent_id)
+    ]
+
+
 def check_project_scope(project: Project) -> list[InvariantViolation]:
     """Invariants asserted on the project as a whole (INV-21, INV-22, INV-25)."""
     return [*_check_inv_21(project), *_check_inv_22(project), *_check_inv_25(project)]
@@ -721,6 +735,7 @@ def check_revision_scope(project: Project, revision: ProjectRevision) -> list[In
         *_check_inv_23(revision),
         *_check_inv_24(revision),
         *_check_inv_26(project, revision),
+        *_check_inv_27(revision),
     ]
 
 

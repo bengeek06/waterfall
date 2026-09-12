@@ -1,13 +1,19 @@
 description: >-
   Requete refusee par le domaine de revision : selection vide ou incoherente,
   position hors plage, deplacement circulaire, tache placee sous une ligne de
-  cout, lien de precedence invalide, ou predecesseur n'appartenant pas a cette
-  revision. `detail.code` porte le code stable (REVISION_SELECTION_INVALID,
+  cout, noeud place sous un jalon, lien de precedence invalide, ou predecesseur
+  n'appartenant pas a cette revision. `detail.code` porte le code stable
+  (REVISION_SELECTION_INVALID,
   REVISION_POSITION_INVALID, REVISION_TREE_CYCLE,
-  REVISION_FACET_PLACEMENT_INVALID, REVISION_LINK_INVALID,
+  REVISION_FACET_PLACEMENT_INVALID, REVISION_MILESTONE_HAS_CHILDREN,
+  REVISION_LINK_INVALID,
   REVISION_CROSS_REVISION, REVISION_FACET_CONTRACT,
   REVISION_PROJECT_MISMATCH, REVISION_WORK_BREAKDOWN_INVALID,
   REVISION_IMPORT_STRUCTURE_INVALID, REVISION_REFUSED).
+  REVISION_MILESTONE_HAS_CHILDREN est le refus d'INV-27 : un jalon ne porte
+  aucun enfant, ni sous-tache ni ligne de cout, et la regle se lit dans les deux
+  sens -- on ne rattache rien sous un jalon, et on ne marque pas comme jalon une
+  tache qui porte deja des enfants.
   REVISION_CROSS_REVISION signifie « cet identifiant de noeud n'est pas un des
   notres » : il couvre aussi bien un noeud d'une autre revision qu'un
   identifiant qui ne designe aucun noeud, distinction que cette revision ne peut
