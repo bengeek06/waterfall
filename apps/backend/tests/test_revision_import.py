@@ -26,6 +26,12 @@ from fastapi.testclient import TestClient
 from httpx import Response
 
 from _calendar_support import ensure_default_calendar
+from _mspdi_fixture_support import (
+    ALL_MSPDI_FIXTURES,
+    generate_mspdi,
+    mspdi_bytes,
+    read_mspdi,
+)
 from _revision_db_support import ReferenceData, insert_labor_line, insert_purchase_line
 from waterfall.db.session import get_session_factory
 from waterfall.domain import revision as domain
@@ -42,10 +48,11 @@ from waterfall.models.revision import ProjectRevision, RevisionNode, RevisionPla
 from waterfall.services import revision_import
 from waterfall.services.msproject_xml import parse_msproject_xml, validate_canonical_export_xml
 
-COBRA_XML = Path(__file__).resolve().parents[3] / "examples" / "planning_cobra.xml"
-#: Tasks of ``planning_cobra.xml`` minus MS Project's project summary task (UID 0),
-#: which the parser drops: it is not a schedulable task.
-COBRA_TASK_COUNT = 542
+#: Volume du round trip export -> ré-import : assez gros et assez profond pour que
+#: l'export parcoure un vrai arbre plutôt qu'une poignée de nœuds, assez petit pour
+#: que l'aller-retour HTTP reste de l'ordre de la seconde. Généré, jamais committé.
+ROUND_TRIP_TASK_COUNT = 250
+ROUND_TRIP_DEPTH = 6
 
 
 def _auth_headers(client: TestClient) -> dict[str, str]:
@@ -195,6 +202,30 @@ def _external_uids(project_id: int) -> dict[int, str]:
     return {uid: name for uid, name in rows if uid is not None}
 
 
+def _parent_external_uids(project_id: int) -> dict[int, int | None]:
+    """``external_uid -> external_uid du parent`` de chaque nœud de planification.
+
+    Exprimé en uids du fichier et non en ids de nœuds : c'est la hiérarchie que le
+    fichier décrit, et elle doit se retrouver telle quelle dans la révision, quelle
+    que soit la façon dont les ids ont été attribués.
+    """
+    with get_session_factory()() as session:
+        rows = (
+            session.query(RevisionNode.id, RevisionNode.parent_id, WorkItem.external_uid)
+            .join(WorkItem, WorkItem.id == RevisionNode.work_item_id)
+            .join(RevisionPlanFacet, RevisionPlanFacet.node_id == RevisionNode.id)
+            .join(ProjectRevision, ProjectRevision.id == RevisionNode.revision_id)
+            .filter(ProjectRevision.project_id == project_id)
+            .all()
+        )
+    uid_by_node = {node_id: uid for node_id, _, uid in rows}
+    return {
+        uid: (None if parent_id is None else uid_by_node[parent_id])
+        for _, parent_id, uid in rows
+        if uid is not None
+    }
+
+
 def _planning_nodes(project_id: int) -> list[tuple[int | None, str, int, int]]:
     """``(external_uid, name, node_id, work_item_id)`` of every planning node."""
     with get_session_factory()() as session:
@@ -275,15 +306,27 @@ def _exported_uids(document: bytes) -> set[int]:
 # --------------------------------------------------------------------------------------
 
 
-def test_importing_planning_cobra_creates_one_node_per_task_keyed_by_external_uid() -> None:
+@pytest.mark.parametrize("fixture", ALL_MSPDI_FIXTURES, ids=lambda path: path.stem)
+def test_importing_a_planning_creates_one_node_per_task_keyed_by_external_uid(
+    fixture: Path,
+) -> None:
+    """Vrai pour chacune des quatre formes MSPDI versionnées, pas seulement pour une.
+
+    Hiérarchie profonde, jalons, liens avec décalage, dates et calendrier : ce qui
+    est affirmé ici -- une facette de planification par tâche du fichier, portée
+    par un work item qui garde l'uid du fichier -- ne doit dépendre d'aucune de
+    ces formes. Le paramétrage est ce qui empêche la règle d'être vérifiée sur le
+    seul cas le plus plat.
+    """
     with TestClient(app) as client:
         headers = _auth_headers(client)
         project_id = _create_project(client, headers)
 
-        assert _import(client, headers, project_id, COBRA_XML.read_bytes()).status_code == 202
+        assert _import(client, headers, project_id, mspdi_bytes(fixture)).status_code == 202
 
-        parsed = parse_msproject_xml(COBRA_XML.read_bytes())
-        assert len(parsed.tasks) == COBRA_TASK_COUNT
+        parsed = parse_msproject_xml(mspdi_bytes(fixture))
+        task_count = len(parsed.tasks)
+        assert task_count > 1
         revision_id = _revision_id(project_id)
         with get_session_factory()() as session:
             facets = (
@@ -292,7 +335,7 @@ def test_importing_planning_cobra_creates_one_node_per_task_keyed_by_external_ui
                 .filter(RevisionNode.revision_id == revision_id)
                 .count()
             )
-            assert facets == COBRA_TASK_COUNT
+            assert facets == task_count
             # Every node designates a work item carrying the file's own uid, and the
             # calendar is a stored attribute initialised to the project's (Règle 1),
             # never derived on read.
@@ -301,6 +344,10 @@ def test_importing_planning_cobra_creates_one_node_per_task_keyed_by_external_ui
                 for facet in session.query(RevisionPlanFacet).all()
             )
         assert set(_external_uids(project_id)) == {task.uid for task in parsed.tasks}
+        # Et la hiérarchie du fichier est celle de la révision, sur toute sa profondeur.
+        assert _parent_external_uids(project_id) == {
+            task.uid: task.parent_uid for task in read_mspdi(mspdi_bytes(fixture)).tasks
+        }
 
 
 def test_the_import_still_writes_the_legacy_tables_in_the_same_transaction() -> None:
@@ -473,11 +520,31 @@ def test_exporting_a_revision_without_a_default_calendar_is_a_conflict_not_a_cra
 
 
 def test_exporting_a_revision_and_reimporting_it_restores_the_same_external_uids() -> None:
+    """Le round trip sur un arbre de volume, fabriqué ici plutôt que lu d'un fichier.
+
+    L'aller-retour ne prouve quelque chose que sur un arbre qui a de la
+    profondeur, des jalons et des liens : sur deux tâches à plat, un export qui
+    perdrait la hiérarchie passerait quand même. Le document est donc généré, ce
+    qui donne ce volume sans rien committer et sans dépendre d'un fichier absent
+    du dépôt.
+    """
+    source = generate_mspdi(
+        task_count=ROUND_TRIP_TASK_COUNT,
+        depth=ROUND_TRIP_DEPTH,
+        branching=3,
+        milestone_every=5,
+        link_every=2,
+        name="Round trip export/import",
+        guid="REVISION-IMPORT-ROUNDTRIP-01",
+    )
+    expected_parents = {task.uid: task.parent_uid for task in read_mspdi(source).tasks}
     with TestClient(app) as client:
         headers = _auth_headers(client)
         project_id = _create_project(client, headers)
-        assert _import(client, headers, project_id, COBRA_XML.read_bytes()).status_code == 202
+        assert _import(client, headers, project_id, source).status_code == 202
         original = _external_uids(project_id)
+        assert len(original) == ROUND_TRIP_TASK_COUNT
+        assert _parent_external_uids(project_id) == expected_parents
 
         revision_id = _revision_id(project_id)
         export = client.get(
@@ -498,6 +565,8 @@ def test_exporting_a_revision_and_reimporting_it_restores_the_same_external_uids
 
         assert _import(client, headers, project_id, exported).status_code == 202
         assert _external_uids(project_id) == original
+        # La hiérarchie a survécu à l'aller-retour, pas seulement la liste des uids.
+        assert _parent_external_uids(project_id) == expected_parents
 
 
 # --------------------------------------------------------------------------------------

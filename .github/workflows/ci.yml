@@ -121,11 +121,11 @@ jobs:
           TEST_REDIS_URL: redis://:waterfall-ci-redis@localhost:6379/0
         run: pytest -q
 
-      - name: PostgreSQL planning benchmark baseline
+      - name: PostgreSQL revision benchmark baseline
         env:
           TEST_POSTGRES_URL: postgresql+psycopg://waterfall:waterfall@localhost:5432/waterfall
           TEST_REDIS_URL: redis://:waterfall-ci-redis@localhost:6379/0
-        run: pytest -q -s --no-cov tests/test_planning_benchmark_postgres.py
+        run: pytest -q -s --no-cov tests/test_revision_benchmark_postgres.py
 
   frontend-quality:
     needs: changes
