@@ -1397,7 +1397,11 @@ def test_inv_26_saving_the_lotissement_is_the_only_trigger_of_the_initialise_sta
 # * ``insert_node`` (and ``add_task``/``add_cost_line``/``generate_skeleton`` through
 #   it) -- guarded by ``tree._validate_insert_slot``;
 # * ``move_nodes`` (and ``indent_nodes``/``outdent_nodes``/``move_nodes_up``/
-#   ``move_nodes_down`` through it) -- guarded by ``tree._validate_move_target``;
+#   ``move_nodes_down`` through it) -- guarded by ``tree._validate_move_target``.
+#   ``outdent_nodes`` *bears* the rule since #344: its new semantics hands the
+#   following siblings over to the outdented node, which may itself be a jalon;
+#   it stays guarded only because that rattachement goes through the very same
+#   relocation core, and not through a direct ``parent_id`` write;
 # * ``facets.update_plan_facet``, the only writer of ``is_milestone`` outside a
 #   creation -- guarded in place, before the first assignment of the patch;
 # * ``reimport._reparent_and_refresh`` / ``_apply_plan_facet``, which write both at
@@ -1538,13 +1542,38 @@ def test_inv_27_a_leaf_task_may_still_become_a_milestone(bench: Bench) -> None:
     assert_sound(project, revision)
 
 
-def test_inv_27_outdenting_is_untouched_by_the_rule(bench: Bench) -> None:
-    """#344 owns ``outdent_nodes``; INV-27 asked nothing of it.
+def test_inv_27_outdenting_a_milestone_that_has_following_siblings_is_refused() -> None:
+    """What #344 made the outdent *bear* -- the guard is no longer a mere belt.
 
-    An outdent moves a selection to its *grandparent*, which already holds the
-    former parent and therefore cannot be a milestone on a sound state. The guard
-    it inherits from ``move_nodes`` is a belt, never the braces -- which is why
-    nothing in ``outdent_nodes`` itself had to change.
+    Under the MS Project semantics of Règle 5 the siblings that follow the
+    outdented node become its **children**, so the outdented node is now a parent
+    and may be a jalon. The refusal only holds because ``outdent_nodes`` hands the
+    following siblings over through the relocation core, and therefore through
+    ``_validate_move_target``: writing ``parent_id`` in place -- as ``reimport``
+    legitimately does elsewhere -- would walk straight past INV-27.
+
+    Nothing is written: the rattachement of the tail runs *before* the outdent
+    itself, precisely so a refusal costs no mutation.
+    """
+    project = build_project()
+    revision = build_draft(project)
+    parent = add_task(project, revision, name="Parent")
+    jalon = add_task(project, revision, name="Jalon", parent_id=parent.id, is_milestone=True)
+    add_task(project, revision, name="Suivante", parent_id=parent.id)
+    before = copy.deepcopy(revision)
+
+    with pytest.raises(MilestoneChildError):
+        outdent_nodes(project, revision, [jalon.id])
+
+    assert revision == before
+
+
+def test_inv_27_outdenting_a_milestone_with_nothing_after_it_stays_allowed(bench: Bench) -> None:
+    """The symmetric: no following sibling, no child handed over, no violation.
+
+    The grandparent an outdent targets already holds the former parent, so it can
+    never be a milestone on a sound state -- that half of the guard is still the
+    belt it was before #344.
     """
     project, revision = bench.project, bench.revision
     update_plan_facet(project, revision, bench.root_c, is_milestone=True)

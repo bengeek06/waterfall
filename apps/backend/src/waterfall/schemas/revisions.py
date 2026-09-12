@@ -289,7 +289,9 @@ class RevisionNodeMove(RevisionWrite):
       the root) at ``position`` (absent = last);
     * ``up``/``down`` shift a contiguous block of siblings by one;
     * ``indent`` puts a block under its immediately preceding sibling,
-      ``outdent`` moves it to its grandparent.
+      ``outdent`` moves it to its grandparent, right after its former parent, and
+      hands the siblings that followed it over to it so that the order of the
+      displayed rows is preserved (Règle 5 of the revision specification).
 
     A node whose ancestor is also selected is carried by that ancestor rather than
     moved twice, and every selected node takes its subtree and both its facets with

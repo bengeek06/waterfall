@@ -36,6 +36,7 @@ from waterfall.domain.revision import (
     PositionError,
     Project,
     ProjectMismatchError,
+    ProjectRevision,
     RevisionDomainError,
     RevisionKind,
     RevisionLifecycleError,
@@ -287,6 +288,36 @@ def test_indent_places_the_selection_under_its_preceding_sibling(bench: Bench) -
     assert_sound(project, revision)
 
 
+def test_indent_preserves_the_display_order_too(bench: Bench) -> None:
+    """The symmetric of Règle 5, verified rather than assumed (#344).
+
+    MS Project makes an indented task the child of the sibling that **precedes**
+    it, which is already what ``indent_nodes`` does -- and appending the block at
+    the end of that sibling's children is what keeps the rows in order, whether
+    the new parent already had children or not. Unlike an outdent, an indentation
+    leaves the *following* siblings alone: they stay at their level, behind the
+    block. Here ``C`` is indented under ``A``, which already holds ``B`` and
+    ``Câblage``, and the cost line ``Assurance chantier`` that follows ``C`` does
+    not move at all.
+    """
+    project, revision = bench.project, bench.revision
+    before = _rows(revision)
+
+    indent_nodes(project, revision, [bench.root_c])
+
+    assert [name for name, _ in _rows(revision)] == [name for name, _ in before]
+    assert _rows(revision) == [
+        ("A", 0),
+        ("B", 1),
+        ("Étude", 2),
+        ("Câblage", 1),
+        ("C", 1),
+        ("Assurance chantier", 0),
+    ]
+    assert revision.nodes[bench.global_cost].parent_id is None
+    assert_sound(project, revision)
+
+
 def test_indent_of_a_first_child_or_of_a_split_selection_is_refused(bench: Bench) -> None:
     project, revision = bench.project, bench.revision
 
@@ -313,6 +344,175 @@ def test_outdent_of_a_root_node_is_refused(bench: Bench) -> None:
 
     with pytest.raises(SelectionError):
         outdent_nodes(project, revision, [bench.root_a])
+
+
+def _rows(revision: ProjectRevision) -> list[tuple[str, int]]:
+    """The displayed rows -- label and indentation level -- in depth-first order.
+
+    What the user actually sees, which is the property Règle 5 is stated on: an
+    outdent changes the *level* of the selection and nothing else in this list.
+    """
+    depth = {node.id: index for index, level in enumerate(levels(revision)) for node in level}
+    return [
+        (
+            revision.plan_facets[node.id].name
+            if node.id in revision.plan_facets
+            else revision.cost_facets[node.id].label,
+            depth[node.id],
+        )
+        for node in depth_first(revision)
+    ]
+
+
+def test_outdent_preserves_the_display_order_and_hands_the_following_siblings_over() -> None:
+    """Règle 5, on the canonical example of #344.
+
+    ``before: P > [X, Y, Z]`` / ``outdent(Y)`` / ``after: P > [X], Y > [Z]``. The
+    rows stay in the very same order -- only ``Y`` changes level -- and ``Z``,
+    which the user never selected, becomes a child of ``Y`` because that is the
+    only way it can keep its rank.
+    """
+    project = build_project()
+    revision = build_draft(project)
+    parent = add_task(project, revision, name="P")
+    x, y, z = (
+        add_task(project, revision, name=name, parent_id=parent.id).id for name in ("X", "Y", "Z")
+    )
+    before = _rows(revision)
+    assert before == [("P", 0), ("X", 1), ("Y", 1), ("Z", 1)]
+
+    outdent_nodes(project, revision, [y])
+
+    assert [name for name, _ in _rows(revision)] == [name for name, _ in before]
+    assert _rows(revision) == [("P", 0), ("X", 1), ("Y", 0), ("Z", 1)]
+    assert [node.id for node in children_of(revision, parent.id)] == [x]
+    assert [node.id for node in children_of(revision, y)] == [z]
+    assert_sound(project, revision)
+
+
+def test_outdent_renumbers_both_sibling_sets_contiguously() -> None:
+    """INV-05 on the two sets an outdent rewrites: the former parent's and the target's."""
+    project = build_project()
+    revision = build_draft(project)
+    parent = add_task(project, revision, name="P")
+    tail = add_task(project, revision, name="Tail")
+    children = [
+        add_task(project, revision, name=name, parent_id=parent.id).id
+        for name in ("X", "Y", "Z", "W")
+    ]
+
+    outdent_nodes(project, revision, [children[1]])
+
+    assert [node.position for node in children_of(revision, parent.id)] == [1]
+    assert [node.position for node in children_of(revision, children[1])] == [1, 2]
+    assert [(node.id, node.position) for node in children_of(revision, None)] == [
+        (parent.id, 1),
+        (children[1], 2),
+        (tail.id, 3),
+    ]
+    assert_sound(project, revision)
+
+
+def test_outdent_of_a_contiguous_block_hands_the_rest_over_to_its_last_node() -> None:
+    """Multi-selection: the block keeps its order, the tail lands under its *last* node.
+
+    Anything else would break Règle 5 -- the tail has to follow the last selected
+    row, and it can only stay below it by hanging under it.
+    """
+    project = build_project()
+    revision = build_draft(project)
+    parent = add_task(project, revision, name="P")
+    w, x, y, z = (
+        add_task(project, revision, name=name, parent_id=parent.id).id
+        for name in ("W", "X", "Y", "Z")
+    )
+
+    outdent_nodes(project, revision, [x, y])
+
+    assert _rows(revision) == [("P", 0), ("W", 1), ("X", 0), ("Y", 0), ("Z", 1)]
+    assert [node.id for node in children_of(revision, parent.id)] == [w]
+    assert [node.id for node in children_of(revision, y)] == [z]
+    assert not children_of(revision, x)
+    assert_sound(project, revision)
+
+
+def test_outdent_of_the_last_siblings_hands_nothing_over(bench: Bench) -> None:
+    """No following sibling, no rattachement: the historical behaviour, unchanged."""
+    project, revision = bench.project, bench.revision
+
+    outdent_nodes(project, revision, [bench.supply])
+
+    assert revision.nodes[bench.supply].parent_id is None
+    assert _names(bench, None) == ["A", "Câblage", "C", "Assurance chantier"]
+    assert [node.id for node in children_of(revision, bench.supply)] == []
+    assert_sound(project, revision)
+
+
+def test_outdent_carries_the_cost_lines_of_the_following_siblings_along(bench: Bench) -> None:
+    """One tree, two facets: the tail moves whole, chiffrage included (#344).
+
+    ``root_a`` holds the task ``child_b`` then the supply line ``Câblage``. The
+    user outdents the task alone; the supply line follows it down a level, with
+    its amount untouched and a **new bearing task** (INV-01, never memorised).
+    This is the price of Règle 5, and it is deliberate: an outdent moves cost
+    lines the user did not select.
+    """
+    project, revision = bench.project, bench.revision
+    supply_before = copy.deepcopy(revision.cost_facets[bench.supply])
+    bearing_before = resolve_bearing_task(revision, bench.supply)
+    assert bearing_before is not None and bearing_before.id == bench.root_a
+
+    outdent_nodes(project, revision, [bench.child_b])
+
+    assert revision.nodes[bench.supply].parent_id == bench.child_b
+    assert revision.cost_facets[bench.supply] == supply_before
+    bearing = resolve_bearing_task(revision, bench.supply)
+    assert bearing is not None and bearing.id == bench.child_b
+    assert _rows(revision) == [
+        ("A", 0),
+        ("B", 0),
+        ("Étude", 1),
+        ("Câblage", 1),
+        ("C", 0),
+        ("Assurance chantier", 0),
+    ]
+    assert_sound(project, revision)
+
+
+def test_outdent_bumps_the_optimistic_lock_once_even_when_it_relocates_twice() -> None:
+    """An outdent is *one* operation: the service consumes exactly one version.
+
+    ``waterfall.services.revision_tree._write`` relies on it -- a domain call that
+    bumped the counter twice would leave the caller's next ``expected_lock_version``
+    off by one.
+    """
+    project = build_project()
+    revision = build_draft(project)
+    parent = add_task(project, revision, name="P")
+    x = add_task(project, revision, name="X", parent_id=parent.id).id
+    add_task(project, revision, name="Y", parent_id=parent.id)
+    before = revision.lock_version
+
+    outdent_nodes(project, revision, [x])
+
+    assert revision.lock_version == before + 1
+
+
+def test_outdent_under_a_cost_line_is_refused_rather_than_hidden(bench: Bench) -> None:
+    """The tail cannot become the child of an outdented *cost* line (INV-14).
+
+    ``root_a`` > [``child_b`` (task), ``supply`` (cost)] with the order reversed:
+    outdenting the cost line would hand the task over to it. Refused before any
+    mutation, exactly as a direct move would be.
+    """
+    project, revision = bench.project, bench.revision
+    move_nodes(project, revision, [bench.supply], target_parent_id=bench.root_a, position=1)
+    before = copy.deepcopy(revision)
+
+    with pytest.raises(FacetPlacementError):
+        outdent_nodes(project, revision, [bench.supply])
+
+    assert revision == before
 
 
 def test_move_keeps_the_relative_order_of_a_multi_node_selection(bench: Bench) -> None:

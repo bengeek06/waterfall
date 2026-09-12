@@ -565,6 +565,58 @@ génération — savoir quel nœud provient de quel élément de lotissement, po
 regénération a le droit d'écraser. L'empreinte répond à la même question sans marquer les nœuds, et
 la réponse qu'elle donne est « tout ou rien », qui est la seule que la règle c autorise.
 
+### Règle 5 — La désindentation préserve l'ordre des lignes affichées
+
+**Désindenter une sélection ne change que son niveau : la suite des lignes affichées est exactement
+celle que l'utilisateur avait sous les yeux avant la commande.** C'est la sémantique MS Project.
+
+```
+avant : P > [X, Y, Z]        lignes affichées : P, X, Y, Z
+outdent(Y)
+après : P > [X] , Y > [Z]    lignes affichées : P, X, Y, Z
+```
+
+*Motif* : les utilisateurs de ce produit viennent de MS Project. Une désindentation qui réordonne
+des lignes qu'ils n'ont pas sélectionnées — ici `P, X, Z, Y` — y serait perçue comme un bug, et non
+comme une variante défendable.
+
+**Le rattachement des frères suivants est une conséquence, pas une règle.** La sélection désindentée
+se place immédiatement après son ancien parent ; les frères qui la suivaient ne peuvent alors
+conserver leur rang qu'en devenant les enfants du **dernier** nœud désindenté. C'est la propriété
+d'ordre qui est énoncée et qui se vérifie ; le rattachement s'en déduit.
+
+**Sélection multiple.** La commande porte sur un **bloc contigu** de frères — une sélection à trou
+est refusée, comme pour l'indentation et les décalages haut/bas, parce qu'elle ferait franchir à un
+nœud non sélectionné les lignes qui l'entourent. Le bloc conserve son ordre relatif, et c'est son
+dernier nœud qui reçoit les frères suivants ; les nœuds précédents du bloc n'en reçoivent aucun.
+Les deux fratries réécrites — celle de l'ancien parent et celle du grand-parent — sont renumérotées
+contiguës ([INV-05](#inv-05)).
+
+**Conséquence sur le chiffrage.** Il n'y a qu'un seul arbre et deux facettes : les frères suivants
+qui deviennent enfants emportent **toute leur facette coût**, puisque c'est le même nœud qui se
+déplace. Une désindentation déplace donc des lignes de coût que l'utilisateur n'a pas sélectionnées.
+Leur montant, leur rôle, leurs heures et leur imputation sont inchangés ; seule leur **tâche
+porteuse** change, et elle n'est jamais mémorisée ([INV-01](#inv-01), et le cas limite
+[« Une réindentation qui change la tâche porteuse d'une ligne de coût »](#une-réindentation-qui-change-la-tâche-porteuse-dune-ligne-de-coût)).
+C'est voulu, et c'est ce que l'interface devra rendre lisible avant de proposer l'opération.
+
+**Ce que la règle fait porter aux gardes de placement.** Le nœud désindenté devient un **parent** :
+la commande est donc refusée, avant toute mutation, lorsque le rattachement des frères suivants
+violerait une règle de placement — un jalon qui ne porte aucun enfant ([INV-27](#inv-27)), une ligne
+de coût qui ne peut pas contenir une tâche ([INV-14](#inv-14)). Ces refus ne sont pas des cas
+particuliers de la désindentation : elle réutilise le déplacement, donc ses gardes.
+
+**Portée : opération.** C'est une post-condition, qui se vérifie en comparant l'état avant et après,
+et non une assertion sur un état isolé : elle a donc sa place parmi les règles tranchées et non
+parmi les invariants, que la fonction de contrôle évalue sur un état seul. C'est aussi, comme les
+règles 1 à 3, un arbitrage produit assorti de son motif.
+
+**L'indentation est le symétrique, et elle est déjà conforme.** Indenter un bloc contigu le place
+sous le frère qui le **précède**, en dernière position parmi les enfants de celui-ci : là encore
+l'ordre des lignes est préservé et seul le niveau du bloc change. Le premier enfant d'un parent n'a
+aucun frère précédent et ne peut donc pas être indenté. Contrairement à la désindentation,
+l'indentation ne touche pas aux frères suivants : ils restent au même niveau, derrière le bloc.
+
 ## Invariants
 
 Chaque invariant porte un identifiant stable, un énoncé vérifiable, une **portée** et une manière
@@ -749,6 +801,13 @@ regarde pas la facette de l'enfant, et interdit donc aussi bien une sous-tâche 
 *Portée : état. Violation : indenter une tâche sous un jalon, rattacher une ligne de coût à une tâche
 jalon, ou marquer comme jalon une tâche qui porte déjà des enfants.*
 
+La **désindentation** est le cas où la règle mord le plus discrètement : elle fait du nœud
+désindenté le parent des frères qui le suivaient
+([Règle 5](#règle-5--la-désindentation-préserve-lordre-des-lignes-affichées)), donc désindenter un
+jalon suivi d'au moins un frère est refusé, alors même que l'utilisateur n'a désigné aucun parent.
+La garde ne tient que parce que ce rattachement passe par le déplacement et ses gardes ; un
+`parent_id` écrit en place y échapperait.
+
 L'invariant se lit dans les deux sens, et chacun des deux sens est refusé **avant toute mutation**,
 avec l'état laissé rigoureusement inchangé : on ne rattache rien sous un jalon — création,
 déplacement, indentation, réimport — et on ne marque pas comme jalon une tâche qui porte déjà des
@@ -899,6 +958,12 @@ résout à la lecture par [INV-01](#inv-01). Le montant, le rôle, les heures, l
 et le code d'imputation de la ligne sont inchangés par le déplacement — seule sa position dans
 l'arbre change. Réciproquement, déplacer ou indenter une tâche emporte ses lignes de coût, avec
 leurs affectations et leurs montants, parce que ce sont ses descendants dans le seul arbre existant.
+
+La **désindentation** va plus loin : elle déplace aussi des lignes de coût que l'utilisateur n'a
+**pas** sélectionnées, à savoir celles qui suivaient la sélection dans la même fratrie et qui en
+deviennent les enfants pour que l'ordre des lignes affichées soit préservé
+([Règle 5](#règle-5--la-désindentation-préserve-lordre-des-lignes-affichées)). Là encore rien du
+chiffrage n'est modifié — seule la tâche porteuse change, et elle se résout à la lecture.
 
 ### Un nœud portant simultanément les deux facettes
 
