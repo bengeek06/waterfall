@@ -3,7 +3,7 @@
 Deliberately not named ``test_*.py`` (see ``_estimate_grid_support.py`` for the
 same reasoning): pytest would otherwise try to import it as a test module.
 
-Two kinds of helper live here:
+Three kinds of helper live here:
 
 * sound builders (:func:`build_project`, :func:`build_draft`), which go through
   the domain operations and therefore always produce a valid state;
@@ -11,7 +11,12 @@ Two kinds of helper live here:
   the dataclasses, bypassing every guard. They exist for one purpose only:
   reproducing the *canonical violation* each invariant of
   ``docs/revision-v0.1-specification.md`` documents, so the checker can be caught
-  failing to report it.
+  failing to report it;
+* le banc de planning (:func:`build_planning_bench`), qui monte un fichier MSPDI
+  -- une fixture versionnée ou un volume généré, au choix de l'appelant -- dans
+  une révision brouillon. C'est par lui que passe tout test ayant besoin d'un
+  arbre profond et varié plutôt que du minuscule :func:`build_bench`. Les
+  fichiers eux-mêmes vivent dans ``_mspdi_fixture_support``.
 """
 
 from __future__ import annotations
@@ -19,10 +24,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
+from _mspdi_fixture_support import MspdiPlanning
 from waterfall.domain.revision import (
     CalendarSource,
     CostFacet,
     CostNature,
+    ImportedTask,
     NodeLink,
     PlanFacet,
     Project,
@@ -31,6 +38,7 @@ from waterfall.domain.revision import (
     RevisionNode,
     Role,
     add_cost_line,
+    add_link,
     add_task,
     check_invariants,
     create_revision,
@@ -207,3 +215,84 @@ def assert_sound(project: Project, revision: ProjectRevision) -> None:
     """Fail with the full detail if any state-scoped invariant is violated."""
     violations = check_invariants(project, revision)
     assert not violations, "; ".join(str(violation) for violation in violations)
+
+
+@dataclass
+class PlanningBench:
+    """Un projet dont la révision brouillon porte un planning MSPDI importé.
+
+    C'est le banc de départ de tout test de domaine qui a besoin d'un arbre plus
+    riche que :func:`build_bench` : plusieurs niveaux, des récapitulatifs, des
+    jalons et des liens de précédence. La fixture ou le volume est choisi par
+    l'appelant, ce module ne fait que le transformer en révision ::
+
+        from _mspdi_fixture_support import HIERARCHY_MSPDI, read_mspdi_fixture
+        from _revision_domain_support import build_planning_bench
+
+        bench = build_planning_bench(read_mspdi_fixture(HIERARCHY_MSPDI))
+
+    ``node_by_uid`` est la seule table de correspondance dont un test a besoin
+    pour désigner une tâche par l'uid du fichier plutôt que par un id de nœud
+    attribué à la volée.
+    """
+
+    project: Project
+    revision: ProjectRevision
+    node_by_uid: dict[int, int]
+    planning: MspdiPlanning
+
+
+def imported_tasks(planning: MspdiPlanning) -> list[ImportedTask]:
+    """Traduire un planning lu en entrées de réimport, dans l'ordre du fichier."""
+    return [
+        ImportedTask(
+            external_uid=task.uid,
+            name=task.name,
+            parent_external_uid=task.parent_uid,
+            duration_minutes=task.duration_minutes,
+            is_milestone=task.is_milestone,
+            percent_complete=task.percent_complete,
+        )
+        for task in planning.tasks
+    ]
+
+
+def build_planning_bench(
+    planning: MspdiPlanning, *, project: Project | None = None
+) -> PlanningBench:
+    """Monter ``planning`` dans une révision brouillon, en passant par les opérations.
+
+    Rien n'est écrit en direct dans les dataclasses : chaque tâche passe par
+    :func:`add_task` et chaque lien par :func:`add_link`, donc le banc obtenu est
+    valide par construction et un banc qui ne se monterait pas serait déjà la
+    preuve d'un défaut.
+    """
+    project = build_project() if project is None else project
+    revision = build_draft(project)
+    node_by_uid: dict[int, int] = {}
+    for task in imported_tasks(planning):
+        parent_id = (
+            None if task.parent_external_uid is None else node_by_uid[task.parent_external_uid]
+        )
+        node = add_task(
+            project,
+            revision,
+            name=task.name,
+            parent_id=parent_id,
+            external_uid=task.external_uid,
+            duration_minutes=task.duration_minutes,
+            is_milestone=task.is_milestone,
+        )
+        node_by_uid[task.external_uid] = node.id
+    for link in planning.links:
+        add_link(
+            revision,
+            node_id=node_by_uid[link.uid],
+            predecessor_node_id=node_by_uid[link.predecessor_uid],
+            link_type=link.link_type,
+            lag_tenth_minute=link.lag_tenth_minute,
+            lag_format=link.lag_format,
+        )
+    return PlanningBench(
+        project=project, revision=revision, node_by_uid=node_by_uid, planning=planning
+    )

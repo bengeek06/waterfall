@@ -1,0 +1,184 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Couverture : hiérarchie multi-niveaux (4 niveaux) avec récapitulatifs.
+
+  Pourquoi cette fixture : le modèle de révision dérive le parent d'une tâche de
+  son OutlineNumber / OutlineLevel, et la plupart des opérations d'arbre (indent,
+  outdent, move, suppression de sous-arbre) n'ont de sens que sur un arbre qui a
+  au moins un grand-parent, un parent intermédiaire et plusieurs feuilles sœurs.
+  On y trouve donc : un récapitulatif de niveau 1 qui ne porte que des
+  récapitulatifs, un récapitulatif de niveau 2 qui porte des feuilles, une
+  branche descendant jusqu'au niveau 4, et une tâche feuille à la racine.
+
+  Données entièrement inventées : aucun planning client n'entre dans le dépôt.
+-->
+<Project xmlns="http://schemas.microsoft.com/project/2007">
+  <SaveVersion>16</SaveVersion>
+  <GUID>FIXTURE-MSPDI-HIERARCHY-0001</GUID>
+  <Name>mspdi_hierarchy.xml</Name>
+  <ScheduleFromStart>1</ScheduleFromStart>
+  <StartDate>2026-01-05T08:00:00</StartDate>
+  <FinishDate>2026-06-30T17:00:00</FinishDate>
+  <MinutesPerDay>480</MinutesPerDay>
+  <MinutesPerWeek>2400</MinutesPerWeek>
+  <DaysPerMonth>20</DaysPerMonth>
+  <CurrencyCode>EUR</CurrencyCode>
+  <Tasks>
+    <Task>
+      <UID>1</UID>
+      <ID>1</ID>
+      <Name>Lot A — Études</Name>
+      <Type>1</Type>
+      <OutlineNumber>1</OutlineNumber>
+      <OutlineLevel>1</OutlineLevel>
+      <Summary>1</Summary>
+      <Milestone>0</Milestone>
+    </Task>
+    <Task>
+      <UID>2</UID>
+      <ID>2</ID>
+      <Name>Étude préliminaire</Name>
+      <Type>1</Type>
+      <OutlineNumber>1.1</OutlineNumber>
+      <OutlineLevel>2</OutlineLevel>
+      <Summary>1</Summary>
+      <Milestone>0</Milestone>
+    </Task>
+    <Task>
+      <UID>3</UID>
+      <ID>3</ID>
+      <Name>Relevé de l'existant</Name>
+      <Type>0</Type>
+      <OutlineNumber>1.1.1</OutlineNumber>
+      <OutlineLevel>3</OutlineLevel>
+      <Duration>PT2400M</Duration>
+      <DurationFormat>7</DurationFormat>
+      <Summary>0</Summary>
+      <Milestone>0</Milestone>
+    </Task>
+    <Task>
+      <UID>4</UID>
+      <ID>4</ID>
+      <Name>Note de cadrage</Name>
+      <Type>0</Type>
+      <OutlineNumber>1.1.2</OutlineNumber>
+      <OutlineLevel>3</OutlineLevel>
+      <Duration>PT960M</Duration>
+      <DurationFormat>7</DurationFormat>
+      <Summary>0</Summary>
+      <Milestone>0</Milestone>
+    </Task>
+    <Task>
+      <UID>5</UID>
+      <ID>5</ID>
+      <Name>Étude détaillée</Name>
+      <Type>1</Type>
+      <OutlineNumber>1.2</OutlineNumber>
+      <OutlineLevel>2</OutlineLevel>
+      <Summary>1</Summary>
+      <Milestone>0</Milestone>
+    </Task>
+    <Task>
+      <UID>6</UID>
+      <ID>6</ID>
+      <Name>Plans d'exécution</Name>
+      <Type>1</Type>
+      <OutlineNumber>1.2.1</OutlineNumber>
+      <OutlineLevel>3</OutlineLevel>
+      <Summary>1</Summary>
+      <Milestone>0</Milestone>
+    </Task>
+    <Task>
+      <UID>7</UID>
+      <ID>7</ID>
+      <Name>Plan de masse</Name>
+      <Type>0</Type>
+      <OutlineNumber>1.2.1.1</OutlineNumber>
+      <OutlineLevel>4</OutlineLevel>
+      <Duration>PT1440M</Duration>
+      <DurationFormat>7</DurationFormat>
+      <Summary>0</Summary>
+      <Milestone>0</Milestone>
+    </Task>
+    <Task>
+      <UID>8</UID>
+      <ID>8</ID>
+      <Name>Plan de détail</Name>
+      <Type>0</Type>
+      <OutlineNumber>1.2.1.2</OutlineNumber>
+      <OutlineLevel>4</OutlineLevel>
+      <Duration>PT1920M</Duration>
+      <DurationFormat>7</DurationFormat>
+      <Summary>0</Summary>
+      <Milestone>0</Milestone>
+    </Task>
+    <Task>
+      <UID>9</UID>
+      <ID>9</ID>
+      <Name>Lot B — Réalisation</Name>
+      <Type>1</Type>
+      <OutlineNumber>2</OutlineNumber>
+      <OutlineLevel>1</OutlineLevel>
+      <Summary>1</Summary>
+      <Milestone>0</Milestone>
+    </Task>
+    <Task>
+      <UID>10</UID>
+      <ID>10</ID>
+      <Name>Préparation du chantier</Name>
+      <Type>0</Type>
+      <OutlineNumber>2.1</OutlineNumber>
+      <OutlineLevel>2</OutlineLevel>
+      <Duration>PT1440M</Duration>
+      <DurationFormat>7</DurationFormat>
+      <Summary>0</Summary>
+      <Milestone>0</Milestone>
+    </Task>
+    <Task>
+      <UID>11</UID>
+      <ID>11</ID>
+      <Name>Montage</Name>
+      <Type>1</Type>
+      <OutlineNumber>2.2</OutlineNumber>
+      <OutlineLevel>2</OutlineLevel>
+      <Summary>1</Summary>
+      <Milestone>0</Milestone>
+    </Task>
+    <Task>
+      <UID>12</UID>
+      <ID>12</ID>
+      <Name>Montage mécanique</Name>
+      <Type>0</Type>
+      <OutlineNumber>2.2.1</OutlineNumber>
+      <OutlineLevel>3</OutlineLevel>
+      <Duration>PT4800M</Duration>
+      <DurationFormat>7</DurationFormat>
+      <Summary>0</Summary>
+      <Milestone>0</Milestone>
+    </Task>
+    <Task>
+      <UID>13</UID>
+      <ID>13</ID>
+      <Name>Montage électrique</Name>
+      <Type>0</Type>
+      <OutlineNumber>2.2.2</OutlineNumber>
+      <OutlineLevel>3</OutlineLevel>
+      <Duration>PT3840M</Duration>
+      <DurationFormat>7</DurationFormat>
+      <Summary>0</Summary>
+      <Milestone>0</Milestone>
+    </Task>
+    <Task>
+      <UID>14</UID>
+      <ID>14</ID>
+      <Name>Lot C — Réception</Name>
+      <Type>0</Type>
+      <OutlineNumber>3</OutlineNumber>
+      <OutlineLevel>1</OutlineLevel>
+      <Duration>PT960M</Duration>
+      <DurationFormat>7</DurationFormat>
+      <Summary>0</Summary>
+      <Milestone>0</Milestone>
+    </Task>
+  </Tasks>
+</Project>
