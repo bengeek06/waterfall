@@ -39,6 +39,12 @@ about the *project* -- has to appear in the OpenAPI description of the response 
 comes back on, and no description may cite a code nothing emits. A frontend builds
 its translation table off those descriptions.
 
+The table is itself asserted, by
+``test_revision_planning_api.test_the_docstring_table_is_the_inventory_it_claims_to_be``:
+it presents itself as the inventory of reference, so a code added to
+``_TRANSLATIONS`` and to the OpenAPI description but not here would leave a
+silently incomplete reference -- and #333 adds a great many codes.
+
 ======================================  ======  ==================================
 Failure                                 Status  ``detail.code``
 ======================================  ======  ==================================
@@ -56,6 +62,7 @@ selection cannot be moved that way      400     ``REVISION_SELECTION_INVALID``
 position outside the sibling range      400     ``REVISION_POSITION_INVALID``
 move would create a cycle               400     ``REVISION_TREE_CYCLE``
 task would land under a cost line       400     ``REVISION_FACET_PLACEMENT_INVALID``
+node under a milestone (INV-27)         400     ``REVISION_MILESTONE_HAS_CHILDREN``
 node of another revision                400     ``REVISION_CROSS_REVISION``
 invalid precedence link                 400     ``REVISION_LINK_INVALID``
 facet shape contract broken             400     ``REVISION_FACET_CONTRACT``
@@ -149,6 +156,11 @@ _TRANSLATIONS: tuple[tuple[type[Exception], int, str], ...] = (
         domain.FacetPlacementError,
         status.HTTP_400_BAD_REQUEST,
         "REVISION_FACET_PLACEMENT_INVALID",
+    ),
+    (
+        domain.MilestoneChildError,
+        status.HTTP_400_BAD_REQUEST,
+        "REVISION_MILESTONE_HAS_CHILDREN",
     ),
     (domain.CrossRevisionError, status.HTTP_400_BAD_REQUEST, "REVISION_CROSS_REVISION"),
     (domain.LinkError, status.HTTP_400_BAD_REQUEST, "REVISION_LINK_INVALID"),

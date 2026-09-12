@@ -59,6 +59,7 @@ from waterfall.domain.revision import (
 )
 from waterfall.domain.revision.facets import rename_task, set_cost_hours
 from waterfall.domain.revision.pricing import default_amount
+from waterfall.domain.revision.structure import is_milestone_node
 
 COBRA_XML = Path(__file__).resolve().parents[3] / "examples" / "planning_cobra.xml"
 MSPDI_NS = "{http://schemas.microsoft.com/project}"
@@ -190,16 +191,29 @@ class Estimate:
 
 
 def _leaf_task_ids(bench: Bench) -> list[int]:
-    """Leaf tasks that hang under a parent, in depth-first order.
+    """Leaf tasks that hang under a parent and can bear a cost line, depth-first.
 
     Root-level leaves are excluded so that a scenario always has an intermediate
     node above the task it works on (scenario 5 deletes exactly that node).
+
+    Milestones are excluded too, and for a rule rather than for convenience: a
+    jalon carries no child at all, cost line included (INV-27). The real file this
+    module imports is full of them, so the filter is what keeps the scenarios
+    about the model instead of about which task the fixture happened to land on.
+
+    Asked through ``is_milestone_node`` and not by indexing ``plan_facets``:
+    ``depth_first`` walks *every* node, cost facets included, so the index would
+    be total only as long as this stays called before the first ``add_cost_line``
+    -- a positional safety that a second call, or a moved one, would turn into a
+    ``KeyError``.
     """
     revision = bench.revision
     return [
         node.id
         for node in depth_first(revision)
-        if node.parent_id is not None and not children_of(revision, node.id)
+        if node.parent_id is not None
+        and not children_of(revision, node.id)
+        and not is_milestone_node(revision, node.id)
     ]
 
 
@@ -548,8 +562,12 @@ def test_scenario_7_reimport_applies_added_moved_and_removed_tasks(
 
     removed_uid = uid_of[estimate.task_x]  # the task bearing two cost lines
     moved_uid = uid_of[estimate.task_y]
+    # Not a milestone: the file's first task happens to be one, and a jalon carries
+    # no child (INV-27), so re-importing the moved task under it would be refused.
     new_parent_uid = next(
-        task.external_uid for task in tasks if task.external_uid not in {removed_uid, moved_uid}
+        task.external_uid
+        for task in tasks
+        if task.external_uid not in {removed_uid, moved_uid} and not task.is_milestone
     )
     modified, added_uid = _modified_planning(
         tasks, removed_uid=removed_uid, moved_uid=moved_uid, new_parent_uid=new_parent_uid

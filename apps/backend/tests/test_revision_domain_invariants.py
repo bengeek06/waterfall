@@ -1,6 +1,6 @@
 """One deliberate violation per invariant of ``docs/revision-v0.1-specification.md``.
 
-Acceptance test of E14-02: *every* invariant INV-01..INV-26 must have at least one
+Acceptance test of E14-02: *every* invariant INV-01..INV-27 must have at least one
 test that fails when it is violated on purpose. Each test below reproduces the
 "violation canonique" the specification documents for its invariant, and then:
 
@@ -49,7 +49,9 @@ from waterfall.domain.revision import (
     FacetContractError,
     FacetPlacementError,
     ImmutableRevisionError,
+    ImportedTask,
     LinkError,
+    MilestoneChildError,
     NodeLink,
     NotFoundError,
     Project,
@@ -66,6 +68,7 @@ from waterfall.domain.revision import (
     apply_reimport,
     bearing_work_item_id,
     check_invariants,
+    children_of,
     compact_positions,
     copy_revision,
     create_revision,
@@ -79,6 +82,7 @@ from waterfall.domain.revision import (
     move_nodes_down,
     move_nodes_up,
     outdent_nodes,
+    plan_reimport,
     replace_links,
     replace_predecessors,
     subtree_ids,
@@ -128,10 +132,10 @@ def bench() -> Bench:
 
 
 def test_every_specified_invariant_has_a_declared_scope() -> None:
-    """The 26 invariants of the specification are all accounted for, exactly once."""
+    """The 27 invariants of the specification are all accounted for, exactly once."""
     declared = set(STATE_SCOPED_INVARIANTS) | OPERATION_SCOPED_INVARIANTS
-    assert declared == {f"INV-{number:02d}" for number in range(1, 27)}
-    assert len(STATE_SCOPED_INVARIANTS) + len(OPERATION_SCOPED_INVARIANTS) == 26
+    assert declared == {f"INV-{number:02d}" for number in range(1, 28)}
+    assert len(STATE_SCOPED_INVARIANTS) + len(OPERATION_SCOPED_INVARIANTS) == 27
 
 
 def test_the_reference_bench_violates_nothing(bench: Bench) -> None:
@@ -1380,6 +1384,299 @@ def test_inv_26_saving_the_lotissement_is_the_only_trigger_of_the_initialise_sta
     save_work_breakdown(project, _lotissement())
 
     assert project.status is ProjectStatus.INITIALISE
+
+
+# --------------------------------------------------------------------------------------
+# INV-27 -- a milestone carries no child
+# --------------------------------------------------------------------------------------
+#
+# The ways a node can end up under a milestone are the ways ``RevisionNode.parent_id``
+# is written, plus the ways ``PlanFacet.is_milestone`` is written -- the rule can be
+# broken from either end. In ``waterfall.domain.revision`` those are, exhaustively:
+#
+# * ``insert_node`` (and ``add_task``/``add_cost_line``/``generate_skeleton`` through
+#   it) -- guarded by ``tree._validate_insert_slot``;
+# * ``move_nodes`` (and ``indent_nodes``/``outdent_nodes``/``move_nodes_up``/
+#   ``move_nodes_down`` through it) -- guarded by ``tree._validate_move_target``;
+# * ``facets.update_plan_facet``, the only writer of ``is_milestone`` outside a
+#   creation -- guarded in place, before the first assignment of the patch;
+# * ``reimport._reparent_and_refresh`` / ``_apply_plan_facet``, which write both at
+#   once -- guarded in ``plan_reimport``, so ``apply_reimport`` never starts;
+# * ``lifecycle.copy_revision``, which reproduces the parent links of its source node
+#   for node and therefore creates no placement of its own.
+#
+# Each of those five is exercised below, and the last one is asserted rather than
+# assumed.
+
+
+def _leaf_milestone(project: Project, revision: ProjectRevision) -> int:
+    """A milestone at the root of the bench, created through the domain."""
+    return add_task(project, revision, name="Jalon", is_milestone=True).id
+
+
+def test_inv_27_violated_by_marking_a_task_that_already_holds_children(bench: Bench) -> None:
+    """Canonical violation, written straight onto the facet to bypass the guard.
+
+    ``root_a`` holds a task (``child_b``) *and* a cost line (``supply``): the single
+    flag turns both into forbidden children at once.
+    """
+    project, revision = bench.project, bench.revision
+    revision.plan_facets[bench.root_a].is_milestone = True
+
+    assert violations_of(project, revision) == ["INV-27"]
+
+
+@pytest.mark.parametrize("kind", [WorkItemKind.TASK, WorkItemKind.COST], ids=["task", "cost line"])
+def test_inv_27_is_reported_whatever_the_facet_of_the_child(
+    bench: Bench, kind: WorkItemKind
+) -> None:
+    """A jalon is a dated point, not a container: neither facet may hang under it."""
+    project, revision = bench.project, bench.revision
+    milestone = _leaf_milestone(project, revision)
+    plan = plan_facet("Sous-tâche") if kind is WorkItemKind.TASK else None
+    cost = None if kind is WorkItemKind.TASK else cost_facet("Fourniture")
+    raw_node(
+        project,
+        revision,
+        work_item_id=create_work_item(project, kind).id,
+        parent_id=milestone,
+        plan=plan,
+        cost=cost,
+    )
+
+    assert violations_of(project, revision) == ["INV-27"]
+
+
+def test_inv_27_creation_under_a_milestone_is_refused(bench: Bench) -> None:
+    """And a refusal allocates nothing: the very same input can be retried elsewhere."""
+    project, revision = bench.project, bench.revision
+    milestone = _leaf_milestone(project, revision)
+    before = copy.deepcopy(revision)
+    work_items_before = copy.deepcopy(project.work_items)
+
+    with pytest.raises(MilestoneChildError):
+        add_task(project, revision, name="Sous-tâche", parent_id=milestone)
+    assert revision == before
+    assert project.work_items == work_items_before
+
+    with pytest.raises(MilestoneChildError):
+        add_cost_line(
+            project,
+            revision,
+            nature=CostNature.NON_LABOR,
+            label="Fourniture",
+            parent_id=milestone,
+            cost_type_id=1,
+            cost_category_id=10,
+            unit_cost=Decimal("50"),
+        )
+    assert revision == before
+    assert project.work_items == work_items_before
+
+    with pytest.raises(MilestoneChildError):
+        insert_node(
+            project,
+            revision,
+            work_item_id=create_work_item(project, WorkItemKind.TASK).id,
+            plan=plan_facet("Sous-tâche"),
+            parent_id=milestone,
+        )
+    assert revision == before
+
+
+def test_inv_27_moving_or_indenting_under_a_milestone_is_refused(bench: Bench) -> None:
+    """The two doors of ``_validate_move_target``: an explicit target, and an indent."""
+    project, revision = bench.project, bench.revision
+    milestone = _leaf_milestone(project, revision)
+    # Root order becomes A, global cost, Jalon, C -- so indenting C lands on the jalon.
+    move_nodes(project, revision, [bench.root_c], target_parent_id=None, position=4)
+    assert [node.id for node in children_of(revision, None)] == [
+        bench.root_a,
+        bench.global_cost,
+        milestone,
+        bench.root_c,
+    ]
+    before = copy.deepcopy(revision)
+
+    with pytest.raises(MilestoneChildError):
+        move_nodes(project, revision, [bench.root_c], target_parent_id=milestone)
+    assert revision == before
+
+    with pytest.raises(MilestoneChildError):
+        indent_nodes(project, revision, [bench.root_c])
+    assert revision == before
+
+    with pytest.raises(MilestoneChildError):
+        move_nodes(project, revision, [bench.supply], target_parent_id=milestone)
+    assert revision == before
+
+
+def test_inv_27_marking_a_task_that_holds_children_as_a_milestone_is_refused(
+    bench: Bench,
+) -> None:
+    """The other end of the rule, and the one no placement guard can catch.
+
+    ``update_plan_facet`` is a *partial* patch applied field by field, so the
+    refusal has to come before the first assignment: the rename below must not
+    survive the rejection.
+    """
+    project, revision = bench.project, bench.revision
+    before = copy.deepcopy(revision)
+
+    with pytest.raises(MilestoneChildError):
+        update_plan_facet(project, revision, bench.root_a, name="renamed", is_milestone=True)
+
+    assert revision == before, "the refused patch applied part of itself"
+
+
+def test_inv_27_a_leaf_task_may_still_become_a_milestone(bench: Bench) -> None:
+    project, revision = bench.project, bench.revision
+
+    update_plan_facet(project, revision, bench.root_c, is_milestone=True)
+
+    assert revision.plan_facets[bench.root_c].is_milestone
+    assert_sound(project, revision)
+
+
+def test_inv_27_outdenting_is_untouched_by_the_rule(bench: Bench) -> None:
+    """#344 owns ``outdent_nodes``; INV-27 asked nothing of it.
+
+    An outdent moves a selection to its *grandparent*, which already holds the
+    former parent and therefore cannot be a milestone on a sound state. The guard
+    it inherits from ``move_nodes`` is a belt, never the braces -- which is why
+    nothing in ``outdent_nodes`` itself had to change.
+    """
+    project, revision = bench.project, bench.revision
+    update_plan_facet(project, revision, bench.root_c, is_milestone=True)
+
+    outdent_nodes(project, revision, [bench.labor])
+
+    assert revision.nodes[bench.labor].parent_id == bench.root_a
+    assert_sound(project, revision)
+
+
+def test_inv_27_a_reimport_hanging_a_task_under_a_milestone_is_refused() -> None:
+    """Refused by the planner, so ``apply_reimport`` never starts writing."""
+    project = build_project()
+    revision = build_draft(project)
+    before = copy.deepcopy(revision)
+    before_work_items = copy.deepcopy(project.work_items)
+    tasks = [
+        ImportedTask(external_uid=1, name="Jalon", is_milestone=True),
+        ImportedTask(external_uid=2, name="Sous-tâche", parent_external_uid=1),
+    ]
+
+    with pytest.raises(MilestoneChildError):
+        plan_reimport(project, revision, tasks)
+    with pytest.raises(MilestoneChildError):
+        apply_reimport(project, revision, tasks)
+
+    assert revision == before
+    # The project too, not only the revision: a refusal that had already allocated
+    # a ``work_item`` for the file would leave an orphan behind -- invisible to
+    # every invariant, since nothing requires a work item to be used by a node.
+    assert project.work_items == before_work_items
+
+
+def test_inv_27_a_reimport_milestoning_a_task_that_keeps_a_cost_line_is_refused() -> None:
+    """The violation nothing in the file betrays.
+
+    The file names tasks only. Marking uid 1 a milestone says nothing about the
+    cost line hanging under it, which the file neither moves nor removes -- so the
+    check has to look at the revision, not only at the file.
+    """
+    project = build_project()
+    revision = build_draft(project)
+    parent = add_task(project, revision, name="Lot", external_uid=1)
+    add_cost_line(
+        project,
+        revision,
+        nature=CostNature.NON_LABOR,
+        label="Fourniture",
+        parent_id=parent.id,
+        cost_type_id=1,
+        cost_category_id=10,
+        unit_cost=Decimal("50"),
+    )
+    before = copy.deepcopy(revision)
+    before_work_items = copy.deepcopy(project.work_items)
+
+    with pytest.raises(MilestoneChildError):
+        apply_reimport(
+            project, revision, [ImportedTask(external_uid=1, name="Jalon", is_milestone=True)]
+        )
+
+    assert revision == before
+    assert project.work_items == before_work_items
+
+
+def test_inv_27_a_reimport_may_milestone_a_task_whose_children_it_takes_away() -> None:
+    """Removed by the file (Rule 3) or moved elsewhere by it: both leave the jalon bare."""
+    project = build_project()
+    revision = build_draft(project)
+    parent = add_task(project, revision, name="Lot", external_uid=1)
+    add_task(project, revision, name="Supprimée", parent_id=parent.id, external_uid=2)
+    add_task(project, revision, name="Déplacée", parent_id=parent.id, external_uid=3)
+
+    apply_reimport(
+        project,
+        revision,
+        [
+            ImportedTask(external_uid=1, name="Jalon", is_milestone=True),
+            ImportedTask(external_uid=4, name="Ailleurs"),
+            ImportedTask(external_uid=3, name="Déplacée", parent_external_uid=4),
+        ],
+    )
+
+    assert revision.plan_facets[parent.id].is_milestone
+    assert children_of(revision, parent.id) == []
+    assert_sound(project, revision)
+
+
+def test_inv_27_a_reimport_may_unmark_a_milestone_and_give_it_a_child() -> None:
+    """The exact converse, and the one the phase order of ``apply_reimport`` decides.
+
+    "This jalon becomes a lot" is an ordinary MS Project edit: uid 1 stops being a
+    milestone and gains a sub-task in the *same* file. The final state is legal, so
+    ``plan_reimport`` accepts it -- and ``apply_reimport`` has to accept it too. It
+    creates the new nodes through ``insert_node``, whose INV-27 guard reads the
+    current flag of the parent, so the flags the file dictates are settled first;
+    otherwise the guard would fire on a flag this very file is clearing, and refuse
+    with "clear its milestone flag first" a file that already does.
+
+    Uid 3 is listed at the root *before* uid 2 on purpose: it is the node a
+    half-applied re-import would have created before giving up, so its presence
+    alone would betray the partial write.
+    """
+    project = build_project()
+    revision = build_draft(project)
+    parent = add_task(project, revision, name="Jalon", external_uid=1)
+    update_plan_facet(project, revision, parent.id, is_milestone=True)
+    tasks = [
+        ImportedTask(external_uid=3, name="Autre nouvelle"),
+        ImportedTask(external_uid=1, name="Lot", is_milestone=False),
+        ImportedTask(external_uid=2, name="Sous-tâche", parent_external_uid=1),
+    ]
+
+    plan_reimport(project, revision, tasks)
+    apply_reimport(project, revision, tasks)
+
+    assert not revision.plan_facets[parent.id].is_milestone
+    assert [revision.plan_facets[child.id].name for child in children_of(revision, parent.id)] == [
+        "Sous-tâche"
+    ]
+    assert_sound(project, revision)
+
+
+def test_inv_27_a_copy_reproduces_a_milestone_without_giving_it_children(bench: Bench) -> None:
+    """``copy_revision`` creates no placement of its own, and this asserts it."""
+    project, revision = bench.project, bench.revision
+    update_plan_facet(project, revision, bench.root_c, is_milestone=True)
+
+    duplicate = copy_revision(project, revision, now=NOW)
+
+    assert [facet.is_milestone for facet in duplicate.plan_facets.values()].count(True) == 1
+    assert_sound(project, duplicate)
 
 
 # --------------------------------------------------------------------------------------

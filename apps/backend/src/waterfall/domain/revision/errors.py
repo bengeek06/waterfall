@@ -68,6 +68,16 @@ class FacetPlacementError(RevisionDomainError):
     """A plan node would end up under a cost node (INV-14)."""
 
 
+class MilestoneChildError(RevisionDomainError):
+    """A node would end up under a task marked as a milestone (INV-27).
+
+    Raised whatever the facet of the child -- a jalon carries *no* child, neither
+    a sub-task nor a cost line -- and whatever the way the child would get there:
+    an insertion, a move, an indentation, a re-import, or marking a task that
+    already has children as a milestone.
+    """
+
+
 class LinkError(RevisionDomainError):
     """A precedence link is invalid (INV-16, INV-17, INV-18)."""
 

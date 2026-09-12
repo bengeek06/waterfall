@@ -21,6 +21,17 @@ def is_cost_node(revision: ProjectRevision, node_id: int) -> bool:
     return node_id in revision.cost_facets
 
 
+def is_milestone_node(revision: ProjectRevision, node_id: int) -> bool:
+    """Whether ``node_id`` carries a planning facet marked as a milestone (INV-27).
+
+    ``False`` for a cost node and for a node the revision does not hold: like every
+    helper here it stays total on a deliberately invalid state, so the invariant
+    checker can call it on a tree built to violate something.
+    """
+    facet = revision.plan_facets.get(node_id)
+    return facet is not None and facet.is_milestone
+
+
 def children_of(revision: ProjectRevision, parent_id: int | None) -> list[RevisionNode]:
     """Children of ``parent_id`` (``None`` for the root siblings), in display order.
 
