@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from httpx import Response
 from sqlalchemy import func
 
+from _legacy_planning_support import legacy_project_tasks
 from waterfall.db.session import get_session_factory
 from waterfall.main import app
 from waterfall.models.ms_core import MsTask
@@ -264,14 +265,7 @@ def test_export_xml_contains_task_notes_from_description() -> None:
         project_id = status_payload["projectId"]
         assert isinstance(project_id, int)
 
-        tasks_response: Response = client.get(
-            f"/projects/{project_id}/tasks",
-            headers=headers,
-        )
-        assert tasks_response.status_code == 200
-        raw_tasks_body = tasks_response.json()
-        assert isinstance(raw_tasks_body, dict)
-        tasks_payload = cast(list[dict[str, Any]], raw_tasks_body["items"])
+        tasks_payload = legacy_project_tasks(project_id)
         assert len(tasks_payload) > 0
         task_uid = cast(int, tasks_payload[0]["uid"])
         source_description = tasks_payload[0]["description"]
@@ -875,10 +869,7 @@ def test_export_then_reimport_round_trip_preserves_tasks_and_links() -> None:
             EXAMPLE_XML_WITH_CALENDARS.name,
         )
 
-        source_tasks_before = cast(
-            list[dict[str, Any]],
-            client.get(f"/projects/{source_project_id}/tasks", headers=headers).json()["items"],
-        )
+        source_tasks_before = legacy_project_tasks(source_project_id)
         assert len(source_tasks_before) == 2
         first_task_uid = cast(
             int,
@@ -902,10 +893,7 @@ def test_export_then_reimport_round_trip_preserves_tasks_and_links() -> None:
         exported_xml = cast(bytes, export_response.content)
         parse_msproject_xml(exported_xml)
 
-        source_tasks = cast(
-            list[dict[str, Any]],
-            client.get(f"/projects/{source_project_id}/tasks", headers=headers).json()["items"],
-        )
+        source_tasks = legacy_project_tasks(source_project_id)
         source_by_uid = {task["uid"]: task for task in source_tasks}
 
         target_project_response: Response = client.post(
@@ -920,10 +908,7 @@ def test_export_then_reimport_round_trip_preserves_tasks_and_links() -> None:
             client, headers, target_project_id, exported_xml, "export_round_trip.xml"
         )
 
-        target_tasks = cast(
-            list[dict[str, Any]],
-            client.get(f"/projects/{target_project_id}/tasks", headers=headers).json()["items"],
-        )
+        target_tasks = legacy_project_tasks(target_project_id)
         target_by_uid = {task["uid"]: task for task in target_tasks}
 
         assert set(source_by_uid) == set(target_by_uid)

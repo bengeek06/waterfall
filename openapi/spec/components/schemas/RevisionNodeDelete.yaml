@@ -1,0 +1,18 @@
+type: object
+required:
+- expected_lock_version
+- node_ids
+properties:
+  expected_lock_version:
+    type: integer
+    maximum: 2147483647
+    minimum: 0
+  node_ids:
+    items:
+      type: integer
+      maximum: 2147483647
+      exclusiveMinimum: 0
+    type: array
+    minItems: 1
+description: Suppression d'une selection, de tout son sous-arbre et des deux facettes de chaque noeud
+  retire. La cascade est INV-02 et n'est pas optionnelle.

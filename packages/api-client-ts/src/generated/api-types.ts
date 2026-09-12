@@ -454,7 +454,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/projects/{projectId}/plannings/{planningId}/tasks/move": {
+    "/projects/{projectId}/revisions/{revisionId}/nodes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Lire l'arbre d'une revision et sa facette planification
+         * @description Retourne les noeuds de la revision en ordre depth-first, chacun avec son identifiant positionnel (`row_number`) et son niveau (`level`) calcules a la lecture et stockes nulle part, ainsi que sa facette. Volontairement non pagine : cet endpoint alimente un arbre editable, qui a besoin de l'arbre complet pour reconstruire la hierarchie et numeroter les lignes.
+         */
+        get: operations["readRevisionNodes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{projectId}/revisions/{revisionId}/tasks": {
         parameters: {
             query?: never;
             header?: never;
@@ -463,15 +483,15 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Deplacer ou reordonner des taches d'un brouillon de planning */
-        post: operations["movePlanningTasks"];
+        /** Creer un noeud tache dans une revision */
+        post: operations["createRevisionTask"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/projects/{projectId}/plannings/{planningId}/tasks": {
+    "/projects/{projectId}/revisions/{revisionId}/nodes/move": {
         parameters: {
             query?: never;
             header?: never;
@@ -480,15 +500,18 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Ajouter une tache a un brouillon de planning a une position explicite */
-        post: operations["createPlanningTask"];
+        /**
+         * Deplacer une selection de noeuds d'une revision
+         * @description Volontairement agnostique de la facette : il n'y a qu'un arbre, donc deplacer une ligne de cout et deplacer une tache sont la meme operation. Chaque noeud selectionne emporte son sous-arbre et ses deux facettes ; un noeud dont un ancetre est aussi selectionne est porte par cet ancetre plutot que deplace deux fois.
+         */
+        post: operations["moveRevisionNodes"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/projects/{projectId}/plannings/{planningId}/tasks/delete": {
+    "/projects/{projectId}/revisions/{revisionId}/nodes/delete": {
         parameters: {
             query?: never;
             header?: never;
@@ -497,15 +520,18 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Supprimer une selection de taches d'un brouillon de planning */
-        post: operations["deletePlanningTasks"];
+        /**
+         * Supprimer une selection de noeuds en cascade
+         * @description Supprime la selection, tout son sous-arbre et les deux facettes de chaque noeud retire (INV-02). La reponse nomme le chiffrage emporte (`cost_losses`) plutot que de le laisser disparaitre silencieusement.
+         */
+        post: operations["deleteRevisionNodes"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/projects/{projectId}/plannings/{planningId}/tasks/{taskUid}": {
+    "/projects/{projectId}/revisions/{revisionId}/nodes/{nodeId}/planning": {
         parameters: {
             query?: never;
             header?: never;
@@ -518,11 +544,14 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** Modifier le mode et la planification d'une tache de brouillon */
-        patch: operations["updatePlanningTaskSchedule"];
+        /**
+         * Modifier la facette planification d'un noeud
+         * @description Edition partielle : duree, dates, avancement, calendrier, jalon, mode manuel/automatique. Un champ absent est laisse tel quel ; `null` est une valeur. Quel que soit le nombre d'attributs modifies, `lock_version` n'avance que d'un cran.
+         */
+        patch: operations["updateRevisionPlanFacet"];
         trace?: never;
     };
-    "/projects/{projectId}/plannings/{planningId}/tasks/{taskUid}/links": {
+    "/projects/{projectId}/revisions/{revisionId}/nodes/{nodeId}/predecessors": {
         parameters: {
             query?: never;
             header?: never;
@@ -530,25 +559,11 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Remplacer les liens de predecesseurs d'une tache d'un brouillon de planning */
-        put: operations["replaceTaskPredecessorLinks"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/projects/{projectId}/plannings/{planningId}/tasks/restore": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /** Restaurer l'etat exact des taches/liens d'un brouillon de planning (undo/redo) */
-        put: operations["restorePlanningSnapshot"];
+        /**
+         * Remplacer les predecesseurs d'un noeud tache
+         * @description Remplace l'integralite des liens de precedence arrivant sur le noeud. Un predecesseur designant un noeud d'une autre revision est refuse (INV-08, `detail.code` = REVISION_CROSS_REVISION).
+         */
+        put: operations["replaceRevisionPredecessors"];
         post?: never;
         delete?: never;
         options?: never;
@@ -624,23 +639,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/projects/{projectId}/tasks": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Lister les taches d'un projet */
-        get: operations["listProjectTasks"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/projects/{projectId}/planning-structure": {
         parameters: {
             query?: never;
@@ -704,23 +702,6 @@ export interface paths {
         put?: never;
         /** Quitter le lotissement sans generer de squelette (planning vide) */
         post: operations["skipPlanningStructure"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/projects/{projectId}/planning-tree": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Lire l'arbre hiérarchique du planning */
-        get: operations["getPlanningTree"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1668,69 +1649,6 @@ export interface components {
             note?: string | null;
             source_planning_id?: number | null;
         };
-        PlanningTaskMove: {
-            task_uids: number[];
-            target_parent_uid?: number | null;
-            position: number;
-            /**
-             * @description Revision of the planning this mutation was computed against. Compared to the
-             *     persisted revision under lock; a mismatch returns a 409 PLANNING_REVISION_CONFLICT.
-             */
-            expected_revision: number;
-        };
-        PlanningTaskCreate: {
-            name: string;
-            /** @default false */
-            is_milestone: boolean;
-            target_parent_uid?: number | null;
-            insert_after_uid?: number | null;
-            expected_revision: number;
-        };
-        PlanningTaskDelete: {
-            task_uids: number[];
-            /** @default false */
-            confirm_cascade: boolean;
-            expected_revision: number;
-        };
-        PlanningTaskSnapshotWrite: {
-            uid: number;
-            structure_key: string | null;
-            /** @enum {string|null} */
-            structure_kind: "poste" | "lot" | "livrable" | "milestone" | "task" | null;
-            parent_uid: number | null;
-            position: number | null;
-            name: string;
-            outline_number: string | null;
-            outline_level: number | null;
-            wbs: string | null;
-            /** Format: date-time */
-            start_at: string | null;
-            /** Format: date-time */
-            finish_at: string | null;
-            duration_minutes: number | null;
-            duration_format: number | null;
-            work_minutes: number | null;
-            task_type: number | null;
-            percent_complete: number | null;
-            is_summary: boolean;
-            is_milestone: boolean;
-            is_manual: boolean | null;
-            calendar_uid: number | null;
-            notes: string | null;
-        };
-        PlanningLinkSnapshotWrite: {
-            task_uid: number;
-            predecessor_uid: number;
-            link_type: number;
-            /** Format: int32 */
-            lag_tenth_minute: number | null;
-            lag_format: number | null;
-        };
-        PlanningSnapshotRestore: {
-            tasks: components["schemas"]["PlanningTaskSnapshotWrite"][];
-            links: components["schemas"]["PlanningLinkSnapshotWrite"][];
-            expected_revision: number;
-        };
         PlanningDetailRead: components["schemas"]["PlanningRead"] & {
             tasks: components["schemas"]["TaskRead"][];
             links: components["schemas"]["PlanningLinkRead"][];
@@ -1803,15 +1721,194 @@ export interface components {
             planning_id: number;
             structure: components["schemas"]["PlanningStructureCreate"];
         };
-        PlanningTreeRead: {
-            tasks: components["schemas"]["PlanningTaskTreeRead"][];
-        };
-        PlanningTaskTreeRead: components["schemas"]["TaskRead"] & {
-            children: components["schemas"]["PlanningTaskTreeRead"][];
-        };
         TaskUpdate: {
             description?: string | null;
             name?: string | null;
+        };
+        /** @description Arbre complet d'une revision : en-tete (dont `lock_version`, a renvoyer en `expected_lock_version` sur la prochaine ecriture) et noeuds en ordre depth-first. */
+        RevisionTreeRead: {
+            revision_id: number;
+            project_id: number;
+            version_number: number;
+            /** @enum {string} */
+            kind: "initial" | "contract_reference" | "forecast_remaining";
+            /** @enum {string} */
+            status: "draft" | "validated" | "superseded";
+            lock_version: number;
+            note: string | null;
+            nodes: components["schemas"]["RevisionNodeRead"][];
+        };
+        /** @description Un noeud de l'arbre. `row_number` (rang dans le parcours depth-first) et `level` (profondeur, racines a 1) sont recalcules a chaque lecture et stockes dans aucune colonne (principe E9) : ils sont en lecture seule. Exactement une des facettes `planning`/`cost` est renseignee, selon `kind`. */
+        RevisionNodeRead: {
+            node_id: number;
+            work_item_id: number;
+            /** @enum {string} */
+            kind: "task" | "cost";
+            parent_id: number | null;
+            position: number;
+            row_number: number;
+            level: number;
+            external_uid: number | null;
+            description: string | null;
+            planning: components["schemas"]["RevisionPlanFacetRead"] | null;
+            cost: components["schemas"]["RevisionCostFacetRead"] | null;
+            predecessors: components["schemas"]["RevisionPredecessorRead"][];
+        };
+        /** @description Facette planification d'un noeud : ce qui en fait une tache. */
+        RevisionPlanFacetRead: {
+            name: string;
+            calendar_id: number | null;
+            calendar_source: ("project" | "role" | "manual") | null;
+            is_milestone: boolean;
+            duration_minutes: number | null;
+            duration_format: number | null;
+            start_at: string | null;
+            finish_at: string | null;
+            work_minutes: number | null;
+            percent_complete: number;
+            is_manual: boolean;
+        };
+        /** @description Facette cout d'un noeud, en lecture seule ici : son edition releve de E14-07 (#333). */
+        RevisionCostFacetRead: {
+            /** @enum {string} */
+            nature: "labor" | "non_labor";
+            label: string;
+            quantity: string;
+            role_id: number | null;
+            hours: string | null;
+            cost_type_id: number | null;
+            cost_category_id: number | null;
+            unit_cost: string | null;
+            supply_status: ("planned" | "ordered" | "received" | "cancelled") | null;
+            planned_date: string | null;
+            cost_code_id: number | null;
+            comment: string | null;
+        };
+        /** @description Un lien de precedence arrivant sur le noeud, designe par identifiant de noeud et jamais par uid. */
+        RevisionPredecessorRead: {
+            predecessor_node_id: number;
+            link_type: number;
+            lag_tenth_minute: number;
+            lag_format: number | null;
+        };
+        /** @description Reponse commune a toute ecriture : la revision et le compteur de verrou que la prochaine ecriture devra presenter. */
+        RevisionWriteRead: {
+            revision_id: number;
+            lock_version: number;
+        };
+        /** @description Noeud fraichement cree, par les identifiants alloues par la base. */
+        RevisionNodeWriteRead: {
+            revision_id: number;
+            lock_version: number;
+            node_id: number;
+            work_item_id: number;
+        };
+        /** @description Ce qu'une suppression en cascade a retire (INV-02), et le chiffrage qu'elle a emporte (garde-fou de la Regle 3). */
+        RevisionNodeDeleteRead: {
+            revision_id: number;
+            lock_version: number;
+            removed_node_ids: number[];
+            cost_losses: components["schemas"]["RevisionCostLossRead"][];
+        };
+        /** @description Une facette cout emportee par une suppression, nommee plutot que perdue silencieusement. */
+        RevisionCostLossRead: {
+            node_id: number;
+            work_item_id: number;
+            label: string;
+            /** @enum {string} */
+            nature: "labor" | "non_labor";
+            amount: string;
+            bearing_task_name: string | null;
+        };
+        /** @description Creation d'un noeud tache : un nouveau `work_item` de nature `task` et sa facette planification. `parent_id` absent = a la racine, `position` absente = dernier enfant. Le calendrier suit la Regle 1 : sans `calendar_id` c'est celui du projet, herite et non epingle (`calendar_source` = `project`) ; avec, il est epingle (`calendar_source` = `manual`). */
+        RevisionTaskCreate: {
+            expected_lock_version: number;
+            name: string;
+            parent_id?: number | null;
+            position?: number | null;
+            description?: string | null;
+            duration_minutes?: number | null;
+            /** @default false */
+            is_milestone: boolean;
+            start_at?: string | null;
+            finish_at?: string | null;
+            calendar_id?: number | null;
+        };
+        /** @description Deplacement d'une selection de noeuds, quelle que soit la facette portee par chacun. `target_parent_id`/`position` n'ont de sens qu'en mode `to_parent` : les fournir avec un autre mode est refuse en 422 plutot qu'ignore silencieusement, les modes `up`/`down`/`indent`/`outdent` calculant eux-memes leur destination. */
+        RevisionNodeMove: {
+            expected_lock_version: number;
+            node_ids: number[];
+            /**
+             * @default to_parent
+             * @enum {string}
+             */
+            mode: "to_parent" | "up" | "down" | "indent" | "outdent";
+            target_parent_id?: number | null;
+            position?: number | null;
+        };
+        /** @description Suppression d'une selection, de tout son sous-arbre et des deux facettes de chaque noeud retire. La cascade est INV-02 et n'est pas optionnelle. */
+        RevisionNodeDelete: {
+            expected_lock_version: number;
+            node_ids: number[];
+        };
+        /** @description Edition partielle de la facette planification : un champ absent est laisse tel quel, `null` est une valeur (vider la duree, retirer l'epinglage du calendrier). `calendar_id` porte la Regle 1 : un identifiant epingle le calendrier (`manual`), `null` retire l'epinglage et laisse la regle rechoisir. Exception : `name`, `percent_complete`, `is_milestone` et `is_manual` n'ont pas d'etat « vide » (colonne NOT NULL) ; ils sont declares optionnels pour pouvoir etre omis, et un `null` explicite sur l'un d'eux est refuse en 422 plutot qu'avale silencieusement. `duration_format` est un code MSPDI `DurationFormat`, contraint a l'enumeration du schema MS Project. Un corps ne portant que `expected_lock_version` est legal et fait avancer `lock_version` d'un cran : le compteur enregistre « une ecriture a eu lieu ». */
+        RevisionPlanFacetUpdate: {
+            expected_lock_version: number;
+            name?: string | null;
+            duration_minutes?: number | null;
+            duration_format?: (3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 19 | 20 | 21 | 35 | 36 | 37 | 38 | 39 | 40 | 41 | 42 | 43 | 44 | 51 | 52 | 53) | null;
+            start_at?: string | null;
+            finish_at?: string | null;
+            work_minutes?: number | null;
+            percent_complete?: number | null;
+            is_milestone?: boolean | null;
+            is_manual?: boolean | null;
+            calendar_id?: number | null;
+        };
+        /** @description Un lien de precedence a installer, designant son predecesseur par identifiant de noeud. `lag_format` est un code MSPDI `LagFormat`, contraint a l'enumeration du schema MS Project ; le prefixe `e` y denote un decalage en temps ecoule (horloge) plutot qu'en temps ouvre. */
+        RevisionPredecessorWrite: {
+            predecessor_node_id: number;
+            /** @default 1 */
+            link_type: number;
+            /** @default 0 */
+            lag_tenth_minute: number;
+            lag_format?: (3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 19 | 20 | 35 | 36 | 37 | 38 | 39 | 40 | 41 | 42 | 43 | 44 | 51 | 52 | 53) | null;
+        };
+        /** @description Remplace l'integralite des predecesseurs d'un noeud. Une liste vide les efface, et c'est la seule facon de le faire. Bornee a 1000 entrees : la detection de cycle parcourt l'ensemble candidat une fois par lien fourni. */
+        RevisionPredecessorsReplace: {
+            expected_lock_version: number;
+            predecessors: components["schemas"]["RevisionPredecessorWrite"][];
+        };
+        /** @description Corps d'erreur structure des endpoints de revision. Toujours un objet portant un `code` exploitable par le frontend, jamais un message libre : `_generic_http_exception_handler` reecrit un `detail` textuel en `{"code": "GENERIC_ERROR"}` precisement pour qu'aucun texte non traduit n'atteigne un client. */
+        RevisionErrorResponse: {
+            detail: {
+                /** @description Code stable de refus, traduit par la couche API depuis l'erreur de domaine ou de service (voir `waterfall.api.revision_errors`). REVISION_IMMUTABLE est le code d'INV-03 : il est identique sur la facette planification et sur la facette cout. */
+                code: string;
+            };
+        };
+        /** @description Conflit d'ecriture sur une revision. Le conflit de verrou optimiste porte de quoi se resynchroniser sans relecture devinee ; les autres conflits ne portent que leur `code`. */
+        RevisionLockConflict: {
+            detail: {
+                /** @description REVISION_LOCK_CONFLICT quand `expected_lock_version` est perime, REVISION_IMMUTABLE quand la revision est figee (INV-03), ou l'un des autres codes de conflit enumeres par la reponse. */
+                code: string;
+                /** @description Present uniquement pour REVISION_LOCK_CONFLICT. */
+                revision_id?: number;
+                /** @description Valeur presentee par la requete refusee. */
+                expected_lock_version?: number;
+                /** @description Valeur reellement stockee ; a relire avant de rejouer l'ecriture. */
+                current_lock_version?: number;
+            };
+        };
+        /** @description Corps refuse avant que le domaine ne le voie : le JSON ne correspond pas au schema de la requete. Volontairement distinct des refus 400 de `RevisionBadRequest`, qui eux portent un `detail.code` stable -- 422 garde ici un seul sens, « le corps n'a pas ete accepte par le schema », ce qui permet de distinguer un corps malforme d'une operation refusee sans inspecter le corps. Forme produite par FastAPI/Pydantic, non reecrite par la couche API. */
+        RevisionValidationError: {
+            detail: {
+                /** @description Identifiant Pydantic du controle qui a echoue (`too_short`, `less_than_equal`, `literal_error`, `value_error`, ...). */
+                type: string;
+                /** @description Chemin du champ fautif, depuis `body`. */
+                loc: (string | number)[];
+                /** @description Message Pydantic, en anglais et non traduit. A ne pas afficher tel quel : c'est `type` et `loc` qui sont exploitables. */
+                msg: string;
+            }[];
         };
         EstimateRoleAssignmentCreate: {
             task_id: number;
@@ -2206,9 +2303,6 @@ export interface components {
         ProjectListRead: components["schemas"]["PaginationMeta"] & {
             items: components["schemas"]["ProjectRead"][];
         };
-        TaskListRead: components["schemas"]["PaginationMeta"] & {
-            items: components["schemas"]["TaskRead"][];
-        };
         PlanningListRead: components["schemas"]["PaginationMeta"] & {
             items: components["schemas"]["PlanningRead"][];
         };
@@ -2247,40 +2341,6 @@ export interface components {
         };
         ProjectSetupWarningsRead: {
             warnings: components["schemas"]["ProjectSetupWarning"][];
-        };
-        PlanningTaskDeleteConflict: {
-            detail: {
-                /** @enum {string} */
-                code: "CASCADE_CONFIRMATION_REQUIRED" | "TASK_REFERENCED";
-                /** @description Present when code=CASCADE_CONFIRMATION_REQUIRED: every descendant uid (of every selected root) that would be removed alongside the selection. */
-                descendant_uids?: number[];
-                /** @description Present when code=TASK_REFERENCED: every uid in the selection (and its to-be-cascaded descendants) that is referenced by an estimate, an assignment, or a charge. */
-                task_uids?: number[];
-            };
-        };
-        PlanningTaskScheduleUpdate: {
-            is_manual: boolean;
-            /** Format: date-time */
-            start_at?: string | null;
-            /** Format: date-time */
-            finish_at?: string | null;
-            duration_minutes?: number | null;
-            expected_revision: number;
-        };
-        TaskLinkWrite: {
-            predecessor_uid: number;
-            link_type: number;
-            /** Format: int32 */
-            lag_tenth_minute?: number | null;
-            /**
-             * @description MSPDI LagFormat code. See the "e" prefix convention documented in waterfall.services.planning_tree for which values denote elapsed (raw wall-clock) vs. working-time lag.
-             * @enum {integer|null}
-             */
-            lag_format?: 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 19 | 20 | 35 | 36 | 37 | 38 | 39 | 40 | 41 | 42 | 43 | 44 | 51 | 52 | null;
-        };
-        TaskLinksReplace: {
-            links: components["schemas"]["TaskLinkWrite"][];
-            expected_revision: number;
         };
         EstimateTaskCreate: {
             name: string;
@@ -2382,6 +2442,16 @@ export interface components {
             /** @description Toujours `false` pour un preview. Pour un confirm, `true` uniquement si `blocking_issues` etait vide et que les changements ont ete appliques. */
             applied: boolean;
         };
+        PlanningTaskDeleteConflict: {
+            detail: {
+                /** @enum {string} */
+                code: "CASCADE_CONFIRMATION_REQUIRED" | "TASK_REFERENCED";
+                /** @description Present when code=CASCADE_CONFIRMATION_REQUIRED: every descendant uid (of every selected root) that would be removed alongside the selection. */
+                descendant_uids?: number[];
+                /** @description Present when code=TASK_REFERENCED: every uid in the selection (and its to-be-cascaded descendants) that is referenced by an estimate, an assignment, or a charge. */
+                task_uids?: number[];
+            };
+        };
         ProjectCostCodeCreate: {
             code: string;
             name: string;
@@ -2470,6 +2540,42 @@ export interface components {
                 "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
+        /** @description Requete refusee par le domaine de revision : selection vide ou incoherente, position hors plage, deplacement circulaire, tache placee sous une ligne de cout, lien de precedence invalide, ou predecesseur n'appartenant pas a cette revision. `detail.code` porte le code stable (REVISION_SELECTION_INVALID, REVISION_POSITION_INVALID, REVISION_TREE_CYCLE, REVISION_FACET_PLACEMENT_INVALID, REVISION_LINK_INVALID, REVISION_CROSS_REVISION, REVISION_FACET_CONTRACT, REVISION_PROJECT_MISMATCH, REVISION_WORK_BREAKDOWN_INVALID, REVISION_IMPORT_STRUCTURE_INVALID, REVISION_REFUSED). REVISION_CROSS_REVISION signifie « cet identifiant de noeud n'est pas un des notres » : il couvre aussi bien un noeud d'une autre revision qu'un identifiant qui ne designe aucun noeud, distinction que cette revision ne peut pas faire et ne pretend pas faire. */
+        RevisionBadRequest: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["RevisionErrorResponse"];
+            };
+        };
+        /** @description Projet, revision ou noeud introuvable. `detail.code` vaut PROJECT_NOT_FOUND quand le projet n'existe pas ou n'appartient pas a l'appelant (meme reponse dans les deux cas, volontairement), REVISION_NOT_FOUND quand la revision n'existe pas (ou n'appartient pas au projet) et REVISION_NODE_NOT_FOUND quand le noeud, l'element de travail ou la facette visee n'existe pas dans cette revision. */
+        RevisionNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["RevisionErrorResponse"];
+            };
+        };
+        /** @description Ecriture refusee sur l'etat stocke. Deux codes principaux : REVISION_LOCK_CONFLICT quand `expected_lock_version` est perime (le corps porte alors `revision_id`, `expected_lock_version` et `current_lock_version`, et rien n'a ete modifie), et REVISION_IMMUTABLE quand la revision est `validated` ou `superseded` et refuse toute ecriture (INV-03) -- code identique sur la facette planification et sur la facette cout. Egalement PROJECT_READ_ONLY quand le statut du projet est `perdu`, `termine` ou `abandonne` (distinct d'INV-03 : la revision visee peut etre un brouillon parfaitement editable), PROJECT_CALENDAR_MISSING, REVISION_DUPLICATE_WORK_ITEM, REVISION_EXTERNAL_UID_CONFLICT, REVISION_LIFECYCLE_CONFLICT, REVISION_WRITE_REFUSED et REVISION_INTEGRITY_CONFLICT. */
+        RevisionConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["RevisionLockConflict"];
+            };
+        };
+        /** @description Corps de requete invalide au sens du schema : selection vide, entier hors des bornes de sa colonne, code MSPDI hors enumeration, `null` explicite sur un champ qui n'a pas d'etat « vide » (`name`, `percent_complete`, `is_milestone`, `is_manual` de la facette planification), ou `target_parent_id`/`position` fournis avec un `mode` qui calcule lui-meme sa destination. Rien n'a ete ecrit et `lock_version` n'a pas bouge. */
+        RevisionUnprocessable: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["RevisionValidationError"];
+            };
+        };
         /** @description Projet, planning ou tache introuvable */
         ProjectPlanningTaskNotFound: {
             headers: {
@@ -2477,93 +2583,6 @@ export interface components {
             };
             content: {
                 "application/json": components["schemas"]["FastAPIErrorResponse"];
-            };
-        };
-        /** @description Requete de deplacement invalide */
-        MovePlanningTasksBadRequest: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/json": components["schemas"]["FastAPIErrorResponse"];
-            };
-        };
-        /** @description Projet, planning ou tache introuvable pendant le deplacement */
-        MovePlanningTasksNotFound: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/json": components["schemas"]["FastAPIErrorResponse"];
-            };
-        };
-        /**
-         * @description Le deplacement entre en conflit avec le planning, ou `expected_revision` ne
-         *     correspond plus a la revision persistee (code `PLANNING_REVISION_CONFLICT`).
-         */
-        MovePlanningTasksConflict: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/json": components["schemas"]["FastAPIErrorResponse"];
-            };
-        };
-        /** @description Requete de creation invalide */
-        CreatePlanningTaskBadRequest: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/json": components["schemas"]["FastAPIErrorResponse"];
-            };
-        };
-        /** @description Projet, planning ou tache parent introuvable */
-        CreatePlanningTaskNotFound: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/json": components["schemas"]["FastAPIErrorResponse"];
-            };
-        };
-        /**
-         * @description La creation entre en conflit avec le planning, ou `expected_revision` ne
-         *     correspond plus a la revision persistee (code `PLANNING_REVISION_CONFLICT`).
-         */
-        CreatePlanningTaskConflict: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/json": components["schemas"]["FastAPIErrorResponse"];
-            };
-        };
-        /** @description Requete de suppression invalide */
-        DeletePlanningTasksBadRequest: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/json": components["schemas"]["FastAPIErrorResponse"];
-            };
-        };
-        /** @description Projet, planning ou tache introuvable pendant la suppression */
-        DeletePlanningTasksNotFound: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/json": components["schemas"]["FastAPIErrorResponse"];
-            };
-        };
-        /** @description Suppression en cascade non confirmee (detail.code=CASCADE_CONFIRMATION_REQUIRED, avec la liste des uid descendants dans detail.descendant_uids), ou tache referencee par un devis, une affectation ou une charge (detail.code=TASK_REFERENCED, avec la liste des uid references dans detail.task_uids). D'autres conflits (planning non brouillon, conflit d'integrite sur la hierarchie, `expected_revision` obsolete avec detail.code=PLANNING_REVISION_CONFLICT) renvoient le detail generique FastAPI plutot que ce detail structure. */
-        DeletePlanningTasksConflict: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/json": components["schemas"]["PlanningTaskDeleteConflict"] | components["schemas"]["FastAPIErrorResponse"];
             };
         };
         /** @description Devis introuvable */
@@ -2595,93 +2614,6 @@ export interface components {
         };
         /** @description Utilisateur introuvable */
         UserNotFound: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/json": components["schemas"]["FastAPIErrorResponse"];
-            };
-        };
-        /** @description Combinaison mode/dates/duree invalide pour la tache */
-        UpdatePlanningTaskScheduleBadRequest: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/json": components["schemas"]["FastAPIErrorResponse"];
-            };
-        };
-        /** @description Projet, planning ou tache introuvable */
-        UpdatePlanningTaskScheduleNotFound: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/json": components["schemas"]["FastAPIErrorResponse"];
-            };
-        };
-        /**
-         * @description La mise a jour du planning entre en conflit avec les donnees, ou `expected_revision`
-         *     ne correspond plus a la revision persistee (code `PLANNING_REVISION_CONFLICT`).
-         */
-        UpdatePlanningTaskScheduleConflict: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/json": components["schemas"]["FastAPIErrorResponse"];
-            };
-        };
-        /** @description Requete de mise a jour des liens invalide */
-        ReplaceTaskLinksBadRequest: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/json": components["schemas"]["FastAPIErrorResponse"];
-            };
-        };
-        /** @description Projet, planning ou tache introuvable pendant la mise a jour des liens */
-        ReplaceTaskLinksNotFound: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/json": components["schemas"]["FastAPIErrorResponse"];
-            };
-        };
-        /**
-         * @description La mise a jour des liens entre en conflit avec le planning, ou `expected_revision`
-         *     ne correspond plus a la revision persistee (code `PLANNING_REVISION_CONFLICT`).
-         */
-        ReplaceTaskLinksConflict: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/json": components["schemas"]["FastAPIErrorResponse"];
-            };
-        };
-        /** @description Snapshot de restauration invalide (uid/cle dupliques, lien inconnu) */
-        RestorePlanningSnapshotBadRequest: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/json": components["schemas"]["FastAPIErrorResponse"];
-            };
-        };
-        /** @description Projet ou planning introuvable */
-        RestorePlanningSnapshotNotFound: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/json": components["schemas"]["FastAPIErrorResponse"];
-            };
-        };
-        /** @description Le snapshot entre en conflit avec le planning (cycle, parent orphelin, milestone avec enfants), ou `expected_revision` ne correspond plus a la revision persistee (code `PLANNING_REVISION_CONFLICT`). */
-        RestorePlanningSnapshotConflict: {
             headers: {
                 [name: string]: unknown;
             };
@@ -2769,6 +2701,10 @@ export interface components {
         EstimateId: number;
         /** @description Identifiant technique de la version de planning */
         PlanningId: number;
+        /** @description Identifiant technique de la revision (arbre + facettes planification et cout) */
+        RevisionId: number;
+        /** @description Identifiant technique du noeud de revision */
+        RevisionNodeId: number;
         /** @description Identifiant technique de la ligne de coût du devis */
         CostLineId: number;
         /** @description Identifiant technique du noeud de ressources */
@@ -3693,206 +3629,207 @@ export interface operations {
             404: components["responses"]["PlanningNotFound"];
         };
     };
-    movePlanningTasks: {
+    readRevisionNodes: {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 /** @description Identifiant technique ms_project.id */
                 projectId: components["parameters"]["ProjectId"];
-                /** @description Identifiant technique de la version de planning */
-                planningId: components["parameters"]["PlanningId"];
+                /** @description Identifiant technique de la revision (arbre + facettes planification et cout) */
+                revisionId: components["parameters"]["RevisionId"];
             };
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PlanningTaskMove"];
-            };
-        };
+        requestBody?: never;
         responses: {
-            /** @description Arbre complet du brouillon mis a jour */
+            /** @description Arbre complet de la revision, en ordre depth-first */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PlanningDetailRead"];
+                    "application/json": components["schemas"]["RevisionTreeRead"];
                 };
             };
-            400: components["responses"]["MovePlanningTasksBadRequest"];
             401: components["responses"]["Unauthorized"];
-            404: components["responses"]["MovePlanningTasksNotFound"];
-            409: components["responses"]["MovePlanningTasksConflict"];
+            404: components["responses"]["RevisionNotFound"];
+            409: components["responses"]["RevisionConflict"];
+            422: components["responses"]["RevisionUnprocessable"];
         };
     };
-    createPlanningTask: {
+    createRevisionTask: {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 /** @description Identifiant technique ms_project.id */
                 projectId: components["parameters"]["ProjectId"];
-                /** @description Identifiant technique de la version de planning */
-                planningId: components["parameters"]["PlanningId"];
+                /** @description Identifiant technique de la revision (arbre + facettes planification et cout) */
+                revisionId: components["parameters"]["RevisionId"];
             };
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["PlanningTaskCreate"];
+                "application/json": components["schemas"]["RevisionTaskCreate"];
             };
         };
         responses: {
-            /** @description Arbre complet du brouillon mis a jour */
-            200: {
+            /** @description Noeud cree, avec le nouveau `lock_version` de la revision */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PlanningDetailRead"];
+                    "application/json": components["schemas"]["RevisionNodeWriteRead"];
                 };
             };
-            400: components["responses"]["CreatePlanningTaskBadRequest"];
+            400: components["responses"]["RevisionBadRequest"];
             401: components["responses"]["Unauthorized"];
-            404: components["responses"]["CreatePlanningTaskNotFound"];
-            409: components["responses"]["CreatePlanningTaskConflict"];
+            404: components["responses"]["RevisionNotFound"];
+            409: components["responses"]["RevisionConflict"];
+            422: components["responses"]["RevisionUnprocessable"];
         };
     };
-    deletePlanningTasks: {
+    moveRevisionNodes: {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 /** @description Identifiant technique ms_project.id */
                 projectId: components["parameters"]["ProjectId"];
-                /** @description Identifiant technique de la version de planning */
-                planningId: components["parameters"]["PlanningId"];
+                /** @description Identifiant technique de la revision (arbre + facettes planification et cout) */
+                revisionId: components["parameters"]["RevisionId"];
             };
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["PlanningTaskDelete"];
+                "application/json": components["schemas"]["RevisionNodeMove"];
             };
         };
         responses: {
-            /** @description Arbre complet du brouillon mis a jour */
+            /** @description Deplacement applique, avec le nouveau `lock_version` */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PlanningDetailRead"];
+                    "application/json": components["schemas"]["RevisionWriteRead"];
                 };
             };
-            400: components["responses"]["DeletePlanningTasksBadRequest"];
+            400: components["responses"]["RevisionBadRequest"];
             401: components["responses"]["Unauthorized"];
-            404: components["responses"]["DeletePlanningTasksNotFound"];
-            409: components["responses"]["DeletePlanningTasksConflict"];
+            404: components["responses"]["RevisionNotFound"];
+            409: components["responses"]["RevisionConflict"];
+            422: components["responses"]["RevisionUnprocessable"];
         };
     };
-    updatePlanningTaskSchedule: {
+    deleteRevisionNodes: {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 /** @description Identifiant technique ms_project.id */
                 projectId: components["parameters"]["ProjectId"];
-                /** @description Identifiant technique de la version de planning */
-                planningId: components["parameters"]["PlanningId"];
-                /** @description UID fonctionnel de la tache dans un projet */
-                taskUid: components["parameters"]["TaskUid"];
+                /** @description Identifiant technique de la revision (arbre + facettes planification et cout) */
+                revisionId: components["parameters"]["RevisionId"];
             };
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["PlanningTaskScheduleUpdate"];
+                "application/json": components["schemas"]["RevisionNodeDelete"];
             };
         };
         responses: {
-            /** @description Arbre complet du brouillon mis a jour */
+            /** @description Suppression appliquee, avec le chiffrage emporte */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PlanningDetailRead"];
+                    "application/json": components["schemas"]["RevisionNodeDeleteRead"];
                 };
             };
-            400: components["responses"]["UpdatePlanningTaskScheduleBadRequest"];
+            400: components["responses"]["RevisionBadRequest"];
             401: components["responses"]["Unauthorized"];
-            404: components["responses"]["UpdatePlanningTaskScheduleNotFound"];
-            409: components["responses"]["UpdatePlanningTaskScheduleConflict"];
+            404: components["responses"]["RevisionNotFound"];
+            409: components["responses"]["RevisionConflict"];
+            422: components["responses"]["RevisionUnprocessable"];
         };
     };
-    replaceTaskPredecessorLinks: {
+    updateRevisionPlanFacet: {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 /** @description Identifiant technique ms_project.id */
                 projectId: components["parameters"]["ProjectId"];
-                /** @description Identifiant technique de la version de planning */
-                planningId: components["parameters"]["PlanningId"];
-                /** @description UID fonctionnel de la tache dans un projet */
-                taskUid: components["parameters"]["TaskUid"];
+                /** @description Identifiant technique de la revision (arbre + facettes planification et cout) */
+                revisionId: components["parameters"]["RevisionId"];
+                /** @description Identifiant technique du noeud de revision */
+                nodeId: components["parameters"]["RevisionNodeId"];
             };
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["TaskLinksReplace"];
+                "application/json": components["schemas"]["RevisionPlanFacetUpdate"];
             };
         };
         responses: {
-            /** @description Arbre complet du brouillon mis a jour */
+            /** @description Facette mise a jour, avec le nouveau `lock_version` */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PlanningDetailRead"];
+                    "application/json": components["schemas"]["RevisionWriteRead"];
                 };
             };
-            400: components["responses"]["ReplaceTaskLinksBadRequest"];
+            400: components["responses"]["RevisionBadRequest"];
             401: components["responses"]["Unauthorized"];
-            404: components["responses"]["ReplaceTaskLinksNotFound"];
-            409: components["responses"]["ReplaceTaskLinksConflict"];
+            404: components["responses"]["RevisionNotFound"];
+            409: components["responses"]["RevisionConflict"];
+            422: components["responses"]["RevisionUnprocessable"];
         };
     };
-    restorePlanningSnapshot: {
+    replaceRevisionPredecessors: {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 /** @description Identifiant technique ms_project.id */
                 projectId: components["parameters"]["ProjectId"];
-                /** @description Identifiant technique de la version de planning */
-                planningId: components["parameters"]["PlanningId"];
+                /** @description Identifiant technique de la revision (arbre + facettes planification et cout) */
+                revisionId: components["parameters"]["RevisionId"];
+                /** @description Identifiant technique du noeud de revision */
+                nodeId: components["parameters"]["RevisionNodeId"];
             };
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["PlanningSnapshotRestore"];
+                "application/json": components["schemas"]["RevisionPredecessorsReplace"];
             };
         };
         responses: {
-            /** @description Arbre complet du brouillon mis a jour */
+            /** @description Predecesseurs remplaces, avec le nouveau `lock_version` */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PlanningDetailRead"];
+                    "application/json": components["schemas"]["RevisionWriteRead"];
                 };
             };
-            400: components["responses"]["RestorePlanningSnapshotBadRequest"];
+            400: components["responses"]["RevisionBadRequest"];
             401: components["responses"]["Unauthorized"];
-            404: components["responses"]["RestorePlanningSnapshotNotFound"];
-            409: components["responses"]["RestorePlanningSnapshotConflict"];
+            404: components["responses"]["RevisionNotFound"];
+            409: components["responses"]["RevisionConflict"];
+            422: components["responses"]["RevisionUnprocessable"];
         };
     };
     validatePlanning: {
@@ -4004,33 +3941,6 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["EstimateNotFound"];
             409: components["responses"]["Conflict"];
-        };
-    };
-    listProjectTasks: {
-        parameters: {
-            query?: {
-                planning_id?: number | null;
-            };
-            header?: never;
-            path: {
-                /** @description Identifiant technique ms_project.id */
-                projectId: components["parameters"]["ProjectId"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Integralite des taches du projet (non pagine : cet endpoint alimente l'editeur de planning, qui a besoin de l'arbre complet pour reconstruire la hierarchie et calculer les durees des taches synthese -- une troncature produirait des parents orphelins et des agregats faux). */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TaskListRead"];
-                };
-            };
-            401: components["responses"]["Unauthorized"];
-            404: components["responses"]["ProjectNotFound"];
         };
     };
     createPlanningStructure: {
@@ -4168,33 +4078,6 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["ProjectNotFound"];
             409: components["responses"]["Conflict"];
-        };
-    };
-    getPlanningTree: {
-        parameters: {
-            query?: {
-                planning_id?: number | null;
-            };
-            header?: never;
-            path: {
-                /** @description Identifiant technique ms_project.id */
-                projectId: components["parameters"]["ProjectId"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Arbre hiérarchique du planning */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PlanningTreeRead"];
-                };
-            };
-            401: components["responses"]["Unauthorized"];
-            404: components["responses"]["ProjectNotFound"];
         };
     };
     updateTask: {

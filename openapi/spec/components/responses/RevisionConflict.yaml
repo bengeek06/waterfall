@@ -1,0 +1,16 @@
+description: >-
+  Ecriture refusee sur l'etat stocke. Deux codes principaux :
+  REVISION_LOCK_CONFLICT quand `expected_lock_version` est perime (le corps porte
+  alors `revision_id`, `expected_lock_version` et `current_lock_version`, et rien
+  n'a ete modifie), et REVISION_IMMUTABLE quand la revision est `validated` ou
+  `superseded` et refuse toute ecriture (INV-03) -- code identique sur la facette
+  planification et sur la facette cout. Egalement PROJECT_READ_ONLY quand le
+  statut du projet est `perdu`, `termine` ou `abandonne` (distinct d'INV-03 : la
+  revision visee peut etre un brouillon parfaitement editable),
+  PROJECT_CALENDAR_MISSING, REVISION_DUPLICATE_WORK_ITEM,
+  REVISION_EXTERNAL_UID_CONFLICT, REVISION_LIFECYCLE_CONFLICT,
+  REVISION_WRITE_REFUSED et REVISION_INTEGRITY_CONFLICT.
+content:
+  application/json:
+    schema:
+      $ref: ../schemas/RevisionLockConflict.yaml

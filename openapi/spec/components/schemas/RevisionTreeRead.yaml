@@ -1,0 +1,41 @@
+type: object
+required:
+- revision_id
+- project_id
+- version_number
+- kind
+- status
+- lock_version
+- note
+- nodes
+properties:
+  revision_id:
+    type: integer
+  project_id:
+    type: integer
+  version_number:
+    type: integer
+  kind:
+    type: string
+    enum:
+    - initial
+    - contract_reference
+    - forecast_remaining
+  status:
+    type: string
+    enum:
+    - draft
+    - validated
+    - superseded
+  lock_version:
+    type: integer
+  note:
+    anyOf:
+    - type: string
+    - type: 'null'
+  nodes:
+    items:
+      $ref: RevisionNodeRead.yaml
+    type: array
+description: 'Arbre complet d''une revision : en-tete (dont `lock_version`, a renvoyer en `expected_lock_version`
+  sur la prochaine ecriture) et noeuds en ordre depth-first.'

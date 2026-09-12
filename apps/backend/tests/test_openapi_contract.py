@@ -10,12 +10,9 @@ import yaml
 from fastapi.testclient import TestClient
 from openpyxl import load_workbook
 
+from waterfall.api.revision_errors import REVISION_IMMUTABLE
 from waterfall.api.routes import estimates
-from waterfall.db.session import get_session_factory
 from waterfall.main import app
-from waterfall.models.ms_core import MsTask
-from waterfall.models.planning import WfPlanning, WfPlanningTaskSnapshot
-from waterfall.models.wf_core import WfChargeLine
 from waterfall.services import (
     PlanningTreeCascadeConfirmationRequiredError,
     PlanningTreeTaskReferencedError,
@@ -214,6 +211,28 @@ def test_public_operations_explicitly_disable_security() -> None:
     assert unauthenticated_operations == PUBLIC_OPERATIONS
 
 
+def _enums_by_path(schema: object, path: str = "$") -> dict[str, list[object]]:
+    """Every ``enum`` under ``schema``, keyed by where it sits.
+
+    Keyed by path, so a static spec that moved an enumeration to another property (or
+    lost the surrounding ``anyOf`` a nullable field generates) fails just as loudly as
+    one whose members drifted.
+    """
+    if isinstance(schema, dict):
+        node = cast(dict[str, Any], schema)
+        members = node.get("enum")
+        found = {path: cast(list[object], members)} if isinstance(members, list) else {}
+        for key, child in node.items():
+            found.update(_enums_by_path(child, f"{path}/{key}"))
+        return found
+    if isinstance(schema, list):
+        found: dict[str, list[object]] = {}
+        for index, child in enumerate(cast(list[object], schema)):
+            found.update(_enums_by_path(child, f"{path}/{index}"))
+        return found
+    return {}
+
+
 def test_static_openapi_matches_runtime_operation_ids_and_components() -> None:
     raw_document: object = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
     if not isinstance(raw_document, dict):
@@ -231,9 +250,13 @@ def test_static_openapi_matches_runtime_operation_ids_and_components() -> None:
         "ProjectStatusUpdate",
         "PlanningRead",
         "PlanningCreate",
-        "PlanningTaskMove",
         "PlanningLinkRead",
         "ReconciliationPlanRead",
+        # E14-05 (#331): the revision tree replaces the planning-snapshot read and
+        # its whole mutation family, so it is anchored here in their place.
+        "RevisionTreeRead",
+        "RevisionNodeRead",
+        "RevisionPlanFacetUpdate",
     ):
         assert schema_name in runtime_components
         assert schema_name in static_components
@@ -241,15 +264,27 @@ def test_static_openapi_matches_runtime_operation_ids_and_components() -> None:
         runtime_schema = cast(dict[str, Any], runtime_components[schema_name])
         assert set(static_schema.get("properties", {})) == set(runtime_schema["properties"])
 
-    static_move = cast(dict[str, Any], static_components["PlanningTaskMove"])
-    runtime_move = cast(dict[str, Any], runtime_components["PlanningTaskMove"])
+    # Enumerations, hand-copied into the static spec value by value, compared by the
+    # path they sit at rather than by schema (#331 review, B5). The properties compared
+    # above are a set of *names*: an enumeration losing a member -- which is what M1
+    # was, on the MSPDI `LagFormat` -- changes nothing in that set while publishing to
+    # every client a narrower domain than the API accepts, or a wider one than it does.
+    for schema_name in ("RevisionPlanFacetUpdate", "RevisionPredecessorWrite"):
+        static_schema = cast(dict[str, Any], static_components[schema_name])
+        runtime_schema = cast(dict[str, Any], runtime_components[schema_name])
+        static_enums = _enums_by_path(static_schema)
+        assert static_enums, f"{schema_name} is anchored here for its enums and has none"
+        assert static_enums == _enums_by_path(runtime_schema)
+
+    static_move = cast(dict[str, Any], static_components["RevisionNodeMove"])
+    runtime_move = cast(dict[str, Any], runtime_components["RevisionNodeMove"])
     assert (
-        static_move["properties"]["task_uids"]["minItems"]
-        == runtime_move["properties"]["task_uids"]["minItems"]
+        static_move["properties"]["node_ids"]["minItems"]
+        == runtime_move["properties"]["node_ids"]["minItems"]
     )
     assert (
-        static_move["properties"]["task_uids"]["items"]["minimum"]
-        == runtime_move["properties"]["task_uids"]["items"]["minimum"]
+        static_move["properties"]["node_ids"]["items"]["exclusiveMinimum"]
+        == runtime_move["properties"]["node_ids"]["items"]["exclusiveMinimum"]
     )
 
     static_plan = cast(dict[str, Any], static_components["ReconciliationPlanRead"])
@@ -288,8 +323,7 @@ def test_planning_contract_matches_runtime_shapes() -> None:
         path
         for path in static_paths
         if "/plannings" in path
-        or "/planning-tree" in path
-        or path.endswith("/tasks")
+        or "/revisions/" in path
         or path.endswith("/export.xml")
         or "/estimates" in path
     }
@@ -305,8 +339,7 @@ def test_planning_contract_matches_runtime_shapes() -> None:
         if method in {"get", "post", "put", "patch", "delete"}
         and (
             "/plannings" in path
-            or "/planning-tree" in path
-            or path.endswith("/tasks")
+            or "/revisions/" in path
             or path.endswith("/export.xml")
             or "/estimates" in path
         )
@@ -332,8 +365,8 @@ def test_planning_contract_matches_runtime_shapes() -> None:
     relevant_schemas = (
         "PlanningRead",
         "PlanningDetailRead",
-        "PlanningTaskMove",
-        "PlanningTreeRead",
+        "RevisionNodeMove",
+        "RevisionTreeRead",
         "TaskRead",
         "PlanningLinkRead",
         "ProjectEstimateRead",
@@ -374,43 +407,82 @@ def test_resource_calendar_contract_matches_runtime_shapes() -> None:
         assert "code" not in _schema_property_names(runtime_schemas[schema_name], runtime_schemas)
 
 
-def test_move_planning_tasks_documents_all_not_found_resources() -> None:
+def test_revision_endpoints_document_their_structured_error_responses() -> None:
+    """E14-05 (#331), in place of the move/delete-family contract checks it removed.
+
+    Every refusal of the revision API is a structured ``{"detail": {"code": ...}}``
+    body, not the generic ``FastAPIErrorResponse`` (``str | object | array``) the
+    endpoints it replaces documented -- a TS client could not type ``error.detail``
+    off that one. Pinned here on all six operations at once, with the INV-03 code
+    E14-07 (#333) has to reuse verbatim.
+    """
     raw_document: object = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
     static_document = cast(dict[str, Any], raw_document)
-    move_operation = static_document["paths"][
-        "/projects/{projectId}/plannings/{planningId}/tasks/move"
-    ]["post"]
-
+    static_paths = cast(dict[str, Any], static_document["paths"])
     static_components = cast(dict[str, Any], static_document["components"])
-    runtime_operation = cast(dict[str, Any], app.openapi()["paths"])[
-        "/projects/{project_id}/plannings/{planning_id}/tasks/move"
-    ]["post"]
 
-    for status_code, response_name in (
-        ("400", "MovePlanningTasksBadRequest"),
-        ("404", "MovePlanningTasksNotFound"),
-        ("409", "MovePlanningTasksConflict"),
+    revision_paths = [path for path in static_paths if "/revisions/" in path]
+    assert len(revision_paths) == 6
+    for path in revision_paths:
+        for method, operation in cast(dict[str, Any], static_paths[path]).items():
+            if method not in {"get", "post", "put", "patch", "delete"}:
+                continue
+            assert operation["responses"]["404"]["$ref"] == (
+                "#/components/responses/RevisionNotFound"
+            ), (path, method)
+            assert operation["responses"]["409"]["$ref"] == (
+                "#/components/responses/RevisionConflict"
+            ), (path, method)
+
+    for response_name, schema_name in (
+        ("RevisionNotFound", "RevisionErrorResponse"),
+        ("RevisionBadRequest", "RevisionErrorResponse"),
+        ("RevisionConflict", "RevisionLockConflict"),
     ):
-        assert move_operation["responses"][status_code]["$ref"] == (
-            f"#/components/responses/{response_name}"
-        )
-        static_response = static_components["responses"][response_name]
-        assert static_response["content"]["application/json"]["schema"]["$ref"] == (
-            "#/components/schemas/FastAPIErrorResponse"
-        )
-        assert (
-            runtime_operation["responses"][status_code]["content"]["application/json"]["schema"][
-                "$ref"
-            ]
-            == "#/components/schemas/FastAPIErrorResponse"
+        response = static_components["responses"][response_name]
+        assert response["content"]["application/json"]["schema"]["$ref"] == (
+            f"#/components/schemas/{schema_name}"
         )
 
+    # The lock conflict carries what a client needs to resynchronise, not just a code.
+    conflict_detail = static_components["schemas"]["RevisionLockConflict"]["properties"]["detail"]
+    assert conflict_detail["required"] == ["code"]
+    assert set(conflict_detail["properties"]) == {
+        "code",
+        "revision_id",
+        "expected_lock_version",
+        "current_lock_version",
+    }
+    # INV-03's code is published, because #333 has to answer exactly this one.
+    assert REVISION_IMMUTABLE == "REVISION_IMMUTABLE"
+    assert REVISION_IMMUTABLE in static_components["responses"]["RevisionConflict"]["description"]
+
+    # Unchanged, and checked here because this is where it used to be checked: the
+    # generic error body every *other* route still answers with.
     error_schema = static_components["schemas"]["FastAPIErrorResponse"]
     assert error_schema["properties"]["detail"]["anyOf"] == [
         {"type": "string"},
         {"type": "object", "additionalProperties": True},
         {"type": "array", "items": {"type": "object", "additionalProperties": True}},
     ]
+
+
+def test_the_contract_no_longer_names_a_planning_task_snapshot_schema() -> None:
+    """Acceptance criterion of #331, pinned rather than checked by hand once.
+
+    `wf_planning_task_snapshot` is the twin table the revision node replaces, and no
+    *schema* of the published contract -- nor of the TypeScript client generated from
+    it -- may be named after it any more. Prose still mentioning the table is fine and
+    deliberately not matched: ``PATCH /projects/{id}/tasks/{uid}`` still writes it, and
+    says so.
+    """
+    raw_document: object = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
+    static_document = cast(dict[str, Any], raw_document)
+    schemas = cast(dict[str, Any], static_document["components"])["schemas"]
+
+    assert [name for name in schemas if "PlanningTaskSnapshot" in name] == []
+    generated_client = GENERATED_CLIENT_PATH.read_text(encoding="utf-8")
+    assert re.findall(r"\b\w*PlanningTaskSnapshot\w*\s*:", generated_client) == []
 
 
 def test_generic_error_responses_document_fastapi_error_shape() -> None:
@@ -665,77 +737,19 @@ def _create_project(client: TestClient, headers: dict[str, str]) -> int:
     return cast(int, response.json()["id"])
 
 
-def _seed_planning_with_parent_and_child(project_id: int) -> int:
-    """A minimal draft planning tree: a summary root (uid=1) with one child
-    (uid=2) -- just enough to trigger a CASCADE_CONFIRMATION_REQUIRED 409 on
-    deleting uid=1, or a TASK_REFERENCED 409 once uid=2 is referenced.
-    """
-    with get_session_factory()() as session:
-        planning = WfPlanning(project_id=project_id, version_number=1, status="draft")
-        session.add(planning)
-        session.flush()
-        session.add_all(
-            [
-                WfPlanningTaskSnapshot(
-                    planning_id=planning.id,
-                    uid=1,
-                    name="Root",
-                    position=1,
-                    is_summary=True,
-                    is_milestone=False,
-                ),
-                WfPlanningTaskSnapshot(
-                    planning_id=planning.id,
-                    uid=2,
-                    name="Child",
-                    parent_uid=1,
-                    position=1,
-                    is_summary=False,
-                    is_milestone=False,
-                ),
-            ]
-        )
-        session.commit()
-        return planning.id
+def test_planning_task_delete_conflict_schema_keeps_its_shape_for_the_devis() -> None:
+    """The dedicated 409 body the devis reconciliation still answers with.
 
-
-def test_delete_planning_tasks_conflict_response_declares_dedicated_schema() -> None:
-    """Guards the finding this response used to trigger: a bare ``dict``
-    ``HTTPException`` ``detail`` documented as the generic
-    ``FastAPIErrorResponse`` (``str | array``), which cannot express
-    ``{code, descendant_uids}``/``{code, task_uids}`` and would make a
-    TS-generated client type ``error.detail`` incorrectly. Checking the two
-    ``$ref``s equal (as ``test_move_planning_tasks_documents_all_not_found_resources``
-    does for ``move``) is not enough on its own -- it would pass even if both
-    still pointed at the same generic schema -- so this also asserts the
-    dedicated schema's actual shape.
-
-    The 409 is documented as a ``oneOf`` of ``PlanningTaskDeleteConflict``
-    (the structured cascade/reference conflicts) and ``FastAPIErrorResponse``
-    (the plain-string conflicts that ``delete_planning_tasks_route`` also
-    raises -- e.g. "Planning is not a draft", or an ``IntegrityError`` on the
-    hierarchy) -- see PR #78's Copilot review finding #2: those code paths
-    never actually return the structured shape, so documenting it exclusively
-    was inaccurate.
+    E14-05 (#331) removed ``POST .../plannings/{id}/tasks/delete`` and its response
+    component, but **not** this schema: ``EstimateReconciliationConfirmConflict``
+    still references it (see the test further down), because
+    ``services.delete_planning_tasks`` still serves the reconciliation import. What
+    is pinned here is the shape a generated client types ``error.detail`` off --
+    the finding that produced this schema in the first place.
     """
     raw_document: object = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
     static_document = cast(dict[str, Any], raw_document)
     static_components = cast(dict[str, Any], static_document["components"])
-    delete_operation = static_document["paths"][
-        "/projects/{projectId}/plannings/{planningId}/tasks/delete"
-    ]["post"]
-    conflict_response = static_components["responses"]["DeletePlanningTasksConflict"]
-    conflict_schema_refs = {
-        member["$ref"]
-        for member in conflict_response["content"]["application/json"]["schema"]["oneOf"]
-    }
-    assert conflict_schema_refs == {
-        "#/components/schemas/PlanningTaskDeleteConflict",
-        "#/components/schemas/FastAPIErrorResponse",
-    }
-    assert delete_operation["responses"]["409"]["$ref"] == (
-        "#/components/responses/DeletePlanningTasksConflict"
-    )
 
     conflict_schema = static_components["schemas"]["PlanningTaskDeleteConflict"]
     detail_schema = conflict_schema["properties"]["detail"]
@@ -756,76 +770,6 @@ def test_delete_planning_tasks_conflict_response_declares_dedicated_schema() -> 
         runtime_detail_schema["properties"]["code"]["enum"]
         == detail_schema["properties"]["code"]["enum"]
     )
-
-    runtime_document = app.openapi()
-    runtime_operation = cast(dict[str, Any], runtime_document["paths"])[
-        "/projects/{project_id}/plannings/{planning_id}/tasks/delete"
-    ]["post"]
-    runtime_conflict_schema = runtime_operation["responses"]["409"]["content"]["application/json"][
-        "schema"
-    ]
-    runtime_conflict_refs = {member["$ref"] for member in runtime_conflict_schema["anyOf"]}
-    assert runtime_conflict_refs == conflict_schema_refs
-
-
-def test_delete_planning_tasks_cascade_confirmation_conflict_matches_declared_schema() -> None:
-    raw_document: object = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
-    static_document = cast(dict[str, Any], raw_document)
-    detail_properties = static_document["components"]["schemas"]["PlanningTaskDeleteConflict"][
-        "properties"
-    ]["detail"]["properties"]
-
-    with TestClient(app) as client:
-        headers = _auth_headers(client)
-        project_id = _create_project(client, headers)
-        planning_id = _seed_planning_with_parent_and_child(project_id)
-
-        response = client.post(
-            f"/projects/{project_id}/plannings/{planning_id}/tasks/delete",
-            json={"task_uids": [1], "expected_revision": 0},
-            headers=headers,
-        )
-
-    assert response.status_code == 409
-    detail = cast(dict[str, Any], response.json())["detail"]
-    assert set(detail) <= set(detail_properties)
-    assert detail["code"] == "CASCADE_CONFIRMATION_REQUIRED"
-    assert isinstance(detail["descendant_uids"], list)
-    assert all(isinstance(uid, int) for uid in detail["descendant_uids"])
-    assert detail["descendant_uids"] == [2]
-
-
-def test_delete_planning_tasks_task_referenced_conflict_matches_declared_schema() -> None:
-    raw_document: object = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
-    static_document = cast(dict[str, Any], raw_document)
-    detail_properties = static_document["components"]["schemas"]["PlanningTaskDeleteConflict"][
-        "properties"
-    ]["detail"]["properties"]
-
-    with TestClient(app) as client:
-        headers = _auth_headers(client)
-        project_id = _create_project(client, headers)
-        planning_id = _seed_planning_with_parent_and_child(project_id)
-
-        with get_session_factory()() as session:
-            session.add(MsTask(project_id=project_id, uid=2, name="Legacy bridge"))
-            session.flush()
-            session.add(WfChargeLine(project_id=project_id, task_uid=2, load_minutes=60))
-            session.commit()
-
-        response = client.post(
-            f"/projects/{project_id}/plannings/{planning_id}/tasks/delete",
-            json={"task_uids": [2], "expected_revision": 0},
-            headers=headers,
-        )
-
-    assert response.status_code == 409
-    detail = cast(dict[str, Any], response.json())["detail"]
-    assert set(detail) <= set(detail_properties)
-    assert detail["code"] == "TASK_REFERENCED"
-    assert isinstance(detail["task_uids"], list)
-    assert all(isinstance(uid, int) for uid in detail["task_uids"])
-    assert detail["task_uids"] == [2]
 
 
 _RECONCILIATION_XLSX_CONTENT_TYPE = (

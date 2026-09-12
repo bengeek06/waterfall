@@ -1,0 +1,11 @@
+description: >-
+  Projet, revision ou noeud introuvable. `detail.code` vaut PROJECT_NOT_FOUND
+  quand le projet n'existe pas ou n'appartient pas a l'appelant (meme reponse
+  dans les deux cas, volontairement), REVISION_NOT_FOUND quand la revision
+  n'existe pas (ou n'appartient pas au projet) et REVISION_NODE_NOT_FOUND quand
+  le noeud, l'element de travail ou la facette visee n'existe pas dans cette
+  revision.
+content:
+  application/json:
+    schema:
+      $ref: ../schemas/RevisionErrorResponse.yaml

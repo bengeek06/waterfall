@@ -9,6 +9,7 @@ from httpx import Response
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from _legacy_planning_support import create_legacy_planning_task, legacy_project_tasks
 from waterfall.api.routes import planning_support, plannings, tasks
 from waterfall.db.session import get_session_factory
 from waterfall.main import app
@@ -77,7 +78,7 @@ def test_save_planning_structure_draft_is_non_operational_and_generates_later() 
         assert second.status_code == 200
         assert first.json()["planning_id"] == second.json()["planning_id"]
         assert client.get(f"/projects/{project_id}", headers=headers).json()["status"] == "cree"
-        assert client.get(f"/projects/{project_id}/tasks", headers=headers).json()["items"] == []
+        assert legacy_project_tasks(project_id) == []
         plannings = client.get(f"/projects/{project_id}/plannings", headers=headers)
         assert plannings.status_code == 200
         planning_items = cast(list[dict[str, Any]], plannings.json()["items"])
@@ -356,12 +357,7 @@ def test_skip_planning_structure_rejects_non_empty_reused_draft() -> None:
         assert created.status_code == 201
         planning_id = cast(int, created.json()["id"])
 
-        task_created = client.post(
-            f"/projects/{project_id}/plannings/{planning_id}/tasks",
-            json={"name": "Manual task", "expected_revision": 0},
-            headers=headers,
-        )
-        assert task_created.status_code == 200
+        create_legacy_planning_task(project_id, planning_id, name="Manual task")
 
         trapped = client.get(f"/projects/{project_id}", headers=headers).json()
         assert trapped["status"] == "cree"
@@ -643,15 +639,19 @@ def test_create_planning_structure_generates_hierarchy_and_links() -> None:
         assert links_response.status_code == 200
         assert links_response.content.count(b"<PredecessorLink>") == 3
 
-        tree_response = client.get(
-            f"/projects/{project_id}/planning-tree",
-            headers=headers,
-        )
-        assert tree_response.status_code == 200
-        roots = cast(list[dict[str, Any]], tree_response.json()["tasks"])
+        # E14-05 (#331) removed GET /planning-tree, which only nested what the flat
+        # task list already carries through parent_uid. The hierarchy the skeleton
+        # generated is the assertion here, so it is rebuilt from that list rather
+        # than dropped with the endpoint.
+        generated_tasks = legacy_project_tasks(project_id)
+        children_by_parent: dict[int | None, list[dict[str, Any]]] = {}
+        for task in generated_tasks:
+            children_by_parent.setdefault(cast(int | None, task["parent_uid"]), []).append(task)
+        roots = children_by_parent[None]
         assert len(roots) == 1
-        assert len(roots[0]["children"]) == 2
-        assert len(roots[0]["children"][0]["children"]) == 3
+        first_level = children_by_parent[cast(int, roots[0]["uid"])]
+        assert len(first_level) == 2
+        assert len(children_by_parent[cast(int, first_level[0]["uid"])]) == 3
 
 
 def test_create_planning_structure_is_idempotent() -> None:
@@ -669,9 +669,7 @@ def test_create_planning_structure_is_idempotent() -> None:
         second_tasks = cast(list[dict[str, Any]], second.json()["tasks"])
         assert [task["uid"] for task in second_tasks] == [task["uid"] for task in first_tasks]
 
-        listed = client.get(f"/projects/{project_id}/tasks", headers=headers)
-        assert listed.status_code == 200
-        listed_tasks = cast(list[dict[str, Any]], listed.json()["items"])
+        listed_tasks = legacy_project_tasks(project_id)
         assert len(listed_tasks) == len(first_tasks)
 
 
@@ -707,9 +705,7 @@ def test_create_planning_structure_reconciles_removed_lots() -> None:
         second = client.post(path, json=payload, headers=headers)
 
         assert second.status_code == 201
-        listed = client.get(f"/projects/{project_id}/tasks", headers=headers)
-        assert listed.status_code == 200
-        tasks = cast(list[dict[str, Any]], listed.json()["items"])
+        tasks = legacy_project_tasks(project_id)
         assert len(tasks) == 5
         assert all(task["structure_key"] != "design/validation" for task in tasks)
 
@@ -728,62 +724,7 @@ def test_create_planning_structure_rejects_duplicate_keys_without_mutation() -> 
         )
 
         assert response.status_code == 422
-        listed = client.get(f"/projects/{project_id}/tasks", headers=headers)
-        assert listed.status_code == 200
-        assert listed.json()["items"] == []
-
-
-def test_task_mutations_target_displayed_draft_snapshot() -> None:
-    with TestClient(app) as client:
-        headers = _auth_headers(client)
-        project_id = _create_project(client, headers)
-        generated = client.post(
-            f"/projects/{project_id}/planning-structure",
-            json=_payload(),
-            headers=headers,
-        )
-        assert generated.status_code == 201
-        summary_uid = generated.json()["tasks"][0]["uid"]
-
-        # create_planning_structure sets the generated draft as the project's
-        # displayed planning; the E3-05 create/delete contract is scoped by
-        # planning id, so it is resolved from there.
-        planning_id = client.get(f"/projects/{project_id}", headers=headers).json()[
-            "displayed_planning_id"
-        ]
-
-        create = client.post(
-            f"/projects/{project_id}/plannings/{planning_id}/tasks",
-            json={"name": "Draft task", "expected_revision": 0},
-            headers=headers,
-        )
-        assert create.status_code == 200
-        create_payload = cast(dict[str, Any], create.json())
-        new_uid = next(
-            task["uid"]
-            for task in cast(list[dict[str, Any]], create_payload["tasks"])
-            if task["name"] == "Draft task"
-        )
-
-        # A summary task that still has children cannot be removed without
-        # confirming the cascade.
-        summary_delete = client.post(
-            f"/projects/{project_id}/plannings/{planning_id}/tasks/delete",
-            json={"task_uids": [summary_uid], "expected_revision": 1},
-            headers=headers,
-        )
-        assert summary_delete.status_code == 409
-        assert summary_delete.json()["detail"]["code"] == "CASCADE_CONFIRMATION_REQUIRED"
-
-        # A leaf task added to the displayed draft snapshot can be removed.
-        leaf_delete = client.post(
-            f"/projects/{project_id}/plannings/{planning_id}/tasks/delete",
-            json={"task_uids": [new_uid], "expected_revision": 1},
-            headers=headers,
-        )
-        assert leaf_delete.status_code == 200
-        remaining = client.get(f"/projects/{project_id}/tasks", headers=headers).json()["items"]
-        assert new_uid not in [task["uid"] for task in remaining]
+        assert legacy_project_tasks(project_id) == []
 
 
 def test_reopen_and_regenerate_preserves_uids() -> None:
@@ -793,10 +734,7 @@ def test_reopen_and_regenerate_preserves_uids() -> None:
         path = f"/projects/{project_id}/planning-structure"
 
         assert client.post(path, json=_payload(), headers=headers).status_code == 201
-        initial_tasks = cast(
-            list[dict[str, Any]],
-            client.get(f"/projects/{project_id}/tasks", headers=headers).json()["items"],
-        )
+        initial_tasks = legacy_project_tasks(project_id)
         uid_by_key = {task["structure_key"]: task["uid"] for task in initial_tasks}
         previous_max_uid = max(uid_by_key.values())
 
@@ -808,10 +746,7 @@ def test_reopen_and_regenerate_preserves_uids() -> None:
             {"key": "deployment", "name": "Deployment"}
         )
         assert client.post(path, json=extended, headers=headers).status_code == 201
-        regenerated_tasks = cast(
-            list[dict[str, Any]],
-            client.get(f"/projects/{project_id}/tasks", headers=headers).json()["items"],
-        )
+        regenerated_tasks = legacy_project_tasks(project_id)
         regenerated_uid_by_key = {task["structure_key"]: task["uid"] for task in regenerated_tasks}
 
         for key, uid in uid_by_key.items():
@@ -828,26 +763,18 @@ def test_regenerate_structure_preserves_manual_tasks() -> None:
         path = f"/projects/{project_id}/planning-structure"
 
         assert client.post(path, json=_payload(), headers=headers).status_code == 201
-        structured_tasks = cast(
-            list[dict[str, Any]],
-            client.get(f"/projects/{project_id}/tasks", headers=headers).json()["items"],
-        )
+        structured_tasks = legacy_project_tasks(project_id)
         uid_by_key = {
             task["structure_key"]: task["uid"]
             for task in structured_tasks
             if task["structure_key"] is not None
         }
 
-        planning_id = client.get(f"/projects/{project_id}", headers=headers).json()[
-            "displayed_planning_id"
-        ]
-        created = client.post(
-            f"/projects/{project_id}/plannings/{planning_id}/tasks",
-            json={"name": "Manual task", "expected_revision": 0},
-            headers=headers,
+        planning_id = cast(
+            int,
+            client.get(f"/projects/{project_id}", headers=headers).json()["displayed_planning_id"],
         )
-        assert created.status_code == 200
-        created_payload = cast(dict[str, Any], created.json())
+        created_payload = create_legacy_planning_task(project_id, planning_id, name="Manual task")
         manual_task = next(
             task
             for task in cast(list[dict[str, Any]], created_payload["tasks"])
@@ -858,10 +785,7 @@ def test_regenerate_structure_preserves_manual_tasks() -> None:
 
         assert client.post(path, json=_payload(), headers=headers).status_code == 201
 
-        regenerated = cast(
-            list[dict[str, Any]],
-            client.get(f"/projects/{project_id}/tasks", headers=headers).json()["items"],
-        )
+        regenerated = legacy_project_tasks(project_id)
         assert manual_uid in [task["uid"] for task in regenerated]
         regenerated_uid_by_key = {
             task["structure_key"]: task["uid"]
@@ -877,38 +801,24 @@ def test_regenerate_structure_preserves_nested_manual_task_hierarchy() -> None:
         headers = _auth_headers(client)
         project_id = _create_project(client, headers)
         path = f"/projects/{project_id}/planning-structure"
-        tasks_url = f"/projects/{project_id}/tasks"
 
         assert client.post(path, json=_payload(), headers=headers).status_code == 201
-        planning_id = client.get(f"/projects/{project_id}", headers=headers).json()[
-            "displayed_planning_id"
-        ]
-
-        parent_created = client.post(
-            f"/projects/{project_id}/plannings/{planning_id}/tasks",
-            json={"name": "Manual parent", "expected_revision": 0},
-            headers=headers,
+        planning_id = cast(
+            int,
+            client.get(f"/projects/{project_id}", headers=headers).json()["displayed_planning_id"],
         )
-        assert parent_created.status_code == 200
-        parent_payload = cast(dict[str, Any], parent_created.json())
+
+        parent_payload = create_legacy_planning_task(project_id, planning_id, name="Manual parent")
         manual_parent = next(
             task
             for task in cast(list[dict[str, Any]], parent_payload["tasks"])
             if task["name"] == "Manual parent"
         )
-        parent_uid = manual_parent["uid"]
+        parent_uid = cast(int, manual_parent["uid"])
 
-        child_created = client.post(
-            f"/projects/{project_id}/plannings/{planning_id}/tasks",
-            json={
-                "name": "Manual child",
-                "target_parent_uid": parent_uid,
-                "expected_revision": parent_payload["revision"],
-            },
-            headers=headers,
+        child_payload = create_legacy_planning_task(
+            project_id, planning_id, name="Manual child", target_parent_uid=parent_uid
         )
-        assert child_created.status_code == 200
-        child_payload = cast(dict[str, Any], child_created.json())
         manual_child = next(
             task
             for task in cast(list[dict[str, Any]], child_payload["tasks"])
@@ -917,9 +827,7 @@ def test_regenerate_structure_preserves_nested_manual_task_hierarchy() -> None:
         child_uid = manual_child["uid"]
         assert manual_child["parent_uid"] == parent_uid
 
-        before_regeneration = cast(
-            list[dict[str, Any]], client.get(tasks_url, headers=headers).json()["items"]
-        )
+        before_regeneration = legacy_project_tasks(project_id)
         manual_child_before = next(task for task in before_regeneration if task["uid"] == child_uid)
         assert manual_child_before["parent_uid"] == parent_uid
 
@@ -927,9 +835,7 @@ def test_regenerate_structure_preserves_nested_manual_task_hierarchy() -> None:
         # nested manual hierarchy created above (Copilot review finding, issue #130).
         assert client.post(path, json=_payload(), headers=headers).status_code == 201
 
-        after_regeneration = cast(
-            list[dict[str, Any]], client.get(tasks_url, headers=headers).json()["items"]
-        )
+        after_regeneration = legacy_project_tasks(project_id)
         manual_parent_after = next(task for task in after_regeneration if task["uid"] == parent_uid)
         manual_child_after = next(task for task in after_regeneration if task["uid"] == child_uid)
         assert manual_parent_after["parent_uid"] is None
@@ -941,33 +847,26 @@ def test_regenerate_structure_still_orphans_manual_task_under_removed_deliverabl
         headers = _auth_headers(client)
         project_id = _create_project(client, headers)
         path = f"/projects/{project_id}/planning-structure"
-        tasks_url = f"/projects/{project_id}/tasks"
 
         assert client.post(path, json=_payload(), headers=headers).status_code == 201
-        planning_id = client.get(f"/projects/{project_id}", headers=headers).json()[
-            "displayed_planning_id"
-        ]
-        structured_tasks = cast(
-            list[dict[str, Any]], client.get(tasks_url, headers=headers).json()["items"]
+        planning_id = cast(
+            int,
+            client.get(f"/projects/{project_id}", headers=headers).json()["displayed_planning_id"],
         )
+        structured_tasks = legacy_project_tasks(project_id)
         uid_by_key = {
             task["structure_key"]: task["uid"]
             for task in structured_tasks
             if task["structure_key"] is not None
         }
-        removed_deliverable_uid = uid_by_key["design/specification/architecture"]
+        removed_deliverable_uid = cast(int, uid_by_key["design/specification/architecture"])
 
-        manual_created = client.post(
-            f"/projects/{project_id}/plannings/{planning_id}/tasks",
-            json={
-                "name": "Manual note",
-                "target_parent_uid": removed_deliverable_uid,
-                "expected_revision": 0,
-            },
-            headers=headers,
+        manual_payload = create_legacy_planning_task(
+            project_id,
+            planning_id,
+            name="Manual note",
+            target_parent_uid=removed_deliverable_uid,
         )
-        assert manual_created.status_code == 200
-        manual_payload = cast(dict[str, Any], manual_created.json())
         manual_task = next(
             task
             for task in cast(list[dict[str, Any]], manual_payload["tasks"])
@@ -984,9 +883,7 @@ def test_regenerate_structure_still_orphans_manual_task_under_removed_deliverabl
             client.post(path, json=payload_without_architecture, headers=headers).status_code == 201
         )
 
-        regenerated = cast(
-            list[dict[str, Any]], client.get(tasks_url, headers=headers).json()["items"]
-        )
+        regenerated = legacy_project_tasks(project_id)
         manual_after = next(task for task in regenerated if task["uid"] == manual_uid)
         assert manual_after["parent_uid"] is None
 
@@ -1044,15 +941,9 @@ def test_structure_versions_validated_planning_is_immutable_and_reopenable() -> 
         original_tasks = cast(list[dict[str, Any]], original.json()["tasks"])
         assert len(original_tasks) == 8
 
-        default_tasks = client.get(f"/projects/{project_id}/tasks", headers=headers)
-        assert default_tasks.status_code == 200
-        default_task_items = cast(list[dict[str, Any]], default_tasks.json()["items"])
+        default_task_items = legacy_project_tasks(project_id)
         assert len(default_task_items) == 5
-        selected_original = client.get(
-            f"/projects/{project_id}/tasks?planning_id={first_planning_id}", headers=headers
-        )
-        assert selected_original.status_code == 200
-        selected_original_items = cast(list[dict[str, Any]], selected_original.json()["items"])
+        selected_original_items = legacy_project_tasks(project_id, cast(int, first_planning_id))
         assert len(selected_original_items) == 8
         paged_original = client.get(
             f"/projects/{project_id}/plannings/{first_planning_id}?limit=1&offset=1",
@@ -1110,9 +1001,10 @@ def test_reopen_from_validated_reference_preserves_engaged_project_status(
         path = f"/projects/{project_id}/planning-structure"
         created = client.post(path, json=_payload(), headers=headers)
         assert created.status_code == 201
-        planning_id = client.get(f"/projects/{project_id}", headers=headers).json()[
-            "displayed_planning_id"
-        ]
+        planning_id = cast(
+            int,
+            client.get(f"/projects/{project_id}", headers=headers).json()["displayed_planning_id"],
+        )
         assert (
             client.post(
                 f"/projects/{project_id}/plannings/{planning_id}/validate", headers=headers
@@ -1135,25 +1027,6 @@ def test_reopen_from_validated_reference_preserves_engaged_project_status(
 
         assert reopened.status_code == 200
         assert reopened.json()["status"] == project_status
-
-
-def test_planning_tree_returns_complete_tree_without_pagination() -> None:
-    with TestClient(app) as client:
-        headers = _auth_headers(client)
-        project_id = _create_project(client, headers)
-        response = client.post(
-            f"/projects/{project_id}/planning-structure", json=_payload(), headers=headers
-        )
-        assert response.status_code == 201
-
-        tree = client.get(f"/projects/{project_id}/planning-tree?limit=1", headers=headers)
-
-        assert tree.status_code == 200
-        tree_payload = cast(dict[str, Any], tree.json())
-        roots = cast(list[dict[str, Any]], tree_payload["tasks"])
-        lots = cast(list[dict[str, Any]], roots[0]["children"])
-        assert len(lots) == 2
-        assert len(cast(list[dict[str, Any]], lots[0]["children"])) == 3
 
 
 @pytest.mark.parametrize(

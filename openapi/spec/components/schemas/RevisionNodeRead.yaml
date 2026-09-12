@@ -1,0 +1,57 @@
+type: object
+required:
+- node_id
+- work_item_id
+- kind
+- parent_id
+- position
+- row_number
+- level
+- external_uid
+- description
+- planning
+- cost
+- predecessors
+properties:
+  node_id:
+    type: integer
+  work_item_id:
+    type: integer
+  kind:
+    type: string
+    enum:
+    - task
+    - cost
+  parent_id:
+    anyOf:
+    - type: integer
+    - type: 'null'
+  position:
+    type: integer
+  row_number:
+    type: integer
+  level:
+    type: integer
+  external_uid:
+    anyOf:
+    - type: integer
+    - type: 'null'
+  description:
+    anyOf:
+    - type: string
+    - type: 'null'
+  planning:
+    anyOf:
+    - $ref: RevisionPlanFacetRead.yaml
+    - type: 'null'
+  cost:
+    anyOf:
+    - $ref: RevisionCostFacetRead.yaml
+    - type: 'null'
+  predecessors:
+    items:
+      $ref: RevisionPredecessorRead.yaml
+    type: array
+description: 'Un noeud de l''arbre. `row_number` (rang dans le parcours depth-first) et `level` (profondeur,
+  racines a 1) sont recalcules a chaque lecture et stockes dans aucune colonne (principe E9) : ils sont
+  en lecture seule. Exactement une des facettes `planning`/`cost` est renseignee, selon `kind`.'

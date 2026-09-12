@@ -862,200 +862,209 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/PlanningNotFound'
-  /projects/{projectId}/plannings/{planningId}/tasks/move:
-    post:
+  /projects/{projectId}/revisions/{revisionId}/nodes:
+    get:
       tags:
         - projects
-      summary: Deplacer ou reordonner des taches d'un brouillon de planning
-      operationId: movePlanningTasks
+      summary: Lire l'arbre d'une revision et sa facette planification
+      description: 'Retourne les noeuds de la revision en ordre depth-first, chacun avec son identifiant positionnel (`row_number`) et son niveau (`level`) calcules a la lecture et stockes nulle part, ainsi que sa facette. Volontairement non pagine : cet endpoint alimente un arbre editable, qui a besoin de l''arbre complet pour reconstruire la hierarchie et numeroter les lignes.'
+      operationId: readRevisionNodes
       security:
         - bearerAuth: []
       parameters:
         - $ref: '#/components/parameters/ProjectId'
-        - $ref: '#/components/parameters/PlanningId'
+        - $ref: '#/components/parameters/RevisionId'
+      responses:
+        '200':
+          description: Arbre complet de la revision, en ordre depth-first
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RevisionTreeRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/RevisionNotFound'
+        '409':
+          $ref: '#/components/responses/RevisionConflict'
+        '422':
+          $ref: '#/components/responses/RevisionUnprocessable'
+  /projects/{projectId}/revisions/{revisionId}/tasks:
+    post:
+      tags:
+        - projects
+      summary: Creer un noeud tache dans une revision
+      operationId: createRevisionTask
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/RevisionId'
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/PlanningTaskMove'
+              $ref: '#/components/schemas/RevisionTaskCreate'
       responses:
-        '200':
-          description: Arbre complet du brouillon mis a jour
+        '201':
+          description: Noeud cree, avec le nouveau `lock_version` de la revision
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PlanningDetailRead'
+                $ref: '#/components/schemas/RevisionNodeWriteRead'
         '400':
-          $ref: '#/components/responses/MovePlanningTasksBadRequest'
+          $ref: '#/components/responses/RevisionBadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
-          $ref: '#/components/responses/MovePlanningTasksNotFound'
+          $ref: '#/components/responses/RevisionNotFound'
         '409':
-          $ref: '#/components/responses/MovePlanningTasksConflict'
-  /projects/{projectId}/plannings/{planningId}/tasks:
+          $ref: '#/components/responses/RevisionConflict'
+        '422':
+          $ref: '#/components/responses/RevisionUnprocessable'
+  /projects/{projectId}/revisions/{revisionId}/nodes/move:
     post:
       tags:
         - projects
-      summary: Ajouter une tache a un brouillon de planning a une position explicite
-      operationId: createPlanningTask
+      summary: Deplacer une selection de noeuds d'une revision
+      description: 'Volontairement agnostique de la facette : il n''y a qu''un arbre, donc deplacer une ligne de cout et deplacer une tache sont la meme operation. Chaque noeud selectionne emporte son sous-arbre et ses deux facettes ; un noeud dont un ancetre est aussi selectionne est porte par cet ancetre plutot que deplace deux fois.'
+      operationId: moveRevisionNodes
       security:
         - bearerAuth: []
       parameters:
         - $ref: '#/components/parameters/ProjectId'
-        - $ref: '#/components/parameters/PlanningId'
+        - $ref: '#/components/parameters/RevisionId'
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/PlanningTaskCreate'
+              $ref: '#/components/schemas/RevisionNodeMove'
       responses:
         '200':
-          description: Arbre complet du brouillon mis a jour
+          description: Deplacement applique, avec le nouveau `lock_version`
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PlanningDetailRead'
+                $ref: '#/components/schemas/RevisionWriteRead'
         '400':
-          $ref: '#/components/responses/CreatePlanningTaskBadRequest'
+          $ref: '#/components/responses/RevisionBadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
-          $ref: '#/components/responses/CreatePlanningTaskNotFound'
+          $ref: '#/components/responses/RevisionNotFound'
         '409':
-          $ref: '#/components/responses/CreatePlanningTaskConflict'
-  /projects/{projectId}/plannings/{planningId}/tasks/delete:
+          $ref: '#/components/responses/RevisionConflict'
+        '422':
+          $ref: '#/components/responses/RevisionUnprocessable'
+  /projects/{projectId}/revisions/{revisionId}/nodes/delete:
     post:
       tags:
         - projects
-      summary: Supprimer une selection de taches d'un brouillon de planning
-      operationId: deletePlanningTasks
+      summary: Supprimer une selection de noeuds en cascade
+      description: Supprime la selection, tout son sous-arbre et les deux facettes de chaque noeud retire (INV-02). La reponse nomme le chiffrage emporte (`cost_losses`) plutot que de le laisser disparaitre silencieusement.
+      operationId: deleteRevisionNodes
       security:
         - bearerAuth: []
       parameters:
         - $ref: '#/components/parameters/ProjectId'
-        - $ref: '#/components/parameters/PlanningId'
+        - $ref: '#/components/parameters/RevisionId'
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/PlanningTaskDelete'
+              $ref: '#/components/schemas/RevisionNodeDelete'
       responses:
         '200':
-          description: Arbre complet du brouillon mis a jour
+          description: Suppression appliquee, avec le chiffrage emporte
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PlanningDetailRead'
+                $ref: '#/components/schemas/RevisionNodeDeleteRead'
         '400':
-          $ref: '#/components/responses/DeletePlanningTasksBadRequest'
+          $ref: '#/components/responses/RevisionBadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
-          $ref: '#/components/responses/DeletePlanningTasksNotFound'
+          $ref: '#/components/responses/RevisionNotFound'
         '409':
-          $ref: '#/components/responses/DeletePlanningTasksConflict'
-  /projects/{projectId}/plannings/{planningId}/tasks/{taskUid}:
+          $ref: '#/components/responses/RevisionConflict'
+        '422':
+          $ref: '#/components/responses/RevisionUnprocessable'
+  /projects/{projectId}/revisions/{revisionId}/nodes/{nodeId}/planning:
     patch:
       tags:
         - projects
-      summary: Modifier le mode et la planification d'une tache de brouillon
-      operationId: updatePlanningTaskSchedule
+      summary: Modifier la facette planification d'un noeud
+      description: 'Edition partielle : duree, dates, avancement, calendrier, jalon, mode manuel/automatique. Un champ absent est laisse tel quel ; `null` est une valeur. Quel que soit le nombre d''attributs modifies, `lock_version` n''avance que d''un cran.'
+      operationId: updateRevisionPlanFacet
       security:
         - bearerAuth: []
       parameters:
         - $ref: '#/components/parameters/ProjectId'
-        - $ref: '#/components/parameters/PlanningId'
-        - $ref: '#/components/parameters/TaskUid'
+        - $ref: '#/components/parameters/RevisionId'
+        - $ref: '#/components/parameters/RevisionNodeId'
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/PlanningTaskScheduleUpdate'
+              $ref: '#/components/schemas/RevisionPlanFacetUpdate'
       responses:
         '200':
-          description: Arbre complet du brouillon mis a jour
+          description: Facette mise a jour, avec le nouveau `lock_version`
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PlanningDetailRead'
+                $ref: '#/components/schemas/RevisionWriteRead'
         '400':
-          $ref: '#/components/responses/UpdatePlanningTaskScheduleBadRequest'
+          $ref: '#/components/responses/RevisionBadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
-          $ref: '#/components/responses/UpdatePlanningTaskScheduleNotFound'
+          $ref: '#/components/responses/RevisionNotFound'
         '409':
-          $ref: '#/components/responses/UpdatePlanningTaskScheduleConflict'
-  /projects/{projectId}/plannings/{planningId}/tasks/{taskUid}/links:
+          $ref: '#/components/responses/RevisionConflict'
+        '422':
+          $ref: '#/components/responses/RevisionUnprocessable'
+  /projects/{projectId}/revisions/{revisionId}/nodes/{nodeId}/predecessors:
     put:
       tags:
         - projects
-      summary: Remplacer les liens de predecesseurs d'une tache d'un brouillon de planning
-      operationId: replaceTaskPredecessorLinks
+      summary: Remplacer les predecesseurs d'un noeud tache
+      description: Remplace l'integralite des liens de precedence arrivant sur le noeud. Un predecesseur designant un noeud d'une autre revision est refuse (INV-08, `detail.code` = REVISION_CROSS_REVISION).
+      operationId: replaceRevisionPredecessors
       security:
         - bearerAuth: []
       parameters:
         - $ref: '#/components/parameters/ProjectId'
-        - $ref: '#/components/parameters/PlanningId'
-        - $ref: '#/components/parameters/TaskUid'
+        - $ref: '#/components/parameters/RevisionId'
+        - $ref: '#/components/parameters/RevisionNodeId'
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/TaskLinksReplace'
+              $ref: '#/components/schemas/RevisionPredecessorsReplace'
       responses:
         '200':
-          description: Arbre complet du brouillon mis a jour
+          description: Predecesseurs remplaces, avec le nouveau `lock_version`
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PlanningDetailRead'
+                $ref: '#/components/schemas/RevisionWriteRead'
         '400':
-          $ref: '#/components/responses/ReplaceTaskLinksBadRequest'
+          $ref: '#/components/responses/RevisionBadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
-          $ref: '#/components/responses/ReplaceTaskLinksNotFound'
+          $ref: '#/components/responses/RevisionNotFound'
         '409':
-          $ref: '#/components/responses/ReplaceTaskLinksConflict'
-  /projects/{projectId}/plannings/{planningId}/tasks/restore:
-    put:
-      tags:
-        - projects
-      summary: Restaurer l'etat exact des taches/liens d'un brouillon de planning (undo/redo)
-      operationId: restorePlanningSnapshot
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: '#/components/parameters/ProjectId'
-        - $ref: '#/components/parameters/PlanningId'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/PlanningSnapshotRestore'
-      responses:
-        '200':
-          description: Arbre complet du brouillon mis a jour
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/PlanningDetailRead'
-        '400':
-          $ref: '#/components/responses/RestorePlanningSnapshotBadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/RestorePlanningSnapshotNotFound'
-        '409':
-          $ref: '#/components/responses/RestorePlanningSnapshotConflict'
+          $ref: '#/components/responses/RevisionConflict'
+        '422':
+          $ref: '#/components/responses/RevisionUnprocessable'
   /projects/{projectId}/plannings/{planningId}/validate:
     post:
       tags:
@@ -1150,35 +1159,6 @@ paths:
           $ref: '#/components/responses/EstimateNotFound'
         '409':
           $ref: '#/components/responses/Conflict'
-  /projects/{projectId}/tasks:
-    get:
-      tags:
-        - projects
-      summary: Lister les taches d'un projet
-      operationId: listProjectTasks
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: '#/components/parameters/ProjectId'
-        - name: planning_id
-          in: query
-          required: false
-          schema:
-            type:
-              - integer
-              - 'null'
-            minimum: 1
-      responses:
-        '200':
-          description: 'Integralite des taches du projet (non pagine : cet endpoint alimente l''editeur de planning, qui a besoin de l''arbre complet pour reconstruire la hierarchie et calculer les durees des taches synthese -- une troncature produirait des parents orphelins et des agregats faux).'
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/TaskListRead'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/ProjectNotFound'
   /projects/{projectId}/planning-structure:
     post:
       tags:
@@ -1303,35 +1283,6 @@ paths:
           $ref: '#/components/responses/ProjectNotFound'
         '409':
           $ref: '#/components/responses/Conflict'
-  /projects/{projectId}/planning-tree:
-    get:
-      tags:
-        - projects
-      summary: Lire l'arbre hiérarchique du planning
-      operationId: getPlanningTree
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: '#/components/parameters/ProjectId'
-        - name: planning_id
-          in: query
-          required: false
-          schema:
-            type:
-              - integer
-              - 'null'
-            minimum: 1
-      responses:
-        '200':
-          description: Arbre hiérarchique du planning
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/PlanningTreeRead'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/ProjectNotFound'
   /projects/{projectId}/tasks/{taskUid}:
     patch:
       tags:
@@ -3692,247 +3643,6 @@ components:
             - integer
             - 'null'
           minimum: 1
-    PlanningTaskMove:
-      type: object
-      required:
-        - task_uids
-        - position
-        - expected_revision
-      properties:
-        task_uids:
-          type: array
-          minItems: 1
-          items:
-            type: integer
-            minimum: 1
-        target_parent_uid:
-          type:
-            - integer
-            - 'null'
-          minimum: 1
-        position:
-          type: integer
-          minimum: 1
-        expected_revision:
-          type: integer
-          minimum: 0
-          description: |-
-            Revision of the planning this mutation was computed against. Compared to the
-            persisted revision under lock; a mismatch returns a 409 PLANNING_REVISION_CONFLICT.
-    PlanningTaskCreate:
-      type: object
-      required:
-        - name
-        - expected_revision
-      properties:
-        name:
-          type: string
-          minLength: 1
-          maxLength: 512
-        is_milestone:
-          type: boolean
-          default: false
-        target_parent_uid:
-          type:
-            - integer
-            - 'null'
-          minimum: 1
-        insert_after_uid:
-          type:
-            - integer
-            - 'null'
-          minimum: 1
-        expected_revision:
-          type: integer
-          minimum: 0
-    PlanningTaskDelete:
-      type: object
-      required:
-        - task_uids
-        - expected_revision
-      properties:
-        task_uids:
-          type: array
-          minItems: 1
-          items:
-            type: integer
-            minimum: 1
-        confirm_cascade:
-          type: boolean
-          default: false
-        expected_revision:
-          type: integer
-          minimum: 0
-    PlanningTaskSnapshotWrite:
-      type: object
-      required:
-        - uid
-        - structure_key
-        - structure_kind
-        - parent_uid
-        - position
-        - name
-        - outline_number
-        - outline_level
-        - wbs
-        - start_at
-        - finish_at
-        - duration_minutes
-        - duration_format
-        - work_minutes
-        - task_type
-        - percent_complete
-        - is_summary
-        - is_milestone
-        - is_manual
-        - calendar_uid
-        - notes
-      properties:
-        uid:
-          type: integer
-          minimum: 1
-        structure_key:
-          type:
-            - string
-            - 'null'
-          maxLength: 128
-        structure_kind:
-          type:
-            - string
-            - 'null'
-          enum:
-            - poste
-            - lot
-            - livrable
-            - milestone
-            - task
-            - null
-        parent_uid:
-          type:
-            - integer
-            - 'null'
-          minimum: 1
-        position:
-          type:
-            - integer
-            - 'null'
-          minimum: 1
-        name:
-          type: string
-          minLength: 1
-          maxLength: 512
-        outline_number:
-          type:
-            - string
-            - 'null'
-          maxLength: 512
-        outline_level:
-          type:
-            - integer
-            - 'null'
-        wbs:
-          type:
-            - string
-            - 'null'
-          maxLength: 255
-        start_at:
-          type:
-            - string
-            - 'null'
-          format: date-time
-        finish_at:
-          type:
-            - string
-            - 'null'
-          format: date-time
-        duration_minutes:
-          type:
-            - integer
-            - 'null'
-          minimum: 0
-        duration_format:
-          type:
-            - integer
-            - 'null'
-        work_minutes:
-          type:
-            - integer
-            - 'null'
-          minimum: 0
-        task_type:
-          type:
-            - integer
-            - 'null'
-          minimum: 0
-          maximum: 2
-        percent_complete:
-          type:
-            - integer
-            - 'null'
-          minimum: 0
-          maximum: 100
-        is_summary:
-          type: boolean
-        is_milestone:
-          type: boolean
-        is_manual:
-          type:
-            - boolean
-            - 'null'
-        calendar_uid:
-          type:
-            - integer
-            - 'null'
-        notes:
-          type:
-            - string
-            - 'null'
-    PlanningLinkSnapshotWrite:
-      type: object
-      required:
-        - task_uid
-        - predecessor_uid
-        - link_type
-        - lag_tenth_minute
-        - lag_format
-      properties:
-        task_uid:
-          type: integer
-          minimum: 1
-        predecessor_uid:
-          type: integer
-          minimum: 1
-        link_type:
-          type: integer
-          minimum: 0
-          maximum: 3
-        lag_tenth_minute:
-          type:
-            - integer
-            - 'null'
-          format: int32
-        lag_format:
-          type:
-            - integer
-            - 'null'
-    PlanningSnapshotRestore:
-      type: object
-      required:
-        - tasks
-        - links
-        - expected_revision
-      properties:
-        tasks:
-          type: array
-          items:
-            $ref: '#/components/schemas/PlanningTaskSnapshotWrite'
-        links:
-          type: array
-          items:
-            $ref: '#/components/schemas/PlanningLinkSnapshotWrite'
-        expected_revision:
-          type: integer
-          minimum: 0
     PlanningDetailRead:
       allOf:
         - $ref: '#/components/schemas/PlanningRead'
@@ -4192,26 +3902,6 @@ components:
           type: integer
         structure:
           $ref: '#/components/schemas/PlanningStructureCreate'
-    PlanningTreeRead:
-      type: object
-      required:
-        - tasks
-      properties:
-        tasks:
-          type: array
-          items:
-            $ref: '#/components/schemas/PlanningTaskTreeRead'
-    PlanningTaskTreeRead:
-      allOf:
-        - $ref: '#/components/schemas/TaskRead'
-        - type: object
-          required:
-            - children
-          properties:
-            children:
-              type: array
-              items:
-                $ref: '#/components/schemas/PlanningTaskTreeRead'
     TaskUpdate:
       type: object
       properties:
@@ -4226,6 +3916,663 @@ components:
             - 'null'
           minLength: 1
           maxLength: 512
+    RevisionTreeRead:
+      type: object
+      required:
+        - revision_id
+        - project_id
+        - version_number
+        - kind
+        - status
+        - lock_version
+        - note
+        - nodes
+      properties:
+        revision_id:
+          type: integer
+        project_id:
+          type: integer
+        version_number:
+          type: integer
+        kind:
+          type: string
+          enum:
+            - initial
+            - contract_reference
+            - forecast_remaining
+        status:
+          type: string
+          enum:
+            - draft
+            - validated
+            - superseded
+        lock_version:
+          type: integer
+        note:
+          anyOf:
+            - type: string
+            - type: 'null'
+        nodes:
+          items:
+            $ref: '#/components/schemas/RevisionNodeRead'
+          type: array
+      description: 'Arbre complet d''une revision : en-tete (dont `lock_version`, a renvoyer en `expected_lock_version` sur la prochaine ecriture) et noeuds en ordre depth-first.'
+    RevisionNodeRead:
+      type: object
+      required:
+        - node_id
+        - work_item_id
+        - kind
+        - parent_id
+        - position
+        - row_number
+        - level
+        - external_uid
+        - description
+        - planning
+        - cost
+        - predecessors
+      properties:
+        node_id:
+          type: integer
+        work_item_id:
+          type: integer
+        kind:
+          type: string
+          enum:
+            - task
+            - cost
+        parent_id:
+          anyOf:
+            - type: integer
+            - type: 'null'
+        position:
+          type: integer
+        row_number:
+          type: integer
+        level:
+          type: integer
+        external_uid:
+          anyOf:
+            - type: integer
+            - type: 'null'
+        description:
+          anyOf:
+            - type: string
+            - type: 'null'
+        planning:
+          anyOf:
+            - $ref: '#/components/schemas/RevisionPlanFacetRead'
+            - type: 'null'
+        cost:
+          anyOf:
+            - $ref: '#/components/schemas/RevisionCostFacetRead'
+            - type: 'null'
+        predecessors:
+          items:
+            $ref: '#/components/schemas/RevisionPredecessorRead'
+          type: array
+      description: 'Un noeud de l''arbre. `row_number` (rang dans le parcours depth-first) et `level` (profondeur, racines a 1) sont recalcules a chaque lecture et stockes dans aucune colonne (principe E9) : ils sont en lecture seule. Exactement une des facettes `planning`/`cost` est renseignee, selon `kind`.'
+    RevisionPlanFacetRead:
+      type: object
+      required:
+        - name
+        - calendar_id
+        - calendar_source
+        - is_milestone
+        - duration_minutes
+        - duration_format
+        - start_at
+        - finish_at
+        - work_minutes
+        - percent_complete
+        - is_manual
+      properties:
+        name:
+          type: string
+        calendar_id:
+          anyOf:
+            - type: integer
+            - type: 'null'
+        calendar_source:
+          anyOf:
+            - type: string
+              enum:
+                - project
+                - role
+                - manual
+            - type: 'null'
+        is_milestone:
+          type: boolean
+        duration_minutes:
+          anyOf:
+            - type: integer
+            - type: 'null'
+        duration_format:
+          anyOf:
+            - type: integer
+            - type: 'null'
+        start_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+        finish_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+        work_minutes:
+          anyOf:
+            - type: integer
+            - type: 'null'
+        percent_complete:
+          type: integer
+        is_manual:
+          type: boolean
+      description: 'Facette planification d''un noeud : ce qui en fait une tache.'
+    RevisionCostFacetRead:
+      type: object
+      required:
+        - nature
+        - label
+        - quantity
+        - role_id
+        - hours
+        - cost_type_id
+        - cost_category_id
+        - unit_cost
+        - supply_status
+        - planned_date
+        - cost_code_id
+        - comment
+      properties:
+        nature:
+          type: string
+          enum:
+            - labor
+            - non_labor
+        label:
+          type: string
+        quantity:
+          type: string
+          pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+        role_id:
+          anyOf:
+            - type: integer
+            - type: 'null'
+        hours:
+          anyOf:
+            - type: string
+              pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+            - type: 'null'
+        cost_type_id:
+          anyOf:
+            - type: integer
+            - type: 'null'
+        cost_category_id:
+          anyOf:
+            - type: integer
+            - type: 'null'
+        unit_cost:
+          anyOf:
+            - type: string
+              pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+            - type: 'null'
+        supply_status:
+          anyOf:
+            - type: string
+              enum:
+                - planned
+                - ordered
+                - received
+                - cancelled
+            - type: 'null'
+        planned_date:
+          anyOf:
+            - type: string
+              format: date
+            - type: 'null'
+        cost_code_id:
+          anyOf:
+            - type: integer
+            - type: 'null'
+        comment:
+          anyOf:
+            - type: string
+            - type: 'null'
+      description: 'Facette cout d''un noeud, en lecture seule ici : son edition releve de E14-07 (#333).'
+    RevisionPredecessorRead:
+      type: object
+      required:
+        - predecessor_node_id
+        - link_type
+        - lag_tenth_minute
+        - lag_format
+      properties:
+        predecessor_node_id:
+          type: integer
+        link_type:
+          type: integer
+        lag_tenth_minute:
+          type: integer
+        lag_format:
+          anyOf:
+            - type: integer
+            - type: 'null'
+      description: Un lien de precedence arrivant sur le noeud, designe par identifiant de noeud et jamais par uid.
+    RevisionWriteRead:
+      type: object
+      required:
+        - revision_id
+        - lock_version
+      properties:
+        revision_id:
+          type: integer
+        lock_version:
+          type: integer
+      description: 'Reponse commune a toute ecriture : la revision et le compteur de verrou que la prochaine ecriture devra presenter.'
+    RevisionNodeWriteRead:
+      type: object
+      required:
+        - revision_id
+        - lock_version
+        - node_id
+        - work_item_id
+      properties:
+        revision_id:
+          type: integer
+        lock_version:
+          type: integer
+        node_id:
+          type: integer
+        work_item_id:
+          type: integer
+      description: Noeud fraichement cree, par les identifiants alloues par la base.
+    RevisionNodeDeleteRead:
+      type: object
+      required:
+        - revision_id
+        - lock_version
+        - removed_node_ids
+        - cost_losses
+      properties:
+        revision_id:
+          type: integer
+        lock_version:
+          type: integer
+        removed_node_ids:
+          items:
+            type: integer
+          type: array
+        cost_losses:
+          items:
+            $ref: '#/components/schemas/RevisionCostLossRead'
+          type: array
+      description: Ce qu'une suppression en cascade a retire (INV-02), et le chiffrage qu'elle a emporte (garde-fou de la Regle 3).
+    RevisionCostLossRead:
+      type: object
+      required:
+        - node_id
+        - work_item_id
+        - label
+        - nature
+        - amount
+        - bearing_task_name
+      properties:
+        node_id:
+          type: integer
+        work_item_id:
+          type: integer
+        label:
+          type: string
+        nature:
+          type: string
+          enum:
+            - labor
+            - non_labor
+        amount:
+          type: string
+          pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+        bearing_task_name:
+          anyOf:
+            - type: string
+            - type: 'null'
+      description: Une facette cout emportee par une suppression, nommee plutot que perdue silencieusement.
+    RevisionTaskCreate:
+      type: object
+      required:
+        - expected_lock_version
+        - name
+      properties:
+        expected_lock_version:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+        name:
+          type: string
+          maxLength: 512
+          minLength: 1
+        parent_id:
+          anyOf:
+            - type: integer
+              maximum: 2147483647
+              exclusiveMinimum: 0
+            - type: 'null'
+        position:
+          anyOf:
+            - type: integer
+              maximum: 2147483647
+              minimum: 1
+            - type: 'null'
+        description:
+          anyOf:
+            - type: string
+              maxLength: 10000
+            - type: 'null'
+        duration_minutes:
+          anyOf:
+            - type: integer
+              maximum: 7884000
+              minimum: 0
+            - type: 'null'
+        is_milestone:
+          type: boolean
+          default: false
+        start_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+        finish_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+        calendar_id:
+          anyOf:
+            - type: integer
+              maximum: 2147483647
+              exclusiveMinimum: 0
+            - type: 'null'
+      description: 'Creation d''un noeud tache : un nouveau `work_item` de nature `task` et sa facette planification. `parent_id` absent = a la racine, `position` absente = dernier enfant. Le calendrier suit la Regle 1 : sans `calendar_id` c''est celui du projet, herite et non epingle (`calendar_source` = `project`) ; avec, il est epingle (`calendar_source` = `manual`).'
+    RevisionNodeMove:
+      type: object
+      required:
+        - expected_lock_version
+        - node_ids
+      properties:
+        expected_lock_version:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+        node_ids:
+          items:
+            type: integer
+            maximum: 2147483647
+            exclusiveMinimum: 0
+          type: array
+          minItems: 1
+        mode:
+          type: string
+          enum:
+            - to_parent
+            - up
+            - down
+            - indent
+            - outdent
+          default: to_parent
+        target_parent_id:
+          anyOf:
+            - type: integer
+              maximum: 2147483647
+              exclusiveMinimum: 0
+            - type: 'null'
+        position:
+          anyOf:
+            - type: integer
+              maximum: 2147483647
+              minimum: 1
+            - type: 'null'
+      description: 'Deplacement d''une selection de noeuds, quelle que soit la facette portee par chacun. `target_parent_id`/`position` n''ont de sens qu''en mode `to_parent` : les fournir avec un autre mode est refuse en 422 plutot qu''ignore silencieusement, les modes `up`/`down`/`indent`/`outdent` calculant eux-memes leur destination.'
+    RevisionNodeDelete:
+      type: object
+      required:
+        - expected_lock_version
+        - node_ids
+      properties:
+        expected_lock_version:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+        node_ids:
+          items:
+            type: integer
+            maximum: 2147483647
+            exclusiveMinimum: 0
+          type: array
+          minItems: 1
+      description: Suppression d'une selection, de tout son sous-arbre et des deux facettes de chaque noeud retire. La cascade est INV-02 et n'est pas optionnelle.
+    RevisionPlanFacetUpdate:
+      type: object
+      required:
+        - expected_lock_version
+      properties:
+        expected_lock_version:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+        name:
+          anyOf:
+            - type: string
+              maxLength: 512
+              minLength: 1
+            - type: 'null'
+        duration_minutes:
+          anyOf:
+            - type: integer
+              maximum: 7884000
+              minimum: 0
+            - type: 'null'
+        duration_format:
+          anyOf:
+            - type: integer
+              enum:
+                - 3
+                - 4
+                - 5
+                - 6
+                - 7
+                - 8
+                - 9
+                - 10
+                - 11
+                - 12
+                - 19
+                - 20
+                - 21
+                - 35
+                - 36
+                - 37
+                - 38
+                - 39
+                - 40
+                - 41
+                - 42
+                - 43
+                - 44
+                - 51
+                - 52
+                - 53
+            - type: 'null'
+        start_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+        finish_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+        work_minutes:
+          anyOf:
+            - type: integer
+              maximum: 7884000
+              minimum: 0
+            - type: 'null'
+        percent_complete:
+          anyOf:
+            - type: integer
+              maximum: 100
+              minimum: 0
+            - type: 'null'
+        is_milestone:
+          anyOf:
+            - type: boolean
+            - type: 'null'
+        is_manual:
+          anyOf:
+            - type: boolean
+            - type: 'null'
+        calendar_id:
+          anyOf:
+            - type: integer
+              maximum: 2147483647
+              exclusiveMinimum: 0
+            - type: 'null'
+      description: 'Edition partielle de la facette planification : un champ absent est laisse tel quel, `null` est une valeur (vider la duree, retirer l''epinglage du calendrier). `calendar_id` porte la Regle 1 : un identifiant epingle le calendrier (`manual`), `null` retire l''epinglage et laisse la regle rechoisir. Exception : `name`, `percent_complete`, `is_milestone` et `is_manual` n''ont pas d''etat « vide » (colonne NOT NULL) ; ils sont declares optionnels pour pouvoir etre omis, et un `null` explicite sur l''un d''eux est refuse en 422 plutot qu''avale silencieusement. `duration_format` est un code MSPDI `DurationFormat`, contraint a l''enumeration du schema MS Project. Un corps ne portant que `expected_lock_version` est legal et fait avancer `lock_version` d''un cran : le compteur enregistre « une ecriture a eu lieu ».'
+    RevisionPredecessorWrite:
+      type: object
+      required:
+        - predecessor_node_id
+      properties:
+        predecessor_node_id:
+          type: integer
+          maximum: 2147483647
+          exclusiveMinimum: 0
+        link_type:
+          type: integer
+          maximum: 3
+          minimum: 0
+          default: 1
+        lag_tenth_minute:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+          default: 0
+        lag_format:
+          anyOf:
+            - type: integer
+              enum:
+                - 3
+                - 4
+                - 5
+                - 6
+                - 7
+                - 8
+                - 9
+                - 10
+                - 11
+                - 12
+                - 19
+                - 20
+                - 35
+                - 36
+                - 37
+                - 38
+                - 39
+                - 40
+                - 41
+                - 42
+                - 43
+                - 44
+                - 51
+                - 52
+                - 53
+            - type: 'null'
+      description: Un lien de precedence a installer, designant son predecesseur par identifiant de noeud. `lag_format` est un code MSPDI `LagFormat`, contraint a l'enumeration du schema MS Project ; le prefixe `e` y denote un decalage en temps ecoule (horloge) plutot qu'en temps ouvre.
+    RevisionPredecessorsReplace:
+      type: object
+      required:
+        - expected_lock_version
+        - predecessors
+      properties:
+        expected_lock_version:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+        predecessors:
+          items:
+            $ref: '#/components/schemas/RevisionPredecessorWrite'
+          type: array
+          maxItems: 1000
+      description: 'Remplace l''integralite des predecesseurs d''un noeud. Une liste vide les efface, et c''est la seule facon de le faire. Bornee a 1000 entrees : la detection de cycle parcourt l''ensemble candidat une fois par lien fourni.'
+    RevisionErrorResponse:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: object
+          required:
+            - code
+          properties:
+            code:
+              type: string
+              description: 'Code stable de refus, traduit par la couche API depuis l''erreur de domaine ou de service (voir `waterfall.api.revision_errors`). REVISION_IMMUTABLE est le code d''INV-03 : il est identique sur la facette planification et sur la facette cout.'
+      description: 'Corps d''erreur structure des endpoints de revision. Toujours un objet portant un `code` exploitable par le frontend, jamais un message libre : `_generic_http_exception_handler` reecrit un `detail` textuel en `{"code": "GENERIC_ERROR"}` precisement pour qu''aucun texte non traduit n''atteigne un client.'
+    RevisionLockConflict:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: object
+          required:
+            - code
+          properties:
+            code:
+              type: string
+              description: REVISION_LOCK_CONFLICT quand `expected_lock_version` est perime, REVISION_IMMUTABLE quand la revision est figee (INV-03), ou l'un des autres codes de conflit enumeres par la reponse.
+            revision_id:
+              type: integer
+              description: Present uniquement pour REVISION_LOCK_CONFLICT.
+            expected_lock_version:
+              type: integer
+              description: Valeur presentee par la requete refusee.
+            current_lock_version:
+              type: integer
+              description: Valeur reellement stockee ; a relire avant de rejouer l'ecriture.
+      description: Conflit d'ecriture sur une revision. Le conflit de verrou optimiste porte de quoi se resynchroniser sans relecture devinee ; les autres conflits ne portent que leur `code`.
+    RevisionValidationError:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: array
+          items:
+            type: object
+            required:
+              - type
+              - loc
+              - msg
+            properties:
+              type:
+                type: string
+                description: Identifiant Pydantic du controle qui a echoue (`too_short`, `less_than_equal`, `literal_error`, `value_error`, ...).
+              loc:
+                type: array
+                items:
+                  anyOf:
+                    - type: string
+                    - type: integer
+                description: Chemin du champ fautif, depuis `body`.
+              msg:
+                type: string
+                description: 'Message Pydantic, en anglais et non traduit. A ne pas afficher tel quel : c''est `type` et `loc` qui sont exploitables.'
+      description: 'Corps refuse avant que le domaine ne le voie : le JSON ne correspond pas au schema de la requete. Volontairement distinct des refus 400 de `RevisionBadRequest`, qui eux portent un `detail.code` stable -- 422 garde ici un seul sens, « le corps n''a pas ete accepte par le schema », ce qui permet de distinguer un corps malforme d''une operation refusee sans inspecter le corps. Forme produite par FastAPI/Pydantic, non reecrite par la couche API.'
     EstimateRoleAssignmentCreate:
       type: object
       required:
@@ -5374,17 +5721,6 @@ components:
               type: array
               items:
                 $ref: '#/components/schemas/ProjectRead'
-    TaskListRead:
-      allOf:
-        - $ref: '#/components/schemas/PaginationMeta'
-        - type: object
-          required:
-            - items
-          properties:
-            items:
-              type: array
-              items:
-                $ref: '#/components/schemas/TaskRead'
     PlanningListRead:
       allOf:
         - $ref: '#/components/schemas/PaginationMeta'
@@ -5499,120 +5835,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ProjectSetupWarning'
-    PlanningTaskDeleteConflict:
-      type: object
-      required:
-        - detail
-      properties:
-        detail:
-          type: object
-          required:
-            - code
-          properties:
-            code:
-              type: string
-              enum:
-                - CASCADE_CONFIRMATION_REQUIRED
-                - TASK_REFERENCED
-            descendant_uids:
-              description: 'Present when code=CASCADE_CONFIRMATION_REQUIRED: every descendant uid (of every selected root) that would be removed alongside the selection.'
-              type: array
-              items:
-                type: integer
-            task_uids:
-              description: 'Present when code=TASK_REFERENCED: every uid in the selection (and its to-be-cascaded descendants) that is referenced by an estimate, an assignment, or a charge.'
-              type: array
-              items:
-                type: integer
-    PlanningTaskScheduleUpdate:
-      type: object
-      required:
-        - is_manual
-        - expected_revision
-      properties:
-        is_manual:
-          type: boolean
-        start_at:
-          type:
-            - string
-            - 'null'
-          format: date-time
-        finish_at:
-          type:
-            - string
-            - 'null'
-          format: date-time
-        duration_minutes:
-          type:
-            - integer
-            - 'null'
-          minimum: 0
-          maximum: 7884000
-        expected_revision:
-          type: integer
-          minimum: 0
-    TaskLinkWrite:
-      type: object
-      required:
-        - predecessor_uid
-        - link_type
-      properties:
-        predecessor_uid:
-          type: integer
-          minimum: 1
-        link_type:
-          type: integer
-          minimum: 0
-          maximum: 3
-        lag_tenth_minute:
-          type:
-            - integer
-            - 'null'
-          format: int32
-        lag_format:
-          type:
-            - integer
-            - 'null'
-          description: MSPDI LagFormat code. See the "e" prefix convention documented in waterfall.services.planning_tree for which values denote elapsed (raw wall-clock) vs. working-time lag.
-          enum:
-            - 3
-            - 4
-            - 5
-            - 6
-            - 7
-            - 8
-            - 9
-            - 10
-            - 11
-            - 12
-            - 19
-            - 20
-            - 35
-            - 36
-            - 37
-            - 38
-            - 39
-            - 40
-            - 41
-            - 42
-            - 43
-            - 44
-            - 51
-            - 52
-            - null
-    TaskLinksReplace:
-      type: object
-      required:
-        - links
-        - expected_revision
-      properties:
-        links:
-          type: array
-          items:
-            $ref: '#/components/schemas/TaskLinkWrite'
-        expected_revision:
-          type: integer
-          minimum: 0
     EstimateTaskCreate:
       type: object
       required:
@@ -5855,6 +6077,31 @@ components:
           type: boolean
           description: Toujours `false` pour un preview. Pour un confirm, `true` uniquement si `blocking_issues` etait vide et que les changements ont ete appliques.
       description: 'Diagnostic + resultat d''un import de reconciliation de devis (E6-09, #70). `POST .../import-reconciliation/preview` et `POST .../import-reconciliation/confirm` executent exactement la meme analyse sur le meme fichier -- seul `applied` distingue les deux reponses.'
+    PlanningTaskDeleteConflict:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: object
+          required:
+            - code
+          properties:
+            code:
+              type: string
+              enum:
+                - CASCADE_CONFIRMATION_REQUIRED
+                - TASK_REFERENCED
+            descendant_uids:
+              description: 'Present when code=CASCADE_CONFIRMATION_REQUIRED: every descendant uid (of every selected root) that would be removed alongside the selection.'
+              type: array
+              items:
+                type: integer
+            task_uids:
+              description: 'Present when code=TASK_REFERENCED: every uid in the selection (and its to-be-cascaded descendants) that is referenced by an estimate, an assignment, or a charge.'
+              type: array
+              items:
+                type: integer
     ProjectCostCodeCreate:
       type: object
       required:
@@ -5977,6 +6224,22 @@ components:
         type: integer
         minimum: 1
       description: Identifiant technique de la version de planning
+    RevisionId:
+      name: revisionId
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+      description: Identifiant technique de la revision (arbre + facettes planification et cout)
+    RevisionNodeId:
+      name: nodeId
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+      description: Identifiant technique du noeud de revision
     CostLineId:
       name: costLineId
       in: path
@@ -6135,72 +6398,36 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/FastAPIErrorResponse'
+    RevisionBadRequest:
+      description: 'Requete refusee par le domaine de revision : selection vide ou incoherente, position hors plage, deplacement circulaire, tache placee sous une ligne de cout, lien de precedence invalide, ou predecesseur n''appartenant pas a cette revision. `detail.code` porte le code stable (REVISION_SELECTION_INVALID, REVISION_POSITION_INVALID, REVISION_TREE_CYCLE, REVISION_FACET_PLACEMENT_INVALID, REVISION_LINK_INVALID, REVISION_CROSS_REVISION, REVISION_FACET_CONTRACT, REVISION_PROJECT_MISMATCH, REVISION_WORK_BREAKDOWN_INVALID, REVISION_IMPORT_STRUCTURE_INVALID, REVISION_REFUSED). REVISION_CROSS_REVISION signifie « cet identifiant de noeud n''est pas un des notres » : il couvre aussi bien un noeud d''une autre revision qu''un identifiant qui ne designe aucun noeud, distinction que cette revision ne peut pas faire et ne pretend pas faire.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/RevisionErrorResponse'
+    RevisionNotFound:
+      description: Projet, revision ou noeud introuvable. `detail.code` vaut PROJECT_NOT_FOUND quand le projet n'existe pas ou n'appartient pas a l'appelant (meme reponse dans les deux cas, volontairement), REVISION_NOT_FOUND quand la revision n'existe pas (ou n'appartient pas au projet) et REVISION_NODE_NOT_FOUND quand le noeud, l'element de travail ou la facette visee n'existe pas dans cette revision.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/RevisionErrorResponse'
+    RevisionConflict:
+      description: 'Ecriture refusee sur l''etat stocke. Deux codes principaux : REVISION_LOCK_CONFLICT quand `expected_lock_version` est perime (le corps porte alors `revision_id`, `expected_lock_version` et `current_lock_version`, et rien n''a ete modifie), et REVISION_IMMUTABLE quand la revision est `validated` ou `superseded` et refuse toute ecriture (INV-03) -- code identique sur la facette planification et sur la facette cout. Egalement PROJECT_READ_ONLY quand le statut du projet est `perdu`, `termine` ou `abandonne` (distinct d''INV-03 : la revision visee peut etre un brouillon parfaitement editable), PROJECT_CALENDAR_MISSING, REVISION_DUPLICATE_WORK_ITEM, REVISION_EXTERNAL_UID_CONFLICT, REVISION_LIFECYCLE_CONFLICT, REVISION_WRITE_REFUSED et REVISION_INTEGRITY_CONFLICT.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/RevisionLockConflict'
+    RevisionUnprocessable:
+      description: 'Corps de requete invalide au sens du schema : selection vide, entier hors des bornes de sa colonne, code MSPDI hors enumeration, `null` explicite sur un champ qui n''a pas d''etat « vide » (`name`, `percent_complete`, `is_milestone`, `is_manual` de la facette planification), ou `target_parent_id`/`position` fournis avec un `mode` qui calcule lui-meme sa destination. Rien n''a ete ecrit et `lock_version` n''a pas bouge.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/RevisionValidationError'
     ProjectPlanningTaskNotFound:
       description: Projet, planning ou tache introuvable
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/FastAPIErrorResponse'
-    MovePlanningTasksBadRequest:
-      description: Requete de deplacement invalide
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/FastAPIErrorResponse'
-    MovePlanningTasksNotFound:
-      description: Projet, planning ou tache introuvable pendant le deplacement
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/FastAPIErrorResponse'
-    MovePlanningTasksConflict:
-      description: |-
-        Le deplacement entre en conflit avec le planning, ou `expected_revision` ne
-        correspond plus a la revision persistee (code `PLANNING_REVISION_CONFLICT`).
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/FastAPIErrorResponse'
-    CreatePlanningTaskBadRequest:
-      description: Requete de creation invalide
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/FastAPIErrorResponse'
-    CreatePlanningTaskNotFound:
-      description: Projet, planning ou tache parent introuvable
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/FastAPIErrorResponse'
-    CreatePlanningTaskConflict:
-      description: |-
-        La creation entre en conflit avec le planning, ou `expected_revision` ne
-        correspond plus a la revision persistee (code `PLANNING_REVISION_CONFLICT`).
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/FastAPIErrorResponse'
-    DeletePlanningTasksBadRequest:
-      description: Requete de suppression invalide
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/FastAPIErrorResponse'
-    DeletePlanningTasksNotFound:
-      description: Projet, planning ou tache introuvable pendant la suppression
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/FastAPIErrorResponse'
-    DeletePlanningTasksConflict:
-      description: Suppression en cascade non confirmee (detail.code=CASCADE_CONFIRMATION_REQUIRED, avec la liste des uid descendants dans detail.descendant_uids), ou tache referencee par un devis, une affectation ou une charge (detail.code=TASK_REFERENCED, avec la liste des uid references dans detail.task_uids). D'autres conflits (planning non brouillon, conflit d'integrite sur la hierarchie, `expected_revision` obsolete avec detail.code=PLANNING_REVISION_CONFLICT) renvoient le detail generique FastAPI plutot que ce detail structure.
-      content:
-        application/json:
-          schema:
-            oneOf:
-              - $ref: '#/components/schemas/PlanningTaskDeleteConflict'
-              - $ref: '#/components/schemas/FastAPIErrorResponse'
     EstimateNotFound:
       description: Devis introuvable
       content:
@@ -6221,64 +6448,6 @@ components:
             $ref: '#/components/schemas/FastAPIErrorResponse'
     UserNotFound:
       description: Utilisateur introuvable
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/FastAPIErrorResponse'
-    UpdatePlanningTaskScheduleBadRequest:
-      description: Combinaison mode/dates/duree invalide pour la tache
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/FastAPIErrorResponse'
-    UpdatePlanningTaskScheduleNotFound:
-      description: Projet, planning ou tache introuvable
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/FastAPIErrorResponse'
-    UpdatePlanningTaskScheduleConflict:
-      description: |-
-        La mise a jour du planning entre en conflit avec les donnees, ou `expected_revision`
-        ne correspond plus a la revision persistee (code `PLANNING_REVISION_CONFLICT`).
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/FastAPIErrorResponse'
-    ReplaceTaskLinksBadRequest:
-      description: Requete de mise a jour des liens invalide
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/FastAPIErrorResponse'
-    ReplaceTaskLinksNotFound:
-      description: Projet, planning ou tache introuvable pendant la mise a jour des liens
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/FastAPIErrorResponse'
-    ReplaceTaskLinksConflict:
-      description: |-
-        La mise a jour des liens entre en conflit avec le planning, ou `expected_revision`
-        ne correspond plus a la revision persistee (code `PLANNING_REVISION_CONFLICT`).
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/FastAPIErrorResponse'
-    RestorePlanningSnapshotBadRequest:
-      description: Snapshot de restauration invalide (uid/cle dupliques, lien inconnu)
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/FastAPIErrorResponse'
-    RestorePlanningSnapshotNotFound:
-      description: Projet ou planning introuvable
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/FastAPIErrorResponse'
-    RestorePlanningSnapshotConflict:
-      description: Le snapshot entre en conflit avec le planning (cycle, parent orphelin, milestone avec enfants), ou `expected_revision` ne correspond plus a la revision persistee (code `PLANNING_REVISION_CONFLICT`).
       content:
         application/json:
           schema:

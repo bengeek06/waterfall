@@ -50,6 +50,8 @@ from waterfall.domain.revision import (
     FacetPlacementError,
     ImmutableRevisionError,
     LinkError,
+    NodeLink,
+    NotFoundError,
     Project,
     ProjectRevision,
     RevisionKind,
@@ -77,6 +79,7 @@ from waterfall.domain.revision import (
     move_nodes_down,
     move_nodes_up,
     outdent_nodes,
+    replace_predecessors,
     subtree_ids,
     tree,
     validate_revision,
@@ -103,6 +106,7 @@ from waterfall.domain.revision.facets import (
     set_task_calendar_manually,
     set_task_dates,
     set_task_duration,
+    update_plan_facet,
 )
 from waterfall.domain.revision.invariants import (
     OPERATION_SCOPED_INVARIANTS,
@@ -242,9 +246,23 @@ def _write_attempts(bench: Bench) -> list[tuple[str, Callable[[], object]]]:
             "add_link",
             lambda: add_link(revision, node_id=bench.child_b, predecessor_node_id=bench.root_c),
         ),
+        (
+            "replace_predecessors",
+            lambda: replace_predecessors(
+                revision,
+                bench.child_b,
+                [NodeLink(node_id=bench.child_b, predecessor_node_id=bench.root_c)],
+            ),
+        ),
         ("apply_reimport", lambda: apply_reimport(project, revision, [])),
         ("rename_task", lambda: rename_task(revision, bench.root_a, "renamed")),
         ("set_task_duration", lambda: set_task_duration(revision, bench.root_a, 999)),
+        (
+            "update_plan_facet",
+            lambda: update_plan_facet(
+                project, revision, bench.root_a, duration_minutes=999, percent_complete=50
+            ),
+        ),
         (
             "set_task_dates",
             lambda: set_task_dates(revision, bench.root_a, start_at=NOW, finish_at=NOW),
@@ -565,6 +583,80 @@ def test_inv_08_link_creation_refuses_a_foreign_node(bench: Bench) -> None:
 
     with pytest.raises(CrossRevisionError, match="does not belong to revision"):
         add_link(revision, node_id=bench.child_b, predecessor_node_id=foreign.id)
+
+
+def test_the_two_link_primitives_answer_an_unknown_node_identically(bench: Bench) -> None:
+    """E14-05's review (#331): ``add_link`` and ``replace_predecessors`` had diverged.
+
+    Both now go through ``_check_link_endpoints`` for the *predecessor* and through
+    ``require_node`` for the node being edited, so the same question gets the same
+    class out of either -- which it did not before: ``add_link`` answered
+    ``CrossRevisionError`` for a node it was asked to attach links *to*, where
+    ``replace_predecessors`` answered ``NotFoundError``. A 404 on the resource the
+    call addresses, a 400 on a reference inside the payload.
+    """
+    revision = bench.revision
+    unknown = 999_999
+
+    with pytest.raises(NotFoundError):
+        add_link(revision, node_id=unknown, predecessor_node_id=bench.root_c)
+    with pytest.raises(NotFoundError):
+        replace_predecessors(revision, unknown, [])
+
+    with pytest.raises(CrossRevisionError, match="does not belong to revision"):
+        add_link(revision, node_id=bench.child_b, predecessor_node_id=unknown)
+    with pytest.raises(CrossRevisionError, match="does not belong to revision"):
+        replace_predecessors(
+            revision,
+            bench.child_b,
+            [NodeLink(node_id=bench.child_b, predecessor_node_id=unknown)],
+        )
+
+
+def test_replace_predecessors_refuses_every_malformed_list_it_documents(bench: Bench) -> None:
+    """The three refusals of ``replace_predecessors`` that no test reached.
+
+    Its sister ``add_link`` had all of its own covered; this one only ever ran its
+    happy path and its cycle guard, which left the set-shaped payload's own rules --
+    a cost line as the edited node, a link arriving somewhere else, the same
+    predecessor twice -- asserted nowhere. Each one is a refusal the API publishes as
+    ``REVISION_LINK_INVALID``.
+    """
+    revision = bench.revision
+    edited, predecessor = bench.child_b, bench.root_c
+
+    # A cost line has neither predecessor nor successor (INV-17), on either end.
+    with pytest.raises(LinkError, match="carries no planning facet"):
+        replace_predecessors(revision, bench.supply, [])
+    with pytest.raises(LinkError, match="carries no planning facet"):
+        replace_predecessors(
+            revision,
+            edited,
+            [NodeLink(node_id=edited, predecessor_node_id=bench.supply)],
+        )
+
+    # A link arriving at another node: this call replaces the predecessors of one.
+    with pytest.raises(LinkError, match="does not arrive at node"):
+        replace_predecessors(
+            revision,
+            edited,
+            [NodeLink(node_id=bench.root_a, predecessor_node_id=predecessor)],
+        )
+
+    # The same predecessor twice with the same link type.
+    with pytest.raises(LinkError, match="appears twice as a predecessor"):
+        replace_predecessors(
+            revision,
+            edited,
+            [
+                NodeLink(node_id=edited, predecessor_node_id=predecessor, link_type=1),
+                NodeLink(node_id=edited, predecessor_node_id=predecessor, link_type=1),
+            ],
+        )
+
+    # None of the four wrote anything, which is the point of validating the whole
+    # candidate set before storing any of it.
+    assert revision.links == []
 
 
 # --------------------------------------------------------------------------------------

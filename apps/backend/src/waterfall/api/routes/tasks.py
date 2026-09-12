@@ -1,21 +1,15 @@
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from waterfall.api.dependencies import get_current_active_user
 from waterfall.api.routes.planning_support import (
-    _planning_detail,  # pyright: ignore[reportPrivateUsage]
     _PlanningTaskBodyValidationRoute,  # pyright: ignore[reportPrivateUsage]
-    _to_task_reads,  # pyright: ignore[reportPrivateUsage]
     get_mutable_project_with_displayed_planning_lock,
     order_ms_tasks_depth_first,
     order_snapshots_depth_first,
     to_snapshot_task_read,
-)
-from waterfall.api.routes.project_access import (
-    get_planning_or_404,
-    get_project_or_404,
 )
 from waterfall.api.routes.projects import get_task_or_404, to_task_read
 from waterfall.db.session import get_db
@@ -24,7 +18,6 @@ from waterfall.models.planning import WfPlanningTaskSnapshot
 from waterfall.models.user import User
 from waterfall.models.wf_core import WfTaskEnrichment
 from waterfall.schemas.projects import (
-    TaskListRead,
     TaskRead,
     TaskUpdate,
 )
@@ -35,30 +28,6 @@ router = APIRouter(prefix="/projects", tags=["projects"])
 def _row_number_of(ordered_tasks: list[WfPlanningTaskSnapshot] | list[MsTask], uid: int) -> int:
     """1-based rank of `uid` within an already depth-first-ordered task list."""
     return next(position for position, task in enumerate(ordered_tasks, start=1) if task.uid == uid)
-
-
-@router.get("/{project_id}/tasks", response_model=TaskListRead)
-def list_project_tasks(
-    project_id: int,
-    planning_id: int | None = Query(default=None, gt=0),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-) -> TaskListRead:
-    # Intentionally not paginated (EPIC E7, issue #115): this endpoint feeds the
-    # planning editor, which needs the whole task tree to reconstruct the
-    # hierarchy and compute summary-task durations -- truncating it would
-    # produce orphaned parents and wrong aggregates.
-    project = get_project_or_404(db, project_id, current_user.id)
-    selected_id = planning_id or project.displayed_planning_id
-    if selected_id is not None:
-        planning = get_planning_or_404(db, project_id, selected_id)
-        items = _planning_detail(db, planning).tasks
-    else:
-        # Ordering is applied inside _to_task_reads (depth-first, same sibling sort as
-        # row_number -- E9-02/#147), so the query itself need not order the rows.
-        tasks = db.query(MsTask).filter(MsTask.project_id == project_id).all()
-        items = _to_task_reads(db, project_id, tasks)
-    return TaskListRead(items=items, total=len(items), limit=None, offset=0)
 
 
 def update_task(

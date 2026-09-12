@@ -1,5 +1,0 @@
-description: Requete de creation invalide
-content:
-  application/json:
-    schema:
-      $ref: ../schemas/FastAPIErrorResponse.yaml

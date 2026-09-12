@@ -1,0 +1,42 @@
+type: object
+required:
+- expected_lock_version
+- node_ids
+properties:
+  expected_lock_version:
+    type: integer
+    maximum: 2147483647
+    minimum: 0
+  node_ids:
+    items:
+      type: integer
+      maximum: 2147483647
+      exclusiveMinimum: 0
+    type: array
+    minItems: 1
+  mode:
+    type: string
+    enum:
+    - to_parent
+    - up
+    - down
+    - indent
+    - outdent
+    default: to_parent
+  target_parent_id:
+    anyOf:
+    - type: integer
+      maximum: 2147483647
+      exclusiveMinimum: 0
+    - type: 'null'
+  position:
+    anyOf:
+    - type: integer
+      maximum: 2147483647
+      minimum: 1
+    - type: 'null'
+description: >-
+  Deplacement d'une selection de noeuds, quelle que soit la facette portee par
+  chacun. `target_parent_id`/`position` n'ont de sens qu'en mode `to_parent` : les
+  fournir avec un autre mode est refuse en 422 plutot qu'ignore silencieusement,
+  les modes `up`/`down`/`indent`/`outdent` calculant eux-memes leur destination.

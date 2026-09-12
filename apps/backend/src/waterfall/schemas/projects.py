@@ -7,6 +7,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from waterfall.schemas.pagination import PaginatedList
 
+# The one definition of the MSPDI `LagFormat` enumeration, imported rather than
+# restated: this module used to carry its own copy, derived from the *documentation*
+# of the bundled MS Project schema instead of its normative ``xsd:enumeration`` list,
+# and therefore missing 53 (#331 review, M1). Two copies would have to be corrected
+# twice; this one dies with the legacy routes at E14-12 (#339), the other stays.
+from waterfall.schemas.revisions import MspdiLagFormat
+
 StructureKind = Literal["poste", "lot", "livrable", "milestone", "task"]
 ProjectStatus = Literal[
     "cree",
@@ -154,6 +161,9 @@ class TaskRead(BaseModel):
     predecessor_links: list["TaskLinkRead"] = Field(default_factory=list)
 
 
+# Unreferenced since E14-05 (#331) removed the legacy planning task listing; kept,
+# like the rest of the legacy planning payloads, until E14-12 (#339) sweeps them out
+# together with the routes and services they belonged to.
 class TaskListRead(PaginatedList[TaskRead]):
     pass
 
@@ -169,16 +179,6 @@ class PlanningLinkRead(TaskLinkRead):
     task_uid: int
 
 
-# MSPDI LagFormat legal values (see waterfall.services.planning_tree's own
-# documentation of this same enumeration, sourced from the bundled MS Project
-# schema). Constrained here -- not just range-bound to the SmallInteger
-# storage column -- so an out-of-domain value is rejected as a 400 instead of
-# reaching the database as a syntactically valid but meaningless code.
-MspdiLagFormat = Literal[
-    3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 19, 20, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 51, 52
-]
-
-
 class TaskLinkWrite(BaseModel):
     predecessor_uid: int = Field(ge=1)
     link_type: int = Field(ge=0, le=3)
@@ -189,6 +189,9 @@ class TaskLinkWrite(BaseModel):
     lag_format: MspdiLagFormat | None = None
 
 
+# Unreferenced since E14-05 (#331) replaced `PUT .../tasks/{uid}/links` with the
+# revision's own `PUT .../nodes/{id}/predecessors`; kept until E14-12 (#339), like
+# `TaskLinkWrite` above, which is still served by `estimates` and `planning_links`.
 class TaskLinksReplace(BaseModel):
     links: list[TaskLinkWrite]
     expected_revision: int = Field(ge=0)
@@ -499,6 +502,10 @@ class ProjectStatusUpdate(BaseModel):
     status: ProjectStatus
 
 
+# Both unreferenced since E14-05 (#331) replaced the planning-snapshot tree read with
+# `RevisionTreeRead` (which is flat: `row_number`/`level` are computed, so the nesting
+# these two expressed is gone for good). Kept until E14-12 (#339) removes the legacy
+# planning services along with them.
 class PlanningTaskTreeRead(TaskRead):
     children: list["PlanningTaskTreeRead"] = Field(default_factory=list)
 

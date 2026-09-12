@@ -12,6 +12,8 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import date, datetime
 from decimal import Decimal
+from enum import Enum
+from typing import Literal
 
 from waterfall.domain.revision.calendar_rule import (
     resynchronize_from_node,
@@ -29,6 +31,27 @@ from waterfall.domain.revision.entities import (
 from waterfall.domain.revision.errors import FacetContractError, NotFoundError
 from waterfall.domain.revision.guards import require_draft, touch
 from waterfall.domain.revision.invariants import check_cost_facet_shape
+
+
+class _Unset(Enum):
+    """Single-member enum standing for "this field was not supplied".
+
+    An ``Enum`` rather than a bare ``object()`` sentinel because it is the one
+    shape a static type checker narrows: ``int | None | Unset`` minus
+    ``UNSET`` is ``int | None``, which is what makes
+    :func:`update_plan_facet` typed rather than ``Any``-flavoured. ``None`` cannot
+    play that role here -- on this facet it is a *value* (clear the duration, drop
+    the calendar override), not an absence.
+    """
+
+    TOKEN = 0
+
+
+#: The "field not supplied" marker of :func:`update_plan_facet`.
+UNSET = _Unset.TOKEN
+
+#: Type of :data:`UNSET`, for spelling ``int | None | Unset`` in a signature.
+Unset = Literal[_Unset.TOKEN]
 
 
 def _plan_facet(revision: ProjectRevision, node_id: int) -> PlanFacet:
@@ -97,6 +120,77 @@ def clear_task_calendar_override(project: Project, revision: ProjectRevision, no
     facet = _plan_facet(revision, node_id)
     facet.calendar_source = CalendarSource.PROJECT
     resynchronize_task_calendar(project, revision, node_id)
+    touch(revision)
+
+
+def update_plan_facet(
+    project: Project,
+    revision: ProjectRevision,
+    node_id: int,
+    *,
+    name: str | Unset = UNSET,
+    duration_minutes: int | None | Unset = UNSET,
+    duration_format: int | None | Unset = UNSET,
+    start_at: datetime | None | Unset = UNSET,
+    finish_at: datetime | None | Unset = UNSET,
+    work_minutes: int | None | Unset = UNSET,
+    percent_complete: int | Unset = UNSET,
+    is_milestone: bool | Unset = UNSET,
+    is_manual: bool | Unset = UNSET,
+    calendar_id: int | None | Unset = UNSET,
+) -> None:
+    """Apply a *partial* edit of one planning facet, as a single write.
+
+    Deliberately the one composite operation of this module, and it exists for a
+    reason the single-attribute setters above cannot serve: each of them bumps the
+    optimistic lock counter (:func:`~waterfall.domain.revision.guards.touch`), so a
+    transport layer editing a duration *and* a start date in one request by calling
+    two of them would consume two versions and hand the caller back an
+    ``expected_lock_version`` off by one for its next write. One request, one
+    ``touch``. The single-attribute setters stay: they are what a programmatic
+    caller with one attribute to change should use, and they read better.
+
+    Still explicit and typed rather than a "patch these fields" dictionary: every
+    field is a named parameter carrying its own type, and ``UNSET`` -- not ``None``
+    -- means "left alone", because ``None`` is a *value* here (clear the duration,
+    drop the calendar override).
+
+    ``calendar_id`` carries Règle 1 in full: an id pins the calendar and marks it
+    ``manual``, ``None`` drops the override and resynchronises from the roles of
+    the subtree (falling back to the project calendar), and ``UNSET`` leaves both
+    the calendar and its provenance exactly as they are.
+
+    Numeric domains (a percentage in 0..100, a non-negative duration) are
+    deliberately **not** checked here: the specification assigns them to the column
+    constraints of the database, and the transport layer bounds them on the way in.
+    """
+    require_draft(revision)
+    facet = _plan_facet(revision, node_id)
+    if not isinstance(name, _Unset):
+        facet.name = name
+    if not isinstance(duration_minutes, _Unset):
+        facet.duration_minutes = duration_minutes
+    if not isinstance(duration_format, _Unset):
+        facet.duration_format = duration_format
+    if not isinstance(start_at, _Unset):
+        facet.start_at = start_at
+    if not isinstance(finish_at, _Unset):
+        facet.finish_at = finish_at
+    if not isinstance(work_minutes, _Unset):
+        facet.work_minutes = work_minutes
+    if not isinstance(percent_complete, _Unset):
+        facet.percent_complete = percent_complete
+    if not isinstance(is_milestone, _Unset):
+        facet.is_milestone = is_milestone
+    if not isinstance(is_manual, _Unset):
+        facet.is_manual = is_manual
+    if not isinstance(calendar_id, _Unset):
+        if calendar_id is None:
+            facet.calendar_source = CalendarSource.PROJECT
+            resynchronize_task_calendar(project, revision, node_id)
+        else:
+            facet.calendar_id = calendar_id
+            facet.calendar_source = CalendarSource.MANUAL
     touch(revision)
 
 

@@ -1,0 +1,11 @@
+type: object
+required:
+- revision_id
+- lock_version
+properties:
+  revision_id:
+    type: integer
+  lock_version:
+    type: integer
+description: 'Reponse commune a toute ecriture : la revision et le compteur de verrou que la prochaine
+  ecriture devra presenter.'

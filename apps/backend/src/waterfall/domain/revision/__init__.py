@@ -56,6 +56,8 @@ from waterfall.domain.revision.errors import (
     WorkBreakdownError,
 )
 from waterfall.domain.revision.facets import (
+    UNSET,
+    Unset,
     assign_role,
     clear_task_calendar_override,
     rename_task,
@@ -69,6 +71,7 @@ from waterfall.domain.revision.facets import (
     set_task_calendar_manually,
     set_task_dates,
     set_task_duration,
+    update_plan_facet,
 )
 from waterfall.domain.revision.invariants import (
     InvariantViolation,
@@ -123,6 +126,7 @@ from waterfall.domain.revision.tree import (
     move_nodes_down,
     move_nodes_up,
     outdent_nodes,
+    replace_predecessors,
     require_node,
     selection_roots,
 )
@@ -175,6 +179,8 @@ __all__ = [
     "SkeletonFingerprint",
     "SupplyStatus",
     "TreeCycleError",
+    "UNSET",
+    "Unset",
     "WorkBreakdownError",
     "WorkItem",
     "WorkItemKind",
@@ -216,6 +222,7 @@ __all__ = [
     "reconcile_forecast_to_budget",
     "regenerate_skeleton",
     "rename_task",
+    "replace_predecessors",
     "require_node",
     "resolve_bearing_task",
     "save_work_breakdown",
@@ -233,6 +240,7 @@ __all__ = [
     "skeleton_fingerprint_of",
     "subtree_ids",
     "unreachable_node_ids",
+    "update_plan_facet",
     "validate_revision",
     "violated_invariant_ids",
 ]

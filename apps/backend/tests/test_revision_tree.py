@@ -742,6 +742,26 @@ def _write_attempts(
                 session, tree.revision_id, expected_lock_version=expected_lock_version
             ),
         ),
+        (
+            "update_plan_facet",
+            lambda: revision_tree.update_plan_facet(
+                session,
+                tree.revision_id,
+                tree.design,
+                expected_lock_version=expected_lock_version,
+                duration_minutes=480,
+            ),
+        ),
+        (
+            "replace_predecessors",
+            lambda: revision_tree.replace_predecessors(
+                session,
+                tree.revision_id,
+                tree.build,
+                [domain.NodeLink(node_id=tree.build, predecessor_node_id=tree.beta)],
+                expected_lock_version=expected_lock_version,
+            ),
+        ),
     ]
 
 
@@ -749,7 +769,7 @@ def _write_attempts(
 #: nothing to the lock or to INV-03. Spelled out one by one, as in the domain's
 #: ``_TREE_READERS``: a new operation is a *write* until this list says otherwise,
 #: so forgetting to add it to the matrix fails rather than passes unnoticed.
-_SERVICE_READERS = frozenset({"resolve_bearing_task"})
+_SERVICE_READERS = frozenset({"read_revision_tree", "resolve_bearing_task"})
 
 #: The single documented exception to "every write refuses a non-draft revision".
 #: It still takes -- and still enforces -- ``expected_lock_version``, so it is

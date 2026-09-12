@@ -1,0 +1,223 @@
+/projects/{projectId}/revisions/{revisionId}/nodes:
+  get:
+    tags:
+    - projects
+    summary: Lire l'arbre d'une revision et sa facette planification
+    description: >-
+      Retourne les noeuds de la revision en ordre depth-first, chacun avec son
+      identifiant positionnel (`row_number`) et son niveau (`level`) calcules a la
+      lecture et stockes nulle part, ainsi que sa facette. Volontairement non
+      pagine : cet endpoint alimente un arbre editable, qui a besoin de l'arbre
+      complet pour reconstruire la hierarchie et numeroter les lignes.
+    operationId: readRevisionNodes
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/RevisionId.yaml
+    responses:
+      '200':
+        description: Arbre complet de la revision, en ordre depth-first
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/RevisionTreeRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/RevisionNotFound.yaml
+      '409':
+        $ref: ../components/responses/RevisionConflict.yaml
+      '422':
+        $ref: ../components/responses/RevisionUnprocessable.yaml
+/projects/{projectId}/revisions/{revisionId}/tasks:
+  post:
+    tags:
+    - projects
+    summary: Creer un noeud tache dans une revision
+    operationId: createRevisionTask
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/RevisionId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/RevisionTaskCreate.yaml
+    responses:
+      '201':
+        description: Noeud cree, avec le nouveau `lock_version` de la revision
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/RevisionNodeWriteRead.yaml
+      '400':
+        $ref: ../components/responses/RevisionBadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/RevisionNotFound.yaml
+      '409':
+        $ref: ../components/responses/RevisionConflict.yaml
+      '422':
+        $ref: ../components/responses/RevisionUnprocessable.yaml
+/projects/{projectId}/revisions/{revisionId}/nodes/move:
+  post:
+    tags:
+    - projects
+    summary: Deplacer une selection de noeuds d'une revision
+    description: >-
+      Volontairement agnostique de la facette : il n'y a qu'un arbre, donc deplacer
+      une ligne de cout et deplacer une tache sont la meme operation. Chaque noeud
+      selectionne emporte son sous-arbre et ses deux facettes ; un noeud dont un
+      ancetre est aussi selectionne est porte par cet ancetre plutot que deplace
+      deux fois.
+    operationId: moveRevisionNodes
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/RevisionId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/RevisionNodeMove.yaml
+    responses:
+      '200':
+        description: Deplacement applique, avec le nouveau `lock_version`
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/RevisionWriteRead.yaml
+      '400':
+        $ref: ../components/responses/RevisionBadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/RevisionNotFound.yaml
+      '409':
+        $ref: ../components/responses/RevisionConflict.yaml
+      '422':
+        $ref: ../components/responses/RevisionUnprocessable.yaml
+/projects/{projectId}/revisions/{revisionId}/nodes/delete:
+  post:
+    tags:
+    - projects
+    summary: Supprimer une selection de noeuds en cascade
+    description: >-
+      Supprime la selection, tout son sous-arbre et les deux facettes de chaque
+      noeud retire (INV-02). La reponse nomme le chiffrage emporte
+      (`cost_losses`) plutot que de le laisser disparaitre silencieusement.
+    operationId: deleteRevisionNodes
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/RevisionId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/RevisionNodeDelete.yaml
+    responses:
+      '200':
+        description: Suppression appliquee, avec le chiffrage emporte
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/RevisionNodeDeleteRead.yaml
+      '400':
+        $ref: ../components/responses/RevisionBadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/RevisionNotFound.yaml
+      '409':
+        $ref: ../components/responses/RevisionConflict.yaml
+      '422':
+        $ref: ../components/responses/RevisionUnprocessable.yaml
+/projects/{projectId}/revisions/{revisionId}/nodes/{nodeId}/planning:
+  patch:
+    tags:
+    - projects
+    summary: Modifier la facette planification d'un noeud
+    description: >-
+      Edition partielle : duree, dates, avancement, calendrier, jalon, mode
+      manuel/automatique. Un champ absent est laisse tel quel ; `null` est une
+      valeur. Quel que soit le nombre d'attributs modifies, `lock_version`
+      n'avance que d'un cran.
+    operationId: updateRevisionPlanFacet
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/RevisionId.yaml
+    - $ref: ../components/parameters/RevisionNodeId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/RevisionPlanFacetUpdate.yaml
+    responses:
+      '200':
+        description: Facette mise a jour, avec le nouveau `lock_version`
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/RevisionWriteRead.yaml
+      '400':
+        $ref: ../components/responses/RevisionBadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/RevisionNotFound.yaml
+      '409':
+        $ref: ../components/responses/RevisionConflict.yaml
+      '422':
+        $ref: ../components/responses/RevisionUnprocessable.yaml
+/projects/{projectId}/revisions/{revisionId}/nodes/{nodeId}/predecessors:
+  put:
+    tags:
+    - projects
+    summary: Remplacer les predecesseurs d'un noeud tache
+    description: >-
+      Remplace l'integralite des liens de precedence arrivant sur le noeud. Un
+      predecesseur designant un noeud d'une autre revision est refuse (INV-08,
+      `detail.code` = REVISION_CROSS_REVISION).
+    operationId: replaceRevisionPredecessors
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/RevisionId.yaml
+    - $ref: ../components/parameters/RevisionNodeId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/RevisionPredecessorsReplace.yaml
+    responses:
+      '200':
+        description: Predecesseurs remplaces, avec le nouveau `lock_version`
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/RevisionWriteRead.yaml
+      '400':
+        $ref: ../components/responses/RevisionBadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/RevisionNotFound.yaml
+      '409':
+        $ref: ../components/responses/RevisionConflict.yaml
+      '422':
+        $ref: ../components/responses/RevisionUnprocessable.yaml

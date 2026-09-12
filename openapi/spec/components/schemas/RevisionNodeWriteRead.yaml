@@ -1,0 +1,16 @@
+type: object
+required:
+- revision_id
+- lock_version
+- node_id
+- work_item_id
+properties:
+  revision_id:
+    type: integer
+  lock_version:
+    type: integer
+  node_id:
+    type: integer
+  work_item_id:
+    type: integer
+description: Noeud fraichement cree, par les identifiants alloues par la base.

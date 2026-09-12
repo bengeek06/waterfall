@@ -14,6 +14,7 @@ afterwards.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -833,8 +834,19 @@ def delete_nodes(
 
 def _would_cycle(revision: ProjectRevision, node_id: int, predecessor_node_id: int) -> bool:
     """Whether adding ``predecessor -> node`` closes a precedence cycle (INV-18)."""
+    return _would_cycle_in(revision.links, node_id, predecessor_node_id)
+
+
+def _would_cycle_in(links: Sequence[NodeLink], node_id: int, predecessor_node_id: int) -> bool:
+    """:func:`_would_cycle` against an arbitrary link set rather than the stored one.
+
+    What :func:`replace_predecessors` needs: it has to know whether a *candidate*
+    set of links closes a cycle **before** committing it to the revision, since a
+    refusal has to leave the revision untouched (INV-03's "no partial write" rule
+    applies to every refusal of this module).
+    """
     successors: dict[int, list[int]] = {}
-    for link in revision.links:
+    for link in links:
         successors.setdefault(link.predecessor_node_id, []).append(link.node_id)
     stack = [node_id]
     seen: set[int] = set()
@@ -858,20 +870,24 @@ def add_link(
     lag_tenth_minute: int = 0,
     lag_format: int | None = None,
 ) -> None:
-    """Add a precedence link between two planning nodes of the same revision."""
+    """Add a precedence link between two planning nodes of the same revision.
+
+    Both endpoints go through :func:`_check_link_endpoints`, the same helper
+    :func:`replace_predecessors` uses: the two are sister primitives of this module
+    and answered the "no such node" question differently until E14-05's review
+    (#331) caught it -- ``add_link`` raised ``CrossRevisionError`` on *either*
+    endpoint, ``replace_predecessors`` raised ``NotFoundError`` on the node it
+    replaces the predecessors of. The second is the right answer for the node being
+    edited (a 404 on the resource the call names), so ``add_link`` now gives it too.
+    """
     require_draft(revision)
-    if node_id == predecessor_node_id:
-        raise LinkError(f"Node {node_id} cannot be its own predecessor (INV-16)")
-    for candidate in (node_id, predecessor_node_id):
-        if candidate not in revision.nodes:
-            raise CrossRevisionError(
-                f"Node {candidate} does not belong to revision {revision.id} (INV-08)"
-            )
-        if not is_plan_node(revision, candidate):
-            raise LinkError(
-                f"Node {candidate} carries no planning facet: a cost line has neither "
-                "predecessor nor successor (INV-17)"
-            )
+    require_node(revision, node_id)
+    if not is_plan_node(revision, node_id):
+        raise LinkError(
+            f"Node {node_id} carries no planning facet: a cost line has neither "
+            "predecessor nor successor (INV-17)"
+        )
+    _check_link_endpoints(revision, node_id, predecessor_node_id)
     if _would_cycle(revision, node_id, predecessor_node_id):
         raise LinkError(
             f"Link {predecessor_node_id} -> {node_id} would close a precedence cycle (INV-18)"
@@ -886,6 +902,86 @@ def add_link(
         )
     )
     touch(revision)
+
+
+def replace_predecessors(
+    revision: ProjectRevision, node_id: int, predecessors: Sequence[NodeLink]
+) -> None:
+    """Replace *every* precedence link arriving at ``node_id``, as a single write.
+
+    The set-shaped counterpart of :func:`add_link`, and the operation a "these are
+    the predecessors of this task now" edit is: a client that computed a new list
+    has no handle on the links it wants gone, and removing then re-adding them one
+    by one would both bump the lock counter once per link and leave a half-applied
+    state behind on the first refusal.
+
+    Every link is validated against the *candidate* state -- the links of the other
+    nodes, plus the ones supplied -- before a single one is stored, so a refusal
+    leaves the revision, ``lock_version`` included, exactly as it was. A
+    predecessor this revision does not hold is a
+    :class:`~waterfall.domain.revision.errors.CrossRevisionError` (INV-08), the
+    same refusal :func:`add_link` gives through the very same helper -- whether the
+    id belongs to another revision or to nothing at all, which is a distinction
+    this revision cannot make and does not claim to.
+    """
+    require_draft(revision)
+    require_node(revision, node_id)
+    if not is_plan_node(revision, node_id):
+        raise LinkError(
+            f"Node {node_id} carries no planning facet: a cost line has neither "
+            "predecessor nor successor (INV-17)"
+        )
+    candidate = [link for link in revision.links if link.node_id != node_id]
+    seen: set[tuple[int, int]] = set()
+    for link in predecessors:
+        if link.node_id != node_id:
+            raise LinkError(
+                f"Link {link.predecessor_node_id} -> {link.node_id} does not arrive at "
+                f"node {node_id}, the only node this call replaces the predecessors of"
+            )
+        _check_link_endpoints(revision, node_id, link.predecessor_node_id)
+        key = (link.predecessor_node_id, link.link_type)
+        if key in seen:
+            raise LinkError(
+                f"Node {link.predecessor_node_id} appears twice as a predecessor of node "
+                f"{node_id} with link type {link.link_type}"
+            )
+        seen.add(key)
+        if _would_cycle_in(candidate, node_id, link.predecessor_node_id):
+            raise LinkError(
+                f"Link {link.predecessor_node_id} -> {node_id} would close a precedence "
+                "cycle (INV-18)"
+            )
+        candidate.append(link)
+    revision.links[:] = candidate
+    touch(revision)
+
+
+def _check_link_endpoints(
+    revision: ProjectRevision, node_id: int, predecessor_node_id: int
+) -> None:
+    """The predecessor rules shared by :func:`add_link` and :func:`replace_predecessors`.
+
+    Both callers check the node being edited themselves, through
+    :func:`require_node` -- a 404 on the resource the call addresses. What is shared
+    is the rule on the *predecessor*, which is a reference inside the payload and is
+    therefore a 400: ``CrossRevisionError`` covers both "belongs to another
+    revision" and "names no node at all", because from this revision's point of view
+    they are the same statement -- the id is not one of ours (INV-08). The published
+    description of ``REVISION_CROSS_REVISION`` says exactly that, rather than
+    promising the id exists somewhere else.
+    """
+    if node_id == predecessor_node_id:
+        raise LinkError(f"Node {node_id} cannot be its own predecessor (INV-16)")
+    if predecessor_node_id not in revision.nodes:
+        raise CrossRevisionError(
+            f"Node {predecessor_node_id} does not belong to revision {revision.id} (INV-08)"
+        )
+    if not is_plan_node(revision, predecessor_node_id):
+        raise LinkError(
+            f"Node {predecessor_node_id} carries no planning facet: a cost line has neither "
+            "predecessor nor successor (INV-17)"
+        )
 
 
 def links_of(revision: ProjectRevision, node_id: int) -> list[tuple[int, int, int]]:
