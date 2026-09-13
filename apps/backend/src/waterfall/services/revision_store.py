@@ -54,7 +54,7 @@ from sqlalchemy.orm import Session
 from waterfall.domain import revision as domain
 from waterfall.models import revision as tables
 from waterfall.models.ms_core import MsProject
-from waterfall.models.resources import CostCategory, ResourceRole
+from waterfall.models.resources import CostCategory, ProjectCostCode, ResourceRole
 from waterfall.services.calendar_schedule import resolve_default_calendar_id
 
 #: Offset a node is parked at while a sibling set is being reordered.
@@ -236,6 +236,7 @@ def _load_project(db: Session, project_id: int) -> domain.Project:
     )
     _load_work_items(db, project)
     _load_roles(db, project)
+    _load_cost_codes(db, project)
     _load_revision_stubs(db, project)
     return project
 
@@ -283,6 +284,22 @@ def _load_roles(db: Session, project: domain.Project) -> None:
             accounting_code=category.accounting_code if category is not None else None,
         )
     project.cost_categories = {row.id: row.accounting_code for row in categories.values()}
+
+
+def _load_cost_codes(db: Session, project: domain.Project) -> None:
+    """The project's imputation codes, reduced to ``id -> code``.
+
+    Loaded for exactly one purpose: copying the code onto a frozen line at validation
+    time (E14-08 review, H1). The domain never navigates the imputation tree, never
+    validates against it and never writes it -- it copies one string off it, so that
+    the ventilation by code d'imputation of a validated devis stays readable when the
+    tree it came from has since been renamed or pruned (INV-23, Règle 2). Scoped to
+    the project, `wf_project_cost_code.code` being unique per project and not globally.
+    """
+    project.cost_codes = {
+        row.id: row.code
+        for row in db.query(ProjectCostCode).filter(ProjectCostCode.project_id == project.id).all()
+    }
 
 
 def _load_revision_stubs(db: Session, project: domain.Project) -> None:
@@ -361,6 +378,27 @@ def _load_tree(db: Session, project: domain.Project, revision: domain.ProjectRev
         )
         for link in _link_rows(db, revision.id)
     ]
+    revision.frozen_lines = [
+        domain.FrozenLine(
+            revision_id=line.revision_id,
+            work_item_id=line.work_item_id,
+            bearing_work_item_id=line.bearing_work_item_id,
+            label=line.label,
+            nature=domain.CostNature(line.nature),
+            bearing_task_name=line.bearing_task_name,
+            role_name=line.role_name,
+            accounting_code=line.accounting_code,
+            category_code=line.category_code,
+            cost_code=line.cost_code,
+            year=line.year,
+            quantity=line.quantity,
+            hours=line.hours,
+            hourly_rate=line.hourly_rate,
+            inflation_coefficient=line.inflation_coefficient,
+            amount=line.amount,
+        )
+        for line in _frozen_line_rows(db, revision.id)
+    ]
     project.next_node_id = _next_id(revision.nodes)
 
 
@@ -394,6 +432,22 @@ def _cost_facet_rows(db: Session, revision_id: int) -> list[tables.RevisionCostF
         .join(tables.RevisionNode, tables.RevisionNode.id == tables.RevisionCostFacet.node_id)
         .filter(tables.RevisionNode.revision_id == revision_id)
         .order_by(tables.RevisionCostFacet.node_id)
+        .all()
+    )
+
+
+def _frozen_line_rows(db: Session, revision_id: int) -> list[tables.RevisionFrozenLine]:
+    """The frozen document of ``revision_id``, in the order it was written.
+
+    Loaded like everything else a revision carries, so that a validated revision
+    read back is the revision that was validated -- ``check_invariants`` reports
+    INV-24 on a validated revision whose lines are missing, and a load that quietly
+    dropped them would make every reload of a validated revision look corrupt.
+    """
+    return (
+        db.query(tables.RevisionFrozenLine)
+        .filter(tables.RevisionFrozenLine.revision_id == revision_id)
+        .order_by(tables.RevisionFrozenLine.id)
         .all()
     )
 
@@ -504,6 +558,7 @@ def save_revision(
     node_ids = _save_tree(db, project, target, revision_id, stored, work_item_ids)
     _save_facets(db, target, stored, node_ids)
     _save_links(db, target, revision_id, stored, node_ids)
+    _save_frozen_lines(db, target, revision_id, work_item_ids)
     db.flush()
     _adopt_database_ids(project, target, revision_id, node_ids, work_item_ids)
     return SaveOutcome(revision_id=revision_id, node_ids=node_ids, work_item_ids=work_item_ids)
@@ -546,20 +601,21 @@ def _validate_before_write(
 
 
 def _refuse_frozen_lines(revision: domain.ProjectRevision) -> None:
-    """Refuse a revision carrying frozen lines: there is no table to write them to.
+    """Refuse frozen lines on a **draft** (INV-24), which is all that is left to refuse.
 
-    `wf_revision_frozen_line` is deliberately not part of this issue -- its shape
-    is decided by the calculation engine that produces the amounts, E14-08 (#334).
-    Writing such a revision anyway would silently drop the lines and store a
-    validated revision that the invariant checker then reports as violating
-    INV-24, which is exactly the kind of quiet corruption a refusal is worth.
+    `wf_revision_frozen_line` exists since E14-08 (#334), so this module no longer
+    turns every frozen line away -- it writes them, once, at the validation that
+    produced them (:func:`_save_frozen_lines`). What stays refused is a draft
+    carrying them: the lines of a revision are the document *its validation* froze,
+    and a draft has not been validated. Storing them anyway would leave a revision
+    the invariant checker reports as violating INV-24, which is exactly the kind of
+    quiet corruption a refusal is worth.
     """
-    if revision.frozen_lines:
+    if revision.status is domain.RevisionStatus.DRAFT and revision.frozen_lines:
         raise RevisionStoreError(
-            f"Revision {revision.id} carries {len(revision.frozen_lines)} frozen line(s), "
-            "which this adapter cannot persist: the frozen lines of a validated revision "
-            "come with the validation itself, E14-08 (#334). Validate the revision through "
-            "that service rather than writing the validated state back here"
+            f"Draft revision {revision.id} carries {len(revision.frozen_lines)} frozen "
+            "line(s), which only a validation produces (INV-24): validate the revision "
+            "with domain.validate_revision() rather than hanging its document on a draft"
         )
 
 
@@ -928,6 +984,66 @@ def _save_tree(
     _delete_removed(db, revision, stored)
     _push_moved_nodes_aside(db, revision, stored.nodes)
     return _write_node_positions(db, project, revision, revision_id, stored, work_item_ids)
+
+
+def _save_frozen_lines(
+    db: Session,
+    revision: domain.ProjectRevision,
+    revision_id: int,
+    work_item_ids: Mapping[int, int],
+) -> None:
+    """Insert the frozen document of a revision that has just been validated.
+
+    **Insert only, and only once.** A frozen line is never updated and never
+    deleted: it is the immutable half of the model, and the revision that owns it
+    refuses every write from the moment it carries one
+    (:func:`_refuse_a_frozen_revision`, INV-03). So a revision that already has rows
+    here is a revision the database holds as validated, which never reaches this
+    point -- the early return is the belt to that braces, not a merge strategy.
+
+    Work item ids go through ``work_item_ids`` like everywhere else in this module:
+    a document validated in the same transaction that created its work items would
+    otherwise freeze the domain's own numbering instead of the database's, and land
+    its identities -- the *one* thing Règle 2 asks a frozen line to keep -- on
+    whatever rows those numbers happen to designate.
+    """
+    if not revision.frozen_lines:
+        return
+    stored = (
+        db.query(tables.RevisionFrozenLine.id)
+        .filter(tables.RevisionFrozenLine.revision_id == revision_id)
+        .first()
+    )
+    if stored is not None:
+        return
+    now = _now()
+    for line in revision.frozen_lines:
+        db.add(
+            tables.RevisionFrozenLine(
+                revision_id=revision_id,
+                work_item_id=work_item_ids.get(line.work_item_id, line.work_item_id),
+                bearing_work_item_id=(
+                    None
+                    if line.bearing_work_item_id is None
+                    else work_item_ids.get(line.bearing_work_item_id, line.bearing_work_item_id)
+                ),
+                label=line.label,
+                nature=line.nature.value,
+                bearing_task_name=line.bearing_task_name,
+                role_name=line.role_name,
+                accounting_code=line.accounting_code,
+                category_code=line.category_code,
+                cost_code=line.cost_code,
+                year=line.year,
+                quantity=line.quantity,
+                hours=line.hours,
+                hourly_rate=line.hourly_rate,
+                inflation_coefficient=line.inflation_coefficient,
+                amount=line.amount,
+                created_at=now,
+            )
+        )
+    db.flush()
 
 
 def _delete_removed(db: Session, revision: domain.ProjectRevision, stored: _StoredRows) -> None:

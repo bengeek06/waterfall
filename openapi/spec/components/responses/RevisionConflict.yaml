@@ -9,7 +9,18 @@ description: >-
   revision visee peut etre un brouillon parfaitement editable),
   PROJECT_CALENDAR_MISSING, REVISION_DUPLICATE_WORK_ITEM,
   REVISION_EXTERNAL_UID_CONFLICT, REVISION_LIFECYCLE_CONFLICT,
-  REVISION_WRITE_REFUSED et REVISION_INTEGRITY_CONFLICT.
+  REVISION_WRITE_REFUSED et REVISION_INTEGRITY_CONFLICT. Enfin
+  REVISION_RATE_COVERAGE_MISSING, propre a la validation : le referentiel ne
+  couvre pas tous les couples (categorie de cout, annee) de la revision, et un
+  document fige pour de bon ne doit pas enregistrer un prix de zero a la place
+  d'un taux manquant -- la liste des taux absents se lit sur
+  `GET .../revisions/{revisionId}/aggregates`, qui la renvoie dans un 200. Et son
+  frere REVISION_UNPRICEABLE_FACET, propre a la validation lui aussi : un chiffrage
+  porte par une tache sans dates n'a aucune annee sur laquelle etre valorise, donc
+  aucun referentiel ne peut le couvrir et il echappait au code precedent -- il etait
+  fige a zero sans que rien ne le signale. Les facettes concernees se lisent sur le
+  meme endpoint d'agregats, dans `unpriceable_facets`, et le remede est de dater la
+  tache porteuse.
 content:
   application/json:
     schema:

@@ -34,16 +34,18 @@ reconciliation are the exports' own issue (#365) -- an engine that returned
 half-built ORM rows would have decided both.
 """
 
-from collections.abc import Container, Mapping
+from collections.abc import Container, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
+from enum import StrEnum
 from typing import TypedDict
 
 from sqlalchemy.orm import Session
 
 from waterfall.core.observability import ESTIMATE_CALCULATION_DURATION, track_duration
 from waterfall.domain import revision as domain
+from waterfall.domain.revision.pricing import PricedYear
 from waterfall.models.ms_core import MsTask
 from waterfall.models.planning import WfPlanningTaskSnapshot
 from waterfall.models.resources import (
@@ -265,6 +267,51 @@ class PricedLine:
     amount: Decimal
 
 
+class UnpriceableReason(StrEnum):
+    """Why the engine could put a facet's hours in no year at all.
+
+    Both values come out of :func:`_bearing_years` answering ``None``, and they are
+    told apart because the user's remedy differs: one task needs dates, the other
+    needs its dates the right way round.
+    """
+
+    #: The bearing task carries no ``start_at`` and/or no ``finish_at``.
+    BEARING_TASK_UNDATED = "bearing_task_undated"
+    #: The bearing task's ``finish_at`` precedes its ``start_at``: an empty range.
+    BEARING_TASK_EMPTY_RANGE = "bearing_task_empty_range"
+
+
+@dataclass(frozen=True)
+class UnpriceableFacet:
+    """A labour facet carrying hours that the engine priced into **no line at all**.
+
+    The gap next to :attr:`RevisionPricing.missing_cost_rates`, and the one #334's
+    review found it had left open. A missing rate makes a line worth zero *and says
+    so*; a bearing task with no dates makes the facet produce no priced line at all,
+    so it contributes nothing to ``missing_cost_rates`` either -- ``category_years``
+    is built from ``cost_node.years``, which is exactly what is ``None`` here -- and
+    a reader saw ``total_labor_cost: 0`` with ``missing_cost_rates: []``, that is a
+    zero with nothing beside it.
+
+    Reported on a read, **refused** on a validation, the same asymmetry and for the
+    same reason: a draft whose task is not scheduled yet must stay readable, and an
+    immutable document must not record 0,00 EUR for a chiffrage of a thousand.
+
+    ``bearing_*`` names the task to fix, which is the whole point of publishing this:
+    the facet itself is impeccable -- it carries its role and its hours -- and the
+    thing to correct is somewhere else in the tree.
+    """
+
+    node_id: int
+    work_item_id: int
+    label: str
+    hours: Decimal
+    bearing_node_id: int | None
+    bearing_work_item_id: int | None
+    bearing_task_name: str | None
+    reason: UnpriceableReason
+
+
 @dataclass(frozen=True)
 class RevisionPricing:
     """Everything the engine made of one revision: its priced lines and its gaps.
@@ -277,8 +324,15 @@ class RevisionPricing:
     entered yet would make a perfectly editable draft unreadable. The line is
     still priced, at a zero rate and a neutral inflation, *and* the gap is named
     in the same breath, so nothing is silent about it. Refusing a **validation**
-    outright on the same gap stays the right answer and stays E14-08's (#334) to
-    make, from these very two lists.
+    outright on the same gap is the right answer and is the one E14-08 (#334) made,
+    from these very lists: see
+    :func:`waterfall.services.revision_tree.validate_revision`, which reads them and
+    raises rather than freezing a zero into an immutable document.
+
+    :attr:`unpriceable_facets` is the third of them and the one #334's review added:
+    a labour facet whose bearing task has no dates produces *no* priced line, so it
+    could never appear in ``missing_cost_rates`` -- and a zero was being frozen with
+    nothing at all beside it. See :class:`UnpriceableFacet`.
     """
 
     revision_id: int
@@ -291,8 +345,14 @@ class RevisionPricing:
     #: lookup :meth:`published_amount_of` answers from. See that method for why the
     #: two mappings both exist and are not each other's rounding.
     published_amount_by_node: Mapping[int, Decimal]
+    #: The *year by year* detail behind that total, in the same unit, keyed by node
+    #: id -- what :meth:`breakdown_of` answers from and what a frozen line is cut at.
+    published_breakdown_by_node: Mapping[int, tuple[PricedYear, ...]]
     missing_cost_rates: tuple[tuple[CostCategory, int], ...]
     missing_inflation_years: tuple[int, ...]
+    #: The facets the engine could price into no year at all -- reported here and
+    #: refused by a validation, like the two lists above. See :class:`UnpriceableFacet`.
+    unpriceable_facets: tuple[UnpriceableFacet, ...]
 
     def amount_of(self, project: domain.Project, facet: domain.CostFacet) -> Decimal:
         """This engine, as the :data:`~waterfall.domain.revision.pricing.AmountResolver`
@@ -313,6 +373,30 @@ class RevisionPricing:
         signature the protocol fixes.
         """
         return self.amount_by_node.get(facet.node_id, Decimal("0"))
+
+    def breakdown_of(
+        self, project: domain.Project, facet: domain.CostFacet
+    ) -> tuple[PricedYear, ...]:
+        """This engine, as the
+        :data:`~waterfall.domain.revision.pricing.BreakdownResolver` the validation of
+        a revision takes (E14-08, #334).
+
+        The third and last way this engine reaches the pure domain, and the only one
+        that hands over more than a number: a frozen line carries the annual rate and
+        the inflation coefficient it was priced under, and those exist **per year**,
+        so what crosses the boundary is one :class:`~waterfall.domain.revision.PricedYear`
+        per year rather than a scalar no rate table could ever be checked against.
+        The labels stay the domain's to copy -- see the class it feeds.
+
+        Amounts are the **published** ones, rounded per priced line exactly as
+        :meth:`published_amount_of` rounds them, so that the total of a frozen
+        document equals the sum of the lines it shows. Rounding the node total
+        instead would make a document whose own rows do not add up to it (#368).
+
+        ``project`` is unread, like the two resolvers above, and is part of the
+        signature the protocol fixes.
+        """
+        return self.published_breakdown_by_node.get(facet.node_id, ())
 
     def published_amount_of(self, project: domain.Project, facet: domain.CostFacet) -> Decimal:
         """:meth:`amount_of`, in the unit an API response is allowed to carry (#368).
@@ -632,6 +716,8 @@ def price_loaded_revision(db: Session, loaded: LoadedRevision) -> RevisionPricin
     lines: list[PricedLine] = []
     amount_by_node: dict[int, Decimal] = {}
     published_amount_by_node: dict[int, Decimal] = {}
+    published_breakdown_by_node: dict[int, tuple[PricedYear, ...]] = {}
+    unpriceable_facets: list[UnpriceableFacet] = []
     for cost_node in cost_nodes:
         node_lines = _priced_lines_of(cost_node, hourly_rates, inflation)
         lines.extend(node_lines)
@@ -642,15 +728,145 @@ def price_loaded_revision(db: Session, loaded: LoadedRevision) -> RevisionPricin
         published_amount_by_node[cost_node.node.id] = sum(
             (amount_at_the_cent(line.amount) for line in node_lines), Decimal("0")
         )
+        published_breakdown_by_node[cost_node.node.id] = _priced_years(cost_node, node_lines)
+        unpriceable = _unpriceable_facet(cost_node, node_lines)
+        if unpriceable is not None:
+            unpriceable_facets.append(unpriceable)
 
     return RevisionPricing(
         revision_id=revision.id,
         lines=tuple(lines),
         amount_by_node=amount_by_node,
         published_amount_by_node=published_amount_by_node,
+        published_breakdown_by_node=published_breakdown_by_node,
         missing_cost_rates=tuple(missing_cost_rates),
         missing_inflation_years=tuple(missing_inflation_years),
+        unpriceable_facets=tuple(unpriceable_facets),
     )
+
+
+def _unpriceable_facet(
+    cost_node: _CostNode, node_lines: Sequence[PricedLine]
+) -> UnpriceableFacet | None:
+    """The facet, when it carries hours and the engine priced it into no line at all.
+
+    Keyed on the **observed outcome** -- hours on one side, an empty breakdown on the
+    other -- rather than on the one cause known today, so that any future way of
+    reaching "a chiffrage worth a thousand euros freezes at zero" is reported by this
+    same check instead of slipping past it. See :class:`UnpriceableFacet`.
+    """
+    facet = cost_node.facet
+    hours = facet.hours if facet.hours is not None else Decimal("0")
+    if node_lines or facet.nature is not domain.CostNature.LABOR or hours <= 0:
+        return None
+    plan = cost_node.bearing_plan
+    return UnpriceableFacet(
+        node_id=cost_node.node.id,
+        work_item_id=cost_node.node.work_item_id,
+        label=facet.label,
+        hours=hours,
+        bearing_node_id=None if cost_node.bearing is None else cost_node.bearing.id,
+        bearing_work_item_id=(
+            None if cost_node.bearing is None else cost_node.bearing.work_item_id
+        ),
+        bearing_task_name=None if plan is None else plan.name,
+        reason=(
+            UnpriceableReason.BEARING_TASK_UNDATED
+            if plan is None or plan.start_at is None or plan.finish_at is None
+            else UnpriceableReason.BEARING_TASK_EMPTY_RANGE
+        ),
+    )
+
+
+def _priced_years(cost_node: _CostNode, node_lines: Sequence[PricedLine]) -> tuple[PricedYear, ...]:
+    """The priced lines of one facet, in the shape the pure domain takes them in.
+
+    A projection and not a second computation, with two publication rules applied on
+    the way across -- and only on the way across, so that :class:`PricedLine` itself
+    stays the full-precision object every other consumer already reads.
+
+    **Amounts** are put into euros at the cent (:func:`amount_at_the_cent`), per
+    line, so that a frozen document totals to the sum of the rows it shows (#368).
+
+    **Hours** are put at the hundredth, the precision
+    `wf_revision_frozen_line.hours` stores at, and distributed so that the rows of
+    one facet add up to exactly the hours the facet carries
+    (:func:`frozen_hours`). Rounding each line on its own instead -- which is what
+    the column silently did, and what `wf_estimate_line` did before it -- turned ten
+    hours over three years into ``3.33 + 3.33 + 3.33 = 9.99``: a document whose own
+    hours contradicted the chiffrage it froze.
+
+    **Hours, rate and inflation are dropped entirely on a non-labour line.** The
+    engine fills them with ``0``/``0``/``1`` there, which are
+    :class:`PricedLine`'s deliberate neutral values -- they exist so the two engines
+    can be compared field by field (#364) -- but no ``wf_cost_rate`` row was read to
+    produce them: a disbursement is ``quantity x unit_cost``. Freezing ``0.0000`` in
+    the column whose documentation says "copied from `wf_cost_rate.hourly_rate`"
+    would give a filler the shape of a figure; the columns are nullable so that a
+    line can say "not applicable", and this is where it says it.
+
+    The identities and the labels are deliberately not projected -- the domain holds
+    them already and copies them itself, so that plugging an engine in never moves
+    the decision of *what a frozen line says* out of the domain (Règle 2).
+    """
+    if not node_lines:
+        return ()
+    if cost_node.facet.nature is not domain.CostNature.LABOR:
+        return tuple(
+            PricedYear(amount=amount_at_the_cent(line.amount), year=line.year)
+            for line in node_lines
+        )
+    facet_hours = cost_node.facet.hours if cost_node.facet.hours is not None else Decimal("0")
+    return tuple(
+        PricedYear(
+            amount=amount_at_the_cent(line.amount),
+            year=line.year,
+            hours=share,
+            hourly_rate=line.hourly_rate,
+            inflation_coefficient=line.inflation_coefficient,
+        )
+        for line, share in zip(node_lines, frozen_hours(facet_hours, len(node_lines)), strict=True)
+    )
+
+
+#: The hundredth of an hour: the precision `wf_revision_frozen_line.hours` stores at,
+#: and therefore the unit a frozen document *publishes* hours in -- the same kind of
+#: rule :data:`CENTS` is for money.
+HOURS = Decimal("0.01")
+
+
+def frozen_hours(total: Decimal, years: int) -> list[Decimal]:
+    """``total`` hours spread over ``years`` years, at the hundredth, **summing to it**.
+
+    Largest remainder: every share is the exact quotient rounded down to the
+    hundredth, and the cents left over are handed out one per year starting from the
+    **last**, so no share is ever more than one hundredth away from the exact
+    quotient and the total is exact. Ten hours over three years gives
+    ``3.33 + 3.33 + 3.34 = 10.00`` where a plain division stored in a
+    ``Numeric(14, 2)`` column gave ``9.99``.
+
+    The residue goes to the latest years and not the earliest by convention, that
+    being the direction the reading goes: a reader checking a multi-year chiffrage
+    reads the first year against the rate table and meets the adjustment last.
+
+    Amounts are **not** recomputed from these shares, and deliberately so: they are
+    the engine's own full-precision products rounded per line (#364's central
+    acceptance criterion is that those amounts have not moved, and #368's rule is
+    that they add up to the published total). So a frozen row is the record of what
+    was charged, not an invitation to re-multiply it -- what this function buys is
+    that the *hours* of a document add up to the chiffrage it froze.
+    """
+    if years <= 0:
+        return []
+    target = total.quantize(HOURS, rounding=ROUND_HALF_UP)
+    base = (target / years).quantize(HOURS, rounding=ROUND_DOWN)
+    shares = [base] * years
+    # `base` is the quotient rounded *down*, so the residue is non-negative and
+    # strictly smaller than one hundredth per year: the loop below can never run
+    # past the end of the list.
+    for offset in range(int((target - base * years) / HOURS)):
+        shares[years - 1 - offset] += HOURS
+    return shares
 
 
 def price_revision(db: Session, revision_id: int) -> RevisionPricing:
@@ -702,6 +918,11 @@ class RevisionAggregates(TypedDict):
     total_unburdened_cost: Decimal
     by_category: dict[str, Decimal]
     by_cost_code: dict[str, Decimal]
+    #: The facets the engine could put in no year at all, carried through from
+    #: :attr:`RevisionPricing.unpriceable_facets` so that a reader of the totals sees
+    #: *why* a labour total is zero, and knows what to fix before a validation
+    #: refuses it. See :class:`UnpriceableFacet`.
+    unpriceable_facets: list[UnpriceableFacet]
     missing_cost_rates: list[tuple[CostCategory, int]]
     missing_inflation_years: list[int]
 
@@ -785,6 +1006,7 @@ def aggregates_of_pricing(db: Session, pricing: RevisionPricing) -> RevisionAggr
         "total_unburdened_cost": Decimal("0"),
         "by_category": {},
         "by_cost_code": {},
+        "unpriceable_facets": list(pricing.unpriceable_facets),
         "missing_cost_rates": list(pricing.missing_cost_rates),
         "missing_inflation_years": list(pricing.missing_inflation_years),
     }

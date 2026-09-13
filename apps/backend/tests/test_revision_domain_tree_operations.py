@@ -10,7 +10,7 @@ calendar resynchronisation and the facet-level writes.
 from __future__ import annotations
 
 import copy
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
@@ -95,6 +95,7 @@ from waterfall.domain.revision.facets import (
     set_task_dates,
     set_task_duration,
 )
+from waterfall.domain.revision.pricing import PricedYear
 from waterfall.domain.revision.reconciliation import reconcile_forecast_to_budget
 from waterfall.domain.revision.tree import links_of
 
@@ -1412,7 +1413,7 @@ def test_a_line_without_a_cost_category_freezes_without_a_category_code(bench: B
 # --------------------------------------------------------------------------------------
 
 
-def _exploding_amount(project: Project, facet: CostFacet) -> Decimal:
+def _exploding_breakdown(project: Project, facet: CostFacet) -> Sequence[PricedYear]:
     raise ArithmeticError(f"no rate table for {facet.label} of project {project.id}")
 
 
@@ -1425,12 +1426,75 @@ def test_a_validation_failing_midway_leaves_the_previous_revision_validated(
     second = copy_revision(project, revision, now=NOW)
 
     with pytest.raises(ArithmeticError):
-        validate_revision(project, second, now=NOW, amount_of=_exploding_amount)
+        validate_revision(project, second, now=NOW, breakdown_of=_exploding_breakdown)
 
     assert revision.status is RevisionStatus.VALIDATED
     assert second.status is RevisionStatus.DRAFT
     assert second.frozen_lines == []
     assert second.lock_version == 0
+    assert check_all_invariants(project) == []
+
+
+def test_a_cost_facet_spread_over_three_years_freezes_three_lines(bench: Bench) -> None:
+    """E14-08 (#334): a frozen line is cut per year, not per cost facet.
+
+    The resolver is the seam the calculation engine plugs into, and what it hands
+    over is one entry per year -- because an annual rate and an inflation coefficient
+    only exist per year. The domain copies each of them onto a line of its own, with
+    the identities and the labels it holds itself.
+    """
+    project, revision = bench.project, bench.revision
+    years = (2026, 2027, 2028)
+
+    def three_years(_project: Project, facet: CostFacet) -> Sequence[PricedYear]:
+        return [
+            PricedYear(
+                amount=Decimal("100.00"),
+                year=year,
+                hours=Decimal("4"),
+                hourly_rate=Decimal(f"{25 + index}.0000"),
+                inflation_coefficient=Decimal("1.02000000"),
+            )
+            for index, year in enumerate(years)
+        ]
+
+    validate_revision(project, revision, now=NOW, breakdown_of=three_years)
+
+    labor_item = revision.nodes[bench.labor].work_item_id
+    frozen = [line for line in revision.frozen_lines if line.work_item_id == labor_item]
+    assert [line.year for line in frozen] == list(years)
+    assert [line.hourly_rate for line in frozen] == [
+        Decimal("25.0000"),
+        Decimal("26.0000"),
+        Decimal("27.0000"),
+    ]
+    assert {line.inflation_coefficient for line in frozen} == {Decimal("1.02000000")}
+    # Three lines per facet, and the invariant checker is satisfied all the same:
+    # INV-24 asks that every cost facet be represented, not that it be represented once.
+    assert len(revision.frozen_lines) == 3 * len(revision.cost_facets)
+    assert check_all_invariants(project) == []
+
+
+def test_a_cost_facet_the_resolver_prices_nothing_for_still_freezes_one_line(
+    bench: Bench,
+) -> None:
+    """A line worth zero, never a line that vanished.
+
+    The engine prices nothing for a labour facet whose bearing task has no dates --
+    there is no year to spread its hours over. Dropping it from the document would
+    make a chiffrage *disappear* from a financial document instead of showing up in
+    it at zero, and would leave INV-24 reporting a facet with no line.
+    """
+    project, revision = bench.project, bench.revision
+
+    def nothing(_project: Project, _facet: CostFacet) -> Sequence[PricedYear]:
+        return []
+
+    validate_revision(project, revision, now=NOW, breakdown_of=nothing)
+
+    assert len(revision.frozen_lines) == len(revision.cost_facets)
+    assert {line.amount for line in revision.frozen_lines} == {Decimal("0")}
+    assert {line.year for line in revision.frozen_lines} == {None}
     assert check_all_invariants(project) == []
 
 

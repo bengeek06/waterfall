@@ -33,8 +33,12 @@ from _revision_db_support import (
     seed_reference_data,
 )
 from waterfall.db.session import get_session_factory
+from waterfall.domain import revision as domain
 from waterfall.models.revision import (
+    ProjectRevision,
+    ProjectRevisionPointer,
     RevisionCostFacet,
+    RevisionFrozenLine,
     RevisionNode,
     RevisionPlanFacet,
     WorkItem,
@@ -437,3 +441,197 @@ def test_the_reference_seed_builds_a_usable_project() -> None:
         assert reference.project_id > 0
         assert reference.calendar_id > 0
         assert reference.role_id > 0
+
+
+# --------------------------------------------------------------------------------------
+# The frozen document and the project's revision pointers (E14-08, issue #334)
+# --------------------------------------------------------------------------------------
+
+
+def _insert_frozen_line(
+    session: Session,
+    revision: ProjectRevision,
+    work_item: WorkItem,
+    *,
+    year: int | None,
+    nature: str = "labor",
+    cost_code: str | None = None,
+) -> RevisionFrozenLine:
+    line = RevisionFrozenLine(
+        revision_id=revision.id,
+        work_item_id=work_item.id,
+        bearing_work_item_id=None,
+        label="Etude",
+        nature=nature,
+        cost_code=cost_code,
+        year=year,
+        quantity=Decimal("1"),
+        hours=Decimal("5"),
+        hourly_rate=Decimal("100.0000"),
+        inflation_coefficient=Decimal("1.00000000"),
+        amount=Decimal("500.00"),
+    )
+    session.add(line)
+    session.flush()
+    return line
+
+
+def _two_frozen_lines_of_one_work_item_in_one_year(session: Session) -> None:
+    """The grain of the document: one line per (chiffrage, year), never two."""
+    reference = seed_reference_data(session)
+    revision = insert_revision(session, reference, status="validated")
+    work_item = insert_work_item(session, reference, kind="cost")
+    _insert_frozen_line(session, revision, work_item, year=2026)
+    # Another year of the same chiffrage is exactly what the grain is for.
+    _insert_frozen_line(session, revision, work_item, year=2027)
+
+    with pytest.raises(IntegrityError):
+        _insert_frozen_line(session, revision, work_item, year=2026)
+    session.rollback()
+
+
+def test_two_frozen_lines_of_one_work_item_in_one_year_are_rejected() -> None:
+    with get_session_factory()() as session:
+        _two_frozen_lines_of_one_work_item_in_one_year(session)
+
+
+def _two_year_less_frozen_lines_of_one_work_item(session: Session) -> None:
+    """The year-less row: uniqueness is the **domain's**, and the docstring says so.
+
+    ``uq_wf_revision_frozen_line_year`` covers ``(revision_id, work_item_id, year)``
+    and SQL keeps NULLs distinct, so two rows with no year never collide -- the
+    database accepts them, as asserted below. What forbids the pair is INV-24 alone,
+    which counts ``(work_item_id, year)`` pairs including the null one, plus the fact
+    that ``_frozen_lines`` produces exactly one such row per facet.
+
+    Pinned rather than left implicit (#334 review, B3): "the constraint does not cover
+    this case" is a claim, and a claim in a docstring about a unique index is exactly
+    the kind that quietly becomes false.
+    """
+    reference = seed_reference_data(session)
+    revision = insert_revision(session, reference, status="validated")
+    work_item = insert_work_item(session, reference, kind="cost")
+    first = _insert_frozen_line(session, revision, work_item, year=None)
+    second = _insert_frozen_line(session, revision, work_item, year=None)
+
+    assert first.id != second.id
+    session.rollback()
+
+
+def test_the_database_does_not_hold_the_year_less_frozen_line_unique() -> None:
+    with get_session_factory()() as session:
+        _two_year_less_frozen_lines_of_one_work_item(session)
+
+
+def test_postgres_does_not_hold_the_year_less_frozen_line_unique(
+    postgres_app_database_url: str,
+) -> None:
+    with postgres_session(postgres_app_database_url) as session:
+        _two_year_less_frozen_lines_of_one_work_item(session)
+
+
+def test_the_domain_is_what_refuses_two_year_less_frozen_lines() -> None:
+    """The other half of B3: what the database lets through, INV-24 catches."""
+    project = domain.Project(id=1)
+    work_item = domain.WorkItem(id=1, project_id=1, kind=domain.WorkItemKind.COST)
+    project.work_items[work_item.id] = work_item
+    revision = domain.ProjectRevision(
+        id=1, project_id=1, version_number=1, status=domain.RevisionStatus.VALIDATED
+    )
+    node = domain.RevisionNode(id=1, revision_id=1, work_item_id=work_item.id)
+    revision.nodes[node.id] = node
+    project.roles[1] = domain.Role(id=1, name="Developpeur")
+    revision.cost_facets[node.id] = domain.CostFacet(
+        node_id=node.id,
+        nature=domain.CostNature.LABOR,
+        label="Etude",
+        role_id=1,
+        hours=Decimal("10"),
+    )
+    revision.frozen_lines = [
+        domain.FrozenLine(
+            revision_id=1,
+            work_item_id=work_item.id,
+            bearing_work_item_id=None,
+            label="Etude",
+            nature=domain.CostNature.LABOR,
+            year=None,
+        )
+        for _ in range(2)
+    ]
+    project.revisions[revision.id] = revision
+
+    violations = domain.check_invariants(project, revision)
+
+    assert [violation.invariant for violation in violations] == ["INV-24"]
+
+
+def test_postgres_two_frozen_lines_of_one_work_item_in_one_year_are_rejected(
+    postgres_app_database_url: str,
+) -> None:
+    with postgres_session(postgres_app_database_url) as session:
+        _two_frozen_lines_of_one_work_item_in_one_year(session)
+
+
+def _pointer_to_a_revision_of_another_project(session: Session) -> None:
+    """A project points at a revision **of its own**, or at nothing.
+
+    What the composite foreign key buys over the single-column
+    ``fk_ms_project_reference_estimate`` it replaces, which accepted anybody's
+    estimate id as happily as its own.
+    """
+    mine = seed_reference_data(session, key="mine")
+    yours = seed_reference_data(session, key="yours", is_default=False)
+    foreign = insert_revision(session, yours, status="validated")
+
+    session.add(
+        ProjectRevisionPointer(project_id=mine.project_id, reference_revision_id=foreign.id)
+    )
+    with pytest.raises(IntegrityError):
+        session.flush()
+    session.rollback()
+
+
+def test_a_project_cannot_reference_a_revision_of_another_project() -> None:
+    with get_session_factory()() as session:
+        _pointer_to_a_revision_of_another_project(session)
+
+
+def test_postgres_a_project_cannot_reference_a_revision_of_another_project(
+    postgres_app_database_url: str,
+) -> None:
+    with postgres_session(postgres_app_database_url) as session:
+        _pointer_to_a_revision_of_another_project(session)
+
+
+def test_the_revision_pointers_close_no_new_foreign_key_cycle() -> None:
+    """The reason the pointers are a table and not two columns on `ms_project`.
+
+    ``sort_tables_and_constraints`` hands back, under a ``None`` table, exactly the
+    foreign keys it could not place in creation order -- the ones a cycle forces to
+    be added by a deferred ``ALTER``. Three of them exist, all three legacy
+    (``ms_project`` -> `wf_planning`/`wf_estimate` -> ``ms_project``), and E14-12
+    (#339) removes them. Two pointer *columns* on `ms_project` would have made a
+    fourth, since `wf_revision` references `ms_project` in the other direction; one
+    table further out, the whole schema sorts in a single topological order.
+
+    Asserted on the exact set rather than on a count, so that removing the legacy
+    three in #339 fails here loudly instead of leaving the guard testing nothing.
+    """
+    from sqlalchemy.sql.ddl import sort_tables_and_constraints
+
+    from waterfall.db.base import Base
+
+    deferred = {
+        constraint.name
+        for table, constraints in sort_tables_and_constraints(list(Base.metadata.tables.values()))
+        if table is None
+        for constraint in constraints
+    }
+
+    assert deferred == {
+        "fk_ms_project_planning_reference",
+        "fk_ms_project_displayed_planning",
+        "fk_ms_project_reference_estimate",
+    }
+    assert "wf_project_revision_pointer" in Base.metadata.tables

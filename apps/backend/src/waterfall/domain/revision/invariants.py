@@ -525,7 +525,18 @@ def _check_inv_23(revision: ProjectRevision) -> list[InvariantViolation]:
 
 
 def _check_inv_24(revision: ProjectRevision) -> list[InvariantViolation]:
-    """Frozen lines exist for validated/superseded revisions only, one per cost facet."""
+    """Frozen lines exist for validated/superseded revisions only, at least one per facet.
+
+    "At least" and not "exactly" since E14-08 (#334): a frozen line is cut at the
+    grain of a **year**, so a labour facet borne by a task spanning three years
+    carries three of them, one per annual rate and inflation coefficient it was
+    priced under (see :func:`~waterfall.domain.revision.lifecycle._frozen_lines`).
+    What the invariant still pins is that no cost facet goes *unrepresented* -- a
+    facet the engine prices nothing for owes a zero line all the same -- and that no
+    frozen line describes a facet the revision does not carry. The years of one
+    facet are distinct, which is what keeps the document free of two lines a reader
+    could not tell apart.
+    """
     if revision.status is RevisionStatus.DRAFT:
         if revision.frozen_lines:
             return [
@@ -542,16 +553,27 @@ def _check_inv_24(revision: ProjectRevision) -> list[InvariantViolation]:
         for node_id in revision.cost_facets
         if node_id in revision.nodes
     }
-    produced = [line.work_item_id for line in revision.frozen_lines]
-    if sorted(produced) != sorted(expected):
-        return [
+    produced = {line.work_item_id for line in revision.frozen_lines}
+    violations: list[InvariantViolation] = []
+    if produced != expected:
+        violations.append(
             _violation(
                 "INV-24",
                 f"revision {revision.id} is {revision.status.value} with frozen lines for "
                 f"work items {sorted(produced)} but cost facets for {sorted(expected)}",
             )
-        ]
-    return []
+        )
+    years = [(line.work_item_id, line.year) for line in revision.frozen_lines]
+    violations.extend(
+        _violation(
+            "INV-24",
+            f"revision {revision.id} carries {years.count(key)} frozen lines for work item "
+            f"{key[0]} in year {key[1]}",
+        )
+        for key in sorted(set(years), key=lambda entry: (entry[0], entry[1] or 0))
+        if years.count(key) > 1
+    )
+    return violations
 
 
 def _check_inv_25(project: Project) -> list[InvariantViolation]:

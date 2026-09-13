@@ -1,0 +1,29 @@
+type: object
+required:
+- expected_lock_version
+properties:
+  expected_lock_version:
+    type: integer
+    maximum: 2147483647
+    minimum: 0
+  kind:
+    anyOf:
+    - type: string
+      enum:
+      - initial
+      - contract_reference
+      - forecast_remaining
+    - type: 'null'
+  note:
+    anyOf:
+    - type: string
+      maxLength: 10000
+    - type: 'null'
+description: >-
+  Creation d'un brouillon reproduisant une revision existante (INV-07). `kind`
+  absent conserve celle de la source ; le nommer est la maniere de produire les
+  deux documents derives du modele -- un `contract_reference` copie du devis qui
+  a emporte la commande, un `forecast_remaining` copie du budget auquel il sera
+  compare. `expected_lock_version` est celui de la **source** et garde ce qui est
+  copie : une source qui a bouge depuis la lecture produirait la copie d'un arbre
+  que l'appelant n'a jamais vu.

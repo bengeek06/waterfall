@@ -205,7 +205,7 @@ def test_migration_upgrade_creates_expected_schema() -> None:
 
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260911_0014"
+                == "20260913_0015"
             )
 
 
@@ -477,7 +477,7 @@ def test_calendar_default_flag_migration_backfills_standard_and_enforces_uniquen
 
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260911_0014"
+                == "20260913_0015"
             )
 
         # STANDARD is already backfilled to is_default=1 above, so a second row
@@ -960,7 +960,7 @@ def _assert_create_all_schema_can_be_stamped_by_migrate_up(database_url: str) ->
     _run_alembic(database_url, "head")
 
     with _disposable_engine(database_url) as engine, engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260911_0014"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260913_0015"
         standard = connection.execute(
             text("SELECT id, is_active, is_default FROM wf_calendar WHERE code = 'STANDARD'")
         ).one()
@@ -1080,7 +1080,7 @@ def test_legacy_prepare_reuses_empty_alembic_version_table() -> None:
         with _disposable_engine(database_url) as engine, engine.connect() as connection:
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260911_0014"
+                == "20260913_0015"
             )
 
 
@@ -1108,7 +1108,7 @@ def test_create_all_schema_before_planning_revision_is_repaired_then_migrated() 
         with _disposable_engine(database_url) as engine, engine.connect() as connection:
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260911_0014"
+                == "20260913_0015"
             )
             planning_columns = {
                 column["name"] for column in inspect(connection).get_columns("wf_planning")
@@ -1215,7 +1215,7 @@ def test_schema_revision_check_rejects_database_behind_head() -> None:
             assert_database_schema_current(engine)
 
     assert error.value.current_revision == "20260901_0005"
-    assert error.value.expected_revision == "20260911_0014"
+    assert error.value.expected_revision == "20260913_0015"
     assert "Run `make migrate-up`" in str(error.value)
 
 
@@ -1261,7 +1261,7 @@ def test_postgres_migration_upgrade_head_succeeds(postgres_database_url: str) ->
             "wf_estimate",
             "wf_estimate_task_row",
         }.issubset(table_names)
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260911_0014"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260913_0015"
 
 
 def test_postgres_project_external_uid_accepts_canonical_guid(
@@ -1398,7 +1398,7 @@ def test_project_cost_code_migration_backfills_root_from_code_and_prj_fallback()
 
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260911_0014"
+                == "20260913_0015"
             )
 
 
@@ -2678,3 +2678,112 @@ def test_postgres_revision_model_migration_round_trip(postgres_database_url: str
 
     with _disposable_engine(postgres_database_url) as engine, engine.connect() as connection:
         assert set(inspect(connection).get_table_names()) >= _REVISION_MODEL_TABLES
+
+
+# --------------------------------------------------------------------------------------
+# E14-08 (#334): the frozen lines and the project's single revision pointer
+# --------------------------------------------------------------------------------------
+
+_LIFECYCLE_TABLES = frozenset({"wf_revision_frozen_line", "wf_project_revision_pointer"})
+
+_LIFECYCLE_MIGRATION = (
+    BACKEND_DIR / "migrations" / "versions" / "20260913_0015_revision_frozen_lines_and_pointer.py"
+)
+
+
+def test_lifecycle_migration_upgrade_holds_no_destructive_operation() -> None:
+    """E14-08 is additive too, and for the same reason as E14-03.
+
+    The three `ms_project` pointers, `wf_estimate.planning_id` and their foreign-key
+    cycle are still read by live code at this point of the EPIC -- the amended scope
+    of #334 says so in as many words -- so removing any of them here would leave the
+    branch uncompilable. E14-12 (#339) is the destructive counterpart.
+    """
+    upgrade = _migration_function(_LIFECYCLE_MIGRATION, "upgrade")
+
+    destructive = sorted(_called_operations(upgrade) & _DESTRUCTIVE_MIGRATION_OPERATIONS)
+    assert destructive == [], (
+        f"E14-08 must stay strictly additive, its upgrade() calls {destructive}"
+    )
+    assert "create_table" in _called_operations(upgrade), (
+        "the tree walk found no create_table either: it is not reading the migration"
+    )
+
+
+def test_lifecycle_migration_creates_its_tables_and_leaves_the_old_pointers_alone() -> None:
+    with TemporaryDirectory() as temporary_directory:
+        database_url = f"sqlite+pysqlite:///{Path(temporary_directory) / 'migration.db'}"
+        _run_alembic(database_url, "head")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            inspector = inspect(connection)
+            table_names = set(inspector.get_table_names())
+            assert table_names >= _LIFECYCLE_TABLES
+            assert table_names >= _LEGACY_TABLES_E14_03_MUST_NOT_TOUCH
+
+            project_columns = {column["name"] for column in inspector.get_columns("ms_project")}
+            assert {
+                "planning_reference_id",
+                "displayed_planning_id",
+                "reference_estimate_id",
+            } <= project_columns
+            estimate_columns = {column["name"] for column in inspector.get_columns("wf_estimate")}
+            assert "planning_id" in estimate_columns
+
+            revision_index_names = {index["name"] for index in inspector.get_indexes("wf_revision")}
+            assert "uq_wf_revision_project_id" in revision_index_names
+
+
+def test_lifecycle_migration_is_reversible() -> None:
+    with TemporaryDirectory() as temporary_directory:
+        database_url = f"sqlite+pysqlite:///{Path(temporary_directory) / 'migration.db'}"
+        _run_alembic(database_url, "head")
+        _downgrade_alembic(database_url, "20260911_0014")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            table_names = set(inspect(connection).get_table_names())
+            assert not (_LIFECYCLE_TABLES & table_names)
+            # The tables of E14-03 are *not* taken down with them.
+            assert table_names >= _REVISION_MODEL_TABLES
+            assert (
+                connection.scalar(text("SELECT version_num FROM alembic_version"))
+                == "20260911_0014"
+            )
+
+        _run_alembic(database_url, "head")
+
+        with _disposable_engine(database_url) as engine, engine.connect() as connection:
+            assert set(inspect(connection).get_table_names()) >= _LIFECYCLE_TABLES
+
+
+def test_postgres_lifecycle_migration_round_trip(postgres_database_url: str) -> None:
+    """PostgreSQL variant: two composite foreign keys pointing at a unique *index*.
+
+    That is the shape SQLite cannot tell apart from a unique constraint and
+    PostgreSQL can, so it is the one worth running on the production dialect --
+    together with the two partial indexes the previous migration left behind.
+    """
+    _run_alembic(postgres_database_url, "head")
+
+    with _disposable_engine(postgres_database_url) as engine, engine.connect() as connection:
+        inspector = inspect(connection)
+        assert set(inspector.get_table_names()) >= _LIFECYCLE_TABLES
+        pointer_keys = {
+            key["name"] for key in inspector.get_foreign_keys("wf_project_revision_pointer")
+        }
+        assert {
+            "fk_wf_project_revision_pointer_reference",
+            "fk_wf_project_revision_pointer_displayed",
+        } <= pointer_keys
+
+    _downgrade_alembic(postgres_database_url, "20260911_0014")
+
+    with _disposable_engine(postgres_database_url) as engine, engine.connect() as connection:
+        table_names = set(inspect(connection).get_table_names())
+        assert not (_LIFECYCLE_TABLES & table_names)
+        assert table_names >= _REVISION_MODEL_TABLES
+
+    _run_alembic(postgres_database_url, "head")
+
+    with _disposable_engine(postgres_database_url) as engine, engine.connect() as connection:
+        assert set(inspect(connection).get_table_names()) >= _LIFECYCLE_TABLES

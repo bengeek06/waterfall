@@ -20,7 +20,7 @@ from __future__ import annotations
 import copy
 import json
 from collections.abc import Callable, Mapping
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from types import ModuleType
@@ -1131,7 +1131,16 @@ def test_inv_24_violated_by_a_validated_revision_missing_a_frozen_line(
     assert "INV-24" in violations_of(project, revision)
 
 
-def test_inv_24_validation_produces_one_frozen_line_per_cost_facet(bench: Bench) -> None:
+def test_inv_24_validation_produces_at_least_one_frozen_line_per_cost_facet(
+    bench: Bench,
+) -> None:
+    """The default resolver prices one year per facet, so "at least one" is one here.
+
+    The plural is what E14-08 (#334) made room for: the calculation engine hands the
+    domain one entry **per year**, and a facet spread over three years then carries
+    three lines. The invariant is about coverage -- no facet without a line, no line
+    without a facet -- and no longer about a count.
+    """
     project, revision = bench.project, bench.revision
 
     validate_revision(project, revision, now=NOW)
@@ -1139,6 +1148,15 @@ def test_inv_24_validation_produces_one_frozen_line_per_cost_facet(bench: Bench)
     assert len(revision.frozen_lines) == len(revision.cost_facets) == 3
     assert revision.validated_at == NOW
     assert_sound(project, revision)
+
+
+def test_inv_24_violated_by_two_frozen_lines_of_one_facet_in_one_year(bench: Bench) -> None:
+    """The one thing the per-year grain must not allow: two lines a reader cannot tell apart."""
+    project, revision = bench.project, bench.revision
+    validate_revision(project, revision, now=NOW)
+    revision.frozen_lines.append(replace(revision.frozen_lines[0]))
+
+    assert violations_of(project, revision) == ["INV-24"]
 
 
 # --------------------------------------------------------------------------------------

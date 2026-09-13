@@ -656,7 +656,7 @@ def test_postgres_two_concurrent_writes_from_the_same_lock_version_serialize(
 def _write_attempts(
     session: Session, tree: Tree, *, expected_lock_version: int = 0
 ) -> list[tuple[str, Callable[[], object]]]:
-    """Every write this service exposes, one call each -- all eight of them.
+    """Every write this service exposes, one call each.
 
     Exhaustive on purpose, exactly like the domain's own INV-03 matrix: each of
     these goes through ``_claim_revision``, but nothing would stop the route work
@@ -792,6 +792,15 @@ def _write_attempts(
                 expected_lock_version=expected_lock_version,
             ),
         ),
+        (
+            # E14-08 (#334): validating is a write like any other, and the one whose
+            # *point* is that no further write will be accepted. It goes through the
+            # same claim, so a validated revision cannot be validated again.
+            "validate_revision",
+            lambda: revision_tree.validate_revision(
+                session, tree.revision_id, expected_lock_version=expected_lock_version
+            ),
+        ),
     ]
 
 
@@ -906,15 +915,29 @@ def test_every_service_write_claims_the_revision_before_it_reads_the_tree(
     monkeypatch.setattr(revision_tree, "_claim_revision", claiming)
     monkeypatch.setattr(revision_tree, "load_revision", loading)
 
+    refused: list[str] = []
     with get_session_factory()() as session:
         tree = _seed_tree(session)
         for label, attempt in _write_attempts(session, tree):
             calls.clear()
-            attempt()
+            try:
+                attempt()
+            except revision_tree.RevisionTreeError:
+                # A refusal this service raises *after* claiming and loading leaves
+                # the order under test exactly as it found it: what this guard
+                # asserts is where the lock is taken, never whether the operation
+                # then succeeds. `validate_revision` is the one that lands here --
+                # this fixture's MO lines are borne by dateless tasks, which is
+                # `REVISION_UNPRICEABLE_FACET` (#334 review, H2) -- and it is named
+                # below so that a *second* write quietly starting to refuse shows up
+                # instead of hiding behind this `except`.
+                refused.append(label)
             assert calls == ["claim", "load"], f"{label} read the tree outside the lock: {calls}"
             # Each attempt starts from the seeded tree again, so every one of them
             # runs against the same state and the same lock version.
             session.rollback()
+
+    assert refused == ["validate_revision"]
 
 
 def test_the_write_matrix_guards_fail_on_a_write_that_forgot_the_lock() -> None:

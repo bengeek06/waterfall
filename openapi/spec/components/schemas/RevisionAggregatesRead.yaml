@@ -6,6 +6,7 @@ required:
 - total_unburdened_cost
 - by_category
 - by_cost_code
+- unpriceable_facets
 - missing_cost_rates
 - missing_inflation_years
 properties:
@@ -30,6 +31,10 @@ properties:
     additionalProperties:
       type: string
       pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+  unpriceable_facets:
+    type: array
+    items:
+      $ref: ./RevisionUnpriceableFacetRead.yaml
   missing_cost_rates:
     type: array
     items:
@@ -48,3 +53,8 @@ description: >-
   Tous les montants sont publies au centime : le moteur somme les produits en pleine
   precision, et l'arrondi a deux decimales -- que portait jusqu'ici la colonne
   `Numeric(16, 2)` du devis -- est applique a la frontiere de reponse.
+  `unpriceable_facets` signale l'autre manque, aux memes conditions que
+  `missing_cost_rates` : un chiffrage porte par une tache sans dates n'est etale sur
+  aucune annee, donc valorise sur aucune ligne, donc invisible pour
+  `missing_cost_rates`. Les deux refusent une validation et les deux sont nommes ici,
+  parce que c'est sur cet ecran que l'utilisateur les corrige.

@@ -35,11 +35,15 @@ give. They fall in three groups:
   denormalised ``project_id`` on `wf_revision_node` plus two composite foreign
   keys; it is tracked as its own issue, and the adapter refuses a node whose work
   item is not one of the loaded project's meanwhile;
-* *about a table this issue does not create*: the frozen lines of a validated
-  revision (INV-01, INV-23, INV-24) have no table here -- see
-  :class:`RevisionCostFacet` -- and `wf_revision_frozen_line` comes with the
-  validation of a revision, E14-08 (#334). INV-26 is in the same case for the
-  lotissement, see the paragraph above.
+* *about the frozen document, and only expressible on a whole revision*: that a
+  frozen line's bearing task is the first ancestor carrying a planning facet
+  (INV-01), that it references no mutable structure (INV-23) and that every cost
+  facet of a validated revision has one (INV-24). `wf_revision_frozen_line` exists
+  since E14-08 (#334) -- see :class:`RevisionFrozenLine` -- and its schema carries
+  INV-23 the only way a schema can, by declaring no column a node or a facet could
+  be named in; the other two are properties of a set of rows, which the domain's
+  invariant checker evaluates. INV-26 is in the case the paragraph above describes,
+  for the lotissement.
 
 Everything else -- INV-04, INV-08, INV-09, INV-12, INV-13, INV-15, INV-16,
 INV-17, INV-19, INV-20, INV-21, INV-22, INV-25 -- is carried by a constraint of
@@ -165,6 +169,16 @@ class ProjectRevision(Base):
         # `source_revision_id`'s self-foreign-key, which PostgreSQL scans on every
         # delete of a revision without it.
         Index("idx_wf_revision_source_revision", "source_revision_id"),
+        # Target of `wf_project_revision_pointer`'s two composite foreign keys, and
+        # declared for them alone -- redundant with the primary key on its own, the
+        # same shape `uq_wf_work_item_id_kind` above already uses. It is what makes
+        # "the revision a project points at belongs to that project" a database
+        # constraint rather than an application rule (E14-08, #334).
+        # A unique *index* and not a ``UniqueConstraint``: SQLite has no ``ALTER
+        # TABLE ADD CONSTRAINT``, so an additive migration can only add the former,
+        # and PostgreSQL accepts a unique index as the target of a foreign key just
+        # as it accepts a constraint. Same shape as `uq_wf_revision_validated_per_kind`.
+        Index("uq_wf_revision_project_id", "project_id", "id", unique=True),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -335,7 +349,7 @@ class RevisionCostFacet(Base):
     ``cost_category_id``/``unit_cost`` the non-labour ones, and the check
     constraint below is INV-19/INV-20 verbatim. Derived amounts -- MO, Achat,
     PRU -- are never stored here: they are computed, and only frozen at
-    validation time onto the frozen lines of the validated revision.
+    validation time onto :class:`RevisionFrozenLine`, one row per year.
 
     ``node_kind`` plays exactly the role it plays on the planning facet, pinned
     to ``cost`` instead.
@@ -483,3 +497,217 @@ class RevisionNodeLink(Base):
     link_type: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1)
     lag_tenth_minute: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     lag_format: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+
+
+class RevisionFrozenLine(Base):
+    """One line of the immutable financial document a validated revision produces.
+
+    Replaces `wf_estimate_line`, and keeps its grain: **one row per (chiffrage,
+    year)**. A labour facet borne by a task spanning three years produces three rows,
+    each carrying the annual rate and the inflation coefficient it was priced under,
+    because those two only exist per year -- a single row would have to average them
+    into a figure no `wf_cost_rate` row contains and no reader could check. The
+    reasoning in full, and the one case where a facet produces a zero row rather than
+    none, is on :func:`~waterfall.domain.revision.lifecycle._frozen_lines`.
+
+    **References no mutable structure** (INV-23, Règle 2): no node id, no facet id,
+    no line of another revision. The two identities it carries are ``work_item``
+    ones -- the chiffrage itself and its bearing task -- because that is the identity
+    the comparison "reference budget vs reste à engager" joins on, years later,
+    whatever became of the trees in between. Everything else is a *copy*: the labels
+    are copied so that renaming a role or a cost category cannot rewrite a validated
+    document, and the amounts are copied because a rate table edited in 2031 must not
+    move a 2026 budget.
+
+    ``cost_code`` is one of those copies, and the reason it is a ``String`` and not a
+    ``cost_code_id`` is the whole of the rule above. `wf_estimate_line` and
+    `wf_estimate_cost_line`, the two tables this one replaces, both carried
+    ``cost_code_id`` -- "a frozen snapshot of the source line's ``cost_code_id`` at
+    validation time" (#63, E6-02) -- and the devis export publishes a column off it.
+    A frozen document that kept the id instead would have to join
+    `wf_project_cost_code` to say anything about imputation, that is to depend on a
+    tree a user may rename, move or delete between the validation and the reading;
+    the ventilation by code of a 2026 devis read in 2029 would then answer whatever
+    the tree says in 2029, or nothing at all. So the *code* is copied, like the
+    accounting code and the category code beside it, and no foreign key is created.
+
+    ``nature`` is carried rather than inferred for a neighbouring reason: this one
+    table merges what the legacy socle separated **by table** (`wf_estimate_line` for
+    the MO, `wf_estimate_cost_line` for the achats), and reconstructing that split
+    from ``role_name IS NOT NULL`` would make the document state by accident what it
+    used to state on purpose.
+
+    ``amount`` is in euros at the cent, rounded **per row** before anything is added
+    up (`estimate_calculation.amount_at_the_cent`), so that the total of a document
+    is the sum of what its rows display -- the publication rule #364 and #368 fixed
+    for every figure this product quotes.
+
+    No ``updated_at``: nothing updates a frozen line. INV-03 refuses every write on
+    the revision that owns it, and the store inserts these rows exactly once, at
+    validation time.
+    """
+
+    __tablename__ = "wf_revision_frozen_line"
+    __table_args__ = (
+        # One row per (chiffrage, year) -- the grain of the document. **This
+        # constraint does not cover the year-less row**: SQL keeps NULLs distinct, so
+        # `(revision_id, work_item_id, NULL)` never collides with itself and the
+        # database would accept two of them. What forbids the pair is INV-24 alone
+        # (`domain.invariants._check_inv_24`, which counts `(work_item_id, year)`
+        # pairs including the null one), plus the fact that `_frozen_lines` produces
+        # exactly one such row per facet by construction. It is the domain and not
+        # the database that holds uniqueness there, deliberately: a partial unique
+        # index over `COALESCE(year, ...)` would have to invent a sentinel year, and
+        # `ck_wf_revision_frozen_line_year` exists precisely so that no invented year
+        # is ever written down.
+        UniqueConstraint(
+            "revision_id", "work_item_id", "year", name="uq_wf_revision_frozen_line_year"
+        ),
+        # Mirrors `ck_wf_revision_cost_facet_nature`: the same two values, spelled
+        # the same way, because a reader partitioning a frozen document by nature and
+        # a reader partitioning the live facets by nature must be reading one vocabulary.
+        CheckConstraint(
+            "nature IN ('labor', 'non_labor')", name="ck_wf_revision_frozen_line_nature"
+        ),
+        CheckConstraint("quantity > 0", name="ck_wf_revision_frozen_line_quantity"),
+        CheckConstraint("hours IS NULL OR hours >= 0", name="ck_wf_revision_frozen_line_hours"),
+        CheckConstraint(
+            "hourly_rate IS NULL OR hourly_rate >= 0", name="ck_wf_revision_frozen_line_rate"
+        ),
+        CheckConstraint(
+            "inflation_coefficient IS NULL OR inflation_coefficient > 0",
+            name="ck_wf_revision_frozen_line_inflation",
+        ),
+        # Deliberately `> 0` and not `>= 2000` like `ck_wf_cost_rate_year`: this year
+        # is copied from a forecast cash-out date the schema does not bound, and a
+        # check refusing it would refuse the *validation* of a revision over a date
+        # every write path accepts.
+        CheckConstraint("year IS NULL OR year > 0", name="ck_wf_revision_frozen_line_year"),
+        CheckConstraint("amount >= 0", name="ck_wf_revision_frozen_line_amount"),
+        # "Where does this work item appear in the frozen documents of the project?"
+        # -- the cross-version comparison these rows exist for -- and the referencing
+        # side of the two work-item foreign keys, which PostgreSQL does not index on
+        # its own. The revision side needs none: `uq_wf_revision_frozen_line_year`
+        # already starts with `revision_id`.
+        Index("idx_wf_revision_frozen_line_work_item", "work_item_id"),
+        Index("idx_wf_revision_frozen_line_bearing", "bearing_work_item_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    revision_id: Mapped[int] = mapped_column(ForeignKey("wf_revision.id"), nullable=False)
+    #: Identity of the chiffrage, the single link a frozen line keeps (INV-23).
+    work_item_id: Mapped[int] = mapped_column(ForeignKey("wf_work_item.id"), nullable=False)
+    #: Identity of the bearing task, null for a project-wide cost (INV-01).
+    bearing_work_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("wf_work_item.id"), nullable=True
+    )
+    label: Mapped[str] = mapped_column(String(512), nullable=False)
+    #: ``labor`` or ``non_labor``, copied from the facet -- see the class docstring.
+    nature: Mapped[str] = mapped_column(String(16), nullable=False)
+    bearing_task_name: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    role_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    accounting_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    category_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: The project cost code's ``code``, copied. Same width as
+    #: `wf_project_cost_code.code`, and no foreign key -- see the class docstring.
+    cost_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("1"))
+    #: The hours of the chiffrage falling in this year, at the hundredth, split so
+    #: that the rows of one facet add up **exactly** to the hours the facet carries
+    #: (`estimate_calculation.frozen_hours`). Null on a non-labour line.
+    hours: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
+    #: Same precision as `wf_cost_rate.hourly_rate`, which is where it is copied from
+    #: -- and **null when no such row was read**, which is the case of every
+    #: non-labour line: a disbursement is priced ``quantity x unit_cost``, no rate
+    #: table is consulted, and writing ``0.0000`` there would give a filler the shape
+    #: of a figure. These three columns are nullable to be able to say "not
+    #: applicable"; saying it is what they are for.
+    hourly_rate: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    #: Same precision as `wf_inflation_rate.coefficient`, likewise, and null on the
+    #: same lines and for the same reason.
+    inflation_coefficient: Mapped[Decimal | None] = mapped_column(Numeric(12, 8), nullable=True)
+    #: In euros at the cent -- see the class docstring.
+    amount: Mapped[Decimal] = mapped_column(Numeric(16, 2), nullable=False, default=Decimal("0"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+
+class ProjectRevisionPointer(Base):
+    """The two revisions a project designates: its reference and the one on screen.
+
+    One row per project, replacing the four pointers that had to agree with one
+    another -- `ms_project.planning_reference_id`, `ms_project.displayed_planning_id`,
+    `ms_project.reference_estimate_id` and `wf_estimate.planning_id`. There is one
+    reference because there is one revision carrying both facets, so the state where
+    a reference planning and a reference devis designate different versions is not
+    refused: it cannot be written down (EPIC #326).
+
+    Why a table of its own rather than two columns on `ms_project`
+    ---------------------------------------------------------------
+
+    Because `wf_revision` already references `ms_project`, so a pointer column *on*
+    `ms_project` would close a second foreign-key cycle -- the very
+    ``ms_project -> wf_planning/wf_estimate -> ms_project`` cycle the three
+    ``use_alter`` constraints of ``models/ms_core.py`` exist to work around and which
+    E14-12 (#339) removes. Holding the pointers one table further out keeps the whole
+    schema sortable in a single topological order: ``ms_project``, then
+    ``wf_revision``, then this table. Nothing has to be created by ``ALTER`` after the
+    fact, nothing has to be nulled out before a delete, and ``metadata.sort_tables``
+    answers without a cycle to break.
+
+    The lesson of `wf_revision.source_revision_id` (#329), applied: that pointer is a
+    plain, single-column foreign key precisely because it points *inside* its own
+    table and closes no cycle. A pointer is put where it does not create one.
+
+    The two composite foreign keys buy something the columns they replace never had:
+    ``(project_id, revision_id)`` is matched against ``wf_revision(project_id, id)``,
+    so a project can only ever point at a revision **of its own**. The legacy
+    ``fk_ms_project_reference_estimate`` was a single-column key that happily accepted
+    somebody else's estimate.
+
+    A ``NULL`` ``displayed_revision_id`` means "show the reference": the column names
+    the draft being worked on, not a duplicate of the reference.
+    """
+
+    __tablename__ = "wf_project_revision_pointer"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "reference_revision_id"],
+            ["wf_revision.project_id", "wf_revision.id"],
+            name="fk_wf_project_revision_pointer_reference",
+        ),
+        ForeignKeyConstraint(
+            ["project_id", "displayed_revision_id"],
+            ["wf_revision.project_id", "wf_revision.id"],
+            name="fk_wf_project_revision_pointer_displayed",
+        ),
+        # Referencing side of the two composite keys above, which PostgreSQL does not
+        # index on its own: every delete of a revision would scan this table.
+        Index("idx_wf_project_revision_pointer_reference", "reference_revision_id"),
+        Index("idx_wf_project_revision_pointer_displayed", "displayed_revision_id"),
+    )
+
+    #: Primary key *and* foreign key: a project has one row here, or none at all.
+    project_id: Mapped[int] = mapped_column(ForeignKey("ms_project.id"), primary_key=True)
+    #: The validated revision the project is run against, set when it enters `en_cours`.
+    reference_revision_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: The revision currently being worked on. NULL means "the reference one", and
+    #: NULL is also what a validation puts back here: this names *the draft on
+    #: screen*, and a validated revision is no longer one
+    #: (`project_lifecycle.clear_displayed_revision`).
+    displayed_revision_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    #: Maintained by the ORM (``onupdate``) and not by each write site, like
+    #: `wf_user.updated_at`: the three functions of `project_lifecycle` that move a
+    #: pointer would otherwise each have to remember, and the one that forgot would
+    #: leave a row claiming it had not changed since its creation.
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )

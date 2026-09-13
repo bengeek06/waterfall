@@ -56,6 +56,8 @@ no default calendar to inherit          409     ``PROJECT_CALENDAR_MISSING``
 work item already in the revision       409     ``REVISION_DUPLICATE_WORK_ITEM``
 external uid already taken              409     ``REVISION_EXTERNAL_UID_CONFLICT``
 lifecycle rule broken                   409     ``REVISION_LIFECYCLE_CONFLICT``
+rate table cannot price a validation    409     ``REVISION_RATE_COVERAGE_MISSING``
+chiffrage priced into no year at all    409     ``REVISION_UNPRICEABLE_FACET``
 concurrency refusal of the tree service 409     ``REVISION_WRITE_REFUSED``
 constraint this layer does not restate  409     ``REVISION_INTEGRITY_CONFLICT``
 selection cannot be moved that way      400     ``REVISION_SELECTION_INVALID``
@@ -118,7 +120,12 @@ from waterfall.services.revision_store import (
     RevisionNotFoundError,
     RevisionStoreError,
 )
-from waterfall.services.revision_tree import RevisionLockConflictError, RevisionTreeError
+from waterfall.services.revision_tree import (
+    RevisionLockConflictError,
+    RevisionRateCoverageError,
+    RevisionTreeError,
+    RevisionUnpriceableFacetError,
+)
 
 #: Stable code of INV-03, named once so #333 reuses the constant rather than the
 #: string. Covers ``validated`` and ``superseded`` alike: neither accepts a write,
@@ -149,6 +156,27 @@ _TRANSLATIONS: tuple[tuple[type[Exception], int, str], ...] = (
     (domain.DuplicateWorkItemError, status.HTTP_409_CONFLICT, "REVISION_DUPLICATE_WORK_ITEM"),
     (domain.ExternalUidError, status.HTTP_409_CONFLICT, "REVISION_EXTERNAL_UID_CONFLICT"),
     (domain.RevisionLifecycleError, status.HTTP_409_CONFLICT, "REVISION_LIFECYCLE_CONFLICT"),
+    # E14-08 (#334): a validation the rate table cannot price. Listed before its base
+    # ``RevisionTreeError`` like every other specific entry, and a 409 rather than a
+    # 400 because the request is impeccable -- what is missing is a row of the
+    # referential, which is a conflict with stored data and which completing the rate
+    # table repairs.
+    (
+        RevisionRateCoverageError,
+        status.HTTP_409_CONFLICT,
+        "REVISION_RATE_COVERAGE_MISSING",
+    ),
+    # E14-08 review (H2): the sibling refusal. A labour facet whose bearing task has
+    # no dates is priced into *no* line at all, so it appears in none of the
+    # ``(cost category, year)`` pairs the entry above is built from -- and was being
+    # frozen at zero with nothing at all reported beside it. A 409 for the same
+    # reason: the request is impeccable, what is missing is a date on another node,
+    # and dating it repairs the conflict.
+    (
+        RevisionUnpriceableFacetError,
+        status.HTTP_409_CONFLICT,
+        "REVISION_UNPRICEABLE_FACET",
+    ),
     (domain.SelectionError, status.HTTP_400_BAD_REQUEST, "REVISION_SELECTION_INVALID"),
     (domain.PositionError, status.HTTP_400_BAD_REQUEST, "REVISION_POSITION_INVALID"),
     (domain.TreeCycleError, status.HTTP_400_BAD_REQUEST, "REVISION_TREE_CYCLE"),

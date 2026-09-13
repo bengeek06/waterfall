@@ -98,6 +98,10 @@ paths:
     $ref: ./paths/revisions.yaml#/~1projects~1{projectId}~1revisions~1{revisionId}~1cost-lines
   /projects/{projectId}/revisions/{revisionId}/nodes/{nodeId}/cost:
     $ref: ./paths/revisions.yaml#/~1projects~1{projectId}~1revisions~1{revisionId}~1nodes~1{nodeId}~1cost
+  /projects/{projectId}/revisions/{revisionId}/copy:
+    $ref: ./paths/revisions.yaml#/~1projects~1{projectId}~1revisions~1{revisionId}~1copy
+  /projects/{projectId}/revisions/{revisionId}/validate:
+    $ref: ./paths/revisions.yaml#/~1projects~1{projectId}~1revisions~1{revisionId}~1validate
   /projects/{projectId}/revisions/{revisionId}/export.xlsx:
     $ref: ./paths/revisions.yaml#/~1projects~1{projectId}~1revisions~1{revisionId}~1export.xlsx
   /projects/{projectId}/revisions/{revisionId}/export-reconciliation.xlsx:

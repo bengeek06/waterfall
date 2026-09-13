@@ -60,7 +60,7 @@ held until the caller commits or rolls back.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Container, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -89,11 +89,12 @@ class RevisionTreeError(RuntimeError):
     and deliberately not a domain error: the two say "this state is wrong", this
     one says "the state was right, but not any more".
 
-    Never raised directly, and carrying a single subclass today: it is the base a
-    caller catches to mean "this service refused the write", and the seam a second
-    concurrency failure of this layer would be added under. An ``except
-    RevisionTreeError`` is therefore *not* dead code, even though only
-    :class:`RevisionLockConflictError` reaches it.
+    Never raised directly: it is the base a caller catches to mean "this service
+    refused the write". Three subclasses reach it -- the optimistic lock's
+    :class:`RevisionLockConflictError` and, since E14-08 (#334), the two refusals a
+    *validation* owes: :class:`RevisionRateCoverageError`, which the rate table
+    cannot price, and :class:`RevisionUnpriceableFacetError`, which no rate table
+    could price because the chiffrage has no year to be priced in.
     """
 
 
@@ -119,6 +120,68 @@ class RevisionLockConflictError(RevisionTreeError):
         self.revision_id: int = revision_id
         self.expected_lock_version: int = expected_lock_version
         self.current_lock_version: int = current_lock_version
+
+
+class RevisionRateCoverageError(RevisionTreeError):
+    """A validation was asked for while the rate table cannot price the revision.
+
+    Reported and never raised on a **read** -- ``GET .../aggregates`` prices the
+    line at a zero rate and names the gap beside it, because a draft whose 2031 rate
+    has not been entered yet still has to be readable (#364). A **validation** is the
+    opposite case and gets the opposite answer: it produces a document that is
+    immutable for good, and freezing a line at a rate of zero because a row is
+    missing from `wf_cost_rate` would be freezing an error rather than a price.
+
+    The refusal names its code and nothing else, like every other refusal of this
+    API. *Which* rates are missing is already an ordinary read -- the aggregates
+    endpoint returns the complete list in its body -- so restating it inside an error
+    payload would publish the same list under two shapes.
+    """
+
+    def __init__(
+        self,
+        revision_id: int,
+        missing_cost_rates: Sequence[tuple[object, int]],
+        missing_inflation_years: Sequence[int],
+    ) -> None:
+        super().__init__(
+            f"Revision {revision_id} cannot be validated: {len(missing_cost_rates)} "
+            f"(cost category, year) rate(s) and {len(missing_inflation_years)} inflation "
+            "coefficient(s) are missing from the referential. Complete the rate table, or "
+            "read GET /projects/{id}/revisions/{id}/aggregates for the full list"
+        )
+        self.revision_id: int = revision_id
+
+
+class RevisionUnpriceableFacetError(RevisionTreeError):
+    """A validation was asked for while a chiffrage has no year to be priced in.
+
+    The sibling of :class:`RevisionRateCoverageError`, and the gap #334's review
+    found beside it. A labour facet borne by a task with no dates produces **no**
+    priced line at all: there is no year to spread its hours over, so it lands in no
+    ``(cost category, year)`` pair, so the rate-coverage refusal above -- which is
+    built from exactly those pairs -- cannot see it. The facet was frozen at
+    ``0,00 EUR`` with ``missing_cost_rates: []`` beside it: a zero recorded as a
+    price, which is the one outcome the refusal above exists to prevent.
+
+    So the same answer, for the same reason, on a gap that reaches the document by a
+    neighbouring route. And the same asymmetry: ``GET .../aggregates`` reports these
+    facets in its body (``unpriceable_facets``) and prices nothing, because a draft
+    whose tasks are not scheduled yet must stay readable -- the remedy is to date the
+    bearing task, and a user cannot date what an unreadable screen will not show.
+
+    Names its code and nothing else, like every refusal of this API: *which* facets
+    are unpriceable is an ordinary read on the aggregates endpoint.
+    """
+
+    def __init__(self, revision_id: int, facets: Sequence[object]) -> None:
+        super().__init__(
+            f"Revision {revision_id} cannot be validated: {len(facets)} cost facet(s) carry "
+            "hours the engine can put in no year, their bearing task having no usable dates. "
+            "Freezing them would record 0.00 as their price. Date the bearing tasks, or read "
+            "GET /projects/{id}/revisions/{id}/aggregates for the full list"
+        )
+        self.revision_id: int = revision_id
 
 
 @dataclass(frozen=True)
@@ -175,10 +238,32 @@ class CreatedRevision(TreeWrite):
     ``lock_version`` is the *copy's* counter, which starts at 0: copying reads the
     source and writes a new revision, so the source's own counter is left exactly
     where it was.
+
+    ``kind`` is the kind the copy **was created with**, read back off the domain
+    object the store just persisted rather than recomputed by the caller. The route
+    used to answer with its own input, which is the same value right up to the day
+    it is not -- and a response that describes the request instead of the row is a
+    response that cannot report a default the service chose.
     """
 
     source_revision_id: int
     version_number: int
+    kind: domain.RevisionKind
+
+
+@dataclass(frozen=True)
+class ValidatedRevision(TreeWrite):
+    """What a validation produced: an immutable revision and its frozen document.
+
+    ``superseded_revision_ids`` is INV-22 made visible: validating replaces the
+    previously validated revision **of the same kind**, and a caller holding a stale
+    reference to it is told which one moved rather than discovering it later.
+    """
+
+    version_number: int
+    validated_at: datetime
+    frozen_line_count: int
+    superseded_revision_ids: tuple[int, ...]
 
 
 @dataclass(frozen=True)
@@ -307,7 +392,10 @@ def _claim_revision(db: Session, revision_id: int, expected_lock_version: int) -
       revision it was given -- again :func:`create_revision_from`, which writes a
       new revision and leaves the source's counter where it was -- can be replayed
       with the very same ``expected_lock_version`` and will succeed again. What
-      stops a double submission there belongs to the route (#352).
+      stops a double submission there belongs to the route (#352), and the route
+      cannot refuse it either: two drafts copied from one source is exactly what a
+      second variant of a chiffrage is. An idempotency token from the client is the
+      remedy, and it is #371's.
     """
     row = _lock_revision_row(db, revision_id)
     if row.status != domain.RevisionStatus.DRAFT.value:
@@ -986,17 +1074,24 @@ def create_revision_from(
     * **it is not idempotent.** Copying leaves the source's counter untouched, so
       two calls carrying the same ``expected_lock_version`` both pass the check
       and produce **two identical copies** -- a double-clicked button is enough.
-      The guard catches a stale read, not a repeat;
+      The guard catches a stale read, not a repeat. **Still open**, and deliberately:
+      the route cannot refuse the second call either, two drafts copied from one
+      source being exactly what a second variant of a chiffrage is. It takes an
+      idempotency token supplied by the client, which is #371's;
     * **two copies of the same project race on ``version_number``.** Concurrent
       calls from *different* sources of one project lock different rows, so they
       never wait for each other, and each allocates its version number from the
       revisions it can see. They then collide on
       ``uq_wf_revision_project_version`` as a raw ``IntegrityError``, which leaves
       the session unusable rather than raising a refusal a caller can act on.
+      **Closed by the route** since E14-08 (#334): ``POST .../revisions/{id}/copy``
+      locks the *project* row for the whole request, which serialises every
+      allocation of the project behind one row --
+      ``tests/test_revision_locking_postgres.py`` observes the second request
+      waiting on that lock rather than racing past it.
 
-    Both are the route's to close (idempotency key, or a project-level lock):
-    nothing in this signature can, since the contention is not on the row this
-    call locks.
+    Neither could be closed from this signature: the contention is not on the row
+    this call locks, which is why both remedies live one layer up.
     """
     # The one write that does not go through :func:`_claim_revision`: the source
     # is locked and version-checked like any other, but *not* required to be a
@@ -1019,4 +1114,96 @@ def create_revision_from(
         lock_version=copy.lock_version,
         source_revision_id=source_revision_id,
         version_number=copy.version_number,
+        kind=copy.kind,
     )
+
+
+def validate_revision(
+    db: Session, revision_id: int, *, expected_lock_version: int
+) -> ValidatedRevision:
+    """Validate a draft: freeze its document, make it immutable, supersede the previous one.
+
+    The one write of this service whose *point* is that no further write will be
+    accepted: the revision leaves ``draft``, its cost facets are frozen into
+    `wf_revision_frozen_line`, and from the next request on every route of both
+    facets answers ``REVISION_IMMUTABLE`` on it -- the same guard, in the same place
+    (:func:`_claim_revision`), which is what makes "a validated revision refuses
+    every write" one behaviour rather than one per facet.
+
+    Three things happen in this order, and the order is the whole of it:
+
+    1. **the engine prices the revision**, and two gaps refuse the validation
+       outright: a rate table that cannot cover it
+       (:class:`RevisionRateCoverageError`) and a chiffrage the engine can put in no
+       year at all (:class:`RevisionUnpriceableFacetError`). A read tolerates both
+       and names them in its body; a document frozen for good tolerates neither,
+       because the row it would write is a zero in the column a price goes in;
+    2. **the domain validates**, taking the engine's yearly breakdown as its
+       :data:`~waterfall.domain.revision.pricing.BreakdownResolver`, so that each
+       frozen line carries the annual rate and the inflation coefficient it was
+       actually priced under -- one line per year, see
+       :func:`~waterfall.domain.revision.lifecycle._frozen_lines`;
+    3. **the previously validated revision of the same kind is superseded** in the
+       database *before* the new one is written. The order is not cosmetic:
+       ``uq_wf_revision_validated_per_kind`` is a partial unique index, so the two
+       rows may not both read ``validated`` even for the duration of one statement.
+
+    The supersession is the one write of this service that touches a revision other
+    than the one it claimed. It is a single ``UPDATE`` on a status, guarded by that
+    same partial unique index, and it cannot be delegated to
+    :func:`~waterfall.services.revision_store.save_revision`, which writes exactly
+    one revision and refuses the tree-less stubs the others were loaded as.
+    """
+    _claim_revision(db, revision_id, expected_lock_version)
+    loaded = load_revision(db, revision_id)
+    pricing = price_loaded_revision(db, loaded)
+    if pricing.missing_cost_rates or pricing.missing_inflation_years:
+        raise RevisionRateCoverageError(
+            revision_id, pricing.missing_cost_rates, pricing.missing_inflation_years
+        )
+    if pricing.unpriceable_facets:
+        raise RevisionUnpriceableFacetError(revision_id, pricing.unpriceable_facets)
+    validated_before = {
+        stub.id for stub in loaded.stubs if stub.status is domain.RevisionStatus.VALIDATED
+    }
+    validated_at = _now()
+    domain.validate_revision(
+        loaded.project, loaded.revision, now=validated_at, breakdown_of=pricing.breakdown_of
+    )
+    superseded = _write_supersessions(db, loaded, validated_before)
+    outcome = save_revision(db, loaded)
+    return ValidatedRevision(
+        revision_id=outcome.revision_id,
+        lock_version=loaded.revision.lock_version,
+        version_number=loaded.revision.version_number,
+        validated_at=validated_at,
+        frozen_line_count=len(loaded.revision.frozen_lines),
+        superseded_revision_ids=superseded,
+    )
+
+
+def _write_supersessions(
+    db: Session, loaded: LoadedRevision, validated_before: Container[int]
+) -> tuple[int, ...]:
+    """Persist the ``validated -> superseded`` transitions the domain just decided (INV-22).
+
+    Restricted to the revisions that were validated *when this transaction read
+    them*: a revision the database already held as ``superseded`` is not written
+    again, so the statement below touches exactly the rows that changed and the
+    returned ids are exactly what the response reports.
+    """
+    superseded = tuple(
+        sorted(
+            stub.id
+            for stub in loaded.stubs
+            if stub.status is domain.RevisionStatus.SUPERSEDED and stub.id in validated_before
+        )
+    )
+    for stub_id in superseded:
+        db.query(tables.ProjectRevision).filter(tables.ProjectRevision.id == stub_id).update(
+            {tables.ProjectRevision.status: domain.RevisionStatus.SUPERSEDED.value},
+            synchronize_session=False,
+        )
+    if superseded:
+        db.flush()
+    return superseded

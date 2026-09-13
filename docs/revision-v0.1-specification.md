@@ -83,6 +83,23 @@ Le projet porte un pointeur unique vers la révision de référence et affichée
 un planning différent de celui de sa propre version, puisqu'il n'y a plus de planning séparé du
 devis.
 
+Ce pointeur unique est porté par une table dédiée, `wf_project_revision_pointer`, à raison d'une
+ligne par projet (`reference_revision_id`, `displayed_revision_id`), et **non** par deux colonnes de
+`ms_project`. Le motif est structurel : `wf_revision` référence déjà `ms_project`, donc une colonne de
+pointeur *sur* `ms_project` refermerait un second cycle de clés étrangères — exactement celui que les
+trois contraintes `use_alter` de `ms_project` contournent aujourd'hui et que l'EPIC supprime. Une
+table plus loin, le schéma entier s'ordonne en une seule passe topologique, et la clé étrangère
+composite `(project_id, revision_id)` garantit en base qu'un projet ne désigne qu'une révision **à
+lui** — ce que le `reference_estimate_id` mono-colonne remplacé ne garantissait pas.
+
+La référence est fixée quand le projet passe `en_cours`, en une seule écriture ; `displayed` nomme la
+révision en cours de travail, et sa valeur nulle signifie « la référence ».
+
+`displayed_revision_id` **repasse à nul à la validation** de la révision qu'il désigne : une révision
+validée refuse toute écriture, ce n'est donc plus une révision « en cours de travail » au sens que
+cette colonne définit, et « nul » veut déjà dire ce qu'il faut dire. Le pointeur de référence n'est
+pas touché par une validation : seule l'entrée en `en_cours` le fixe.
+
 ### `node` — une position dans l'arbre d'une révision
 
 Table `wf_revision_node`.
@@ -169,8 +186,81 @@ indépendant de toute structure mutable.
 | `revision_id` | révision validée dont cette ligne fait partie |
 | `work_item_id` | identité de l'élément de travail chiffré — le seul lien conservé |
 | `bearing_work_item_id` | identité de la tâche porteuse, nulle pour un coût global |
-| `label`, `bearing_task_name`, `role_name`, `accounting_code`, `category_code` | libellés recopiés |
+| `nature` | `labor` ou `non_labor`, recopiée de la facette |
+| `label`, `bearing_task_name`, `role_name`, `accounting_code`, `category_code`, `cost_code` | libellés recopiés |
 | `year`, `quantity`, `hours`, `hourly_rate`, `inflation_coefficient`, `amount` | montants recopiés |
+
+`cost_code` est le **code** du code d'imputation projet (`wf_project_cost_code.code`), recopié comme
+les autres libellés, et non un `cost_code_id`. Les deux tables remplacées portaient bien une
+imputation (`wf_estimate_line.cost_code_id` et `wf_estimate_cost_line.cost_code_id`, figées à la
+validation) et l'export du devis en publie une colonne ; garder l'identifiant obligerait le document
+à joindre `wf_project_cost_code` pour dire quoi que ce soit de son imputation, c'est-à-dire à dépendre
+d'un arbre que l'utilisateur peut renommer, déplacer ou supprimer entre la validation et la lecture —
+exactement ce que la [Règle 2](#règle-2--rattachement-des-lignes-figées-dun-devis-validé) interdit. La
+ventilation par code d'imputation d'un devis 2026 relu en 2029 répondrait sinon ce que l'arbre dit en
+2029, ou rien du tout.
+
+`nature` est portée et non déduite : cette table unique fusionne ce que le socle historique séparait
+**par table** (`wf_estimate_line` pour la MO, `wf_estimate_cost_line` pour les achats), et
+reconstituer le découpage à partir de `role_name IS NOT NULL` ferait dire par accident au document ce
+qu'il disait auparavant exprès.
+
+`hours`, `hourly_rate` et `inflation_coefficient` sont **nulles sur une ligne non-MO**. Un
+décaissement est chiffré `quantity × unit_cost` : aucune ligne de `wf_cost_rate` n'est lue, et écrire
+`0.0000` dans une colonne dont la sémantique est « recopiée du référentiel de taux » donnerait à un
+remplissage l'apparence d'une donnée. Ces colonnes sont nullables précisément pour pouvoir dire
+« sans objet ».
+
+#### Grain : une ligne figée par couple (chiffrage, année)
+
+**Une facette de coût produit une ligne figée par année de son chiffrage**, et non une ligne par
+facette. Une ligne de main-d'œuvre portée par une tâche à cheval sur trois ans en produit trois, une
+fourniture en produit une.
+
+*Motif* : `year`, `hourly_rate` et `inflation_coefficient` ne veulent rien dire séparément. Un taux
+est **annuel** (`wf_cost_rate`) et un coefficient d'inflation aussi ; une ligne unique couvrant trois
+années ne pourrait porter qu'une **moyenne pondérée** — un nombre que le référentiel ne contient pas,
+qu'aucun lecteur ne peut vérifier, et qui détruit précisément la comparaison par exercice que la
+[Règle 2](#règle-2--rattachement-des-lignes-figées-dun-devis-validé) doit rendre possible des années
+plus tard. Ré-agréger les années en un total est un `GROUP BY` ; redécouper une moyenne en années ne
+se fait pas. C'est aussi le grain qu'avait déjà `wf_estimate_line`, la table remplacée.
+
+Deux conséquences :
+
+- **une facette que le moteur ne chiffre pas produit quand même une ligne, à zéro.** Une ligne MO
+  portée par une tâche sans dates n'a aucune année sur laquelle étaler ses heures ; la faire
+  disparaître du document reviendrait à perdre un chiffrage plutôt qu'à l'afficher à zéro ;
+- **le montant d'une ligne figée est arrondi au centime ligne par ligne**, jamais l'arrondi d'un
+  total calculé en pleine précision. C'est la règle de publication commune à tous les montants du
+  produit, et c'est elle qui garantit que le total d'un document figé est bien la somme de ce que ses
+  lignes affichent ;
+- **les heures d'un chiffrage sont réparties à reste**, au centième, de sorte que les lignes d'une
+  facette totalisent **exactement** les heures qu'elle porte, le reliquat allant à la dernière année.
+  `hours` est une `Numeric(14, 2)` et `10 / 3` n'en est pas une : une division simple écrivait `3.33`
+  trois fois et figeait 9,99 heures pour un chiffrage de dix. Les montants, eux, **ne sont pas
+  recalculés** à partir de ces parts — ce sont les produits du moteur en pleine précision, arrondis
+  ligne par ligne comme ci-dessus — de sorte que les deux règles coexistent : les montants somment au
+  total publié, les heures somment au chiffrage.
+
+Le taux et le coefficient recopiés sont ceux sous lesquels la ligne a **effectivement** été chiffrée,
+fournis par le moteur de calcul au moment de la validation. Aucun d'eux n'est lu sur le rôle : un
+rôle ne porte pas de taux, et c'est pour cette raison qu'il n'en porte pas.
+
+Une validation dont le référentiel de taux ne couvre pas toutes les années est **refusée**, là où la
+lecture des totaux, elle, la tolère et signale le manque : un brouillon dont le taux 2031 n'est pas
+encore saisi doit rester lisible, mais figer un zéro à la place d'un taux manquant dans un document
+immuable enregistrerait une erreur comme un prix.
+
+Une validation portant un **chiffrage que le moteur ne rattache à aucune année** est refusée de la
+même manière et pour la même raison. Une facette MO portée par une tâche sans dates n'a aucune année
+sur laquelle étaler ses heures : elle ne produit aucune ligne valorisée, donc aucun couple (catégorie
+de coût, année), donc le refus précédent — bâti sur ces couples — ne peut pas la voir. Le document
+figeait `0,00 €` pour un chiffrage de mille euros, sans que rien ne le signale. La ligne à zéro
+ci-dessus reste ce qu'un document produit lorsqu'il n'y a rien à valoriser ; ce qui n'est pas
+acceptable, c'est le **silence** — et une facette qui porte des heures strictement positives n'est
+pas « rien à valoriser ». La lecture des totaux signale ces facettes dans son corps de réponse au
+même titre que les taux manquants, parce que le remède est de dater la tâche porteuse et qu'un
+utilisateur ne date pas ce qu'un écran illisible ne lui montre pas.
 
 Une ligne figée ne référence **aucun nœud et aucune facette**. C'est exactement ce qui remplace
 `EstimateCostLine.source_line_id` : la comparaison budget de référence ↔ engagé ↔ reste à engager se
@@ -865,10 +955,13 @@ identifiant de nœud, de facette ou de ligne d'une autre révision.
 ##### INV-24
 
 **Les lignes figées n'existent que pour une révision `validated` ou `superseded`.** Un brouillon n'en
-porte aucune ; une révision validée en porte une par facette de coût existante au moment de la
-validation.
+porte aucune ; une révision validée porte **au moins une** ligne par facette de coût existante au
+moment de la validation — une par année de son chiffrage (voir
+[Grain](#grain--une-ligne-figée-par-couple-chiffrage-année)) — et aucune ligne ne décrit une facette
+que la révision ne porte pas. Les années d'une même facette sont distinctes.
 *Portée : état. Violation : produire les lignes figées à la création du brouillon plutôt qu'à la
-validation.*
+validation ; laisser une facette de coût sans aucune ligne parce que le moteur ne lui a trouvé
+aucune année.*
 
 #### Identité externe
 
@@ -1079,7 +1172,7 @@ sous-jacent qui est abandonnée, délibérément.
 | `ms_task.structure_key`, `ms_task.structure_kind` | **PROVISOIRE — voir l'encadré sous la table** : supprimées, remplacées par l'empreinte de squelette ([Règle 4 c](#règle-4--le-lotissement-vit-hors-de-la-révision-provisoire)) |
 | `wf_charge_line` | supprimée |
 | `EstimateCostLine.source_line_id` (jamais créé) | identité `work_item` |
-| `MsProject.planning_reference_id`, `displayed_planning_id`, `reference_estimate_id`, `Estimate.planning_id` | pointeur unique de révision |
+| `MsProject.planning_reference_id`, `displayed_planning_id`, `reference_estimate_id`, `Estimate.planning_id` | `wf_project_revision_pointer` (pointeur unique de révision) |
 | `WfPlanning.revision`, `Estimate.revision` | `ProjectRevision.lock_version` |
 | `services/task_references.py` | supprimé, remplacé par l'immuabilité d'une révision validée |
 
