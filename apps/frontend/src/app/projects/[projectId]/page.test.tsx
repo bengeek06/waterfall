@@ -1,7 +1,17 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, SessionExpiredError, type Planning, type PlanningDetail, type Project } from "@/lib/backend";
+import {
+  ApiError,
+  type ImportDiff,
+  type Planning,
+  type PlanningDetail,
+  type Project,
+  type Revision,
+  type RevisionList,
+  type RevisionNode,
+  type RevisionTree,
+} from "@/lib/backend";
 
 const mocks = vi.hoisted(() => ({
   getProject: vi.fn(),
@@ -18,15 +28,15 @@ const mocks = vi.hoisted(() => ({
   runImportBatch: vi.fn(),
   getImportBatchStatus: vi.fn(),
   getImportBatchDiff: vi.fn(),
-  setDisplayedPlanning: vi.fn(),
-  setPlanningReference: vi.fn(),
-  createPlanning: vi.fn(),
-  movePlanningTasks: vi.fn(),
-  updatePlanningTaskSchedule: vi.fn(),
-  replaceTaskPredecessorLinks: vi.fn(),
-  createPlanningTask: vi.fn(),
-  deletePlanningTasks: vi.fn(),
-  restorePlanningSnapshot: vi.fn(),
+  listRevisions: vi.fn(),
+  getRevisionNodes: vi.fn(),
+  moveRevisionNodes: vi.fn(),
+  createRevisionTask: vi.fn(),
+  deleteRevisionNodes: vi.fn(),
+  updateRevisionPlanFacet: vi.fn(),
+  replaceRevisionPredecessors: vi.fn(),
+  copyRevision: vi.fn(),
+  validateRevision: vi.fn(),
   savePlanningStructureDraft: vi.fn(),
   getPlanningStructureDraft: vi.fn(),
   createPlanningStructure: vi.fn(),
@@ -64,15 +74,15 @@ vi.mock("@/lib/backend", async () => {
     runImportBatch: mocks.runImportBatch,
     getImportBatchStatus: mocks.getImportBatchStatus,
     getImportBatchDiff: mocks.getImportBatchDiff,
-    setDisplayedPlanning: mocks.setDisplayedPlanning,
-    setPlanningReference: mocks.setPlanningReference,
-    createPlanning: mocks.createPlanning,
-    movePlanningTasks: mocks.movePlanningTasks,
-    updatePlanningTaskSchedule: mocks.updatePlanningTaskSchedule,
-    replaceTaskPredecessorLinks: mocks.replaceTaskPredecessorLinks,
-    createPlanningTask: mocks.createPlanningTask,
-    deletePlanningTasks: mocks.deletePlanningTasks,
-    restorePlanningSnapshot: mocks.restorePlanningSnapshot,
+    listRevisions: mocks.listRevisions,
+    getRevisionNodes: mocks.getRevisionNodes,
+    moveRevisionNodes: mocks.moveRevisionNodes,
+    createRevisionTask: mocks.createRevisionTask,
+    deleteRevisionNodes: mocks.deleteRevisionNodes,
+    updateRevisionPlanFacet: mocks.updateRevisionPlanFacet,
+    replaceRevisionPredecessors: mocks.replaceRevisionPredecessors,
+    copyRevision: mocks.copyRevision,
+    validateRevision: mocks.validateRevision,
     savePlanningStructureDraft: mocks.savePlanningStructureDraft,
     getPlanningStructureDraft: mocks.getPlanningStructureDraft,
     createPlanningStructure: mocks.createPlanningStructure,
@@ -146,6 +156,76 @@ const detail = (version: Planning): PlanningDetail => ({
   links: [],
 });
 
+// E14-10 (#336): the revision fixtures the Planning tab now reads.
+function revisionSummary(overrides: Partial<Revision> = {}): Revision {
+  return {
+    revision_id: 7,
+    project_id: 1,
+    version_number: 1,
+    kind: "initial",
+    status: "draft",
+    lock_version: 0,
+    note: null,
+    created_at: "2026-09-01T00:00:00Z",
+    validated_at: null,
+    ...overrides,
+  };
+}
+
+function emptyRevisionList(): RevisionList {
+  return { items: [], reference_revision_id: null, displayed_revision_id: null };
+}
+
+function revisionList(items: Revision[], overrides: Partial<RevisionList> = {}): RevisionList {
+  return { items, reference_revision_id: null, displayed_revision_id: null, ...overrides };
+}
+
+function taskNode(
+  nodeId: number,
+  options: { name?: string; parentId?: number | null; position?: number; level?: number; rowNumber?: number } = {},
+): RevisionNode {
+  return {
+    node_id: nodeId,
+    work_item_id: nodeId * 10,
+    kind: "task",
+    parent_id: options.parentId ?? null,
+    position: options.position ?? 1,
+    row_number: options.rowNumber ?? nodeId,
+    level: options.level ?? 1,
+    external_uid: null,
+    description: null,
+    planning: {
+      name: options.name ?? `Tâche ${nodeId}`,
+      calendar_id: null,
+      calendar_source: null,
+      is_milestone: false,
+      duration_minutes: 480,
+      duration_format: null,
+      start_at: null,
+      finish_at: null,
+      work_minutes: null,
+      percent_complete: 0,
+      is_manual: true,
+    },
+    cost: null,
+    predecessors: [],
+  };
+}
+
+function revisionTree(overrides: Partial<RevisionTree> = {}): RevisionTree {
+  return {
+    revision_id: 7,
+    project_id: 1,
+    version_number: 1,
+    kind: "initial",
+    status: "draft",
+    lock_version: 0,
+    note: null,
+    nodes: [taskNode(1, { name: "Étude" })],
+    ...overrides,
+  };
+}
+
 // E6-06/#67: a single draft estimate, used by the "add a task from the Devis tab" tests below
 // to make canEditEstimate true.
 function draftEstimate() {
@@ -178,15 +258,15 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     mocks.runImportBatch.mockReset();
     mocks.getImportBatchStatus.mockReset();
     mocks.getImportBatchDiff.mockReset();
-    mocks.setDisplayedPlanning.mockReset();
-    mocks.setPlanningReference.mockReset();
-    mocks.createPlanning.mockReset();
-    mocks.movePlanningTasks.mockReset();
-    mocks.updatePlanningTaskSchedule.mockReset();
-    mocks.replaceTaskPredecessorLinks.mockReset();
-    mocks.createPlanningTask.mockReset();
-    mocks.deletePlanningTasks.mockReset();
-    mocks.restorePlanningSnapshot.mockReset();
+    mocks.listRevisions.mockReset();
+    mocks.getRevisionNodes.mockReset();
+    mocks.moveRevisionNodes.mockReset();
+    mocks.createRevisionTask.mockReset();
+    mocks.deleteRevisionNodes.mockReset();
+    mocks.updateRevisionPlanFacet.mockReset();
+    mocks.replaceRevisionPredecessors.mockReset();
+    mocks.copyRevision.mockReset();
+    mocks.validateRevision.mockReset();
     mocks.savePlanningStructureDraft.mockReset();
     mocks.getPlanningStructureDraft.mockReset();
     mocks.createPlanningStructure.mockReset();
@@ -194,6 +274,15 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     mocks.skipPlanningStructure.mockReset();
     mocks.listProjectEstimates.mockResolvedValue([]);
     mocks.listPlannings.mockResolvedValue([]);
+    mocks.listRevisions.mockResolvedValue(emptyRevisionList());
+    mocks.getRevisionNodes.mockImplementation(async (_projectId: number, revisionId: number) =>
+      revisionTree({ revision_id: revisionId }),
+    );
+    mocks.moveRevisionNodes.mockResolvedValue({ revision_id: 7, lock_version: 1 });
+    mocks.createRevisionTask.mockResolvedValue({ revision_id: 7, lock_version: 1, node_id: 99, work_item_id: 99 });
+    mocks.deleteRevisionNodes.mockResolvedValue({ revision_id: 7, lock_version: 1, removed_node_ids: [], cost_losses: [] });
+    mocks.updateRevisionPlanFacet.mockResolvedValue({ revision_id: 7, lock_version: 1 });
+    mocks.replaceRevisionPredecessors.mockResolvedValue({ revision_id: 7, lock_version: 1 });
     mocks.createPlanningStructure.mockResolvedValue({ tasks: [] });
     mocks.savePlanningStructureDraft.mockResolvedValue({ planning_id: 2, structure: { posts: [] } });
     mocks.getPlanningStructureDraft.mockResolvedValue(null);
@@ -201,13 +290,9 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     mocks.skipPlanningStructure.mockResolvedValue(project({ status: "initialise", displayed_planning_id: 3 }));
     mocks.createImportBatch.mockResolvedValue({ id: 42 });
     mocks.uploadImportSourceXml.mockResolvedValue({ id: 42 });
-    mocks.runImportBatch.mockResolvedValue({ batchId: 42 });
+    mocks.runImportBatch.mockResolvedValue({ batchId: 42, revisionId: 7, revisionCreated: false });
     mocks.getImportBatchStatus.mockResolvedValue({ status: "success" });
-    mocks.getImportBatchDiff.mockResolvedValue({ batchId: 42, identicalSource: false, items: [] });
-    mocks.setPlanningReference.mockResolvedValue(project({ status: "initialise" }));
-    mocks.setDisplayedPlanning.mockImplementation(async (_projectId, planningId) =>
-      project({ status: "initialise", displayed_planning_id: planningId }),
-    );
+    mocks.getImportBatchDiff.mockResolvedValue({ batchId: 42, identicalSource: false, items: [], costLosses: [] });
   });
 
   afterEach(() => cleanup());
@@ -259,6 +344,15 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     );
     mocks.listProjectEstimates.mockResolvedValue([]);
     mocks.listPlannings.mockResolvedValue([]);
+    mocks.listRevisions.mockResolvedValue(emptyRevisionList());
+    mocks.getRevisionNodes.mockImplementation(async (_projectId: number, revisionId: number) =>
+      revisionTree({ revision_id: revisionId }),
+    );
+    mocks.moveRevisionNodes.mockResolvedValue({ revision_id: 7, lock_version: 1 });
+    mocks.createRevisionTask.mockResolvedValue({ revision_id: 7, lock_version: 1, node_id: 99, work_item_id: 99 });
+    mocks.deleteRevisionNodes.mockResolvedValue({ revision_id: 7, lock_version: 1, removed_node_ids: [], cost_losses: [] });
+    mocks.updateRevisionPlanFacet.mockResolvedValue({ revision_id: 7, lock_version: 1 });
+    mocks.replaceRevisionPredecessors.mockResolvedValue({ revision_id: 7, lock_version: 1 });
 
     const { unmount } = render(<ProjectDetailsPage />);
     await waitFor(() => expect(mocks.getProject).toHaveBeenCalledTimes(1));
@@ -528,129 +622,6 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     expect(screen.queryByRole("button", { name: "Passer cette étape" })).not.toBeInTheDocument();
   });
 
-  it("allows creating a task manually in the empty planning right after skipping the structure step", async () => {
-    const draftAfterSkip = planning({ id: 3, status: "draft" });
-    const emptyDetail: PlanningDetail = { ...draftAfterSkip, tasks: [], links: [] };
-    const updatedDetail: PlanningDetail = {
-      ...draftAfterSkip,
-      tasks: [{ ...detail(draftAfterSkip).tasks[0], uid: 11, name: "Première tâche", position: 1 }],
-      links: [],
-    };
-    mocks.getProject.mockResolvedValue(project());
-    mocks.listPlannings.mockResolvedValueOnce([]).mockResolvedValue([draftAfterSkip]);
-    mocks.skipPlanningStructure.mockResolvedValue(
-      project({ status: "initialise", displayed_planning_id: 3 }),
-    );
-    mocks.getPlanning.mockResolvedValue(emptyDetail);
-    mocks.createPlanningTask.mockResolvedValue(updatedDetail);
-
-    render(<ProjectDetailsPage />);
-
-    await screen.findByRole("heading", { name: "Lotissement du projet" });
-    fireEvent.click(screen.getByRole("button", { name: "Passer cette étape" }));
-
-    await waitFor(() =>
-      expect(screen.queryByRole("heading", { name: "Lotissement du projet" })).not.toBeInTheDocument(),
-    );
-
-    fireEvent.click(await screen.findByRole("button", { name: "Ajouter une tâche" }));
-    fireEvent.change(screen.getByLabelText("Nom de la nouvelle tâche"), { target: { value: "Première tâche" } });
-    fireEvent.click(screen.getByRole("button", { name: "Ajouter" }));
-
-    await waitFor(() =>
-      expect(mocks.createPlanningTask).toHaveBeenCalledWith(
-        1,
-        3,
-        {
-          name: "Première tâche",
-          is_milestone: false,
-          target_parent_uid: undefined,
-          insert_after_uid: undefined,
-          expected_revision: 0,
-        },
-        expect.anything(),
-        expect.anything(),
-      ),
-    );
-    expect(await screen.findByText("Première tâche")).toBeInTheDocument();
-  });
-
-  it("renders the refetched planning tasks after generation, including manual ones", async () => {
-    const generated = planning({ id: 5, status: "draft" });
-    const generatedDetail: PlanningDetail = {
-      ...generated,
-      tasks: [
-        {
-          id: 20,
-          project_id: 1,
-          uid: 20,
-          row_number: 0,
-          structure_key: "post/lot/deliverable",
-          structure_kind: "livrable",
-          parent_uid: null,
-          position: 1,
-          name: "Tâche structurée",
-          outline_number: "1.1.1",
-          outline_level: 3,
-          start_at: null,
-          finish_at: null,
-          percent_complete: 0,
-          is_summary: false,
-          is_milestone: false,
-          is_manual: false,
-          description: null,
-          predecessor_links: [],
-        },
-        {
-          id: 21,
-          project_id: 1,
-          uid: 21,
-          row_number: 0,
-          structure_key: null,
-          structure_kind: null,
-          parent_uid: null,
-          position: 2,
-          name: "Tâche manuelle",
-          outline_number: "2",
-          outline_level: 1,
-          start_at: null,
-          finish_at: null,
-          percent_complete: 0,
-          is_summary: false,
-          is_milestone: false,
-          is_manual: true,
-          description: null,
-          predecessor_links: [],
-        },
-      ],
-      links: [],
-    };
-    mocks.getProject
-      .mockResolvedValueOnce(project())
-      .mockResolvedValue(project({ status: "initialise", displayed_planning_id: generated.id }));
-    mocks.listPlannings.mockResolvedValueOnce([]).mockResolvedValue([generated]);
-    mocks.createPlanningStructure.mockResolvedValue({ tasks: generatedDetail.tasks });
-    mocks.getPlanning.mockResolvedValue(generatedDetail);
-
-    render(<ProjectDetailsPage />);
-
-    await screen.findByRole("heading", { name: "Lotissement du projet" });
-    fireEvent.change(screen.getByLabelText("Nom poste 1"), { target: { value: "Poste" } });
-    fireEvent.change(screen.getByLabelText("Nom lot 1.1"), { target: { value: "Lot" } });
-    fireEvent.change(screen.getByLabelText("Livrable 1.1.1"), { target: { value: "Livrable" } });
-    fireEvent.click(screen.getByRole("button", { name: "Générer le squelette" }));
-
-    await waitFor(() =>
-      expect(mocks.getPlanning).toHaveBeenCalledWith(
-        1,
-        generated.id,
-        expect.anything(),
-        expect.anything(),
-      ),
-    );
-    expect(await screen.findAllByText("Tâche structurée")).not.toHaveLength(0);
-    expect(await screen.findAllByText("Tâche manuelle")).not.toHaveLength(0);
-  });
 
   it("allows reopening an existing draft without a planning reference", async () => {
     const draft = planning({ id: 3, status: "draft" });
@@ -714,226 +685,6 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     expect(screen.getByDisplayValue("Livrable sauvegardé")).toBeInTheDocument();
   });
 
-  it("does not allow reopening a draft in a read-only project", async () => {
-    const draft = planning({ id: 3, status: "draft" });
-    mocks.getProject.mockResolvedValue(project({ status: "perdu", displayed_planning_id: draft.id }));
-    mocks.listPlannings.mockResolvedValue([draft]);
-    mocks.getPlanning.mockResolvedValue(detail(draft));
-
-    render(<ProjectDetailsPage />);
-
-    expect(await screen.findByText("Tâche 1")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Rouvrir la structure" })).not.toBeInTheDocument();
-  });
-
-  it("loads and persists the selected planning without showing the previous detail", async () => {
-    const first = planning({ id: 1, version_number: 1 });
-    const second = planning({ id: 2, version_number: 2, status: "validated" });
-    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: 2 }));
-    mocks.listPlannings.mockResolvedValue([first, second]);
-    mocks.getPlanning.mockImplementation(async (_projectId, planningId) =>
-      detail(planningId === 1 ? first : second),
-    );
-
-    render(<ProjectDetailsPage />);
-
-    expect(await screen.findByText("Tâche 2")).toBeInTheDocument();
-    fireEvent.change(screen.getByRole("combobox", { name: "Version affichée" }), {
-      target: { value: "1" },
-    });
-
-    expect(screen.getByText("Tâche 2")).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText("Tâche 1")).toBeInTheDocument());
-    expect(mocks.setDisplayedPlanning).toHaveBeenCalledWith(
-      1,
-      1,
-      expect.anything(),
-      expect.anything(),
-    );
-  });
-
-  it("restores the previous planning when displaying another planning fails", async () => {
-    const first = planning({ id: 1, version_number: 1 });
-    const second = planning({ id: 2, version_number: 2 });
-    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: 2 }));
-    mocks.listPlannings.mockResolvedValue([first, second]);
-    mocks.getPlanning.mockResolvedValue(detail(second));
-    mocks.setDisplayedPlanning.mockRejectedValueOnce(new Error("display failed"));
-
-    render(<ProjectDetailsPage />);
-
-    const selector = await screen.findByRole("combobox", { name: "Version affichée" });
-    fireEvent.change(selector, { target: { value: "1" } });
-
-    await waitFor(() => expect(selector).toHaveValue("2"));
-    expect(screen.getByText("Tâche 2")).toBeInTheDocument();
-  });
-
-  it("allows historical planning navigation in a read-only project without mutation", async () => {
-    const current = planning({ id: 2, version_number: 2, status: "validated" });
-    const historical = planning({ id: 1, version_number: 1, status: "superseded" });
-    mocks.getProject.mockResolvedValue(
-      project({ status: "perdu", displayed_planning_id: current.id, planning_reference_id: current.id }),
-    );
-    mocks.listPlannings.mockResolvedValue([historical, current]);
-    mocks.getPlanning.mockImplementation(async (_projectId, planningId) =>
-      detail(planningId === historical.id ? historical : current),
-    );
-
-    render(<ProjectDetailsPage />);
-
-    const selector = await screen.findByRole("combobox", { name: "Version affichée" });
-    expect(selector).not.toBeDisabled();
-    fireEvent.change(selector, { target: { value: String(historical.id) } });
-
-    await waitFor(() => expect(screen.getByText("Tâche 1")).toBeInTheDocument());
-    expect(mocks.setDisplayedPlanning).not.toHaveBeenCalled();
-  });
-
-  it("refreshes planning metadata after changing the reference", async () => {
-    const previous = planning({ id: 1, version_number: 1, status: "validated" });
-    const next = planning({ id: 2, version_number: 2, status: "validated" });
-    mocks.getProject
-      .mockResolvedValueOnce(project({ status: "initialise", displayed_planning_id: next.id }))
-      .mockResolvedValueOnce(project({
-        status: "initialise",
-        displayed_planning_id: next.id,
-        planning_reference_id: next.id,
-      }));
-    mocks.listPlannings
-      .mockResolvedValueOnce([previous, next])
-      .mockResolvedValueOnce([{ ...previous, status: "superseded" }, next]);
-    mocks.getPlanning.mockImplementation(async (_projectId, planningId) =>
-      detail(planningId === previous.id ? previous : next),
-    );
-    mocks.setPlanningReference.mockResolvedValue(
-      project({ status: "initialise", displayed_planning_id: previous.id, planning_reference_id: next.id }),
-    );
-
-    render(<ProjectDetailsPage />);
-    fireEvent.click(await screen.findByRole("button", { name: "Définir comme référence" }));
-
-    await waitFor(() => expect(mocks.listPlannings).toHaveBeenCalledTimes(2));
-    expect(screen.getByText("Version 2 - validated")).toBeInTheDocument();
-  });
-
-  // #143: a validated planning has no way to spawn an editable draft other than the
-  // planning-structure wizard ("Rouvrir la structure"), which does not do what its label
-  // suggests. "Créer une nouvelle version" must clone the validated planning into a fresh draft
-  // and switch the displayed/selected version to it, without ever opening the structure wizard.
-  it("creates a new draft from the validated planning and switches to it", async () => {
-    const validated = planning({ id: 2, version_number: 2, status: "validated" });
-    const created = planning({ id: 5, version_number: 3, status: "draft" });
-    const createdDetail = detail(created);
-    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: validated.id }));
-    mocks.listPlannings
-      .mockResolvedValueOnce([validated])
-      .mockResolvedValueOnce([validated, created]);
-    mocks.getPlanning.mockImplementation(async (_projectId, planningId) =>
-      planningId === created.id ? createdDetail : detail(validated),
-    );
-    mocks.createPlanning.mockResolvedValue(createdDetail);
-    mocks.setDisplayedPlanning.mockResolvedValue(
-      project({ status: "initialise", displayed_planning_id: created.id }),
-    );
-
-    render(<ProjectDetailsPage />);
-    fireEvent.click(await screen.findByRole("button", { name: "Créer une nouvelle version" }));
-
-    await waitFor(() =>
-      expect(mocks.createPlanning).toHaveBeenCalledWith(
-        1,
-        { source_planning_id: validated.id },
-        expect.anything(),
-        expect.anything(),
-      ),
-    );
-    await waitFor(() =>
-      expect(mocks.setDisplayedPlanning).toHaveBeenCalledWith(1, created.id, expect.anything(), expect.anything()),
-    );
-    await waitFor(() => expect(mocks.listPlannings).toHaveBeenCalledTimes(2));
-    expect(await screen.findByText("Version 3 - draft")).toBeInTheDocument();
-    expect(await screen.findByText("Tâche 3")).toBeInTheDocument();
-  });
-
-  it("does not show the create-version action when the displayed planning is not validated", async () => {
-    const draft = planning({ id: 2, version_number: 1, status: "draft" });
-    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draft.id }));
-    mocks.listPlannings.mockResolvedValue([draft]);
-    mocks.getPlanning.mockResolvedValue(detail(draft));
-
-    render(<ProjectDetailsPage />);
-
-    expect(await screen.findByText("Tâche 1")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Créer une nouvelle version" })).not.toBeInTheDocument();
-  });
-
-  it("redirects to login when creating a new planning version reports session expiry", async () => {
-    const validated = planning({ id: 2, version_number: 2, status: "validated" });
-    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: validated.id }));
-    mocks.listPlannings.mockResolvedValue([validated]);
-    mocks.getPlanning.mockResolvedValue(detail(validated));
-    mocks.createPlanning.mockRejectedValue(new SessionExpiredError());
-
-    render(<ProjectDetailsPage />);
-    fireEvent.click(await screen.findByRole("button", { name: "Créer une nouvelle version" }));
-
-    await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith("/login"));
-    expect(mocks.setDisplayedPlanning).not.toHaveBeenCalled();
-  });
-
-  // Regression coverage for the critical review finding on #143: createPlanning succeeded (the
-  // draft genuinely exists server-side) but the follow-up setDisplayedPlanning call failed. The
-  // new draft must still show up in the version list (via a best-effort listPlannings refresh)
-  // instead of being invisible/orphaned, and the error banner must not claim the creation itself
-  // failed since it did not.
-  it("still lists the newly created draft, and reports a display failure rather than a creation failure, when setDisplayedPlanning fails after createPlanning succeeds", async () => {
-    const validated = planning({ id: 2, version_number: 2, status: "validated" });
-    const created = planning({ id: 5, version_number: 3, status: "draft" });
-    const createdDetail = detail(created);
-    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: validated.id }));
-    mocks.listPlannings
-      .mockResolvedValueOnce([validated])
-      .mockResolvedValueOnce([validated, created]);
-    mocks.getPlanning.mockResolvedValue(detail(validated));
-    mocks.createPlanning.mockResolvedValue(createdDetail);
-    mocks.setDisplayedPlanning.mockRejectedValue(new Error("display failed"));
-
-    render(<ProjectDetailsPage />);
-    fireEvent.click(await screen.findByRole("button", { name: "Créer une nouvelle version" }));
-
-    await waitFor(() => expect(mocks.listPlannings).toHaveBeenCalledTimes(2));
-    expect(
-      await screen.findByText(
-        "Le brouillon a été créé mais son affichage a échoué : sélectionne-le manuellement dans la liste des versions.",
-      ),
-    ).toBeInTheDocument();
-    expect(screen.queryByText("Impossible de créer une nouvelle version du planning.")).not.toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "V3 (draft)" })).toBeInTheDocument();
-    // The draft was not applied as the selected/displayed planning (setDisplayedPlanning failed):
-    // the version still shown is the one the request started from.
-    expect(screen.getByText("Version 2 - validated")).toBeInTheDocument();
-  });
-
-  it("keeps archived projects read-only", async () => {
-    const archived = planning({ status: "validated" });
-    mocks.getProject.mockResolvedValue(
-      project({ status: "perdu", planning_reference_id: archived.id, displayed_planning_id: archived.id }),
-    );
-    mocks.listPlannings.mockResolvedValue([archived]);
-    mocks.getPlanning.mockResolvedValue(detail(archived));
-
-    render(<ProjectDetailsPage />);
-
-    expect(await screen.findByText("Tâche 1")).toBeInTheDocument();
-    await waitFor(() =>
-      expect(screen.queryByLabelText("Importer un planning MS Project (.xml)")).not.toBeInTheDocument(),
-    );
-    expect(screen.queryByRole("button", { name: "Modifier" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Valider le planning" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Rouvrir la structure" })).not.toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "Version affichée" })).not.toBeDisabled();
-  });
 
   it("previews an import and refreshes the selected planning after confirmation", async () => {
     const current = planning({ id: 2, version_number: 2, status: "validated" });
@@ -1049,7 +800,7 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     mocks.listPlannings.mockResolvedValue([current]);
     mocks.getPlanning.mockResolvedValue(detail(current));
 
-    let resolveDiff!: (value: { batchId: number; identicalSource: boolean; items: never[] }) => void;
+    let resolveDiff!: (value: ImportDiff) => void;
     mocks.getImportBatchDiff.mockImplementation(
       () =>
         new Promise((resolve) => {
@@ -1073,7 +824,7 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     expect(await screen.findByText("Fichier sélectionné : b.xml")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Remplacement à confirmer" })).not.toBeInTheDocument();
 
-    resolveDiff({ batchId: 42, identicalSource: false, items: [] });
+    resolveDiff({ batchId: 42, identicalSource: false, items: [], costLosses: [] });
     // Wait for the (now-stale) preview request to actually settle -- the busy button reverting to
     // its idle label is the observable signal that `preparePlanningImport`'s `finally` block ran --
     // before asserting the stale result was dropped rather than resurrecting the review banner.
@@ -1334,808 +1085,6 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     expect(mocks.runImportBatch).toHaveBeenCalledTimes(2);
   });
 
-  it("sends a move command and replaces the planning detail with the full server response", async () => {
-    const draft = planning({ id: 2, status: "draft" });
-    const siblingsDetail: PlanningDetail = {
-      ...draft,
-      tasks: [
-        { ...detail(draft).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 11, name: "Second", position: 2, parent_uid: null },
-      ],
-      links: [],
-    };
-    const movedDetail: PlanningDetail = {
-      ...draft,
-      revision: 1,
-      tasks: [
-        { ...detail(draft).tasks[0], uid: 11, name: "Second", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 10, name: "Premier", position: 2, parent_uid: null },
-      ],
-      links: [],
-    };
-    const secondMovedDetail: PlanningDetail = {
-      ...draft,
-      revision: 2,
-      tasks: [
-        { ...detail(draft).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 11, name: "Second", position: 2, parent_uid: null },
-      ],
-      links: [],
-    };
-    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draft.id }));
-    mocks.listPlannings.mockResolvedValue([draft]);
-    mocks.getPlanning.mockResolvedValue(siblingsDetail);
-    mocks.movePlanningTasks.mockResolvedValueOnce(movedDetail).mockResolvedValueOnce(secondMovedDetail);
-
-    render(<ProjectDetailsPage />);
-
-    await screen.findByText("Second");
-    fireEvent.click(screen.getByText("Second"));
-    fireEvent.click(screen.getByRole("button", { name: "Monter" }));
-
-    await waitFor(() =>
-      expect(mocks.movePlanningTasks).toHaveBeenCalledWith(
-        1,
-        draft.id,
-        { task_uids: [11], target_parent_uid: null, position: 1, expected_revision: 0 },
-        expect.anything(),
-        expect.anything(),
-      ),
-    );
-    const rows = await screen.findAllByRole("row");
-    expect(rows).toHaveLength(3);
-    expect(rows[1]).toHaveTextContent("Second");
-    expect(rows[2]).toHaveTextContent("Premier");
-
-    // The second move must send the revision the first move's response actually
-    // returned (1), not the stale revision (0) still held on the plannings list.
-    fireEvent.click(screen.getByText("Premier"));
-    fireEvent.click(screen.getByRole("button", { name: "Monter" }));
-
-    await waitFor(() =>
-      expect(mocks.movePlanningTasks).toHaveBeenCalledWith(
-        1,
-        draft.id,
-        { task_uids: [10], target_parent_uid: null, position: 1, expected_revision: 1 },
-        expect.anything(),
-        expect.anything(),
-      ),
-    );
-  });
-
-  it("ignores a move response for a planning that is no longer selected", async () => {
-    const draftA = planning({ id: 2, status: "draft" });
-    const draftB = planning({ id: 6, status: "draft", version_number: 2 });
-    const detailA: PlanningDetail = {
-      ...draftA,
-      tasks: [
-        { ...detail(draftA).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null },
-        { ...detail(draftA).tasks[0], uid: 11, name: "Second", position: 2, parent_uid: null },
-      ],
-      links: [],
-    };
-    const detailB = detail(draftB);
-    const staleDetail: PlanningDetail = {
-      ...draftA,
-      tasks: [{ ...detailA.tasks[0], name: "Réponse obsolète" }],
-      links: [],
-    };
-    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draftA.id }));
-    mocks.listPlannings.mockResolvedValue([draftA, draftB]);
-    mocks.getPlanning.mockImplementation(async (_projectId, planningId) =>
-      planningId === draftA.id ? detailA : detailB,
-    );
-    mocks.setDisplayedPlanning.mockImplementation(async (_projectId, planningId) =>
-      project({ status: "initialise", displayed_planning_id: planningId }),
-    );
-    let resolveMove!: (value: PlanningDetail) => void;
-    mocks.movePlanningTasks.mockImplementation(() => new Promise<PlanningDetail>((resolve) => {
-      resolveMove = resolve;
-    }));
-
-    render(<ProjectDetailsPage />);
-
-    await screen.findByText("Second");
-    fireEvent.click(screen.getByText("Second"));
-    fireEvent.click(screen.getByRole("button", { name: "Monter" }));
-    await waitFor(() => expect(mocks.movePlanningTasks).toHaveBeenCalledTimes(1));
-
-    fireEvent.change(await screen.findByRole("combobox", { name: "Version affichée" }), {
-      target: { value: String(draftB.id) },
-    });
-    await waitFor(() => expect(screen.getByText("Tâche 2")).toBeInTheDocument());
-
-    resolveMove(staleDetail);
-    await waitFor(() => expect(mocks.movePlanningTasks).toHaveResolved());
-
-    expect(screen.queryByText("Réponse obsolète")).not.toBeInTheDocument();
-    expect(screen.getByText("Tâche 2")).toBeInTheDocument();
-  });
-
-  it("does not show a move error after switching to another planning version", async () => {
-    const draftA = planning({ id: 2, status: "draft" });
-    const draftB = planning({ id: 6, status: "draft", version_number: 2 });
-    const detailA: PlanningDetail = {
-      ...draftA,
-      tasks: [
-        { ...detail(draftA).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null },
-        { ...detail(draftA).tasks[0], uid: 11, name: "Second", position: 2, parent_uid: null },
-      ],
-      links: [],
-    };
-    const detailB = detail(draftB);
-    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draftA.id }));
-    mocks.listPlannings.mockResolvedValue([draftA, draftB]);
-    mocks.getPlanning.mockImplementation(async (_projectId, planningId) =>
-      planningId === draftA.id ? detailA : detailB,
-    );
-    mocks.setDisplayedPlanning.mockImplementation(async (_projectId, planningId) =>
-      project({ status: "initialise", displayed_planning_id: planningId }),
-    );
-    let rejectMove!: (error: Error) => void;
-    mocks.movePlanningTasks.mockImplementation(() => new Promise<PlanningDetail>((_resolve, reject) => {
-      rejectMove = reject;
-    }));
-
-    render(<ProjectDetailsPage />);
-
-    await screen.findByText("Second");
-    fireEvent.click(screen.getByText("Second"));
-    fireEvent.click(screen.getByRole("button", { name: "Monter" }));
-    await waitFor(() => expect(mocks.movePlanningTasks).toHaveBeenCalledTimes(1));
-
-    fireEvent.change(await screen.findByRole("combobox", { name: "Version affichée" }), {
-      target: { value: String(draftB.id) },
-    });
-    await waitFor(() => expect(screen.getByText("Tâche 2")).toBeInTheDocument());
-
-    rejectMove(new Error("move failed"));
-    await waitFor(() => expect(screen.queryByText("Impossible de déplacer les tâches sélectionnées.")).not.toBeInTheDocument());
-    expect(screen.getByText("Tâche 2")).toBeInTheDocument();
-  });
-
-  it("restores the pre-move layout when clicking Annuler after a move", async () => {
-    const draft = planning({ id: 2, status: "draft" });
-    const siblingsDetail: PlanningDetail = {
-      ...draft,
-      tasks: [
-        { ...detail(draft).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 11, name: "Second", position: 2, parent_uid: null },
-      ],
-      links: [],
-    };
-    const movedDetail: PlanningDetail = {
-      ...draft,
-      revision: 1,
-      tasks: [
-        { ...detail(draft).tasks[0], uid: 11, name: "Second", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 10, name: "Premier", position: 2, parent_uid: null },
-      ],
-      links: [],
-    };
-    const restoredDetail: PlanningDetail = {
-      ...draft,
-      revision: 2,
-      tasks: [
-        { ...detail(draft).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 11, name: "Second", position: 2, parent_uid: null },
-      ],
-      links: [],
-    };
-    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draft.id }));
-    mocks.listPlannings.mockResolvedValue([draft]);
-    mocks.getPlanning.mockResolvedValue(siblingsDetail);
-    mocks.movePlanningTasks.mockResolvedValue(movedDetail);
-    mocks.restorePlanningSnapshot.mockResolvedValue(restoredDetail);
-
-    render(<ProjectDetailsPage />);
-
-    await screen.findByText("Second");
-    fireEvent.click(screen.getByText("Second"));
-    fireEvent.click(screen.getByRole("button", { name: "Monter" }));
-
-    await waitFor(() => expect(mocks.movePlanningTasks).toHaveResolved());
-    await waitFor(() => {
-      const rows = screen.getAllByRole("row");
-      expect(rows[1]).toHaveTextContent("Second");
-      expect(rows[2]).toHaveTextContent("Premier");
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "Annuler" }));
-
-    await waitFor(() => expect(mocks.restorePlanningSnapshot).toHaveBeenCalledTimes(1));
-    const [calledProjectId, calledPlanningId, payload] = mocks.restorePlanningSnapshot.mock.calls[0];
-    expect(calledProjectId).toBe(1);
-    expect(calledPlanningId).toBe(draft.id);
-    expect(payload.expected_revision).toBe(1);
-    expect(payload.tasks.find((task: { uid: number }) => task.uid === 10)).toMatchObject({
-      parent_uid: null,
-      position: 1,
-    });
-    expect(payload.tasks.find((task: { uid: number }) => task.uid === 11)).toMatchObject({
-      parent_uid: null,
-      position: 2,
-    });
-
-    const restoredRows = await screen.findAllByRole("row");
-    expect(restoredRows[1]).toHaveTextContent("Premier");
-    expect(restoredRows[2]).toHaveTextContent("Second");
-  });
-
-  it("shows a reload banner on a revision conflict and only reloads once confirmed", async () => {
-    const draft = planning({ id: 2, status: "draft" });
-    const siblingsDetail: PlanningDetail = {
-      ...draft,
-      tasks: [
-        { ...detail(draft).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 11, name: "Second", position: 2, parent_uid: null },
-      ],
-      links: [],
-    };
-    const freshDetail: PlanningDetail = {
-      ...draft,
-      revision: 1,
-      tasks: [
-        { ...detail(draft).tasks[0], uid: 10, name: "Premier rechargé", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 11, name: "Second rechargé", position: 2, parent_uid: null },
-      ],
-      links: [],
-    };
-    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draft.id }));
-    mocks.listPlannings.mockResolvedValue([draft]);
-    mocks.getPlanning.mockResolvedValueOnce(siblingsDetail).mockResolvedValueOnce(freshDetail);
-    mocks.movePlanningTasks.mockRejectedValue(
-      new ApiError(409, "Planning was modified concurrently", {
-        code: "PLANNING_REVISION_CONFLICT",
-        project_id: 1,
-        planning_id: draft.id,
-        expected_revision: 0,
-        current_revision: 1,
-      }),
-    );
-
-    render(<ProjectDetailsPage />);
-
-    await screen.findByText("Second");
-    fireEvent.click(screen.getByText("Second"));
-    fireEvent.click(screen.getByRole("button", { name: "Monter" }));
-
-    expect(await screen.findByText("Planning modifié")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Recharger le planning" })).toBeInTheDocument();
-    expect(mocks.getPlanning).toHaveBeenCalledTimes(1);
-    expect(screen.getByText("Premier")).toBeInTheDocument();
-    expect(screen.queryByText("Premier rechargé")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Valider le planning" })).toBeDisabled();
-    expect(screen.queryByRole("button", { name: "Monter" })).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Recharger le planning" }));
-
-    await waitFor(() => expect(mocks.getPlanning).toHaveBeenCalledTimes(2));
-    expect(await screen.findByText("Premier rechargé")).toBeInTheDocument();
-    expect(screen.queryByText("Planning modifié")).not.toBeInTheDocument();
-  });
-
-  it("offers a retry button after a generic move failure and re-sends the same command on click", async () => {
-    const draft = planning({ id: 2, status: "draft" });
-    const siblingsDetail: PlanningDetail = {
-      ...draft,
-      tasks: [
-        { ...detail(draft).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 11, name: "Second", position: 2, parent_uid: null },
-      ],
-      links: [],
-    };
-    const movedDetail: PlanningDetail = {
-      ...draft,
-      revision: 1,
-      tasks: [
-        { ...detail(draft).tasks[0], uid: 11, name: "Second", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 10, name: "Premier", position: 2, parent_uid: null },
-      ],
-      links: [],
-    };
-    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draft.id }));
-    mocks.listPlannings.mockResolvedValue([draft]);
-    mocks.getPlanning.mockResolvedValue(siblingsDetail);
-    mocks.movePlanningTasks.mockRejectedValueOnce(new Error("network down")).mockResolvedValueOnce(movedDetail);
-
-    render(<ProjectDetailsPage />);
-
-    await screen.findByText("Second");
-    fireEvent.click(screen.getByText("Second"));
-    fireEvent.click(screen.getByRole("button", { name: "Monter" }));
-
-    await waitFor(() => expect(mocks.movePlanningTasks).toHaveBeenCalledTimes(1));
-    const retryButton = await screen.findByRole("button", { name: "Réessayer" });
-
-    fireEvent.click(retryButton);
-
-    await waitFor(() => expect(mocks.movePlanningTasks).toHaveBeenCalledTimes(2));
-    expect(mocks.movePlanningTasks.mock.calls[1]).toEqual(mocks.movePlanningTasks.mock.calls[0]);
-    await waitFor(() => expect(screen.queryByRole("button", { name: "Réessayer" })).not.toBeInTheDocument());
-  });
-
-  it("keeps the reload banner visible when reloading after a revision conflict itself fails", async () => {
-    const draft = planning({ id: 2, status: "draft" });
-    const siblingsDetail: PlanningDetail = {
-      ...draft,
-      tasks: [
-        { ...detail(draft).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 11, name: "Second", position: 2, parent_uid: null },
-      ],
-      links: [],
-    };
-    const freshDetail: PlanningDetail = {
-      ...draft,
-      revision: 1,
-      tasks: [
-        { ...detail(draft).tasks[0], uid: 10, name: "Premier rechargé", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 11, name: "Second rechargé", position: 2, parent_uid: null },
-      ],
-      links: [],
-    };
-    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draft.id }));
-    mocks.listPlannings.mockResolvedValue([draft]);
-    mocks.getPlanning
-      .mockResolvedValueOnce(siblingsDetail)
-      .mockRejectedValueOnce(new Error("reload failed"))
-      .mockResolvedValueOnce(freshDetail);
-    mocks.movePlanningTasks.mockRejectedValue(
-      new ApiError(409, "Planning was modified concurrently", {
-        code: "PLANNING_REVISION_CONFLICT",
-        project_id: 1,
-        planning_id: draft.id,
-        expected_revision: 0,
-        current_revision: 1,
-      }),
-    );
-
-    render(<ProjectDetailsPage />);
-
-    await screen.findByText("Second");
-    fireEvent.click(screen.getByText("Second"));
-    fireEvent.click(screen.getByRole("button", { name: "Monter" }));
-
-    expect(await screen.findByText("Planning modifié")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Recharger le planning" }));
-
-    await waitFor(() => expect(mocks.getPlanning).toHaveBeenCalledTimes(2));
-    expect(screen.getByText("Planning modifié")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Recharger le planning" })).toBeInTheDocument();
-    expect(screen.getByText("Premier")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Recharger le planning" }));
-
-    await waitFor(() => expect(mocks.getPlanning).toHaveBeenCalledTimes(3));
-    expect(await screen.findByText("Premier rechargé")).toBeInTheDocument();
-    expect(screen.queryByText("Planning modifié")).not.toBeInTheDocument();
-  });
-
-  it("sends a schedule update and replaces the planning detail with the full server response", async () => {
-    const draft = planning({ id: 2, status: "draft" });
-    const initialDetail: PlanningDetail = {
-      ...draft,
-      tasks: [{ ...detail(draft).tasks[0], uid: 10, name: "Tâche éditable", duration_minutes: 480 }],
-      links: [],
-    };
-    const updatedDetail: PlanningDetail = {
-      ...draft,
-      tasks: [{ ...initialDetail.tasks[0], name: "Tâche mise à jour", duration_minutes: 600 }],
-      links: [],
-    };
-    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draft.id }));
-    mocks.listPlannings.mockResolvedValue([draft]);
-    mocks.getPlanning.mockResolvedValue(initialDetail);
-    mocks.updatePlanningTaskSchedule.mockResolvedValue(updatedDetail);
-
-    render(<ProjectDetailsPage />);
-
-    const durationInput = await screen.findByLabelText("Durée de Tâche éditable");
-    fireEvent.change(durationInput, { target: { value: "600" } });
-    fireEvent.blur(durationInput);
-
-    await waitFor(() =>
-      expect(mocks.updatePlanningTaskSchedule).toHaveBeenCalledWith(
-        1,
-        draft.id,
-        10,
-        expect.objectContaining({ duration_minutes: 600 }),
-        expect.anything(),
-        expect.anything(),
-      ),
-    );
-    expect(await screen.findByText("Tâche mise à jour")).toBeInTheDocument();
-  });
-
-  it("sends a predecessor links replace and replaces the planning detail with the full server response", async () => {
-    const draft = planning({ id: 2, status: "draft" });
-    // uid and row_number are deliberately kept distinct (uid 10 -> row_number 5) so the
-    // "5 (FS)" assertion below cannot pass by accident if the predecessor label were still built
-    // from the raw predecessor_uid instead of its row_number (E9-04).
-    const siblingsDetail: PlanningDetail = {
-      ...draft,
-      tasks: [
-        { ...detail(draft).tasks[0], uid: 10, row_number: 5, name: "Premier", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 11, row_number: 6, name: "Second", position: 2, parent_uid: null },
-      ],
-      links: [],
-    };
-    const updatedDetail: PlanningDetail = {
-      ...draft,
-      tasks: [
-        { ...detail(draft).tasks[0], uid: 10, row_number: 5, name: "Premier", position: 1, parent_uid: null },
-        {
-          ...detail(draft).tasks[0],
-          uid: 11,
-          row_number: 6,
-          name: "Second",
-          position: 2,
-          parent_uid: null,
-          predecessor_links: [{ predecessor_uid: 10, link_type: 1, lag_tenth_minute: 0, lag_format: 7 }],
-        },
-      ],
-      links: [],
-    };
-    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draft.id }));
-    mocks.listPlannings.mockResolvedValue([draft]);
-    mocks.getPlanning.mockResolvedValue(siblingsDetail);
-    mocks.replaceTaskPredecessorLinks.mockResolvedValue(updatedDetail);
-
-    render(<ProjectDetailsPage />);
-
-    await screen.findByText("Second");
-    fireEvent.click(screen.getByRole("button", { name: "Éditer les prédécesseurs de Second" }));
-    fireEvent.click(screen.getByRole("button", { name: "Ajouter une ligne" }));
-    fireEvent.change(screen.getByLabelText("Tâche prédécesseure"), { target: { value: "10" } });
-    fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
-
-    await waitFor(() =>
-      expect(mocks.replaceTaskPredecessorLinks).toHaveBeenCalledWith(
-        1,
-        draft.id,
-        11,
-        {
-          links: [{ predecessor_uid: 10, link_type: 1, lag_tenth_minute: 0, lag_format: 7 }],
-          expected_revision: 0,
-        },
-        expect.anything(),
-        expect.anything(),
-      ),
-    );
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    expect(screen.getByText("5 (FS)")).toBeInTheDocument();
-  });
-
-  it("ignores a schedule update response for a planning that is no longer selected", async () => {
-    const draftA = planning({ id: 2, status: "draft" });
-    const draftB = planning({ id: 6, status: "draft", version_number: 2 });
-    const detailA: PlanningDetail = {
-      ...draftA,
-      tasks: [{ ...detail(draftA).tasks[0], uid: 10, name: "Tâche éditable", duration_minutes: 480 }],
-      links: [],
-    };
-    const detailB = detail(draftB);
-    const staleDetail: PlanningDetail = {
-      ...draftA,
-      tasks: [{ ...detailA.tasks[0], name: "Réponse obsolète" }],
-      links: [],
-    };
-    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draftA.id }));
-    mocks.listPlannings.mockResolvedValue([draftA, draftB]);
-    mocks.getPlanning.mockImplementation(async (_projectId, planningId) =>
-      planningId === draftA.id ? detailA : detailB,
-    );
-    mocks.setDisplayedPlanning.mockImplementation(async (_projectId, planningId) =>
-      project({ status: "initialise", displayed_planning_id: planningId }),
-    );
-    let resolveScheduleUpdate!: (value: PlanningDetail) => void;
-    mocks.updatePlanningTaskSchedule.mockImplementation(
-      () => new Promise<PlanningDetail>((resolve) => {
-        resolveScheduleUpdate = resolve;
-      }),
-    );
-
-    render(<ProjectDetailsPage />);
-
-    const durationInput = await screen.findByLabelText("Durée de Tâche éditable");
-    fireEvent.change(durationInput, { target: { value: "600" } });
-    fireEvent.blur(durationInput);
-    await waitFor(() => expect(mocks.updatePlanningTaskSchedule).toHaveBeenCalledTimes(1));
-
-    fireEvent.change(await screen.findByRole("combobox", { name: "Version affichée" }), {
-      target: { value: String(draftB.id) },
-    });
-    await waitFor(() => expect(screen.getByText("Tâche 2")).toBeInTheDocument());
-
-    resolveScheduleUpdate(staleDetail);
-    await waitFor(() => expect(mocks.updatePlanningTaskSchedule).toHaveResolved());
-
-    expect(screen.queryByText("Réponse obsolète")).not.toBeInTheDocument();
-    expect(screen.getByText("Tâche 2")).toBeInTheDocument();
-  });
-
-  it("reports a project-read-only conflict distinctly from a cycle conflict", async () => {
-    const draft = planning({ id: 2, status: "draft" });
-    const siblingsDetail: PlanningDetail = {
-      ...draft,
-      tasks: [
-        { ...detail(draft).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null },
-        { ...detail(draft).tasks[0], uid: 11, name: "Second", position: 2, parent_uid: null },
-      ],
-      links: [],
-    };
-    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draft.id }));
-    mocks.listPlannings.mockResolvedValue([draft]);
-    mocks.getPlanning.mockResolvedValue(siblingsDetail);
-    mocks.replaceTaskPredecessorLinks.mockRejectedValue(
-      new ApiError(409, "Project is read-only in its current status"),
-    );
-
-    render(<ProjectDetailsPage />);
-
-    await screen.findByText("Second");
-    fireEvent.click(screen.getByRole("button", { name: "Éditer les prédécesseurs de Second" }));
-    fireEvent.click(screen.getByRole("button", { name: "Ajouter une ligne" }));
-    fireEvent.change(screen.getByLabelText("Tâche prédécesseure"), { target: { value: "10" } });
-    fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
-
-    // Rendered both by the page-level error banner and by the dialog's own inline error
-    // (editTaskPredecessorLinksSelection sets both from the same message).
-    await waitFor(() =>
-      expect(
-        screen.getAllByText("Le projet est passé en lecture seule et ne peut plus être modifié."),
-      ).not.toHaveLength(0),
-    );
-    expect(screen.queryByText("Cette combinaison de prédécesseurs créerait un cycle dans le planning.")).not.toBeInTheDocument();
-  });
-
-  it("ignores a predecessor links response for a planning that is no longer selected", async () => {
-    const draftA = planning({ id: 2, status: "draft" });
-    const draftB = planning({ id: 6, status: "draft", version_number: 2 });
-    const detailA: PlanningDetail = {
-      ...draftA,
-      tasks: [
-        { ...detail(draftA).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null },
-        { ...detail(draftA).tasks[0], uid: 11, name: "Second", position: 2, parent_uid: null },
-      ],
-      links: [],
-    };
-    const detailB = detail(draftB);
-    const staleDetail: PlanningDetail = {
-      ...draftA,
-      tasks: [{ ...detailA.tasks[0], name: "Réponse obsolète" }],
-      links: [],
-    };
-    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draftA.id }));
-    mocks.listPlannings.mockResolvedValue([draftA, draftB]);
-    mocks.getPlanning.mockImplementation(async (_projectId, planningId) =>
-      planningId === draftA.id ? detailA : detailB,
-    );
-    mocks.setDisplayedPlanning.mockImplementation(async (_projectId, planningId) =>
-      project({ status: "initialise", displayed_planning_id: planningId }),
-    );
-    let resolveLinks!: (value: PlanningDetail) => void;
-    mocks.replaceTaskPredecessorLinks.mockImplementation(() => new Promise<PlanningDetail>((resolve) => {
-      resolveLinks = resolve;
-    }));
-
-    render(<ProjectDetailsPage />);
-
-    await screen.findByText("Second");
-    fireEvent.click(screen.getByRole("button", { name: "Éditer les prédécesseurs de Second" }));
-    fireEvent.click(screen.getByRole("button", { name: "Ajouter une ligne" }));
-    fireEvent.change(screen.getByLabelText("Tâche prédécesseure"), { target: { value: "10" } });
-    fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
-    await waitFor(() => expect(mocks.replaceTaskPredecessorLinks).toHaveBeenCalledTimes(1));
-
-    // The predecessor links dialog is a modal (unlike the move toolbar), so the version selector
-    // is marked aria-hidden while it stays open pending the in-flight request; `hidden: true`
-    // reaches through that to exercise the same stale-response guard the move test covers.
-    fireEvent.change(await screen.findByRole("combobox", { name: "Version affichée", hidden: true }), {
-      target: { value: String(draftB.id) },
-    });
-    await waitFor(() => expect(screen.getByText("Tâche 2")).toBeInTheDocument());
-
-    resolveLinks(staleDetail);
-    await waitFor(() => expect(mocks.replaceTaskPredecessorLinks).toHaveResolved());
-
-    expect(screen.queryByText("Réponse obsolète")).not.toBeInTheDocument();
-    expect(screen.getByText("Tâche 2")).toBeInTheDocument();
-  });
-
-  it("sends a create-task request and replaces the planning detail with the full server response", async () => {
-    const draft = planning({ id: 2, status: "draft" });
-    const initialDetail: PlanningDetail = {
-      ...draft,
-      tasks: [{ ...detail(draft).tasks[0], uid: 10, name: "Tâche existante" }],
-      links: [],
-    };
-    const updatedDetail: PlanningDetail = {
-      ...draft,
-      tasks: [
-        ...initialDetail.tasks,
-        { ...initialDetail.tasks[0], uid: 11, name: "Nouvelle tâche", position: 2 },
-      ],
-      links: [],
-    };
-    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draft.id }));
-    mocks.listPlannings.mockResolvedValue([draft]);
-    mocks.getPlanning.mockResolvedValue(initialDetail);
-    mocks.createPlanningTask.mockResolvedValue(updatedDetail);
-
-    render(<ProjectDetailsPage />);
-
-    await screen.findByText("Tâche existante");
-    fireEvent.click(screen.getByRole("button", { name: "Ajouter une tâche" }));
-    fireEvent.change(screen.getByLabelText("Nom de la nouvelle tâche"), { target: { value: "Nouvelle tâche" } });
-    fireEvent.click(screen.getByRole("button", { name: "Ajouter" }));
-
-    await waitFor(() =>
-      expect(mocks.createPlanningTask).toHaveBeenCalledWith(
-        1,
-        draft.id,
-        {
-          name: "Nouvelle tâche",
-          is_milestone: false,
-          target_parent_uid: undefined,
-          insert_after_uid: undefined,
-          expected_revision: 0,
-        },
-        expect.anything(),
-        expect.anything(),
-      ),
-    );
-    expect(await screen.findByText("Nouvelle tâche")).toBeInTheDocument();
-  });
-
-  it("sends a delete-tasks request and replaces the planning detail with the full server response", async () => {
-    const draft = planning({ id: 2, status: "draft" });
-    const initialDetail: PlanningDetail = {
-      ...draft,
-      tasks: [
-        { ...detail(draft).tasks[0], uid: 10, name: "À conserver", position: 1 },
-        { ...detail(draft).tasks[0], uid: 11, name: "À supprimer", position: 2 },
-      ],
-      links: [],
-    };
-    const updatedDetail: PlanningDetail = {
-      ...draft,
-      tasks: [initialDetail.tasks[0]],
-      links: [],
-    };
-    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draft.id }));
-    mocks.listPlannings.mockResolvedValue([draft]);
-    mocks.getPlanning.mockResolvedValue(initialDetail);
-    mocks.deletePlanningTasks.mockResolvedValue(updatedDetail);
-
-    render(<ProjectDetailsPage />);
-
-    await screen.findByText("À supprimer");
-    fireEvent.click(screen.getByText("À supprimer"));
-    fireEvent.click(screen.getByRole("button", { name: "Supprimer la sélection" }));
-
-    await waitFor(() =>
-      expect(mocks.deletePlanningTasks).toHaveBeenCalledWith(
-        1,
-        draft.id,
-        { task_uids: [11], confirm_cascade: false, expected_revision: 0 },
-        expect.anything(),
-        expect.anything(),
-      ),
-    );
-    await waitFor(() => expect(screen.queryByText("À supprimer")).not.toBeInTheDocument());
-    expect(screen.getByText("À conserver")).toBeInTheDocument();
-  });
-
-  it("ignores a delete-tasks response for a planning that is no longer selected", async () => {
-    const draftA = planning({ id: 2, status: "draft" });
-    const draftB = planning({ id: 6, status: "draft", version_number: 2 });
-    const detailA: PlanningDetail = {
-      ...draftA,
-      tasks: [{ ...detail(draftA).tasks[0], uid: 10, name: "Premier", position: 1, parent_uid: null }],
-      links: [],
-    };
-    const detailB = detail(draftB);
-    const staleDetail: PlanningDetail = { ...draftA, tasks: [], links: [] };
-    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draftA.id }));
-    mocks.listPlannings.mockResolvedValue([draftA, draftB]);
-    mocks.getPlanning.mockImplementation(async (_projectId, planningId) =>
-      planningId === draftA.id ? detailA : detailB,
-    );
-    mocks.setDisplayedPlanning.mockImplementation(async (_projectId, planningId) =>
-      project({ status: "initialise", displayed_planning_id: planningId }),
-    );
-    let resolveDelete!: (value: PlanningDetail) => void;
-    mocks.deletePlanningTasks.mockImplementation(() => new Promise<PlanningDetail>((resolve) => {
-      resolveDelete = resolve;
-    }));
-
-    render(<ProjectDetailsPage />);
-
-    await screen.findByText("Premier");
-    fireEvent.click(screen.getByText("Premier"));
-    fireEvent.click(screen.getByRole("button", { name: "Supprimer la sélection" }));
-    await waitFor(() => expect(mocks.deletePlanningTasks).toHaveBeenCalledTimes(1));
-
-    fireEvent.change(await screen.findByRole("combobox", { name: "Version affichée" }), {
-      target: { value: String(draftB.id) },
-    });
-    await waitFor(() => expect(screen.getByText("Tâche 2")).toBeInTheDocument());
-
-    resolveDelete(staleDetail);
-    await waitFor(() => expect(mocks.deletePlanningTasks).toHaveResolved());
-
-    // The stale response (an empty task list for A) must never be applied on top of B's tasks.
-    expect(screen.getByText("Tâche 2")).toBeInTheDocument();
-  });
-
-  it("never sends a cascade delete confirmation to a planning version that is no longer displayed", async () => {
-    // Reproduces the race from the E3-05 review: requestDeleteSelection's probe (confirm_cascade
-    // false) is answered with CASCADE_CONFIRMATION_REQUIRED while planning A is displayed, opening
-    // PlanningTreeTable's own cascade AlertDialog; the user then switches the displayed planning
-    // to B before ever confirming it. Task uids are reused across a planning's versions, so
-    // blindly confirming here could delete the wrong version's tasks (see
-    // waterfall.services.planning_structure) -- deletePlanningTasks must never be called a second
-    // time (confirm_cascade: true) against B with A's task uids.
-    const draftA = planning({ id: 2, status: "draft" });
-    const draftB = planning({ id: 6, status: "draft", version_number: 2 });
-    const detailA: PlanningDetail = {
-      ...draftA,
-      tasks: [
-        { ...detail(draftA).tasks[0], uid: 10, name: "Poste", position: 1, parent_uid: null, is_summary: true },
-        { ...detail(draftA).tasks[0], uid: 11, name: "Lot", position: 1, parent_uid: 10 },
-      ],
-      links: [],
-    };
-    const detailB = detail(draftB);
-    mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draftA.id }));
-    mocks.listPlannings.mockResolvedValue([draftA, draftB]);
-    mocks.getPlanning.mockImplementation(async (_projectId, planningId) =>
-      planningId === draftA.id ? detailA : detailB,
-    );
-    mocks.setDisplayedPlanning.mockImplementation(async (_projectId, planningId) =>
-      project({ status: "initialise", displayed_planning_id: planningId }),
-    );
-    mocks.deletePlanningTasks.mockImplementation(async (_projectId, _planningId, payload) => {
-      if (!payload.confirm_cascade) {
-        throw new ApiError(409, "Cette tâche a des tâches enfants et nécessite une confirmation.", {
-          code: "CASCADE_CONFIRMATION_REQUIRED",
-          descendant_uids: [11],
-        });
-      }
-      throw new Error("deletePlanningTasks must never be retried with confirm_cascade after a version switch");
-    });
-
-    render(<ProjectDetailsPage />);
-
-    await screen.findByText("Poste");
-    fireEvent.click(screen.getByText("Poste"));
-    fireEvent.click(screen.getByRole("button", { name: "Supprimer la sélection" }));
-
-    await screen.findByRole("alertdialog");
-    expect(mocks.deletePlanningTasks).toHaveBeenCalledTimes(1);
-
-    // The cascade AlertDialog is modal, so the version selector is marked aria-hidden while it
-    // stays open; `hidden: true` reaches through that (see the analogous predecessor-links test
-    // above for the same pattern).
-    fireEvent.change(await screen.findByRole("combobox", { name: "Version affichée", hidden: true }), {
-      target: { value: String(draftB.id) },
-    });
-    await waitFor(() => expect(screen.getByText("Tâche 2")).toBeInTheDocument());
-
-    // Switching the displayed planning must close (or otherwise invalidate) the stale cascade
-    // dialog rather than leave it confirmable against the wrong version.
-    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
-    expect(mocks.deletePlanningTasks).toHaveBeenCalledTimes(1);
-    expect(mocks.deletePlanningTasks).not.toHaveBeenCalledWith(
-      1,
-      draftB.id,
-      expect.objectContaining({ confirm_cascade: true }),
-      expect.anything(),
-      expect.anything(),
-    );
-  });
 
   // E6-06/#67 (Haute + Moyenne review findings): creating a task from the Devis tab must
   // refresh `planningDetail` -- without a page reload -- so the "Tâche parente" selector in a
@@ -2241,6 +1190,583 @@ describe("ProjectDetailsPage planning lifecycle", () => {
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
       expect(await screen.findByRole("heading", { name: "Lotissement du projet" })).toBeInTheDocument();
       expect(mocks.reopenPlanningStructure).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // ------------------------------------------------------------------------------------------
+  // E14-10 (#336): the Planning tab reads and writes a **revision**.
+  // ------------------------------------------------------------------------------------------
+
+  describe("the displayed revision", () => {
+    function initialisedProject() {
+      mocks.getProject.mockResolvedValue(project({ status: "initialise" }));
+      mocks.listPlannings.mockResolvedValue([]);
+    }
+
+    it("displays the tree of the revision the project points at, with its positional identifiers", async () => {
+      initialisedProject();
+      mocks.listRevisions.mockResolvedValue(
+        revisionList([revisionSummary({ revision_id: 7, version_number: 3 })], { displayed_revision_id: 7 }),
+      );
+      mocks.getRevisionNodes.mockResolvedValue(
+        revisionTree({
+          revision_id: 7,
+          version_number: 3,
+          nodes: [taskNode(1, { name: "Terrassement", rowNumber: 91 })],
+        }),
+      );
+
+      render(<ProjectDetailsPage />);
+
+      expect(await screen.findByText("Terrassement")).toBeInTheDocument();
+      expect(screen.getByText("91")).toBeInTheDocument();
+      expect(mocks.getRevisionNodes).toHaveBeenCalledWith(1, 7, expect.anything(), expect.anything());
+      expect(screen.getByRole("combobox", { name: "Révision affichée" })).toHaveValue("7");
+    });
+
+    it("falls back to the reference revision when no draft is being worked on", async () => {
+      initialisedProject();
+      mocks.listRevisions.mockResolvedValue(
+        revisionList(
+          [
+            revisionSummary({ revision_id: 7, version_number: 1, status: "validated" }),
+            revisionSummary({ revision_id: 8, version_number: 2, status: "draft" }),
+          ],
+          { reference_revision_id: 7, displayed_revision_id: null },
+        ),
+      );
+
+      render(<ProjectDetailsPage />);
+
+      await waitFor(() =>
+        expect(mocks.getRevisionNodes).toHaveBeenCalledWith(1, 7, expect.anything(), expect.anything()),
+      );
+    });
+
+    it("says there is nothing to display, rather than failing, on a project with no revision", async () => {
+      initialisedProject();
+      mocks.listRevisions.mockResolvedValue(emptyRevisionList());
+
+      render(<ProjectDetailsPage />);
+
+      expect(await screen.findByText(/Aucune révision à afficher/)).toBeInTheDocument();
+      expect(mocks.getRevisionNodes).not.toHaveBeenCalled();
+    });
+
+    it("does not claim the project has no revision while the list is still being read", async () => {
+      // The first render has `revisions = []` simply because nothing has been asked yet. Drawing
+      // the empty state from it tells the user to import a planning over a network round-trip
+      // that may well be about to answer with three revisions.
+      initialisedProject();
+      let resolveList: (list: RevisionList) => void = () => undefined;
+      mocks.listRevisions.mockReturnValue(
+        new Promise<RevisionList>((resolve) => {
+          resolveList = resolve;
+        }),
+      );
+
+      render(<ProjectDetailsPage />);
+
+      expect(await screen.findByText(/Chargement des révisions/)).toBeInTheDocument();
+      expect(screen.queryByText(/Aucune révision à afficher/)).not.toBeInTheDocument();
+      expect(screen.queryByText("Aucune révision pour ce projet.")).not.toBeInTheDocument();
+
+      resolveList(emptyRevisionList());
+
+      expect(await screen.findByText(/Aucune révision à afficher/)).toBeInTheDocument();
+    });
+
+    it("does not invite an import when the revision list failed to load", async () => {
+      // A failed read is not an empty project: the way out is to retry, not to import a planning.
+      initialisedProject();
+      mocks.listRevisions.mockRejectedValue(new ApiError(503, "Service indisponible"));
+
+      render(<ProjectDetailsPage />);
+
+      expect(await screen.findByText("Service indisponible")).toBeInTheDocument();
+      expect(screen.getByText(/n'ont pas pu être chargées/)).toBeInTheDocument();
+      expect(screen.queryByText(/Aucune révision à afficher/)).not.toBeInTheDocument();
+    });
+
+    it("renders a validated revision read-only, with no edit command at all", async () => {
+      initialisedProject();
+      mocks.listRevisions.mockResolvedValue(
+        revisionList([revisionSummary({ revision_id: 7, status: "validated", validated_at: "2026-09-02T10:00:00Z" })]),
+      );
+      mocks.getRevisionNodes.mockResolvedValue(revisionTree({ status: "validated" }));
+
+      render(<ProjectDetailsPage />);
+
+      expect(await screen.findByText("Étude")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Indenter" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Ajouter une tâche" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Valider la révision" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Créer un brouillon" })).toBeInTheDocument();
+    });
+  });
+
+  describe("revision commands", () => {
+    async function renderDraftRevision(treeOverrides: Partial<RevisionTree> = {}) {
+      mocks.getProject.mockResolvedValue(project({ status: "initialise" }));
+      mocks.listPlannings.mockResolvedValue([]);
+      mocks.listRevisions.mockResolvedValue(
+        revisionList([revisionSummary({ revision_id: 7, lock_version: 4 })], { displayed_revision_id: 7 }),
+      );
+      mocks.getRevisionNodes.mockResolvedValue(
+        revisionTree({
+          lock_version: 4,
+          nodes: [taskNode(1, { name: "Étude", rowNumber: 91 }), taskNode(2, { name: "Réalisation", position: 2, rowNumber: 92 })],
+          ...treeOverrides,
+        }),
+      );
+      render(<ProjectDetailsPage />);
+      expect(await screen.findByText("Étude")).toBeInTheDocument();
+    }
+
+    it("sends a move as a mode and the selection, quoting the counter the tree was read with", async () => {
+      await renderDraftRevision();
+
+      fireEvent.click(screen.getAllByRole("row")[2]); // "Réalisation"
+      fireEvent.click(screen.getByRole("button", { name: "Monter" }));
+
+      await waitFor(() =>
+        expect(mocks.moveRevisionNodes).toHaveBeenCalledWith(
+          1,
+          7,
+          { expected_lock_version: 4, node_ids: [2], mode: "up" },
+          expect.anything(),
+          expect.anything(),
+        ),
+      );
+    });
+
+    it("re-reads the whole tree after a write, since a move changes rows the response never names", async () => {
+      // This is what makes a task drag its cost lines along: row_number, level and a cost facet's
+      // bearing task are computed on read, so only a re-read shows the new state (EPIC #326).
+      await renderDraftRevision();
+      const readsBefore = mocks.getRevisionNodes.mock.calls.length;
+
+      fireEvent.click(screen.getAllByRole("row")[2]);
+      fireEvent.click(screen.getByRole("button", { name: "Monter" }));
+
+      await waitFor(() => expect(mocks.getRevisionNodes.mock.calls.length).toBeGreaterThan(readsBefore));
+    });
+
+    it("creates a draft from the displayed revision and switches to it, without writing to the source", async () => {
+      mocks.getProject.mockResolvedValue(project({ status: "initialise" }));
+      mocks.listPlannings.mockResolvedValue([]);
+      mocks.listRevisions.mockResolvedValue(
+        revisionList([revisionSummary({ revision_id: 7, status: "validated", lock_version: 2 })]),
+      );
+      mocks.getRevisionNodes.mockResolvedValue(revisionTree({ status: "validated", lock_version: 2 }));
+      mocks.copyRevision.mockResolvedValue({
+        revision_id: 8,
+        lock_version: 0,
+        source_revision_id: 7,
+        version_number: 2,
+        kind: "initial",
+      });
+
+      render(<ProjectDetailsPage />);
+      expect(await screen.findByText("Étude")).toBeInTheDocument();
+
+      mocks.listRevisions.mockResolvedValue(
+        revisionList(
+          [
+            revisionSummary({ revision_id: 7, status: "validated", lock_version: 2 }),
+            revisionSummary({ revision_id: 8, version_number: 2 }),
+          ],
+          { displayed_revision_id: 8 },
+        ),
+      );
+      mocks.getRevisionNodes.mockResolvedValue(revisionTree({ revision_id: 8, version_number: 2 }));
+
+      fireEvent.click(screen.getByRole("button", { name: "Créer un brouillon" }));
+
+      await waitFor(() =>
+        // The **source**'s counter: a source that moved since it was read would produce the copy
+        // of a tree the user never saw.
+        expect(mocks.copyRevision).toHaveBeenCalledWith(
+          1,
+          7,
+          { expected_lock_version: 2 },
+          expect.anything(),
+          expect.anything(),
+        ),
+      );
+      // The copy is displayed, and the source was never written to.
+      await waitFor(() =>
+        expect(mocks.getRevisionNodes).toHaveBeenCalledWith(1, 8, expect.anything(), expect.anything()),
+      );
+      expect(mocks.updateRevisionPlanFacet).not.toHaveBeenCalled();
+      expect(mocks.moveRevisionNodes).not.toHaveBeenCalled();
+      expect(await screen.findByText(/Brouillon V2 créé/)).toBeInTheDocument();
+    });
+
+    it("turns the table read-only when a write is refused because the revision was validated", async () => {
+      // INV-03 under the user's feet: another tab validated it. Keeping an editable table over a
+      // revision that refuses every write would only produce a second refusal.
+      await renderDraftRevision();
+      mocks.moveRevisionNodes.mockRejectedValue(
+        new ApiError(409, "Figée", { code: "REVISION_IMMUTABLE" }),
+      );
+      mocks.getRevisionNodes.mockResolvedValue(
+        revisionTree({ status: "validated", nodes: [taskNode(1, { name: "Étude" })] }),
+      );
+
+      fireEvent.click(screen.getAllByRole("row")[2]);
+      fireEvent.click(screen.getByRole("button", { name: "Monter" }));
+
+      await waitFor(() => expect(screen.queryByRole("button", { name: "Monter" })).not.toBeInTheDocument());
+      expect(screen.getByText(/Révision validée ou projet en lecture seule/)).toBeInTheDocument();
+    });
+
+    it("shows a reload banner on a stale-counter conflict, and reloads only when asked", async () => {
+      await renderDraftRevision();
+      mocks.moveRevisionNodes.mockRejectedValue(
+        new ApiError(409, "Conflit", {
+          code: "REVISION_LOCK_CONFLICT",
+          revision_id: 7,
+          expected_lock_version: 4,
+          current_lock_version: 6,
+        }),
+      );
+
+      fireEvent.click(screen.getAllByRole("row")[2]);
+      fireEvent.click(screen.getByRole("button", { name: "Monter" }));
+
+      expect(await screen.findByText("Révision modifiée")).toBeInTheDocument();
+      const readsBefore = mocks.getRevisionNodes.mock.calls.length;
+
+      fireEvent.click(screen.getByRole("button", { name: "Recharger la révision" }));
+
+      await waitFor(() => expect(mocks.getRevisionNodes.mock.calls.length).toBeGreaterThan(readsBefore));
+      await waitFor(() => expect(screen.queryByText("Révision modifiée")).not.toBeInTheDocument());
+    });
+
+    it("names the chiffrage a deletion took away rather than losing it silently", async () => {
+      await renderDraftRevision();
+      mocks.deleteRevisionNodes.mockResolvedValue({
+        revision_id: 7,
+        lock_version: 5,
+        removed_node_ids: [2],
+        cost_losses: [
+          {
+            node_id: 30,
+            work_item_id: 300,
+            label: "Étude béton",
+            nature: "labor",
+            amount: "1200.00",
+            bearing_task_name: "Réalisation",
+          },
+        ],
+      });
+
+      fireEvent.click(screen.getAllByRole("row")[2]);
+      fireEvent.click(screen.getByRole("button", { name: "Supprimer la sélection" }));
+      fireEvent.click(screen.getByRole("button", { name: "Supprimer" }));
+
+      await waitFor(() => expect(mocks.deleteRevisionNodes).toHaveBeenCalled());
+      expect(await screen.findByText(/Étude béton/)).toBeInTheDocument();
+    });
+
+    it("validates the displayed draft and re-reads it as read-only", async () => {
+      await renderDraftRevision();
+      mocks.validateRevision.mockResolvedValue({
+        revision_id: 7,
+        lock_version: 5,
+        version_number: 1,
+        status: "validated",
+        validated_at: "2026-09-03T09:00:00Z",
+        frozen_line_count: 3,
+        superseded_revision_ids: [],
+      });
+      mocks.listRevisions.mockResolvedValue(
+        revisionList([revisionSummary({ revision_id: 7, status: "validated", lock_version: 5 })]),
+      );
+      mocks.getRevisionNodes.mockResolvedValue(revisionTree({ status: "validated", lock_version: 5 }));
+
+      fireEvent.click(screen.getByRole("button", { name: "Valider la révision" }));
+
+      await waitFor(() =>
+        expect(mocks.validateRevision).toHaveBeenCalledWith(
+          1,
+          7,
+          { expected_lock_version: 4 },
+          expect.anything(),
+          expect.anything(),
+        ),
+      );
+      expect(await screen.findByText(/3 ligne\(s\) figée\(s\)/)).toBeInTheDocument();
+      await waitFor(() => expect(screen.queryByRole("button", { name: "Indenter" })).not.toBeInTheDocument());
+    });
+  });
+
+  // ----------------------------------------------------------------------------------------
+  // A response landing after the user switched revisions, and the failure affordances.
+  // ----------------------------------------------------------------------------------------
+
+  describe("a write whose response lands late", () => {
+    /** V2 (validated, id 7) and V3 (the displayed draft, id 8), each with its own tree. */
+    async function renderTwoRevisions() {
+      mocks.getProject.mockResolvedValue(project({ status: "initialise" }));
+      mocks.listPlannings.mockResolvedValue([]);
+      mocks.listRevisions.mockResolvedValue(
+        revisionList(
+          [
+            revisionSummary({ revision_id: 7, version_number: 2, status: "validated", lock_version: 2 }),
+            revisionSummary({ revision_id: 8, version_number: 3, lock_version: 4 }),
+          ],
+          { displayed_revision_id: 8 },
+        ),
+      );
+      mocks.getRevisionNodes.mockImplementation(async (_projectId: number, revisionId: number) =>
+        revisionId === 8
+          ? revisionTree({
+              revision_id: 8,
+              version_number: 3,
+              lock_version: 4,
+              nodes: [
+                taskNode(1, { name: "Étude V3", rowNumber: 91 }),
+                taskNode(2, { name: "Réalisation V3", position: 2, rowNumber: 92 }),
+              ],
+            })
+          : revisionTree({
+              revision_id: 7,
+              version_number: 2,
+              status: "validated",
+              lock_version: 2,
+              nodes: [taskNode(1, { name: "Étude V2", rowNumber: 81 })],
+            }),
+      );
+      render(<ProjectDetailsPage />);
+      expect(await screen.findByText("Étude V3")).toBeInTheDocument();
+    }
+
+    it("drops the failure of a write aimed at the revision the user has just left", async () => {
+      // The whole point of the guard: a 502 on V3 must not put an error -- nor, on a 409, a
+      // read-only conflict banner -- over V2, which the user is now looking at and which the
+      // failed command never touched.
+      await renderTwoRevisions();
+      let rejectMove: (cause: unknown) => void = () => undefined;
+      mocks.moveRevisionNodes.mockReturnValue(
+        new Promise((_resolve, reject) => {
+          rejectMove = reject;
+        }),
+      );
+
+      fireEvent.click(screen.getAllByRole("row")[2]); // "Réalisation V3"
+      fireEvent.click(screen.getByRole("button", { name: "Monter" }));
+      await waitFor(() => expect(mocks.moveRevisionNodes).toHaveBeenCalled());
+
+      fireEvent.change(screen.getByRole("combobox", { name: "Révision affichée" }), {
+        target: { value: "7" },
+      });
+      expect(await screen.findByText("Étude V2")).toBeInTheDocument();
+
+      rejectMove(new ApiError(502, "Passerelle indisponible"));
+
+      await waitFor(() => expect(screen.getByText("Étude V2")).toBeInTheDocument());
+      expect(screen.queryByText("Passerelle indisponible")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Réessayer" })).not.toBeInTheDocument();
+      expect(screen.queryByText("Étude V3")).not.toBeInTheDocument();
+    });
+
+    it("does not offer to replay a failed write once another revision is displayed", async () => {
+      // The retry replays the command with the lock_version of the tree it failed on, so offered
+      // over V2 it would write into V3 -- and the re-read that follows, being stale, would be
+      // dropped: the write would land with nothing on screen to say so.
+      await renderTwoRevisions();
+      mocks.moveRevisionNodes.mockRejectedValue(new Error("network down"));
+
+      fireEvent.click(screen.getAllByRole("row")[2]);
+      fireEvent.click(screen.getByRole("button", { name: "Monter" }));
+      expect(await screen.findByRole("button", { name: "Réessayer" })).toBeInTheDocument();
+
+      fireEvent.change(screen.getByRole("combobox", { name: "Révision affichée" }), {
+        target: { value: "7" },
+      });
+
+      expect(await screen.findByText("Étude V2")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Réessayer" })).not.toBeInTheDocument();
+      // The error itself belonged to V3 too, and goes with it. Asserted on the message actually
+      // rendered -- a generic failure is reported with the fallback, never with `cause.message`,
+      // so looking for "network down" here would be an assertion nothing could ever fail.
+      expect(screen.queryByText("Impossible de déplacer la sélection.")).not.toBeInTheDocument();
+    });
+
+    it("offers a retry after a generic move failure and re-sends the very same command", async () => {
+      await renderTwoRevisions();
+      mocks.moveRevisionNodes
+        .mockRejectedValueOnce(new Error("network down"))
+        .mockResolvedValueOnce({ revision_id: 8, lock_version: 5 });
+
+      fireEvent.click(screen.getAllByRole("row")[2]);
+      fireEvent.click(screen.getByRole("button", { name: "Monter" }));
+
+      await waitFor(() => expect(mocks.moveRevisionNodes).toHaveBeenCalledTimes(1));
+      fireEvent.click(await screen.findByRole("button", { name: "Réessayer" }));
+
+      await waitFor(() => expect(mocks.moveRevisionNodes).toHaveBeenCalledTimes(2));
+      // Same counter, deliberately: the retry replays the command against the tree the user acted
+      // on, so a revision that moved in the meantime answers a 409 instead of applying it twice.
+      expect(mocks.moveRevisionNodes.mock.calls[1][2]).toEqual(mocks.moveRevisionNodes.mock.calls[0][2]);
+      expect(mocks.moveRevisionNodes.mock.calls[1][2]).toEqual({
+        expected_lock_version: 4,
+        node_ids: [2],
+        mode: "up",
+      });
+      await waitFor(() => expect(screen.queryByRole("button", { name: "Réessayer" })).not.toBeInTheDocument());
+    });
+
+    it("logs out when a revision write fails with a post-refresh 401", async () => {
+      // Unconditional, unlike everything above: an expired session is not a statement about a
+      // revision, and must log the user out whatever is on screen when the response lands.
+      await renderTwoRevisions();
+      mocks.moveRevisionNodes.mockRejectedValue(new ApiError(401, "Session expirée"));
+
+      fireEvent.click(screen.getAllByRole("row")[2]);
+      fireEvent.click(screen.getByRole("button", { name: "Monter" }));
+
+      await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith("/login"));
+      expect(screen.queryByRole("button", { name: "Réessayer" })).not.toBeInTheDocument();
+    });
+
+    it("logs out on a 401 that lands after the user has switched revisions", async () => {
+      // What makes the expiry check *unconditional* rather than merely first: the test above
+      // never leaves V3, so it passes just as well with the check placed behind the "is this
+      // still the displayed revision?" guard. Here the guard is crossed, and only a check that
+      // runs before it still logs the user out -- otherwise the session is dead in place, with
+      // no redirection and every later write failing silently.
+      await renderTwoRevisions();
+      let rejectMove: (cause: unknown) => void = () => undefined;
+      mocks.moveRevisionNodes.mockReturnValue(
+        new Promise((_resolve, reject) => {
+          rejectMove = reject;
+        }),
+      );
+
+      fireEvent.click(screen.getAllByRole("row")[2]); // "Réalisation V3"
+      fireEvent.click(screen.getByRole("button", { name: "Monter" }));
+      await waitFor(() => expect(mocks.moveRevisionNodes).toHaveBeenCalled());
+
+      fireEvent.change(screen.getByRole("combobox", { name: "Révision affichée" }), {
+        target: { value: "7" },
+      });
+      expect(await screen.findByText("Étude V2")).toBeInTheDocument();
+
+      rejectMove(new ApiError(401, "Session expirée"));
+
+      await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith("/login"));
+    });
+  });
+
+  describe("importing into a revision", () => {
+    it("says which revision the file landed in once the import is confirmed", async () => {
+      mocks.getProject.mockResolvedValue(project({ status: "initialise" }));
+      mocks.listPlannings.mockResolvedValue([]);
+      mocks.listRevisions.mockResolvedValue(emptyRevisionList());
+      mocks.runImportBatch.mockResolvedValue({ batchId: 42, revisionId: 9, revisionCreated: true });
+
+      render(<ProjectDetailsPage />);
+
+      const input = await screen.findByLabelText("Importer un planning MS Project (.xml)");
+      fireEvent.change(input, {
+        target: { files: [new File(["<Project />"], "planning.xml", { type: "application/xml" })] },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Prévisualiser l'import" }));
+
+      expect(await screen.findByRole("heading", { name: "Remplacement à confirmer" })).toBeInTheDocument();
+
+      mocks.listRevisions.mockResolvedValue(
+        revisionList([revisionSummary({ revision_id: 9, version_number: 1 })], { displayed_revision_id: 9 }),
+      );
+      mocks.getRevisionNodes.mockResolvedValue(revisionTree({ revision_id: 9 }));
+
+      fireEvent.click(screen.getByRole("button", { name: "Confirmer le remplacement" }));
+
+      expect(await screen.findByRole("heading", { name: "Import appliqué" })).toBeInTheDocument();
+      expect(screen.getByText(/importé dans la révision V1/)).toBeInTheDocument();
+      expect(screen.getByText(/créée pour l'occasion/)).toBeInTheDocument();
+
+      // Picking another file must take the banner down with the preview: left up, it keeps
+      // asserting that the file now selected has already been imported into V1.
+      fireEvent.change(screen.getByLabelText("Importer un planning MS Project (.xml)"), {
+        target: { files: [new File(["<Project />"], "autre.xml", { type: "application/xml" })] },
+      });
+
+      expect(await screen.findByText("Fichier sélectionné : autre.xml")).toBeInTheDocument();
+      expect(screen.queryByRole("heading", { name: "Import appliqué" })).not.toBeInTheDocument();
+      await waitFor(() =>
+        expect(mocks.getRevisionNodes).toHaveBeenCalledWith(1, 9, expect.anything(), expect.anything()),
+      );
+    });
+
+    it("applies an import that removes a task without any error, on a project that carries chiffrage", async () => {
+      mocks.getProject.mockResolvedValue(project({ status: "initialise" }));
+      mocks.listPlannings.mockResolvedValue([]);
+      mocks.listRevisions.mockResolvedValue(
+        revisionList([revisionSummary({ revision_id: 9 })], { displayed_revision_id: 9 }),
+      );
+      mocks.getRevisionNodes.mockResolvedValue(
+        revisionTree({ revision_id: 9, nodes: [taskNode(1, { name: "Étude" }), taskNode(2, { name: "Disparue", position: 2 })] }),
+      );
+      mocks.getImportBatchDiff.mockResolvedValue({
+        batchId: 42,
+        identicalSource: false,
+        items: [
+          {
+            kind: "removed",
+            uid: 2,
+            message: "Tâche 2 (Disparue) supprimée",
+            fields: [],
+            costLosses: [
+              {
+                nodeId: 30,
+                workItemId: 300,
+                label: "Étude béton",
+                nature: "labor",
+                amount: "1200.00",
+                bearingTaskName: "Disparue",
+              },
+            ],
+          },
+        ],
+        costLosses: [
+          {
+            nodeId: 30,
+            workItemId: 300,
+            label: "Étude béton",
+            nature: "labor",
+            amount: "1200.00",
+            bearingTaskName: "Disparue",
+          },
+        ],
+      });
+      mocks.runImportBatch.mockResolvedValue({ batchId: 42, revisionId: 9, revisionCreated: false });
+
+      render(<ProjectDetailsPage />);
+
+      const input = await screen.findByLabelText("Importer un planning MS Project (.xml)");
+      fireEvent.change(input, {
+        target: { files: [new File(["<Project />"], "planning.xml", { type: "application/xml" })] },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Prévisualiser l'import" }));
+
+      // Règle 3: the deletion is named, with its deduplicated total, before it is confirmed.
+      expect(await screen.findByText(/1 ligne\(s\) de chiffrage/)).toBeInTheDocument();
+      expect(screen.getByText(/Tâche 2 \(Disparue\) supprimée/)).toBeInTheDocument();
+
+      // After the import the row is simply gone -- no 409, no error banner (#325 is over).
+      mocks.getRevisionNodes.mockResolvedValue(
+        revisionTree({ revision_id: 9, nodes: [taskNode(1, { name: "Étude" })] }),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Confirmer le remplacement" }));
+
+      await waitFor(() => expect(screen.queryByText("Disparue")).not.toBeInTheDocument());
+      // No 409, no error banner: a draft allows a deletion, chiffrage or not (#325 is over).
+      expect(screen.queryByText(/Impossible/)).not.toBeInTheDocument();
+      expect(document.querySelector('[data-slot="alert"].text-destructive')).toBeNull();
     });
   });
 });

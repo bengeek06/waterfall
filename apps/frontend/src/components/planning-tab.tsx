@@ -1,22 +1,17 @@
 "use client";
 
 import { PlanningConflictBanner } from "@/components/planning-conflict-banner";
-import { PlanningImportPanel } from "@/components/planning-import-panel";
+import { PlanningImportPanel, type PlanningImportTarget } from "@/components/planning-import-panel";
 import { PlanningStructureEditor, type PlanningStructureGroup } from "@/components/planning-structure-editor";
 import { PlanningTreePanel } from "@/components/planning-tree-panel";
-import { PlanningVersionControls } from "@/components/planning-version-controls";
-import type { PlanningRevisionConflict } from "@/hooks/use-planning-detail";
-import type {
-  ImportDiff,
-  Planning,
-  PlanningDetail,
-  PlanningTaskScheduleUpdate,
-  Project,
-  TaskLinkWrite,
-} from "@/lib/backend";
+import { PlanningVersionControls, revisionLabel } from "@/components/planning-version-controls";
+import type { CreateTaskCommand } from "@/hooks/use-planning-create-task-dialog";
+import type { SchedulePayload } from "@/hooks/use-planning-schedule-drafts";
+import type { RevisionLockConflict } from "@/hooks/use-revision-planning";
+import type { ImportDiff, Project, Revision, RevisionPredecessorWrite, RevisionTree } from "@/lib/backend";
 import { DEFAULT_PROJECT_CALENDAR, type ProjectCalendar } from "@/lib/planning-calendar";
 import type { PlanningStructureDraftRow } from "@/lib/planning-structure";
-import type { PlanningMoveCommand } from "@/lib/planning-tree";
+import type { PlanningMoveMode } from "@/lib/planning-tree";
 import type { ChangeEvent } from "react";
 
 export type PlanningTabProps = {
@@ -34,13 +29,14 @@ export type PlanningTabProps = {
   onExportXml: () => void;
   importReview: { batchId: number; diff: ImportDiff } | null;
   onConfirmImport: () => void;
+  importTarget: PlanningImportTarget | null;
 
   // Structure editor
   structureOpen: boolean;
   postGroups: PlanningStructureGroup[];
   structureDraft: PlanningStructureDraftRow[];
   structureBusy: boolean;
-  structureAction: "save" | "generate" | "skip" | null;
+  structureAction: "save" | "generate" | "skip" | "reopen" | null;
   onUpdatePostField: (postKey: string, field: "postKey" | "postName", value: string) => void;
   onUpdateLotField: (rowId: string, field: "lotKey" | "lotName", value: string) => void;
   onUpdateDeliverable: (rowId: string, deliverableIndex: number, value: string) => void;
@@ -53,47 +49,34 @@ export type PlanningTabProps = {
   onGenerateStructure: () => void;
   onSkipStructure: () => void;
 
-  // Version controls
-  plannings: Planning[];
-  selectedPlanningId: number | null;
-  planningBusy: boolean;
-  onSelectPlanning: (planningId: number) => void;
-  selectedPlanning: Planning | null;
-  selectedPlanningHasConflict: boolean;
-  onValidatePlanning: () => void;
-  onSetReference: () => void;
-  onCreateVersion: () => void;
+  // Revision controls
+  revisions: Revision[];
+  selectedRevision: Revision | null;
+  selectedRevisionId: number | null;
+  referenceRevisionId: number | null;
+  revisionsBusy: boolean;
+  onSelectRevision: (revisionId: number) => void;
+  onCreateDraft: () => void;
+  onValidateRevision: () => void;
   onReopenStructure: () => void;
   planningMutationBusy: boolean;
-  canUndo: boolean;
-  canRedo: boolean;
-  onUndo: () => void;
-  onRedo: () => void;
+  /** Post-command feedback (a draft was created, a validation froze N lines, a deletion took chiffrage away). */
+  revisionFeedback: string | null;
 
   // Conflict banner
-  conflict: PlanningRevisionConflict | null;
+  conflict: RevisionLockConflict | null;
   onReloadConflict: () => void;
+  /** True when the page is already showing an error banner -- see PlanningTreePanel.hasError. */
+  hasError: boolean;
 
   // Tree panel
-  planningDetailBusy: boolean;
-  planningDetail: PlanningDetail | null;
-  onMove: (command: PlanningMoveCommand) => void;
-  onScheduleUpdate: (
-    taskUid: number,
-    payload: Omit<PlanningTaskScheduleUpdate, "expected_revision">,
-  ) => Promise<boolean>;
-  onEditLinks: (payload: { taskUid: number; links: TaskLinkWrite[] }) => Promise<void>;
-  onCreateTask: (command: {
-    name: string;
-    isMilestone: boolean;
-    targetParentUid?: number;
-    insertAfterUid?: number;
-  }) => void;
-  onDeleteTasks: (
-    taskUids: number[],
-    confirmCascade: boolean,
-    versionKey: number | string | null,
-  ) => Promise<void>;
+  treeBusy: boolean;
+  tree: RevisionTree | null;
+  onMove: (mode: PlanningMoveMode, nodeIds: number[]) => void;
+  onScheduleUpdate: (nodeId: number, payload: SchedulePayload) => Promise<boolean>;
+  onEditLinks: (payload: { nodeId: number; predecessors: RevisionPredecessorWrite[] }) => Promise<void>;
+  onCreateTask: (command: CreateTaskCommand) => void;
+  onDeleteNodes: (nodeIds: number[]) => void;
 };
 
 // A skeleton can only be generated once, from a project that hasn't already got a displayed or
@@ -110,6 +93,30 @@ function canSkipPlanningStructure(project: Project | null): boolean {
 // project is past "cree") and the project itself isn't read-only.
 function canReopenPlanningStructure(project: Project | null, isReadOnlyProject: boolean): boolean {
   return !isReadOnlyProject && project?.status !== "cree";
+}
+
+/**
+ * What the header says under "Révision affichée".
+ *
+ * "Aucune révision pour ce projet." is a *conclusion*, and it is only reachable once the list has
+ * actually answered: asserted while the read is still in flight -- or after it failed -- it tells
+ * the user the project is empty when it may be nothing of the sort.
+ */
+function revisionSubtitle(
+  selectedRevision: Revision | null,
+  revisionsBusy: boolean,
+  hasError: boolean,
+): string {
+  if (selectedRevision) {
+    return `${revisionLabel(selectedRevision)} - planning et devis d'une même révision`;
+  }
+  if (revisionsBusy) {
+    return "Chargement des révisions...";
+  }
+  if (hasError) {
+    return "Les révisions du projet n'ont pas pu être chargées.";
+  }
+  return "Aucune révision pour ce projet.";
 }
 
 // Falls back to DEFAULT_PROJECT_CALENDAR while the project hasn't loaded yet (e.g. first render):
@@ -144,6 +151,7 @@ export function PlanningTab({
   onExportXml,
   importReview,
   onConfirmImport,
+  importTarget,
   structureOpen,
   postGroups,
   structureDraft,
@@ -160,30 +168,27 @@ export function PlanningTab({
   onSaveStructure,
   onGenerateStructure,
   onSkipStructure,
-  plannings,
-  selectedPlanningId,
-  planningBusy,
-  onSelectPlanning,
-  selectedPlanning,
-  selectedPlanningHasConflict,
-  onValidatePlanning,
-  onSetReference,
-  onCreateVersion,
+  revisions,
+  selectedRevision,
+  selectedRevisionId,
+  referenceRevisionId,
+  revisionsBusy,
+  onSelectRevision,
+  onCreateDraft,
+  onValidateRevision,
   onReopenStructure,
   planningMutationBusy,
-  canUndo,
-  canRedo,
-  onUndo,
-  onRedo,
+  revisionFeedback,
   conflict,
   onReloadConflict,
-  planningDetailBusy,
-  planningDetail,
+  hasError,
+  treeBusy,
+  tree,
   onMove,
   onScheduleUpdate,
   onEditLinks,
   onCreateTask,
-  onDeleteTasks,
+  onDeleteNodes,
 }: PlanningTabProps) {
   if (!active) {
     return null;
@@ -202,6 +207,7 @@ export function PlanningTab({
         onExportXml={onExportXml}
         importReview={importReview}
         onConfirmImport={onConfirmImport}
+        importTarget={importTarget}
       />
 
       <PlanningStructureEditor
@@ -229,52 +235,48 @@ export function PlanningTab({
         <div className="grid gap-4">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
-              <h2>Planning affiché</h2>
+              <h2>Révision affichée</h2>
               <p className="text-sm text-muted-foreground">
-                {selectedPlanning
-                  ? `Version ${selectedPlanning.version_number} - ${selectedPlanning.status}`
-                  : "Aucune version de planning."}
+                {revisionSubtitle(selectedRevision, revisionsBusy, hasError)}
               </p>
             </div>
             <PlanningVersionControls
-              plannings={plannings}
-              selectedPlanningId={selectedPlanningId}
-              planningBusy={planningBusy}
-              onSelectPlanning={onSelectPlanning}
-              selectedPlanning={selectedPlanning}
+              revisions={revisions}
+              selectedRevisionId={selectedRevisionId}
+              selectedRevision={selectedRevision}
+              referenceRevisionId={referenceRevisionId}
+              revisionsBusy={revisionsBusy}
+              mutationBusy={planningMutationBusy}
               isReadOnlyProject={isReadOnlyProject}
-              selectedPlanningHasConflict={selectedPlanningHasConflict}
-              onValidate={onValidatePlanning}
-              projectPlanningReferenceId={project?.planning_reference_id}
-              onSetReference={onSetReference}
-              onCreateVersion={onCreateVersion}
+              hasConflict={conflict !== null}
+              onSelectRevision={onSelectRevision}
+              onCreateDraft={onCreateDraft}
+              onValidate={onValidateRevision}
               showReopenStructure={canReopenPlanningStructure(project, isReadOnlyProject)}
               onReopenStructure={onReopenStructure}
-              planningMutationBusy={planningMutationBusy}
-              canUndo={canUndo}
-              canRedo={canRedo}
-              onUndo={onUndo}
-              onRedo={onRedo}
             />
           </div>
-          <PlanningConflictBanner
-            conflict={conflict}
-            planningId={selectedPlanning?.id ?? null}
-            onReload={onReloadConflict}
-          />
+          {revisionFeedback ? (
+            <p role="status" className="text-sm text-muted-foreground">
+              {revisionFeedback}
+            </p>
+          ) : null}
+          <PlanningConflictBanner conflict={conflict} onReload={onReloadConflict} />
           <PlanningTreePanel
-            planningDetailBusy={planningDetailBusy}
-            planningDetail={planningDetail}
-            selectedPlanning={selectedPlanning}
+            treeBusy={treeBusy}
+            revisionsBusy={revisionsBusy}
+            hasRevisions={revisions.length > 0}
+            hasError={hasError}
+            tree={tree}
             isReadOnlyProject={isReadOnlyProject}
-            selectedPlanningHasConflict={selectedPlanningHasConflict}
-            planningMutationBusy={planningMutationBusy}
+            hasConflict={conflict !== null}
+            mutationBusy={planningMutationBusy}
             calendar={projectCalendar(project)}
             onMove={onMove}
             onScheduleUpdate={onScheduleUpdate}
             onEditLinks={onEditLinks}
             onCreateTask={onCreateTask}
-            onDeleteTasks={onDeleteTasks}
+            onDeleteNodes={onDeleteNodes}
           />
         </div>
       ) : null}

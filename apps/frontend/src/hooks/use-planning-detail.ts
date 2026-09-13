@@ -11,7 +11,6 @@ import {
   SessionExpiredError,
 } from "@/lib/backend";
 import { clearSession, type SessionTokens } from "@/lib/session";
-import { getPlanningHistory, type PlanningHistoryByPlanningId, type PlanningHistoryState } from "@/lib/planning-history";
 import {
   getPlanningStructureDraftRows,
   structureToDraftRows,
@@ -20,15 +19,14 @@ import {
 
 type AppRouter = ReturnType<typeof useRouter>;
 
-// Mirrors the inline conflict record type declared alongside planningConflictByPlanningId in
-// ProjectDetailsPage (page.tsx) -- kept as a local duplicate rather than imported, so this hook
-// has no coupling to the component beyond the parameters it is passed.
-export type PlanningRevisionConflict = {
-  projectId: number;
-  expectedRevision: number;
-  currentRevision: number;
-  message: string;
-};
+// E14-10 (#336): this hook no longer belongs to the planning editor. The Planning tab reads a
+// **revision** now (see use-revision-planning.ts); what is left here is the legacy planning detail
+// the *Devis* tab still needs -- its parent-task selector and its post-create refresh -- until
+// E14-11 (#337) moves it too, plus the structure draft the lotissement editor hydrates from.
+//
+// The revision-conflict tracking that used to live here went with the undo/redo stacks it served:
+// `PUT .../tasks/restore` no longer exists, and the revision model carries its own optimistic lock
+// (REVISION_LOCK_CONFLICT, see use-revision-planning.ts).
 
 // Derives the structure-draft rows to apply after loading a planning: the saved draft's rows if
 // there is one, otherwise the rows inferred from the planning detail itself -- but only if every
@@ -51,36 +49,6 @@ export function deriveStructureDraftRows(
         row.deliverables.trim(),
     );
   return isComplete ? rows : null;
-}
-
-// Detects a revision conflict between the locally-tracked undo/redo history and the just-loaded
-// planning detail, and records it via `setPlanningConflictByPlanningId` if one is found (no-op
-// when the history has no tracked revision yet, or when it still matches). Extracted from
-// loadPlanningDetail (E4-20 / #206) -- same condition and conflict payload as before.
-export function recordRevisionConflictIfAny(
-  history: PlanningHistoryState,
-  detail: PlanningDetail,
-  selectedPlanningId: number,
-  projectId: number,
-  setPlanningConflictByPlanningId: (
-    updater: (
-      previous: Record<number, PlanningRevisionConflict>,
-    ) => Record<number, PlanningRevisionConflict>,
-  ) => void,
-): void {
-  const historyRevision = history.revision;
-  if (historyRevision === null || historyRevision === detail.revision) {
-    return;
-  }
-  setPlanningConflictByPlanningId((previous) => ({
-    ...previous,
-    [selectedPlanningId]: {
-      projectId,
-      expectedRevision: historyRevision,
-      currentRevision: detail.revision,
-      message: "Ce planning a été modifié entre-temps : recharge-le avant de continuer.",
-    },
-  }));
 }
 
 // Guards `loadPlanningDetail`'s catch/finally branches: whether a load that was scheduled as
@@ -121,14 +89,8 @@ interface UsePlanningDetailEffectParams {
   router: AppRouter;
   planningLoadGenerationRef: RefObject<number>;
   selectedPlanningIdRef: RefObject<number | null>;
-  historyByPlanningIdRef: RefObject<PlanningHistoryByPlanningId>;
   setPlanningDetail: (detail: PlanningDetail | null) => void;
   setPlanningDetailBusy: (busy: boolean) => void;
-  setPlanningConflictByPlanningId: (
-    updater: (
-      previous: Record<number, PlanningRevisionConflict>,
-    ) => Record<number, PlanningRevisionConflict>,
-  ) => void;
   setStructureDraft: (rows: PlanningStructureDraftRow[]) => void;
   setError: (message: string | null) => void;
 }
@@ -144,10 +106,8 @@ export function usePlanningDetailEffect({
   router,
   planningLoadGenerationRef,
   selectedPlanningIdRef,
-  historyByPlanningIdRef,
   setPlanningDetail,
   setPlanningDetailBusy,
-  setPlanningConflictByPlanningId,
   setStructureDraft,
   setError,
 }: UsePlanningDetailEffectParams) {
@@ -175,14 +135,6 @@ export function usePlanningDetailEffect({
             selectedPlanningId,
           )
         ) {
-          const history = getPlanningHistory(historyByPlanningIdRef.current, selectedPlanningId);
-          recordRevisionConflictIfAny(
-            history,
-            detail,
-            selectedPlanningId,
-            projectId,
-            setPlanningConflictByPlanningId,
-          );
           setPlanningDetail(detail);
           const rows = deriveStructureDraftRows(savedDraft, detail);
           if (rows) {
@@ -216,11 +168,9 @@ export function usePlanningDetailEffect({
     router,
     selectedPlanningId,
     session,
-    historyByPlanningIdRef,
     planningLoadGenerationRef,
     selectedPlanningIdRef,
     setError,
-    setPlanningConflictByPlanningId,
     setPlanningDetail,
     setPlanningDetailBusy,
     setStructureDraft,

@@ -7,8 +7,17 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import type { ImportDiff } from "@/lib/backend";
+import type { ImportCostLoss, ImportDiff, ImportDiffItem } from "@/lib/backend";
 import { cn } from "@/lib/utils";
+
+/** Where the last confirmed import landed, as the page resolves it from the revision list. */
+export type PlanningImportTarget = {
+  revisionId: number;
+  /** "V3" -- the version number the user sees, or null when the list could not be refreshed. */
+  versionLabel: string | null;
+  /** True when the import had to create that revision because the project had none. */
+  created: boolean;
+};
 
 export type PlanningImportPanelProps = {
   projectStatusInitialise: boolean;
@@ -21,7 +30,41 @@ export type PlanningImportPanelProps = {
   onExportXml: () => void;
   importReview: { batchId: number; diff: ImportDiff } | null;
   onConfirmImport: () => void;
+  /** Set once an import has actually been applied; null while none has been in this session. */
+  importTarget: PlanningImportTarget | null;
 };
+
+const EUROS = new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR" });
+
+function formatAmount(amount: string): string {
+  const value = Number(amount);
+  return Number.isFinite(value) ? EUROS.format(value) : `${amount} €`;
+}
+
+/**
+ * The project-level, **deduplicated** total of the chiffrage this import would destroy.
+ *
+ * This is the only summable list the diff carries. The per-item lists attribute the same loss to
+ * every vanished task that takes it away -- a cost node condemned by two nested deletions appears
+ * in both -- so adding them up would show an amount that is simply false. Hence the split this
+ * panel implements: the total at the project level, the names at the item level, never the
+ * reverse.
+ *
+ * A malformed amount is skipped rather than added: `Number("")` is NaN and a single one of them
+ * turns the whole total into "NaN €", while the per-line display right below degrades gracefully
+ * (see formatAmount). Same guard, same behaviour, on both sides of the panel.
+ */
+function totalCostLoss(losses: readonly ImportCostLoss[]): string {
+  const total = losses.reduce((sum, loss) => {
+    const amount = Number(loss.amount);
+    return Number.isFinite(amount) ? sum + amount : sum;
+  }, 0);
+  return EUROS.format(total);
+}
+
+function itemsWithCostLosses(diff: ImportDiff): ImportDiffItem[] {
+  return diff.items.filter((item) => item.costLosses.length > 0);
+}
 
 // Extracted from ProjectDetailsPage (E4-11 / #151): the MS Project import card (file input +
 // preview + XML export) and its "replacement to confirm" review banner. The two blocks are
@@ -38,6 +81,7 @@ export function PlanningImportPanel({
   onExportXml,
   importReview,
   onConfirmImport,
+  importTarget,
 }: PlanningImportPanelProps) {
   // dragenter/dragleave bubble up from the label/input/button children of the drop zone, so a
   // naive boolean toggled directly by those events would flicker off every time the pointer
@@ -157,14 +201,56 @@ export function PlanningImportPanel({
           <AlertTitle><h2>Remplacement à confirmer</h2></AlertTitle>
           <AlertDescription>
             Cette prévisualisation contient {importReview.diff.items.length} changement(s).
-            Le planning actuel ne sera remplacé qu&apos;après confirmation explicite.
+            Le planning de la révision ciblée ne sera remplacé qu&apos;après confirmation explicite.
           </AlertDescription>
           {importReview.diff.identicalSource ? (
             <AlertDescription>La source est identique à la dernière importation.</AlertDescription>
           ) : null}
+          {/*
+            Règle 3 : une suppression ne doit jamais être silencieuse. Le total dédoublonné est
+            affiché ici, au niveau du projet -- c'est le seul montant juste -- et les libellés sont
+            nommés item par item juste en dessous, sans montant cumulé.
+          */}
+          {importReview.diff.costLosses.length ? (
+            <AlertDescription>
+              <strong>
+                Cet import supprimera {importReview.diff.costLosses.length} ligne(s) de chiffrage,
+                pour un total de {totalCostLoss(importReview.diff.costLosses)}.
+              </strong>
+              <ul className="mt-2 list-disc pl-5 text-sm">
+                {itemsWithCostLosses(importReview.diff).map((item) => (
+                  <li key={`${item.kind}-${item.uid}`}>
+                    {item.message}
+                    <span className="text-muted-foreground">
+                      {" "}
+                      — chiffrage emporté :{" "}
+                      {item.costLosses.map((loss) => `${loss.label} (${formatAmount(loss.amount)})`).join(", ")}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </AlertDescription>
+          ) : null}
           <Button className="mt-3" variant="destructive" type="button" disabled={importBusy} onClick={onConfirmImport}>
             {importBusy ? "Import..." : "Confirmer le remplacement"}
           </Button>
+        </Alert>
+      ) : null}
+
+      {importTarget ? (
+        <Alert className="mb-4">
+          <AlertTitle><h2>Import appliqué</h2></AlertTitle>
+          {/*
+            L'import vise toujours la dernière révision du projet par numéro de version et le client
+            ne la choisit pas : sans cette restitution, un utilisateur qui croit alimenter un
+            brouillon alors qu'un plus récent existe ne l'apprendrait jamais.
+          */}
+          <AlertDescription>
+            Le fichier a été importé dans la révision {importTarget.versionLabel ?? `#${importTarget.revisionId}`}
+            {importTarget.created
+              ? ", créée pour l'occasion : le projet n'en avait aucune."
+              : ", la plus récente du projet."}
+          </AlertDescription>
         </Alert>
       ) : null}
     </>

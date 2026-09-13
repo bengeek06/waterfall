@@ -139,10 +139,10 @@ export function useTreeTableSelection<TRow>(rows: readonly TRow[], identity: Tre
       return;
     }
     // A row's raw `parentUidOf` is not guaranteed to resolve to a row that is actually navigable:
-    // a row whose parent is outside the loaded tree is rendered as a root while still carrying its
-    // original parent uid (the planning's re-rooted orphans), and a parent can also simply be
-    // hidden. Focusing such a uid would move the tab stop onto a row that does not exist, so the
-    // focus is only moved when the target is really there.
+    // a row whose parent is outside the rendered set still carries its original parent uid (a
+    // kind-filtered revision tree produces exactly that), and a parent can also simply be hidden.
+    // Focusing such a uid would move the tab stop onto a row that does not exist, so the focus is
+    // only moved when the target is really there.
     const parentUid = identity.parentUidOf(row);
     if (parentUid !== null && navigableIndexByUid.has(parentUid)) {
       setFocusedUid(parentUid);

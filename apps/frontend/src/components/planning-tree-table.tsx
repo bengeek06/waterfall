@@ -6,8 +6,8 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { PlanningCascadeDeleteDialog } from "@/components/planning-cascade-delete-dialog";
 import { PlanningCreateTaskDialog } from "@/components/planning-create-task-dialog";
+import { PlanningDeleteDialog } from "@/components/planning-delete-dialog";
 import { PlanningScheduleCells } from "@/components/planning-schedule-cells";
 import { PlanningTaskLinksDialog } from "@/components/planning-task-links-dialog";
 import { PlanningTreeToolbar } from "@/components/planning-tree-toolbar";
@@ -20,22 +20,21 @@ import {
   usePlanningColumnWidths,
   type PlanningColumnKey,
 } from "@/hooks/use-planning-column-widths";
-import { usePlanningCreateTaskDialog } from "@/hooks/use-planning-create-task-dialog";
-import { usePlanningDeleteSelection } from "@/hooks/use-planning-delete-selection";
-import { usePlanningScheduleDrafts } from "@/hooks/use-planning-schedule-drafts";
+import { usePlanningCreateTaskDialog, type CreateTaskCommand } from "@/hooks/use-planning-create-task-dialog";
+import { usePlanningScheduleDrafts, type SchedulePayload } from "@/hooks/use-planning-schedule-drafts";
 import { usePlanningTaskLinks } from "@/hooks/use-planning-task-links";
 import { stopRowKeys, useTreeTableSelection } from "@/hooks/use-tree-table-selection";
-import type { PlanningTaskScheduleUpdate, Task, TaskLinkWrite } from "@/lib/backend";
+import type { RevisionNode, RevisionPredecessorWrite } from "@/lib/backend";
 import { DEFAULT_PROJECT_CALENDAR, type ProjectCalendar } from "@/lib/planning-calendar";
 import { predecessorsLabel } from "@/lib/planning-links";
 import {
-  buildPlanningTreeRows,
-  computeIndentCommand,
-  computeOutdentCommand,
-  computeReorderCommand,
-  planningTreeRowIdentity,
-  type PlanningMoveCommand,
+  EXPLAINED_MOVE_REFUSALS,
+  planningMoveAvailability,
+  normalizeSelectionToRoots,
+  type PlanningMoveMode,
+  type PlanningRow,
 } from "@/lib/planning-tree";
+import { revisionNodeRowIdentity, siblingRanks } from "@/lib/revision-tree";
 import { cn } from "@/lib/utils";
 
 const COLUMN_HEADERS: ReadonlyArray<{ key: PlanningColumnKey; label: string }> = [
@@ -55,20 +54,15 @@ const COLUMN_HEADERS: ReadonlyArray<{ key: PlanningColumnKey; label: string }> =
 // have to traverse a per-row control that does nothing beyond announcing the name they'd already
 // hear. Only once the text is truncated does it become a focusable Tooltip trigger, which is the
 // only way to reach the full name without a mouse hover in that case.
-function TaskNameLabel({ name, width, isMilestone }: { name: string; width: number; isMilestone: boolean }) {
+function TaskNameLabel({ name, width, isMilestone }: Readonly<{ name: string; width: number; isMilestone: boolean }>) {
   // Typed as the common base rather than HTMLSpanElement | HTMLButtonElement because the same ref
   // is attached to either a plain <span> (untruncated case) or the Tooltip's <button> trigger
-  // (truncated case, see below) -- only scrollWidth/clientWidth are read from it, both of which
-  // are HTMLElement members, so this stays a pure typing fix with no runtime effect.
+  // (truncated case) -- only scrollWidth/clientWidth are read from it, both HTMLElement members.
   const textRef = useRef<HTMLElement>(null);
   const [isTruncated, setIsTruncated] = useState(false);
 
   // Re-checked whenever the name text or the Name column's own width changes -- either can flip
-  // whether the text actually overflows its box. `width` (usePlanningColumnWidths' committed value
-  // for the "name" column) also updates while a resize drag is in progress, not just once it ends:
-  // the hook commits at most one width per animation frame during a drag (see its own rAF-
-  // coalescing comment), so this re-measures at that same, already-throttled cadence rather than on
-  // every raw mousemove.
+  // whether the text actually overflows its box.
   useEffect(() => {
     const element = textRef.current;
     if (!element) {
@@ -108,155 +102,170 @@ function TaskNameLabel({ name, width, isMilestone }: { name: string; width: numb
   );
 }
 
-function taskTypeLabel(task: Task): string {
-  if (task.is_milestone) {
+// A task with task children is a summary line: the revision model carries no `is_summary` column,
+// because the tree already says it (and a task carrying only cost lines is not one).
+function planningRowTypeLabel(row: PlanningRow): string {
+  if (row.planning.is_milestone) {
     return "Jalon";
   }
-  return task.is_summary ? "Résumé" : "Tâche";
+  return row.hasChildren ? "Résumé" : "Tâche";
 }
 
-// Only meaningful when exactly one row is selected: with zero or several rows selected there is
-// no single unambiguous "relative to this task" position, so the create dialog only offers the
+function rowLabel(row: PlanningRow): string {
+  return `${row.row_number} - ${row.planning.name}`;
+}
+
+// Only meaningful when exactly one row is selected: with zero or several rows selected there is no
+// single unambiguous "relative to this task" position, so the create dialog only offers the
 // root-level default in that case (see PlanningCreateTaskDialog's position <select>).
-function getSingleSelectedTask(selectedUids: Set<number>, tasksByUid: Map<number, Task>): Task | null {
-  if (selectedUids.size !== 1) {
+function getSingleSelectedRow(selectedIds: Set<number>, rowsByNodeId: Map<number, PlanningRow>): PlanningRow | null {
+  if (selectedIds.size !== 1) {
     return null;
   }
-  return tasksByUid.get([...selectedUids][0]) ?? null;
+  return rowsByNodeId.get([...selectedIds][0]) ?? null;
 }
 
-type PlanningTreeTableProps = Readonly<{
-  tasks: Task[];
-  /** Any value identifying the loaded planning version; changing it resets local expand/selection state. */
-  versionKey: number | string | null;
+export type PlanningTreeTableProps = Readonly<{
+  /** Task rows of the displayed revision, depth-first, as lib/planning-tree.ts builds them. */
+  rows: PlanningRow[];
+  /**
+   * The revision's **complete** node list -- cost nodes included, hence not `rows` above.
+   *
+   * It is what the move commands decide on: the backend ranks a node among *all* its siblings
+   * (`children_of()`, INV-05), so a task sitting after a cost line is not at the rank the task
+   * rows alone suggest. See planningMoveAvailability's contract.
+   */
+  treeNodes: readonly RevisionNode[];
+  /** node_id -> row_number over the **whole** tree, for the Prédécesseurs column. */
+  rowNumberByNodeId: Map<number, number>;
+  /** Identity of the displayed revision; changing it resets local expand/selection/draft state. */
+  revisionKey: number | null;
   /**
    * The owning project's working calendar, used to format/parse the Duration cell and the
    * Prédécesseurs column's lag in MS-Project-like units (day/week/month) instead of raw minutes.
-   * Optional (defaulting to DEFAULT_PROJECT_CALENDAR) so call sites that don't care about this
-   * formatting -- most of this component's own tests -- don't need to thread it through, mirroring
-   * readOnly/mutationBusy's own optional-with-default pattern below.
    */
   calendar?: ProjectCalendar;
   readOnly?: boolean;
-  onMove?: (command: PlanningMoveCommand) => void;
-  onScheduleUpdate?: (
-    taskUid: number,
-    payload: Omit<PlanningTaskScheduleUpdate, "expected_revision">,
-  ) => Promise<boolean>;
-  /** Replaces the full predecessor link list of one task; rejects with a user-facing message on failure. */
-  onEditLinks?: (payload: { taskUid: number; links: TaskLinkWrite[] }) => Promise<void>;
-  /** Creates a single new task at an explicit position; errors are reported by the parent's own error state. */
-  onCreateTask?: (command: {
-    name: string;
-    isMilestone: boolean;
-    targetParentUid?: number;
-    insertAfterUid?: number;
-  }) => void;
   /**
-   * Deletes the given task uids. Must reject on failure -- including the
-   * CASCADE_CONFIRMATION_REQUIRED conflict, which this component itself turns into a follow-up
-   * confirmation dialog (see use-planning-delete-selection) -- so it can tell "needs confirmation"
-   * apart from "resolved".
-   *
-   * `versionKey` is the identity of the planning version the deletion was requested against
-   * (captured from this component's own `versionKey` prop at the moment the request was made,
-   * not re-read at call time). The caller must re-check it against whatever planning version is
-   * currently displayed before sending any request: task uids are reused across a planning's
-   * versions, so a cascade confirmation retried after the displayed version changed could
-   * otherwise delete the wrong version's tasks. Errors are reported by the parent's own error
-   * state, mirroring onCreateTask.
+   * Asks for one of the four sibling-level moves. The destination is **not** passed: `POST
+   * .../nodes/move` computes it from the mode (and the outdent semantics of #344 are its own, not
+   * this table's). Node ids are passed raw -- the backend normalises the selection to its roots.
    */
-  onDeleteTasks?: (
-    taskUids: number[],
-    confirmCascade: boolean,
-    versionKey: number | string | null,
-  ) => Promise<void>;
+  onMove?: (mode: PlanningMoveMode, nodeIds: number[]) => void;
+  onScheduleUpdate?: (nodeId: number, payload: SchedulePayload) => Promise<boolean>;
+  /** Replaces the whole predecessor list of one node; rejects with a user-facing message on failure. */
+  onEditLinks?: (payload: { nodeId: number; predecessors: RevisionPredecessorWrite[] }) => Promise<void>;
+  /** Creates a single task at an explicit position; errors are reported by the parent's own state. */
+  onCreateTask?: (command: CreateTaskCommand) => void;
+  /**
+   * Deletes the given nodes, their subtree and both facets of each (INV-02) -- the confirmation is
+   * asked here, before the call, since the backend's cascade is unconditional. Errors and the list
+   * of chiffrage the deletion took away are reported by the parent's own state.
+   */
+  onDeleteNodes?: (nodeIds: number[]) => void;
   mutationBusy?: boolean;
 }>;
 
 export function PlanningTreeTable({
-  tasks,
-  versionKey,
+  rows,
+  treeNodes,
+  rowNumberByNodeId,
+  revisionKey,
   calendar = DEFAULT_PROJECT_CALENDAR,
   readOnly = false,
   onMove,
   onScheduleUpdate,
   onEditLinks,
   onCreateTask,
-  onDeleteTasks,
+  onDeleteNodes,
   mutationBusy = false,
 }: PlanningTreeTableProps) {
-  const [renderedVersionKey, setRenderedVersionKey] = useState(versionKey);
+  const [renderedRevisionKey, setRenderedRevisionKey] = useState(revisionKey);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
 
-  // Full-planning lookup (unlike selection.visibleRows, not limited to currently-visible rows): a
-  // predecessor referenced by a collapsed/off-screen task must still resolve correctly.
-  const tasksByUid = useMemo(() => new Map(tasks.map((task) => [task.uid, task])), [tasks]);
-
-  // uid -> row_number lookup for predecessorsLabel: a predecessor link only carries the
-  // predecessor's stable uid, not its (display-order-derived) row_number, so this table lets the
-  // "Prédécesseurs" column show the same positional identifier as the ID column instead of the
-  // technical uid. Built once from the full task list (not just currently-visible rows, mirroring
-  // tasksByUid above), so it isn't recomputed on every row render.
-  const rowNumberByUid = useMemo(
-    () => new Map(tasks.map((task) => [task.uid, task.row_number])),
-    [tasks],
-  );
+  // Whole-tree lookup (unlike selection.visibleRows, not limited to currently-visible rows): a
+  // predecessor referenced by a collapsed/off-screen row must still resolve correctly.
+  const rowsByNodeId = useMemo(() => new Map(rows.map((row) => [row.node_id, row])), [rows]);
 
   const columnWidths = usePlanningColumnWidths();
   // Table renders `w-full`, which under table-fixed layout redistributes any surplus between the
   // container and this sum across the columns -- making rendered widths drift from the persisted
   // ones and coupling a resize on one column to its neighbors. Pinning the table's own width to
-  // exactly this sum (see the inline style below) keeps each handle in sole control of its column;
-  // the existing overflow-x-auto wrapper still takes over and scrolls once this exceeds the
-  // viewport.
+  // exactly this sum keeps each handle in sole control of its column; the existing overflow-x-auto
+  // wrapper still takes over and scrolls once this exceeds the viewport.
   const totalColumnWidth = useMemo(
     () => PLANNING_COLUMN_ORDER.reduce((total, key) => total + columnWidths.widths[key], 0),
     [columnWidths.widths],
   );
-  // Flattened once per task list, independently of what is collapsed: the shared selection hook
-  // owns collapsedUids and applies the visibility filter itself.
-  const planningRows = useMemo(() => buildPlanningTreeRows(tasks), [tasks]);
-  const selection = useTreeTableSelection(planningRows, planningTreeRowIdentity);
+  const selection = useTreeTableSelection(rows, revisionNodeRowIdentity);
   const scheduleDrafts = usePlanningScheduleDrafts({ onScheduleUpdate, mutationBusy, calendar });
-  const taskLinks = usePlanningTaskLinks({ tasks, onEditLinks });
-  const singleSelectedTask = getSingleSelectedTask(selection.selectedUids, tasksByUid);
-  const createTaskDialog = usePlanningCreateTaskDialog({ onCreateTask, singleSelectedTask });
-  const deleteSelection = usePlanningDeleteSelection({
-    tasks,
-    versionKey,
-    selectedUids: selection.selectedUids,
-    mutationBusy,
-    onDeleteTasks,
-    onSelectionCleared: selection.clearSelection,
-  });
+  const taskLinks = usePlanningTaskLinks({ rows, onEditLinks });
+  const singleSelectedRow = getSingleSelectedRow(selection.selectedUids, rowsByNodeId);
+  const createTaskDialog = usePlanningCreateTaskDialog({ onCreateTask, singleSelectedRow });
 
-  // A different planning version must never reuse another version's expand/selection state. This
-  // is a deliberate synchronous render-body write (not a useEffect): it must reset every hook's
-  // local state within the same render as the versionKey prop change, so no frame is ever painted
-  // with the previous version's selection/drafts/dialogs applied to the newly loaded tasks.
-  if (versionKey !== renderedVersionKey) {
-    setRenderedVersionKey(versionKey);
+  // A different revision must never reuse another revision's expand/selection state. This is a
+  // deliberate synchronous render-body write (not a useEffect): it must reset every hook's local
+  // state within the same render as the revisionKey prop change, so no frame is ever painted with
+  // the previous revision's selection/drafts/dialogs applied to the newly loaded rows.
+  if (revisionKey !== renderedRevisionKey) {
+    setRenderedRevisionKey(revisionKey);
     taskLinks.reset();
     selection.reset();
     scheduleDrafts.reset();
     createTaskDialog.reset();
-    deleteSelection.reset();
+    setDeleteDialogOpen(false);
   }
 
-  const readOnlyNotice = readOnly ? (
-    <p className="mt-2 text-xs text-muted-foreground">Version validée ou projet en lecture seule : édition désactivée.</p>
-  ) : null;
+  const moveAvailability = {
+    indent: planningMoveAvailability(treeNodes, selection.selectedUids, "indent"),
+    outdent: planningMoveAvailability(treeNodes, selection.selectedUids, "outdent"),
+    up: planningMoveAvailability(treeNodes, selection.selectedUids, "up"),
+    down: planningMoveAvailability(treeNodes, selection.selectedUids, "down"),
+  };
+  // INV-27 (#343) and INV-14 are explained rather than merely greyed out: "this row is already
+  // the first of its level" is self-evident from the table, whereas "this jalon cannot be
+  // outdented" comes from a flag carried by another row -- and "the previous sibling is a cost
+  // line" from a row this table does not even render. A user who is not told would keep clicking
+  // a dead button. Announced politely (role="status") so a screen-reader user learns it too,
+  // instead of only seeing a disabled control.
+  const moveNotice =
+    [moveAvailability.indent, moveAvailability.outdent].find(
+      (availability) => availability.refusal !== null && EXPLAINED_MOVE_REFUSALS.has(availability.refusal),
+    )?.reason ?? null;
 
-  const indentCommand = computeIndentCommand(tasks, selection.selectedUids);
-  const outdentCommand = computeOutdentCommand(tasks, selection.selectedUids);
-  const moveUpCommand = computeReorderCommand(tasks, selection.selectedUids, "up");
-  const moveDownCommand = computeReorderCommand(tasks, selection.selectedUids, "down");
+  const selectedRootIds = normalizeSelectionToRoots(treeNodes, selection.selectedUids).map(
+    (node) => node.node_id,
+  );
+  const selectedLabels = [...selection.selectedUids]
+    .map((nodeId) => rowsByNodeId.get(nodeId))
+    .filter((row): row is PlanningRow => row !== undefined)
+    .map(rowLabel);
 
-  function dispatchMove(command: PlanningMoveCommand | null) {
-    if (command) {
-      onMove?.(command);
+  function dispatchMove(mode: PlanningMoveMode) {
+    if (planningMoveAvailability(treeNodes, selection.selectedUids, mode).enabled) {
+      onMove?.(mode, [...selection.selectedUids]);
     }
   }
+
+  function confirmDelete() {
+    onDeleteNodes?.(selectedRootIds);
+    setDeleteDialogOpen(false);
+    selection.clearSelection();
+  }
+
+  // aria-posinset/aria-setsize, which a flattened DOM gives assistive technology no way to work
+  // out on its own (#380). Both are computed over the **rendered** rows, deliberately unlike the
+  // move commands above: the stored `position` ranks a node among all its siblings, cost lines
+  // included, so pairing it with a count of task rows would announce "3 of 2" as soon as a cost
+  // node sits between two tasks.
+  const rankByNodeId = useMemo(() => siblingRanks(rows), [rows]);
+
+  const readOnlyNotice = readOnly ? (
+    <p className="mt-2 text-xs text-muted-foreground">
+      Révision validée ou projet en lecture seule : édition désactivée. Crée un brouillon pour
+      modifier ce planning.
+    </p>
+  ) : null;
 
   return (
     <Card className="mt-4">
@@ -267,25 +276,36 @@ export function PlanningTreeTable({
         <PlanningTreeToolbar
           visible={!readOnly}
           showMoveActions={Boolean(onMove)}
-          indentDisabled={!indentCommand || mutationBusy}
-          outdentDisabled={!outdentCommand || mutationBusy}
-          moveUpDisabled={!moveUpCommand || mutationBusy}
-          moveDownDisabled={!moveDownCommand || mutationBusy}
-          onIndent={() => dispatchMove(indentCommand)}
-          onOutdent={() => dispatchMove(outdentCommand)}
-          onMoveUp={() => dispatchMove(moveUpCommand)}
-          onMoveDown={() => dispatchMove(moveDownCommand)}
+          indentDisabled={!moveAvailability.indent.enabled || mutationBusy}
+          outdentDisabled={!moveAvailability.outdent.enabled || mutationBusy}
+          moveUpDisabled={!moveAvailability.up.enabled || mutationBusy}
+          moveDownDisabled={!moveAvailability.down.enabled || mutationBusy}
+          onIndent={() => dispatchMove("indent")}
+          onOutdent={() => dispatchMove("outdent")}
+          onMoveUp={() => dispatchMove("up")}
+          onMoveDown={() => dispatchMove("down")}
+          notice={moveNotice}
           showCreateAction={Boolean(onCreateTask)}
           createDisabled={mutationBusy}
           onCreateTask={createTaskDialog.openCreateTaskDialog}
-          showDeleteAction={Boolean(onDeleteTasks)}
+          showDeleteAction={Boolean(onDeleteNodes)}
           deleteDisabled={selection.selectedUids.size === 0 || mutationBusy}
-          onDeleteSelection={() => void deleteSelection.requestDeleteSelection()}
+          onDeleteSelection={() => setDeleteDialogOpen(true)}
         />
         {selection.visibleRows.length === 0 ? (
-          <p className="py-6 text-sm text-muted-foreground">Le planning ne contient aucune tâche.</p>
+          <p className="py-6 text-sm text-muted-foreground">Cette révision ne contient aucune tâche.</p>
         ) : (
-          <Table className="table-fixed w-auto" style={{ width: totalColumnWidth }}>
+          <Table
+            // #380: the interaction model this table has always implemented -- rows that fold,
+            // unfold, take focus and enter a selection -- is a treegrid, and now says so. Without
+            // these roles a screen-reader user hears a plain table and is told neither the level of
+            // a row nor whether it can be unfolded.
+            role="treegrid"
+            aria-label="Planning de la révision"
+            aria-multiselectable="true"
+            className="table-fixed w-auto"
+            style={{ width: totalColumnWidth }}
+          >
             <colgroup>
               {COLUMN_HEADERS.map(({ key }) => (
                 <col key={key} style={{ width: `${columnWidths.widths[key]}px` }} />
@@ -317,44 +337,52 @@ export function PlanningTreeTable({
             </TableHeader>
             <TableBody>
               {selection.visibleRows.map((row) => {
-                const collapsed = selection.collapsedUids.has(row.uid);
-                const selected = selection.selectedUids.has(row.uid);
-                const isFocusable = selection.focusableUid === row.uid;
+                const collapsed = selection.collapsedUids.has(row.node_id);
+                const selected = selection.selectedUids.has(row.node_id);
+                const isFocusable = selection.focusableUid === row.node_id;
                 return (
                   <TableRow
-                    key={row.uid}
+                    key={row.node_id}
                     ref={(element) => selection.registerRow(row, element)}
+                    role="row"
                     data-state={selected ? "selected" : undefined}
                     aria-selected={selected}
+                    aria-level={row.level}
+                    aria-posinset={rankByNodeId.get(row.node_id)?.position ?? 1}
+                    aria-setsize={rankByNodeId.get(row.node_id)?.total ?? 1}
+                    aria-expanded={row.hasChildren ? !collapsed : undefined}
                     tabIndex={isFocusable ? 0 : -1}
-                    className="cursor-pointer outline-none"
+                    // The focus ring is an `outline` and not the `ring-3` the design system uses
+                    // elsewhere: a box-shadow on a `display: table-row` element is unreliable across
+                    // browsers, where an outline is drawn around the whole row. Replacing the bare
+                    // `outline-none` this row used to carry is the other half of #380 -- a focused
+                    // row that shows nothing fails WCAG 2.4.7 no matter how correct its roles are.
+                    className="cursor-pointer outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
                     onClick={(event) => selection.selectRow(row, event)}
-                    onFocus={() => selection.setFocusedUid(row.uid)}
+                    onFocus={() => selection.setFocusedUid(row.node_id)}
                     onKeyDown={(event) => selection.onRowKeyDown(event, row)}
                   >
-                    <TableCell>{row.row_number}</TableCell>
-                    <TableCell className="overflow-hidden">
+                    <TableCell role="gridcell">{row.row_number}</TableCell>
+                    <TableCell role="gridcell" className="overflow-hidden">
                       <div
                         className="flex min-w-0 items-center gap-1"
-                        // Deliberately uncapped: the tree builder allows arbitrary nesting depth (a
-                        // real MS Project import can exceed a handful of levels), and the visual
-                        // indentation must keep reflecting the actual hierarchy rather than flattening
-                        // past some arbitrary depth. PLANNING_MIN_COLUMN_WIDTHS.name (in
-                        // use-planning-column-widths.ts) only comfortably budgets indentation headroom
-                        // up to a typical depth of 4 -- a tree nested deeper than that may need the
-                        // Name column widened via its resize handle to keep the chevron/text fully
-                        // visible, which is expected, not a bug.
-                        style={{ paddingLeft: `${row.depth * 1.25}rem` }}
+                        // Deliberately uncapped: the tree allows arbitrary nesting depth (a real
+                        // MS Project import can exceed a handful of levels), and the visual
+                        // indentation must keep reflecting the actual hierarchy. `level` is 1-based
+                        // (roots at 1), hence the -1.
+                        style={{ paddingLeft: `${(row.level - 1) * 1.25}rem` }}
                       >
                         {row.hasChildren ? (
                           <button
                             type="button"
-                            aria-label={collapsed ? `Déplier ${row.name}` : `Replier ${row.name}`}
-                            className="flex size-6 shrink-0 items-center justify-center"
+                            aria-label={
+                              collapsed ? `Déplier ${row.planning.name}` : `Replier ${row.planning.name}`
+                            }
+                            className="flex size-6 shrink-0 items-center justify-center rounded-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
                             {...stopRowKeys}
                             onClick={(event) => {
                               event.stopPropagation();
-                              selection.toggleCollapsed(row.uid);
+                              selection.toggleCollapsed(row.node_id);
                             }}
                           >
                             {collapsed ? <ChevronRight aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}
@@ -363,13 +391,13 @@ export function PlanningTreeTable({
                           <span className="size-6 shrink-0" />
                         )}
                         <TaskNameLabel
-                          name={row.name}
+                          name={row.planning.name}
                           width={columnWidths.widths.name}
-                          isMilestone={row.is_milestone}
+                          isMilestone={row.planning.is_milestone}
                         />
                       </div>
                     </TableCell>
-                    <TableCell>{taskTypeLabel(row)}</TableCell>
+                    <TableCell role="gridcell">{planningRowTypeLabel(row)}</TableCell>
                     <PlanningScheduleCells
                       row={row}
                       draft={scheduleDrafts.scheduleDraftFor(row)}
@@ -378,15 +406,17 @@ export function PlanningTreeTable({
                       mutationBusy={mutationBusy}
                       calendar={calendar}
                       durationError={scheduleDrafts.durationErrorFor(row)}
-                      tasksByUid={tasksByUid}
+                      rowsByNodeId={rowsByNodeId}
                       onUpdateDraft={(field, value) => scheduleDrafts.updateScheduleDraft(row, field, value)}
                       onCommit={() => void scheduleDrafts.commitScheduleEdit(row)}
                       onCommitModeChange={(isManual) => void scheduleDrafts.commitModeChange(row, isManual)}
                       onFieldKeyDown={scheduleDrafts.onScheduleFieldKeyDown}
                     />
-                    <TableCell className="whitespace-normal break-words align-top">
+                    <TableCell role="gridcell" className="whitespace-normal break-words align-top">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="min-w-0">{predecessorsLabel(row, calendar, rowNumberByUid)}</span>
+                        <span className="min-w-0">
+                          {predecessorsLabel(row.predecessors, calendar, rowNumberByNodeId)}
+                        </span>
                         {!readOnly && onEditLinks ? (
                           <Button
                             type="button"
@@ -394,7 +424,7 @@ export function PlanningTreeTable({
                             size="sm"
                             className="shrink-0"
                             disabled={mutationBusy}
-                            aria-label={`Éditer les prédécesseurs de ${row.name}`}
+                            aria-label={`Éditer les prédécesseurs de ${row.planning.name}`}
                             {...stopRowKeys}
                             onClick={(event: MouseEvent<HTMLButtonElement>) => {
                               event.stopPropagation();
@@ -415,8 +445,8 @@ export function PlanningTreeTable({
         {readOnlyNotice}
       </CardContent>
       <PlanningTaskLinksDialog
-        editingTask={taskLinks.editingTask}
-        linkCandidateTasks={taskLinks.linkCandidateTasks}
+        editingRow={taskLinks.editingRow}
+        linkCandidateRows={taskLinks.linkCandidateRows}
         linkRows={taskLinks.linkRows}
         linkFormError={taskLinks.linkFormError}
         linkFormBusy={taskLinks.linkFormBusy}
@@ -433,7 +463,7 @@ export function PlanningTreeTable({
         isMilestone={createTaskDialog.createTaskIsMilestone}
         positionMode={createTaskDialog.createPositionMode}
         error={createTaskDialog.createTaskError}
-        singleSelectedTask={singleSelectedTask}
+        singleSelectedRow={singleSelectedRow}
         mutationBusy={mutationBusy}
         onNameChange={createTaskDialog.setCreateTaskName}
         onMilestoneChange={createTaskDialog.setCreateTaskIsMilestone}
@@ -441,12 +471,12 @@ export function PlanningTreeTable({
         onClose={createTaskDialog.closeCreateTaskDialog}
         onSubmit={createTaskDialog.submitCreateTask}
       />
-      <PlanningCascadeDeleteDialog
-        open={deleteSelection.cascadeConflict !== null}
-        description={deleteSelection.cascadeDescription}
-        busy={deleteSelection.cascadeBusy}
-        onCancel={deleteSelection.reset}
-        onConfirm={() => void deleteSelection.confirmCascadeDelete()}
+      <PlanningDeleteDialog
+        open={deleteDialogOpen}
+        rowLabels={selectedLabels}
+        busy={mutationBusy}
+        onCancel={() => setDeleteDialogOpen(false)}
+        onConfirm={confirmDelete}
       />
     </Card>
   );

@@ -1,0 +1,50 @@
+type: object
+required:
+- revision_id
+- project_id
+- version_number
+- kind
+- status
+- lock_version
+- note
+- created_at
+- validated_at
+properties:
+  revision_id:
+    type: integer
+  project_id:
+    type: integer
+  version_number:
+    type: integer
+  kind:
+    type: string
+    enum:
+    - initial
+    - contract_reference
+    - forecast_remaining
+  status:
+    type: string
+    enum:
+    - draft
+    - validated
+    - superseded
+  lock_version:
+    type: integer
+  note:
+    anyOf:
+    - type: string
+    - type: 'null'
+  created_at:
+    type: string
+    format: date-time
+  validated_at:
+    anyOf:
+    - type: string
+      format: date-time
+    - type: 'null'
+description: >-
+  Une revision d'un projet, sans son arbre : l'en-tete de `RevisionTreeRead` plus
+  les deux dates dont un ecran d'historique a besoin. `lock_version` y figure pour
+  la seule commande qui a besoin du compteur d'une revision dont l'arbre n'a pas ete
+  lu -- `POST .../copy` prend celui de la **source**, donc un brouillon s'ouvre
+  depuis une revision validee listee ici sans la telecharger d'abord.

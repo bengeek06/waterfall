@@ -20,7 +20,7 @@ export type PlanningStructureEditorProps = {
   postGroups: PlanningStructureGroup[];
   structureDraft: PlanningStructureDraftRow[];
   structureBusy: boolean;
-  structureAction: "save" | "generate" | "skip" | null;
+  structureAction: "save" | "generate" | "skip" | "reopen" | null;
   canSkipStructure: boolean;
   onUpdatePostField: (postKey: string, field: "postKey" | "postName", value: string) => void;
   onUpdateLotField: (rowId: string, field: "lotKey" | "lotName", value: string) => void;

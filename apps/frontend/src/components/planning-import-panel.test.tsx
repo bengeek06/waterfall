@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { ImportCostLoss, ImportDiff, ImportDiffItem } from "@/lib/backend";
 import { PlanningImportPanel, type PlanningImportPanelProps } from "./planning-import-panel";
 
 afterEach(() => cleanup());
@@ -17,6 +18,7 @@ function buildProps(overrides: Partial<PlanningImportPanelProps> = {}): Planning
     onExportXml: vi.fn(),
     importReview: null,
     onConfirmImport: vi.fn(),
+    importTarget: null,
     ...overrides,
   };
 }
@@ -252,5 +254,95 @@ describe("PlanningImportPanel", () => {
 
       expect(getNativeInput().files).toBeUndefined();
     });
+  });
+});
+
+// -------------------------------------------------------------------------------------------
+// Règle 3's safeguard (#332): a deletion is never silent, and the two forms the contract carries
+// are not interchangeable -- the deduplicated total at the project level, the labels per item.
+// -------------------------------------------------------------------------------------------
+
+function costLoss(overrides: Partial<ImportCostLoss> & { label: string; amount: string }): ImportCostLoss {
+  return { nodeId: 1, workItemId: 1, nature: "labor", bearingTaskName: null, ...overrides };
+}
+
+function diffItem(overrides: Partial<ImportDiffItem> & { uid: number }): ImportDiffItem {
+  return {
+    kind: "removed",
+    message: `Tâche ${overrides.uid} supprimée`,
+    fields: [],
+    costLosses: [],
+    ...overrides,
+  };
+}
+
+function diffWithLosses(): ImportDiff {
+  const study = costLoss({ nodeId: 10, label: "Étude", amount: "1000.00" });
+  const build = costLoss({ nodeId: 11, label: "Réalisation", amount: "500.00" });
+  return {
+    batchId: 7,
+    sourceSha256: null,
+    identicalSource: false,
+    items: [
+      // The parent's item carries *both* losses, the child's carries one of them: the same node is
+      // attributed to every vanished task that takes it away.
+      diffItem({ uid: 1, message: "Tâche 1 (Poste) supprimée", costLosses: [study, build] }),
+      diffItem({ uid: 2, message: "Tâche 2 (Lot) supprimée", costLosses: [build] }),
+    ],
+    // The deduplicated total: 1000 + 500, not 1000 + 500 + 500.
+    costLosses: [study, build],
+  };
+}
+
+describe("PlanningImportPanel cost losses", () => {
+  it("shows the deduplicated project-level total, not the sum of the per-item lists", () => {
+    renderPanel({ importReview: { batchId: 7, diff: diffWithLosses() } });
+
+    expect(screen.getByText(/2 ligne\(s\) de chiffrage/)).toBeInTheDocument();
+    // 1 500 €, and never 2 000 € -- the per-item lists are not summable.
+    expect(screen.getByText(/1\s*500,00/)).toBeInTheDocument();
+    expect(screen.queryByText(/2\s*000,00/)).not.toBeInTheDocument();
+  });
+
+  it("names the chiffrage each vanished task takes away, item by item", () => {
+    renderPanel({ importReview: { batchId: 7, diff: diffWithLosses() } });
+
+    const firstItem = screen.getByText(/Tâche 1 \(Poste\) supprimée/);
+    expect(firstItem.textContent).toContain("Étude");
+    expect(firstItem.textContent).toContain("Réalisation");
+    const secondItem = screen.getByText(/Tâche 2 \(Lot\) supprimée/);
+    expect(secondItem.textContent).toContain("Réalisation");
+  });
+
+  it("says nothing about chiffrage when the import destroys none", () => {
+    renderPanel({
+      importReview: {
+        batchId: 7,
+        diff: { batchId: 7, sourceSha256: null, identicalSource: false, items: [], costLosses: [] },
+      },
+    });
+
+    expect(screen.queryByText(/ligne\(s\) de chiffrage/)).not.toBeInTheDocument();
+  });
+});
+
+describe("PlanningImportPanel import target", () => {
+  it("says which revision the file landed in", () => {
+    renderPanel({ importTarget: { revisionId: 12, versionLabel: "V3", created: false } });
+
+    expect(screen.getByText(/importé dans la révision V3/)).toBeInTheDocument();
+    expect(screen.getByText(/la plus récente du projet/)).toBeInTheDocument();
+  });
+
+  it("says when a revision had to be created for the file", () => {
+    renderPanel({ importTarget: { revisionId: 12, versionLabel: "V1", created: true } });
+
+    expect(screen.getByText(/créée pour l'occasion/)).toBeInTheDocument();
+  });
+
+  it("falls back on the revision id when the version number could not be resolved", () => {
+    renderPanel({ importTarget: { revisionId: 12, versionLabel: null, created: false } });
+
+    expect(screen.getByText(/importé dans la révision #12/)).toBeInTheDocument();
   });
 });

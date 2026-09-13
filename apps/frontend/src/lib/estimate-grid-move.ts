@@ -13,15 +13,20 @@ export type EstimateGridMoveCommand = {
 // E14-09/#335 did *not* touch this module: it is live production code, not leftover dead code
 // awaiting deletion. EstimateGridTreeTable calls the three compute*Command functions below on
 // every render; their results drive the Indenter/Désindenter/Monter/Descendre buttons' enabled
-// state and the payload sent to `POST .../grid-nodes/move`. The same is true of
-// planning-tree.ts's own compute*Command trio for PlanningTreeTable. Unifying the two move models
-// (#337) is therefore a rewrite of working behavior, with the toolbars of both tables as its
-// blast radius -- not a deferred dead-code cleanup.
+// state and the payload sent to `POST .../grid-nodes/move`.
 //
-// Mirrors lib/planning-tree.ts's own
-// computeIndentCommand/computeOutdentCommand/computeReorderCommand, scoped to grid nodes: sibling
-// order/local position is always read from each grid node's own `position` field (matching the
-// backend's `move_estimate_grid_nodes`, whose `siblings_by_parent` is built purely from
+// **The two tables no longer share a move model, and this one is now the older of the two.**
+// E14-10/#336 moved the planning table off client-computed destinations: `POST
+// .../revisions/{id}/nodes/move` takes a mode (`up`/`down`/`indent`/`outdent`) and works the
+// destination out server-side, so planning-tree.ts's computeIndentCommand/computeOutdentCommand/
+// computeReorderCommand are gone -- what is left there is `planningMoveAvailability`, which only
+// says *whether* a command is legal. This module still computes a `{target_parent_uid, position}`
+// itself, because `POST .../grid-nodes/move` still takes one. Unifying the two (#337) means
+// moving this endpoint to the same mode-based contract, not porting the computation across: the
+// blast radius is this module, the grid toolbar, and the backend route.
+//
+// Sibling order/local position is always read from each grid node's own `position` field (matching
+// the backend's `move_estimate_grid_nodes`, whose `siblings_by_parent` is built purely from
 // `EstimateGridNode` rows -- a task's own `position`/`EstimateTaskRow.position` numbering is a
 // different, unrelated counter and never participates in this ordering, see
 // services/estimate_grid.py's module doc comment).
@@ -113,8 +118,10 @@ export function computeGridIndentCommand(
 
 // Outdent: moves the selected root(s) out from under their current parent, appended as the last
 // grid-node child of that parent's own parent ("grandparent") -- null/root if there is none.
-// Always appended at the end (not spliced back in "right after the former parent", unlike
-// planning-tree.ts's own computeOutdentCommand): the former parent may itself be a task, which
+// Always appended at the end rather than spliced back in "right after the former parent" -- which
+// is also where this model and the revision one now differ, the latter's outdent preserving the
+// displayed row order and re-parenting the following siblings (Règle 5, #344): the former parent
+// may itself be a task, which
 // never participates in the grid-node-only `position` counter at all (see gridNodePosition's own
 // doc comment), so "right after it" has no well-defined index to compute -- appending at the end
 // is an unambiguous, always-valid fallback the user can still fine-tune with Monter/Descendre.
@@ -141,10 +148,10 @@ export function computeGridOutdentCommand(
 }
 
 // Monter/Descendre: reorders a contiguous block of selected roots one slot up/down among its own
-// grid-node siblings (same parent_uid) -- mirrors lib/planning-tree.ts's own
-// computeReorderCommand, scoped to grid nodes and using each node's own `position` field (see
+// grid-node siblings (same parent_uid), using each node's own `position` field (see
 // gridNodePosition) for sibling order instead of row_number (which also ranks task siblings that
-// never participate in this grid-node-only ordering).
+// never participate in this grid-node-only ordering). The revision model expresses the same
+// command as the mode `up`/`down` and computes no index client-side at all.
 export function computeGridReorderCommand(
   rows: EstimateGridTreeRow[],
   selectedUids: ReadonlySet<number>,

@@ -1,40 +1,47 @@
 import { useState } from "react";
 
-import type { Task } from "@/lib/backend";
+import type { PlanningRow } from "@/lib/planning-tree";
 
 export type CreateTaskPositionMode = "root" | "after" | "child";
 
+/** Where a new task lands, in the terms `POST .../revisions/{id}/tasks` takes. */
+export type CreateTaskCommand = {
+  name: string;
+  isMilestone: boolean;
+  /** Absent/null = at the root of the revision. */
+  parentId: number | null;
+  /** Absent/null = last child of that parent. Positions are 1-based and contiguous (INV-05). */
+  position: number | null;
+};
+
 type UsePlanningCreateTaskDialogParams = {
-  onCreateTask?: (command: {
-    name: string;
-    isMilestone: boolean;
-    targetParentUid?: number;
-    insertAfterUid?: number;
-  }) => void;
+  onCreateTask?: (command: CreateTaskCommand) => void;
   // Recomputed by the caller on every render from its own selection state; only meaningful when
   // exactly one row is selected (see PlanningTreeTable) -- with zero or several rows selected
   // there is no single unambiguous "relative to this task" position.
-  singleSelectedTask: Task | null;
+  singleSelectedRow: PlanningRow | null;
 };
 
 function resolvePositionTarget(
   positionMode: CreateTaskPositionMode,
-  singleSelectedTask: Task | null,
-): { targetParentUid?: number; insertAfterUid?: number } {
-  if (positionMode === "after" && singleSelectedTask) {
-    return { targetParentUid: singleSelectedTask.parent_uid ?? undefined, insertAfterUid: singleSelectedTask.uid };
+  singleSelectedRow: PlanningRow | null,
+): { parentId: number | null; position: number | null } {
+  if (positionMode === "after" && singleSelectedRow) {
+    // Right after the selected row among its own siblings: positions are contiguous, so the slot
+    // to ask for is simply its own plus one.
+    return { parentId: singleSelectedRow.parent_id, position: singleSelectedRow.position + 1 };
   }
-  if (positionMode === "child" && singleSelectedTask) {
-    return { targetParentUid: singleSelectedTask.uid };
+  if (positionMode === "child" && singleSelectedRow) {
+    return { parentId: singleSelectedRow.node_id, position: null };
   }
-  return {};
+  return { parentId: null, position: null };
 }
 
 // Extracted from PlanningTreeTable (E4-12 / #152): the "add a task" dialog's form state and
 // submit flow. Owns its own reset() called from PlanningTreeTable's render-phase versionKey-
 // change block -- see that component for why this must stay a synchronous render-body reset, not
 // a useEffect.
-export function usePlanningCreateTaskDialog({ onCreateTask, singleSelectedTask }: UsePlanningCreateTaskDialogParams) {
+export function usePlanningCreateTaskDialog({ onCreateTask, singleSelectedRow }: UsePlanningCreateTaskDialogParams) {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [createTaskName, setCreateTaskName] = useState("");
   const [createTaskIsMilestone, setCreateTaskIsMilestone] = useState(false);
@@ -44,7 +51,7 @@ export function usePlanningCreateTaskDialog({ onCreateTask, singleSelectedTask }
   function openCreateTaskDialog() {
     setCreateTaskName("");
     setCreateTaskIsMilestone(false);
-    setCreatePositionMode(singleSelectedTask ? "after" : "root");
+    setCreatePositionMode(singleSelectedRow ? "after" : "root");
     setCreateTaskError(null);
     setCreateDialogOpen(true);
   }
@@ -66,8 +73,8 @@ export function usePlanningCreateTaskDialog({ onCreateTask, singleSelectedTask }
       setCreateTaskError("Le nom de la tâche est obligatoire.");
       return;
     }
-    const { targetParentUid, insertAfterUid } = resolvePositionTarget(createPositionMode, singleSelectedTask);
-    onCreateTask({ name: trimmedName, isMilestone: createTaskIsMilestone, targetParentUid, insertAfterUid });
+    const { parentId, position } = resolvePositionTarget(createPositionMode, singleSelectedRow);
+    onCreateTask({ name: trimmedName, isMilestone: createTaskIsMilestone, parentId, position });
     closeCreateTaskDialog();
   }
 

@@ -297,8 +297,9 @@ describe("useTreeTableSelection tab stop", () => {
   });
 
   it("ignores an ArrowLeft whose parent uid resolves to no loaded row", () => {
-    // The planning's re-rooted orphan: rendered as a root, yet still carrying the parent uid it
-    // came in with (see planningTreeRowIdentity's own comment).
+    // A row rendered as a root while still carrying a parent uid no loaded row answers to -- what
+    // a filtered view produces (see buildRevisionTreeRows), and what the shared filter treats as a
+    // root rather than hiding.
     const orphanRows: FakeRow[] = [group(1, null), { uid: 2, parentUid: 99, hasChildren: false, kind: "item" }];
     const { result } = renderRowsSelection(orphanRows);
 

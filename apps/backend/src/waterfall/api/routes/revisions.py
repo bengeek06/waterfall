@@ -67,7 +67,7 @@ from waterfall.core.config import get_settings
 from waterfall.db.session import get_db
 from waterfall.domain import revision as domain
 from waterfall.models.ms_core import MsProject
-from waterfall.models.revision import ProjectRevision
+from waterfall.models.revision import ProjectRevision, ProjectRevisionPointer
 from waterfall.models.user import User
 from waterfall.schemas.revisions import (
     RevisionAggregatesRead,
@@ -77,6 +77,7 @@ from waterfall.schemas.revisions import (
     RevisionCostLineCreate,
     RevisionCostLossRead,
     RevisionCreatedRead,
+    RevisionListRead,
     RevisionMissingRateRead,
     RevisionNodeDelete,
     RevisionNodeDeleteRead,
@@ -89,6 +90,7 @@ from waterfall.schemas.revisions import (
     RevisionPredecessorsReplace,
     RevisionReconciliationIssueRead,
     RevisionReconciliationPlanRead,
+    RevisionSummaryRead,
     RevisionTaskCreate,
     RevisionTreeRead,
     RevisionUnpriceableFacetRead,
@@ -268,6 +270,63 @@ def _to_tree_read(tree: revision_tree.RevisionTree) -> RevisionTreeRead:
 
 def _to_write_read(write: revision_tree.TreeWrite) -> RevisionWriteRead:
     return RevisionWriteRead(revision_id=write.revision_id, lock_version=write.lock_version)
+
+
+@router.get(
+    "/{project_id}/revisions",
+    response_model=RevisionListRead,
+)
+def list_revisions(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> RevisionListRead:
+    """Every revision of the project, oldest first, and the two pointers to it.
+
+    The one read that answers "which revisions exist" (E14-10, #336). Until it
+    existed, a revision id only ever reached a client as the by-product of an
+    import (``ImportRunAcceptedResponse.revisionId``): there was no way to open a
+    revision that was not the one just imported, and therefore no way to show a
+    history, to open a validated revision read-only, or to copy one into a draft.
+
+    Deliberately no ``GET .../revisions/{id}`` beside it: the header of a single
+    revision already comes back with its tree on ``GET .../nodes``, and a second
+    endpoint publishing the same header would be a second place to keep in sync.
+    """
+    _readable_project(db, project_id, current_user.id)
+    revisions = (
+        db.query(ProjectRevision)
+        .filter(ProjectRevision.project_id == project_id)
+        .order_by(ProjectRevision.version_number.asc(), ProjectRevision.id.asc())
+        .all()
+    )
+    pointer = (
+        db.query(ProjectRevisionPointer)
+        .filter(ProjectRevisionPointer.project_id == project_id)
+        .first()
+    )
+    return RevisionListRead(
+        items=[
+            RevisionSummaryRead(
+                revision_id=revision.id,
+                project_id=revision.project_id,
+                version_number=revision.version_number,
+                # Through the domain enumerations and not a `cast`, for the reason
+                # :func:`copy_revision` states below: these are `str` columns whose values only a
+                # `CheckConstraint` guarantees, and a `cast` would silence the type checker on
+                # exactly the string it cannot check.
+                kind=domain.RevisionKind(revision.kind).value,
+                status=domain.RevisionStatus(revision.status).value,
+                lock_version=revision.lock_version,
+                note=revision.note,
+                created_at=revision.created_at,
+                validated_at=revision.validated_at,
+            )
+            for revision in revisions
+        ],
+        reference_revision_id=None if pointer is None else pointer.reference_revision_id,
+        displayed_revision_id=None if pointer is None else pointer.displayed_revision_id,
+    )
 
 
 @router.get(

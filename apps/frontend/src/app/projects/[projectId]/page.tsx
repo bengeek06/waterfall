@@ -11,6 +11,7 @@ import { EstimateRoleAssignmentDeleteDialog } from "@/components/estimate-role-a
 import { EstimateTab } from "@/components/estimate-tab";
 import { EstimateValidationDialog } from "@/components/estimate-validation-dialog";
 import { PlanningTab } from "@/components/planning-tab";
+import type { PlanningImportTarget } from "@/components/planning-import-panel";
 import { ProjectHeaderCard } from "@/components/project-header-card";
 import { ProjectLoadFailedCard } from "@/components/project-load-failed-card";
 import { ProjectStatusBanners } from "@/components/project-status-banners";
@@ -51,13 +52,11 @@ import {
   uploadImportSourceXml,
 } from "@/lib/backend";
 import { clearSession, getSession, setSession, type SessionTokens } from "@/lib/session";
-import { canRedo, canUndo, getPlanningHistory, type PlanningHistoryByPlanningId } from "@/lib/planning-history";
 import { validateImportFile } from "@/lib/planning-import-validation";
-import { usePlanningDetailEffect, type PlanningRevisionConflict } from "@/hooks/use-planning-detail";
-import { usePlanningHistoryCommand } from "@/hooks/use-planning-history-command";
+import { usePlanningDetailEffect } from "@/hooks/use-planning-detail";
 import { usePlanningImport } from "@/hooks/use-planning-import";
 import { usePlanningStructureEditor } from "@/hooks/use-planning-structure-editor";
-import { usePlanningTreeMutations } from "@/hooks/use-planning-tree-mutations";
+import { useRevisionPlanning } from "@/hooks/use-revision-planning";
 import { useEstimateCostLines } from "@/hooks/use-estimate-cost-lines";
 import { useProjectInfoEditor } from "@/hooks/use-project-info-editor";
 
@@ -81,30 +80,8 @@ function canEditSelectedEstimate(estimate: ProjectEstimate | null, isReadOnlyPro
   return estimate?.status === "draft" && !isReadOnlyProject;
 }
 
-function getSelectedPlanningConflict(
-  selectedPlanning: Planning | null,
-  conflicts: Record<number, PlanningRevisionConflict>,
-): PlanningRevisionConflict | null {
-  return selectedPlanning ? (conflicts[selectedPlanning.id] ?? null) : null;
-}
-
-function hasSelectedPlanningConflict(
-  selectedPlanning: Planning | null,
-  conflicts: Record<number, PlanningRevisionConflict>,
-): boolean {
-  return getSelectedPlanningConflict(selectedPlanning, conflicts) !== null;
-}
-
 function didInitialLoadFail(busy: boolean, project: Project | null, error: string | null): boolean {
   return !busy && project === null && error !== null;
-}
-
-function canUndoSelectedPlanning(history: PlanningHistoryByPlanningId, selectedPlanning: Planning | null): boolean {
-  return canUndo(getPlanningHistory(history, selectedPlanning?.id ?? -1));
-}
-
-function canRedoSelectedPlanning(history: PlanningHistoryByPlanningId, selectedPlanning: Planning | null): boolean {
-  return canRedo(getPlanningHistory(history, selectedPlanning?.id ?? -1));
 }
 
 export default function ProjectDetailsPage() {
@@ -125,36 +102,10 @@ export default function ProjectDetailsPage() {
     setSelectedPlanningId(next);
   }
   const [planningDetail, setPlanningDetail] = useState<PlanningDetail | null>(null);
-  const [planningBusy, setPlanningBusy] = useState(false);
-  const [planningDetailBusy, setPlanningDetailBusy] = useState(false);
-  const [planningMutationBusy, setPlanningMutationBusy] = useState(false);
-  // Per-planning_id undo/redo stacks (E4-01): isolated by construction, since each key is its
-  // own independent history. A revision conflict never replaces planningDetail/history itself;
-  // it sets planningConflict instead, and only a confirmed reload clears the stale history.
-  const [historyByPlanningId, setHistoryByPlanningIdState] = useState<PlanningHistoryByPlanningId>({});
-  const historyByPlanningIdRef = useRef(historyByPlanningId);
-  // Updated synchronously (not via effect) for the same reason as updateSelectedPlanningId above:
-  // this ref is read from use-planning-detail.ts to detect a stale revision conflict, and an
-  // effect only runs after commit, leaving a window where a race could still slip through. Every
-  // write to historyByPlanningId must go through this wrapper instead of the raw setState.
-  function updateHistoryByPlanningId(
-    updater: (current: PlanningHistoryByPlanningId) => PlanningHistoryByPlanningId,
-  ) {
-    const next = updater(historyByPlanningIdRef.current);
-    historyByPlanningIdRef.current = next;
-    setHistoryByPlanningIdState(next);
-  }
-  // Per-planning conflict tracking (E4-02): a conflict on planning A survives if user switches
-  // to B; undo/redo is disabled until the conflict is explicitly cleared by a successful reload.
-  const [planningConflictByPlanningId, setPlanningConflictByPlanningId] = useState<
-    Record<number, PlanningRevisionConflict>
-  >({});
-  // A network/unclassified failure (not a session expiry, not a revision conflict) keeps the
-  // just-attempted mutation retryable instead of silently dropping it (E4-01).
-  const [retryableAction, setRetryableAction] = useState<{
-    message: string;
-    retry: () => void;
-  } | null>(null);
+  // Write-only: nothing renders a busy state for the legacy planning detail any more. The detail
+  // itself is still loaded, for the Devis tab's parent-task selector and its post-create refresh,
+  // until E14-11 (#337) moves that side onto the revision too.
+  const [, setPlanningDetailBusy] = useState(false);
   const [structureOpen, setStructureOpen] = useState(false);
   const [planningExportBusy, setPlanningExportBusy] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
@@ -165,6 +116,10 @@ export default function ProjectDetailsPage() {
   const [importBusy, setImportBusy] = useState(false);
   const [importReview, setImportReview] = useState<{ batchId: number; diff: ImportDiff } | null>(null);
   const [importFeedback, setImportFeedback] = useState<string | null>(null);
+  // Where the last confirmed import landed. The client does not choose the target revision -- the
+  // import always writes into the latest one by version number -- so the screen has to say which
+  // one it was, and whether it had to be created (#332).
+  const [importTarget, setImportTarget] = useState<PlanningImportTarget | null>(null);
   const [estimates, setEstimates] = useState<ProjectEstimate[]>([]);
   const [selectedEstimateId, setSelectedEstimateId] = useState<number | null>(null);
   const [estimateTaskRows, setEstimateTaskRows] = useState<EstimateTaskRow[]>([]);
@@ -188,11 +143,6 @@ export default function ProjectDetailsPage() {
   const [activeTab, setActiveTab] = useState<ProjectTab>("planning");
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
-  function setRetryableError(message: string, retry: () => void) {
-    setError(message);
-    setRetryableAction({ message, retry });
-  }
 
   const onSessionRefresh = useMemo(
     () => (next: SessionTokens) => {
@@ -288,10 +238,8 @@ export default function ProjectDetailsPage() {
     router,
     planningLoadGenerationRef,
     selectedPlanningIdRef,
-    historyByPlanningIdRef,
     setPlanningDetail,
     setPlanningDetailBusy,
-    setPlanningConflictByPlanningId,
     setStructureDraft: structureEditor.setStructureDraft,
     setError,
   });
@@ -433,8 +381,6 @@ export default function ProjectDetailsPage() {
   const selectedEstimate = estimates.find((estimate) => estimate.id === selectedEstimateId) ?? null;
   const isReadOnlyProject = isProjectReadOnly(project);
   const canEditEstimate = canEditSelectedEstimate(selectedEstimate, isReadOnlyProject);
-  const selectedPlanning = plannings.find((planning) => planning.id === selectedPlanningId) ?? null;
-  const selectedPlanningHasConflict = hasSelectedPlanningConflict(selectedPlanning, planningConflictByPlanningId);
   const initialLoadFailed = didInitialLoadFail(busy, project, error);
 
   const projectInfoEditor = useProjectInfoEditor({
@@ -447,50 +393,12 @@ export default function ProjectDetailsPage() {
     setError,
   });
 
-  const planningMutations = usePlanningTreeMutations({
+  const revisionPlanning = useRevisionPlanning({
     session,
     projectId,
-    setProject,
-    setPlannings,
-    selectedPlanningId,
-    selectedPlanning,
-    isReadOnlyProject,
-    planningDetail,
-    setPlanningDetail,
-    selectedPlanningIdRef,
-    updateSelectedPlanningId,
-    setHistoryByPlanningId: updateHistoryByPlanningId,
-    planningConflictByPlanningId,
-    setPlanningConflictByPlanningId,
     onSessionRefresh,
     router,
     setError,
-    setRetryableAction,
-    setRetryableError,
-    setPlanningBusy,
-    setPlanningDetailBusy,
-    setPlanningMutationBusy,
-    setStructureDraft: structureEditor.setStructureDraft,
-    setStructureOpen,
-  });
-
-  const applyPlanningHistoryCommand = usePlanningHistoryCommand({
-    session,
-    selectedPlanning,
-    isReadOnlyProject,
-    planningDetail,
-    historyByPlanningId,
-    projectId,
-    onSessionRefresh,
-    router,
-    selectedPlanningIdRef,
-    setPlanningMutationBusy,
-    setError,
-    setRetryableAction,
-    setPlanningDetail,
-    setPlanningConflictByPlanningId,
-    setHistoryByPlanningId: updateHistoryByPlanningId,
-    setRetryableError,
   });
 
   const estimateCostLines = useEstimateCostLines({
@@ -577,11 +485,20 @@ export default function ProjectDetailsPage() {
     }
   }
 
-  // Any change to the candidate file -- accepted or rejected -- invalidates a pending import
-  // preview: `importReview.batchId` refers to whatever file was uploaded when "Prévisualiser
-  // l'import" was last clicked, and confirming it after the candidate changed would silently
-  // apply the wrong batch. Clear it in every branch of both handlers below, not just the
-  // happy path.
+  /**
+   * Clears everything the *previous* candidate file left on screen.
+   *
+   * `importReview.batchId` refers to whatever file was uploaded when "Prévisualiser l'import" was
+   * last clicked, and confirming it after the candidate changed would silently apply the wrong
+   * batch. `importTarget` is the "Import appliqué" banner naming the revision an earlier file
+   * landed in: left up next to a freshly picked file it reads as if *that* file had already been
+   * imported. Both are called in every branch of both handlers below, not just the happy path.
+   */
+  function resetImportBanners() {
+    setImportReview(null);
+    setImportTarget(null);
+  }
+
   function onImportFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0] ?? null;
     if (file) {
@@ -589,7 +506,7 @@ export default function ProjectDetailsPage() {
       if (validationError) {
         setImportFile(null);
         latestImportFileRef.current = null;
-        setImportReview(null);
+        resetImportBanners();
         setError(validationError);
         event.target.value = "";
         return;
@@ -598,21 +515,21 @@ export default function ProjectDetailsPage() {
     setError(null);
     setImportFile(file);
     latestImportFileRef.current = file;
-    setImportReview(null);
+    resetImportBanners();
   }
 
   function onImportFilesDrop(files: FileList) {
     if (files.length === 0) {
       setImportFile(null);
       latestImportFileRef.current = null;
-      setImportReview(null);
+      resetImportBanners();
       setError("Le dépôt ne contient aucun fichier exploitable (dossier non pris en charge ou élément invalide).");
       return;
     }
     if (files.length > 1) {
       setImportFile(null);
       latestImportFileRef.current = null;
-      setImportReview(null);
+      resetImportBanners();
       setError("Dépose un seul fichier à la fois.");
       return;
     }
@@ -621,14 +538,14 @@ export default function ProjectDetailsPage() {
     if (validationError) {
       setImportFile(null);
       latestImportFileRef.current = null;
-      setImportReview(null);
+      resetImportBanners();
       setError(validationError);
       return;
     }
     setError(null);
     setImportFile(file);
     latestImportFileRef.current = file;
-    setImportReview(null);
+    resetImportBanners();
   }
 
   const confirmPlanningImport = usePlanningImport({
@@ -648,7 +565,36 @@ export default function ProjectDetailsPage() {
     setImportFeedback,
     setImportBusy,
     setError,
+    onImported: async ({ revisionId, revisionCreated }) => {
+      if (revisionId === null) {
+        return;
+      }
+      // Displays the revision the file actually landed in, and records where that was so the panel
+      // can say it: the client never chooses the target (#332).
+      const list = await revisionPlanning.reload(revisionId);
+      const landed = list?.items.find((revision) => revision.revision_id === revisionId) ?? null;
+      setImportTarget({
+        revisionId,
+        versionLabel: landed ? `V${landed.version_number}` : null,
+        created: revisionCreated ?? false,
+      });
+    },
   });
+
+  // A retry replays the write with the tree -- and therefore the `expected_lock_version` -- that
+  // was on screen when it failed. Offered while another revision is displayed, it would write
+  // into a revision the user has left, and its re-read would be dropped as stale: the write would
+  // land with nothing on screen to say so. So the affordance exists only on its own revision.
+  //
+  // Defence in depth, and inert as things stand: `ProjectStatusBanners` only draws "Réessayer"
+  // when `retryableActionMessage === error`, and `reportFailureFor` has already suppressed the
+  // `setError` for a revision the user has left -- so the button has nothing to hang under
+  // anyway. Same for `runWrite`'s own guard before `setRetryableAction`. Kept because each layer
+  // stands on its own, and read as *coverage* by nobody: no test can distinguish them.
+  const retryableAction =
+    revisionPlanning.retryableAction?.revisionId === revisionPlanning.selectedRevisionId
+      ? revisionPlanning.retryableAction
+      : null;
 
   if (initialLoadFailed) {
     return <ProjectLoadFailedCard projectId={projectId} error={error} />;
@@ -696,6 +642,7 @@ export default function ProjectDetailsPage() {
           onExportXml={() => void exportPlanningXml()}
           importReview={importReview}
           onConfirmImport={() => void confirmPlanningImport()}
+          importTarget={importTarget}
           structureOpen={structureOpen}
           postGroups={structureEditor.postGroups}
           structureDraft={structureEditor.structureDraft}
@@ -712,32 +659,34 @@ export default function ProjectDetailsPage() {
           onSaveStructure={() => void structureEditor.savePlanningStructure()}
           onGenerateStructure={() => void structureEditor.generatePlanningStructure()}
           onSkipStructure={() => void structureEditor.skipStructure()}
-          plannings={plannings}
-          selectedPlanningId={selectedPlanningId}
-          planningBusy={planningBusy}
-          onSelectPlanning={(planningId) => void planningMutations.selectPlanning(planningId)}
-          selectedPlanning={selectedPlanning}
-          selectedPlanningHasConflict={selectedPlanningHasConflict}
-          onValidatePlanning={() => void planningMutations.validateSelectedPlanning()}
-          onSetReference={() => void planningMutations.setSelectedPlanningAsReference()}
-          onCreateVersion={() => void planningMutations.createPlanningVersionFromSelected()}
-          onReopenStructure={() => void planningMutations.reopenStructure()}
-          planningMutationBusy={planningMutationBusy}
-          canUndo={canUndoSelectedPlanning(historyByPlanningId, selectedPlanning)}
-          canRedo={canRedoSelectedPlanning(historyByPlanningId, selectedPlanning)}
-          onUndo={() => void applyPlanningHistoryCommand("undo")}
-          onRedo={() => void applyPlanningHistoryCommand("redo")}
-          conflict={getSelectedPlanningConflict(selectedPlanning, planningConflictByPlanningId)}
-          onReloadConflict={() => void planningMutations.reloadPlanningAfterConflict()}
-          planningDetailBusy={planningDetailBusy}
-          planningDetail={planningDetail}
-          onMove={(command) => void planningMutations.movePlanningTaskSelection(command)}
-          onScheduleUpdate={(taskUid, payload) => planningMutations.updateTaskScheduleSelection(taskUid, payload)}
-          onEditLinks={(payload) => planningMutations.editTaskPredecessorLinksSelection(payload.taskUid, payload.links)}
-          onCreateTask={(command) => void planningMutations.createPlanningTaskSelection(command)}
-          onDeleteTasks={(taskUids, confirmCascade, requestedVersionKey) =>
-            planningMutations.deletePlanningTasksSelection(taskUids, confirmCascade, requestedVersionKey)
+          revisions={revisionPlanning.revisions}
+          selectedRevision={revisionPlanning.selectedRevision}
+          selectedRevisionId={revisionPlanning.selectedRevisionId}
+          referenceRevisionId={revisionPlanning.referenceRevisionId}
+          revisionsBusy={revisionPlanning.revisionsBusy}
+          onSelectRevision={(revisionId) => revisionPlanning.selectRevision(revisionId)}
+          onCreateDraft={() => void revisionPlanning.createDraftFromSelected()}
+          onValidateRevision={() => void revisionPlanning.validateSelected()}
+          onReopenStructure={() => void structureEditor.reopenStructure()}
+          planningMutationBusy={revisionPlanning.mutationBusy}
+          revisionFeedback={revisionPlanning.feedback}
+          conflict={revisionPlanning.conflict}
+          onReloadConflict={() => void revisionPlanning.reload()}
+          hasError={error !== null}
+          treeBusy={revisionPlanning.treeBusy}
+          tree={revisionPlanning.tree}
+          onMove={(mode, nodeIds) => void revisionPlanning.moveNodes(mode, nodeIds)}
+          onScheduleUpdate={(nodeId, payload) => revisionPlanning.updatePlanning(nodeId, payload)}
+          onEditLinks={(payload) => revisionPlanning.replacePredecessors(payload.nodeId, payload.predecessors)}
+          onCreateTask={(command) =>
+            void revisionPlanning.createTask({
+              name: command.name,
+              is_milestone: command.isMilestone,
+              parent_id: command.parentId,
+              position: command.position,
+            })
           }
+          onDeleteNodes={(nodeIds) => void revisionPlanning.deleteNodes(nodeIds)}
         />
 
         <EstimateTab
@@ -796,7 +745,7 @@ export default function ProjectDetailsPage() {
           onReopenStructure={() => {
             estimateCostLines.closeCreateTaskDialog();
             setActiveTab("planning");
-            void planningMutations.reopenStructure();
+            void structureEditor.reopenStructure();
           }}
           milestoneDialogOpen={estimateCostLines.milestoneDialogOpen}
           milestoneLineId={estimateCostLines.milestoneLineId}
@@ -815,7 +764,7 @@ export default function ProjectDetailsPage() {
           onReopenStructureForMilestone={() => {
             estimateCostLines.closeMilestoneDialog();
             setActiveTab("planning");
-            void planningMutations.reopenStructure();
+            void structureEditor.reopenStructure();
           }}
           estimateRoleAssignments={estimateRoleAssignments}
           resourceNodes={resourceNodes}

@@ -1,3 +1,32 @@
+/projects/{projectId}/revisions:
+  get:
+    tags:
+    - projects
+    summary: Lister les revisions d'un projet
+    description: >-
+      La seule lecture qui repond « quelles revisions existent » (E14-10). Avant elle,
+      un identifiant de revision n'atteignait un client que comme sous-produit d'un
+      import (`ImportRunAcceptedResponse.revisionId`) : aucune autre revision que celle
+      qui venait d'etre importee n'etait ouvrable, donc ni historique, ni ouverture en
+      lecture seule d'une revision validee, ni copie vers un brouillon. Volontairement
+      pas de `GET .../revisions/{revisionId}` a cote : l'en-tete d'une revision revient
+      deja avec son arbre sur `GET .../nodes`.
+    operationId: listRevisions
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    responses:
+      '200':
+        description: Revisions du projet, de la plus ancienne a la plus recente
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/RevisionListRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/RevisionNotFound.yaml
 /projects/{projectId}/revisions/{revisionId}/nodes:
   get:
     tags:

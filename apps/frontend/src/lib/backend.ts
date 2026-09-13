@@ -246,138 +246,45 @@ export type PlanningStructureRead = components["schemas"]["PlanningStructureRead
 export type PlanningStructureDraftRead = components["schemas"]["PlanningStructureDraftRead"];
 export type Planning = components["schemas"]["PlanningRead"];
 export type PlanningDetail = components["schemas"]["PlanningDetailRead"];
-export type PlanningCreate = components["schemas"]["PlanningCreate"];
-type PlanningTaskDeleteConflictDetail = components["schemas"]["PlanningTaskDeleteConflict"]["detail"];
-
-// E14-05 (#331) removed the eight snapshot-based planning endpoints from the backend
-// and, with them, their request/response schemas from the OpenAPI contract. The
-// planning editor below still calls them and is rebuilt on the revision model by
-// E14-09/E14-10 (#335, #336); until then these payload shapes are declared here,
-// verbatim as the contract last generated them, so this wrapper keeps compiling
-// against a contract that no longer describes them. Nothing else in the file is
-// hand-typed -- every surviving endpoint still reads its types from `components`.
-/**
- * @deprecated Hand-copied from the OpenAPI contract, which no longer describes `PlanningTaskMove`:
- * E14-05 (#331) removed the snapshot-based planning endpoints. Rebuilt on the revision
- * model by E14-09/E14-10 (#335, #336); this alias disappears with them.
- */
-export type PlanningTaskMove = {
-  task_uids: number[];
-  target_parent_uid?: number | null;
-  position: number;
-  expected_revision: number;
-};
-/**
- * @deprecated Hand-copied from the OpenAPI contract, which no longer describes `PlanningTaskCreate`:
- * E14-05 (#331) removed the snapshot-based planning endpoints. Rebuilt on the revision
- * model by E14-09/E14-10 (#335, #336); this alias disappears with them.
- */
-export type PlanningTaskCreate = {
-  name: string;
-  is_milestone: boolean;
-  target_parent_uid?: number | null;
-  insert_after_uid?: number | null;
-  expected_revision: number;
-};
-/**
- * @deprecated Hand-copied from the OpenAPI contract, which no longer describes `PlanningTaskDelete`:
- * E14-05 (#331) removed the snapshot-based planning endpoints. Rebuilt on the revision
- * model by E14-09/E14-10 (#335, #336); this alias disappears with them.
- */
-export type PlanningTaskDelete = {
-  task_uids: number[];
-  confirm_cascade: boolean;
-  expected_revision: number;
-};
-/**
- * @deprecated Hand-copied from the OpenAPI contract, which no longer describes `PlanningTaskSnapshotWrite`:
- * E14-05 (#331) removed the snapshot-based planning endpoints. Rebuilt on the revision
- * model by E14-09/E14-10 (#335, #336); this alias disappears with them.
- */
-export type PlanningTaskSnapshotWrite = {
-  uid: number;
-  structure_key: string | null;
-  structure_kind: "poste" | "lot" | "livrable" | "milestone" | "task" | null;
-  parent_uid: number | null;
-  position: number | null;
-  name: string;
-  outline_number: string | null;
-  outline_level: number | null;
-  wbs: string | null;
-  start_at: string | null;
-  finish_at: string | null;
-  duration_minutes: number | null;
-  duration_format: number | null;
-  work_minutes: number | null;
-  task_type: number | null;
-  percent_complete: number | null;
-  is_summary: boolean;
-  is_milestone: boolean;
-  is_manual: boolean | null;
-  calendar_uid: number | null;
-  notes: string | null;
-};
-/**
- * @deprecated Hand-copied from the OpenAPI contract, which no longer describes `PlanningLinkSnapshotWrite`:
- * E14-05 (#331) removed the snapshot-based planning endpoints. Rebuilt on the revision
- * model by E14-09/E14-10 (#335, #336); this alias disappears with them.
- */
-export type PlanningLinkSnapshotWrite = {
-  task_uid: number;
-  predecessor_uid: number;
-  link_type: number;
-  lag_tenth_minute: number | null;
-  lag_format: number | null;
-};
-/**
- * @deprecated Hand-copied from the OpenAPI contract, which no longer describes `PlanningSnapshotRestore`:
- * E14-05 (#331) removed the snapshot-based planning endpoints. Rebuilt on the revision
- * model by E14-09/E14-10 (#335, #336); this alias disappears with them.
- */
-export type PlanningSnapshotRestore = {
-  tasks: PlanningTaskSnapshotWrite[];
-  links: PlanningLinkSnapshotWrite[];
-  expected_revision: number;
-};
-/**
- * @deprecated Hand-copied from the OpenAPI contract, which no longer describes `PlanningTaskScheduleUpdate`:
- * E14-05 (#331) removed the snapshot-based planning endpoints. Rebuilt on the revision
- * model by E14-09/E14-10 (#335, #336); this alias disappears with them.
- */
-export type PlanningTaskScheduleUpdate = {
-  is_manual: boolean;
-  start_at?: string | null;
-  finish_at?: string | null;
-  duration_minutes?: number | null;
-  expected_revision: number;
-};
-/**
- * @deprecated Hand-copied from the OpenAPI contract, which no longer describes `TaskLinkWrite`:
- * E14-05 (#331) removed the snapshot-based planning endpoints. Rebuilt on the revision
- * model by E14-09/E14-10 (#335, #336); this alias disappears with them.
- */
-export type TaskLinkWrite = {
-  predecessor_uid: number;
-  link_type: number;
-  lag_tenth_minute?: number | null;
-  lag_format?:
-    | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 19 | 20
-    | 35 | 36 | 37 | 38 | 39 | 40 | 41 | 42 | 43 | 44 | 51 | 52
-    | null;
-};
-/**
- * @deprecated Hand-copied from the OpenAPI contract, which no longer describes `TaskLinksReplace`:
- * E14-05 (#331) removed the snapshot-based planning endpoints. Rebuilt on the revision
- * model by E14-09/E14-10 (#335, #336); this alias disappears with them.
- */
-export type TaskLinksReplace = {
-  links: TaskLinkWrite[];
-  expected_revision: number;
-};
+// E14-10 (#336): the planning editor now speaks the revision model. The eight snapshot-based
+// planning endpoints E14-05 (#331) removed from the backend -- move/create/delete/schedule/links/
+// restore -- are gone from this wrapper too, and with them the hand-copied payload shapes that
+// kept it compiling against a contract that no longer described them. Every type below is read
+// from `components` again, which is the rule this file never meant to break.
+export type Revision = components["schemas"]["RevisionSummaryRead"];
+export type RevisionList = components["schemas"]["RevisionListRead"];
+export type RevisionStatus = Revision["status"];
+export type RevisionTree = components["schemas"]["RevisionTreeRead"];
+export type RevisionNode = components["schemas"]["RevisionNodeRead"];
+export type RevisionNodeKind = RevisionNode["kind"];
+export type RevisionPlanFacet = components["schemas"]["RevisionPlanFacetRead"];
+export type RevisionCostFacet = components["schemas"]["RevisionCostFacetRead"];
+export type RevisionPredecessor = components["schemas"]["RevisionPredecessorRead"];
+export type RevisionPredecessorWrite = components["schemas"]["RevisionPredecessorWrite"];
+export type RevisionWriteResult = components["schemas"]["RevisionWriteRead"];
+export type RevisionNodeWriteResult = components["schemas"]["RevisionNodeWriteRead"];
+export type RevisionNodeDeleteResult = components["schemas"]["RevisionNodeDeleteRead"];
+export type RevisionCostLoss = components["schemas"]["RevisionCostLossRead"];
+export type RevisionTaskCreateInput = components["schemas"]["RevisionTaskCreate"];
+export type RevisionNodeDeleteInput = components["schemas"]["RevisionNodeDelete"];
+export type RevisionValidateInput = components["schemas"]["RevisionValidate"];
+export type RevisionNodeMoveInput = components["schemas"]["RevisionNodeMove"];
+/** `to_parent` names its destination; `up`/`down`/`indent`/`outdent` compute theirs server-side. */
+export type RevisionMoveMode = NonNullable<RevisionNodeMoveInput["mode"]>;
+export type RevisionPlanFacetUpdateInput = components["schemas"]["RevisionPlanFacetUpdate"];
+export type RevisionPredecessorsReplaceInput = components["schemas"]["RevisionPredecessorsReplace"];
+export type RevisionCopyInput = components["schemas"]["RevisionCopy"];
+export type RevisionCreated = components["schemas"]["RevisionCreatedRead"];
+export type RevisionValidated = components["schemas"]["RevisionValidatedRead"];
+/** MSPDI `LagFormat`, as the predecessor write contract constrains it. */
+export type MspdiLagFormat = NonNullable<RevisionPredecessorWrite["lag_format"]>;
 export type ImportBatch = components["schemas"]["ImportBatchResponse"];
 export type ImportBatchStatus = components["schemas"]["ImportBatchStatusResponse"];
 export type ImportRunAcceptedResponse = components["schemas"]["ImportRunAcceptedResponse"];
 export type ImportDiff = components["schemas"]["ImportDiffResponse"];
+export type ImportDiffItem = components["schemas"]["ImportDiffItem"];
+/** One cost facet an import would destroy -- Rule 3's safeguard, on the item and on the whole diff. */
+export type ImportCostLoss = components["schemas"]["ImportCostLoss"];
 export type TokenResponse = components["schemas"]["Token"];
 
 export class ApiError extends Error {
@@ -387,7 +294,7 @@ export class ApiError extends Error {
     // Raw, still-structured `detail` from the response body (e.g. PlanningTaskDeleteConflict's
     // `{code, descendant_uids, task_uids}`), when the backend sent one -- kept alongside the
     // already-formatted `message` so a caller that needs more than a display string (see
-    // getPlanningTaskDeleteConflict below) does not have to re-parse the response itself.
+    // getRevisionLockConflict below) does not have to re-parse the response itself.
     public readonly detail?: unknown,
   ) {
     super(message);
@@ -425,19 +332,44 @@ type ParsedError = { message: string; detail?: unknown };
 // English or raw JSON to the user (see issue #137).
 const GENERIC_ERROR_MESSAGE = "Une erreur est survenue. Réessayez ou contactez le support si le problème persiste.";
 
+// French copy for the refusal codes of the revision API (E14-10 / #336). One table rather than a
+// chain of `if`s, because this list is a translation of `waterfall.api.revision_errors`' own table
+// and is meant to be read next to it -- a code missing here still reaches the user as
+// GENERIC_ERROR_MESSAGE rather than as an untranslated English sentence (#137).
+const REVISION_ERROR_MESSAGES: Readonly<Record<string, string>> = {
+  REVISION_LOCK_CONFLICT: "Cette révision a été modifiée entre-temps : recharge-la avant de réessayer.",
+  REVISION_IMMUTABLE:
+    "Cette révision est validée : crée un brouillon pour la modifier, la révision validée ne change plus.",
+  REVISION_MILESTONE_HAS_CHILDREN:
+    "Un jalon ne peut pas contenir de lignes : retire son indicateur de jalon, ou choisis un autre parent.",
+  REVISION_SELECTION_INVALID:
+    "Cette sélection ne peut pas être déplacée d'un bloc : choisis des lignes voisines de même niveau.",
+  REVISION_POSITION_INVALID: "La position visée n'existe pas à cet endroit de l'arbre.",
+  REVISION_TREE_CYCLE: "Une ligne ne peut pas être déplacée sous l'une de ses propres sous-lignes.",
+  REVISION_LINK_INVALID: "Ce lien de précédence est refusé : il créerait un cycle ou désigne une ligne d'une autre révision.",
+  REVISION_CROSS_REVISION: "Cette ligne appartient à une autre révision.",
+  REVISION_NODE_NOT_FOUND: "Cette ligne n'existe plus dans la révision : recharge-la.",
+  REVISION_NOT_FOUND: "Cette révision n'existe pas ou n'appartient pas à ce projet.",
+  REVISION_RATE_COVERAGE_MISSING:
+    "Le référentiel de taux ne couvre pas toute la révision : complète les taux manquants avant de valider (onglet Devis).",
+  REVISION_UNPRICEABLE_FACET:
+    "Un chiffrage est porté par une tâche sans dates : date la tâche porteuse avant de valider (onglet Devis).",
+  REVISION_WRITE_REFUSED: "Cette écriture a été refusée sur l'état stocké : recharge la révision avant de réessayer.",
+  REVISION_INTEGRITY_CONFLICT: "Cette écriture entre en conflit avec l'état stocké : recharge la révision avant de réessayer.",
+  PROJECT_READ_ONLY: "Ce projet est en lecture seule : son statut n'autorise plus aucune modification.",
+  PROJECT_CALENDAR_MISSING:
+    "Aucun calendrier actif n'est marqué par défaut : définis-en un dans les paramètres avant de modifier la révision.",
+  PROJECT_NOT_FOUND: "Ce projet n'existe pas ou ne t'appartient pas.",
+};
+
 // Readable French copy for structured detail codes (PlanningTaskDeleteConflict's two codes, see
 // that generated schema, plus PLANNING_REVISION_CONFLICT shared by every versioned planning
 // mutation, and the two PLANNING_STRUCTURE_REOPEN_* codes raised by the structure reopen
 // endpoint); anything else falls back to GENERIC_ERROR_MESSAGE via the caller in parseError.
 function describeStructuredDetailCode(code: unknown): string | null {
-  if (code === "CASCADE_CONFIRMATION_REQUIRED") {
-    return "Cette tâche a des tâches enfants et nécessite une confirmation.";
-  }
-  if (code === "TASK_REFERENCED") {
-    return "Cette tâche est référencée par un devis, une affectation ou une charge.";
-  }
-  if (code === "PLANNING_REVISION_CONFLICT") {
-    return "Ce planning a été modifié entre-temps : recharge-le avant de réessayer.";
+  const revisionMessage = REVISION_ERROR_MESSAGES[String(code)];
+  if (revisionMessage) {
+    return revisionMessage;
   }
   if (code === "PLANNING_STRUCTURE_REOPEN_REQUIRES_VALIDATION") {
     return "Cette structure doit d'abord être validée avant de pouvoir être rouverte.";
@@ -473,7 +405,7 @@ async function parseError(response: Response): Promise<ParsedError> {
     // `{code, descendant_uids, task_uids}`, must never be handed to callers as the `message`
     // string as-is (it would stringify to something like "[object Object]"): translate it to
     // readable copy here, but also keep the raw object on ApiError.detail so a caller that needs
-    // the structured fields (see getPlanningTaskDeleteConflict) does not have to re-parse it.
+    // the structured fields (see getRevisionLockConflict) does not have to re-parse it.
     if (payload.detail && typeof payload.detail === "object") {
       return {
         message: describeStructuredDetailCode(payload.detail.code) ?? GENERIC_ERROR_MESSAGE,
@@ -556,39 +488,18 @@ async function authFetch(
   return secondResponse;
 }
 
-// Inspects an error thrown by deletePlanningTasks for the structured 409 conflict body
-// (PlanningTaskDeleteConflict): CASCADE_CONFIRMATION_REQUIRED means the deletion needs the user's
-// confirmation to also remove the listed descendants; TASK_REFERENCED means the deletion cannot
-// proceed at all (referenced by an estimate/assignment/charge), regardless of confirm_cascade.
-// Returns null for anything else (a different status, no structured detail, or an unrelated
-// error), so callers can fall back to a generic error message.
-export function getPlanningTaskDeleteConflict(cause: unknown): {
-  code: "CASCADE_CONFIRMATION_REQUIRED" | "TASK_REFERENCED";
-  descendantUids?: number[];
-  taskUids?: number[];
-} | null {
-  if (!(cause instanceof ApiError) || cause.status !== 409) {
-    return null;
-  }
-  const detail = cause.detail as PlanningTaskDeleteConflictDetail | undefined;
-  if (!detail || (detail.code !== "CASCADE_CONFIRMATION_REQUIRED" && detail.code !== "TASK_REFERENCED")) {
-    return null;
-  }
-  return {
-    code: detail.code,
-    descendantUids: detail.descendant_uids,
-    taskUids: detail.task_uids,
-  };
-}
-
-// Inspects an error thrown by any versioned planning mutation (move/create/delete/schedule/
-// links/restore) for the structured PLANNING_REVISION_CONFLICT 409 body (E4-01). Returns null
-// for anything else, so callers can fall back to a generic error message.
-export function getPlanningRevisionConflict(cause: unknown): {
-  projectId: number;
-  planningId: number;
-  expectedRevision: number;
-  currentRevision: number;
+/**
+ * The structured 409 a revision write answers when `expected_lock_version` is stale.
+ *
+ * `current_lock_version` is what the revision actually holds: the caller re-reads the tree and
+ * replays its write against that value, rather than guessing. Returns null for any other refusal
+ * (including REVISION_IMMUTABLE, which is a 409 too but carries no counter and has no retry),
+ * so callers fall back to `cause.message`.
+ */
+export function getRevisionLockConflict(cause: unknown): {
+  revisionId: number | null;
+  expectedLockVersion: number | null;
+  currentLockVersion: number | null;
 } | null {
   if (!(cause instanceof ApiError) || cause.status !== 409) {
     return null;
@@ -596,21 +507,34 @@ export function getPlanningRevisionConflict(cause: unknown): {
   const detail = cause.detail as
     | {
         code?: string;
-        project_id?: number;
-        planning_id?: number;
-        expected_revision?: number;
-        current_revision?: number;
+        revision_id?: number;
+        expected_lock_version?: number;
+        current_lock_version?: number;
       }
     | undefined;
-  if (!detail || detail.code !== "PLANNING_REVISION_CONFLICT") {
+  if (!detail || detail.code !== "REVISION_LOCK_CONFLICT") {
     return null;
   }
   return {
-    projectId: detail.project_id ?? 0,
-    planningId: detail.planning_id ?? 0,
-    expectedRevision: detail.expected_revision ?? 0,
-    currentRevision: detail.current_revision ?? 0,
+    revisionId: detail.revision_id ?? null,
+    expectedLockVersion: detail.expected_lock_version ?? null,
+    currentLockVersion: detail.current_lock_version ?? null,
   };
+}
+
+/**
+ * The stable `detail.code` of any revision refusal, or null when the error carries none.
+ *
+ * Every refusal of the revision API answers a code and never a free message (see
+ * `waterfall.api.revision_errors`), so a caller that needs to branch -- "this one is INV-03, offer
+ * to open a draft" -- reads it here instead of matching on a translated sentence.
+ */
+export function getRevisionErrorCode(cause: unknown): string | null {
+  if (!(cause instanceof ApiError)) {
+    return null;
+  }
+  const detail = cause.detail as { code?: string } | undefined;
+  return typeof detail?.code === "string" ? detail.code : null;
 }
 
 // E6-11/#175: the structured 400 body `POST .../role-assignments` raises when a labor
@@ -620,7 +544,7 @@ export function getPlanningRevisionConflict(cause: unknown): {
 // the message must list the actual missing combinations/years), so `cause.message` alone would
 // only carry the generic fallback -- callers needing the details go through
 // getMissingRateCoverage/describeMissingRateCoverage below instead, same precedent as
-// getPlanningTaskDeleteConflict/getPlanningRevisionConflict.
+// getRevisionLockConflict/getRevisionErrorCode.
 export type MissingRateCoverageDetail = components["schemas"]["MissingRateCoverage"]["detail"];
 
 // Basse review finding #4 (E12-06/#278): the `409` branch below isn't dead code, even though
@@ -1610,7 +1534,7 @@ export function moveEstimateGridNodes(
 }
 
 // Inspects an error thrown by moveEstimateGridNodes for the structured ESTIMATE_REVISION_CONFLICT
-// 409 body -- mirrors getPlanningRevisionConflict above, one level up (an estimate's own
+// 409 body -- mirrors getRevisionLockConflict above, one level up (an estimate's own
 // `revision`, not a planning's).
 export function getEstimateRevisionConflict(cause: unknown): {
   projectId: number;
@@ -1924,6 +1848,11 @@ export async function getPlanningStructureDraft(
   }
 }
 
+// What is left of the legacy planning family (E14-10 / #336). Creating a version, validating one,
+// pointing the project at one: all four wrappers are gone, because the planning lifecycle **is**
+// the revision lifecycle now (copy/validate above). The two reads below survive only for the Devis
+// tab -- its parent-task selector and its post-create refresh -- and for the lotissement editor,
+// which is not carried by a revision. E14-11 (#337) takes the first, E14-12 (#339) the rest.
 export async function listPlannings(
   projectId: number,
   tokens: SessionTokens,
@@ -1945,27 +1874,6 @@ export function getPlanning(
   onSessionRefresh: (next: SessionTokens) => void,
 ) {
   return getCompletePlanning(projectId, planningId, tokens, onSessionRefresh);
-}
-
-// Creates a brand new planning version, optionally cloning `source_planning_id`'s tasks/links
-// into a fresh draft (see #143: this is what lets the UI offer an explicit "new version from a
-// validated planning" action, distinct from the planning-structure wizard).
-export function createPlanning(
-  projectId: number,
-  payload: PlanningCreate,
-  tokens: SessionTokens,
-  onSessionRefresh: (next: SessionTokens) => void,
-) {
-  return authRequest<PlanningDetail>(
-    `/projects/${projectId}/plannings`,
-    tokens,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    },
-    onSessionRefresh,
-  );
 }
 
 const PLANNING_PAGE_SIZE = 200;
@@ -2001,29 +1909,71 @@ async function getCompletePlanning(
   }
 }
 
-export function validatePlanning(
+// ---------------------------------------------------------------------------------------------
+// The revision model (E14-10 / #336). Everything below lives under
+// /projects/{projectId}/revisions/{revisionId}: one tree, two facets, one optimistic-lock counter.
+//
+// Two rules run through the whole family and are the reason these functions look alike:
+//
+// * every write carries `expected_lock_version` and answers the new one. A stale counter is
+//   refused with a 409 REVISION_LOCK_CONFLICT carrying the stored value (see
+//   getRevisionLockConflict), and a validated revision refuses every write with REVISION_IMMUTABLE
+//   -- the same code whichever facet was aimed at;
+// * a write answers the counter and *not* the tree. The caller re-reads `getRevisionNodes` after
+//   a successful write rather than patching local state: `row_number`, `level` and a cost facet's
+//   bearing task are all computed on read, so a move changes rows the response never mentions.
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Every revision of the project, oldest first, with the reference/displayed pointers.
+ *
+ * The one read that answers "which revisions exist": a revision id otherwise only ever reaches
+ * the client as the by-product of an import (`ImportRunAcceptedResponse.revisionId`).
+ */
+export function listRevisions(
   projectId: number,
-  planningId: number,
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
 ) {
-  return authRequest<Planning>(
-    `/projects/${projectId}/plannings/${planningId}/validate`,
+  return authRequest<RevisionList>(
+    `/projects/${projectId}/revisions`,
     tokens,
-    { method: "POST" },
+    { method: "GET" },
     onSessionRefresh,
   );
 }
 
-export function movePlanningTasks(
+/**
+ * The whole tree of a revision, depth-first, each node with its `row_number`, its `level`, its
+ * facet and its predecessors.
+ *
+ * Deliberately not paginated by the backend and deliberately not paginated here either (unlike
+ * getCompletePlanning above): an editable tree needs every node to reconstruct the hierarchy and
+ * to number its rows, and a page boundary would produce orphaned parents.
+ */
+export function getRevisionNodes(
   projectId: number,
-  planningId: number,
-  payload: PlanningTaskMove,
+  revisionId: number,
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
 ) {
-  return authRequest<PlanningDetail>(
-    `/projects/${projectId}/plannings/${planningId}/tasks/move`,
+  return authRequest<RevisionTree>(
+    `/projects/${projectId}/revisions/${revisionId}/nodes`,
+    tokens,
+    { method: "GET" },
+    onSessionRefresh,
+  );
+}
+
+export function createRevisionTask(
+  projectId: number,
+  revisionId: number,
+  payload: RevisionTaskCreateInput,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<RevisionNodeWriteResult>(
+    `/projects/${projectId}/revisions/${revisionId}/tasks`,
     tokens,
     {
       method: "POST",
@@ -2034,15 +1984,23 @@ export function movePlanningTasks(
   );
 }
 
-export function createPlanningTask(
+/**
+ * Moves a selection of nodes, whatever facet each one carries -- which is what makes a task drag
+ * its cost lines along in the very same operation (EPIC #326's propagation rule).
+ *
+ * `up`/`down`/`indent`/`outdent` compute their own destination server-side: the outdent semantics
+ * changed with #344 (the displayed row order is preserved and the following siblings become the
+ * outdented node's children), and the client no longer builds those destinations at all.
+ */
+export function moveRevisionNodes(
   projectId: number,
-  planningId: number,
-  payload: PlanningTaskCreate,
+  revisionId: number,
+  payload: RevisionNodeMoveInput,
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
 ) {
-  return authRequest<PlanningDetail>(
-    `/projects/${projectId}/plannings/${planningId}/tasks`,
+  return authRequest<RevisionWriteResult>(
+    `/projects/${projectId}/revisions/${revisionId}/nodes/move`,
     tokens,
     {
       method: "POST",
@@ -2053,15 +2011,22 @@ export function createPlanningTask(
   );
 }
 
-export function deletePlanningTasks(
+/**
+ * Deletes a selection, its whole subtree and both facets of every removed node (INV-02).
+ *
+ * The cascade is not optional and there is no confirmation code to send back: what the response
+ * carries instead is `cost_losses`, naming every chiffrage the deletion took away rather than
+ * losing it silently (Rule 3's safeguard).
+ */
+export function deleteRevisionNodes(
   projectId: number,
-  planningId: number,
-  payload: PlanningTaskDelete,
+  revisionId: number,
+  payload: RevisionNodeDeleteInput,
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
 ) {
-  return authRequest<PlanningDetail>(
-    `/projects/${projectId}/plannings/${planningId}/tasks/delete`,
+  return authRequest<RevisionNodeDeleteResult>(
+    `/projects/${projectId}/revisions/${revisionId}/nodes/delete`,
     tokens,
     {
       method: "POST",
@@ -2072,16 +2037,17 @@ export function deletePlanningTasks(
   );
 }
 
-export function updatePlanningTaskSchedule(
+/** Partial edit of one node's planning facet: an absent field is left alone, `null` is a value. */
+export function updateRevisionPlanFacet(
   projectId: number,
-  planningId: number,
-  taskUid: number,
-  payload: PlanningTaskScheduleUpdate,
+  revisionId: number,
+  nodeId: number,
+  payload: RevisionPlanFacetUpdateInput,
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
 ) {
-  return authRequest<PlanningDetail>(
-    `/projects/${projectId}/plannings/${planningId}/tasks/${taskUid}`,
+  return authRequest<RevisionWriteResult>(
+    `/projects/${projectId}/revisions/${revisionId}/nodes/${nodeId}/planning`,
     tokens,
     {
       method: "PATCH",
@@ -2092,16 +2058,17 @@ export function updatePlanningTaskSchedule(
   );
 }
 
-export function replaceTaskPredecessorLinks(
+/** Replaces a node's whole predecessor list; an empty list erases it, and is the only way to. */
+export function replaceRevisionPredecessors(
   projectId: number,
-  planningId: number,
-  taskUid: number,
-  payload: TaskLinksReplace,
+  revisionId: number,
+  nodeId: number,
+  payload: RevisionPredecessorsReplaceInput,
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
 ) {
-  return authRequest<PlanningDetail>(
-    `/projects/${projectId}/plannings/${planningId}/tasks/${taskUid}/links`,
+  return authRequest<RevisionWriteResult>(
+    `/projects/${projectId}/revisions/${revisionId}/nodes/${nodeId}/predecessors`,
     tokens,
     {
       method: "PUT",
@@ -2112,20 +2079,25 @@ export function replaceTaskPredecessorLinks(
   );
 }
 
-// Drives undo/redo (E4-01): replaces every task/link of a draft planning with an exact
-// prior snapshot the caller already received from a previous response.
-export function restorePlanningSnapshot(
+/**
+ * Copies a revision into a new draft (INV-07). `expected_lock_version` is the **source**'s: a
+ * source that moved since it was read would produce the copy of a tree the caller never saw.
+ *
+ * This is the only way to modify a validated revision (INV-03), and it leaves the source exactly
+ * as it was -- which is what the "create a draft from a validated revision" command does.
+ */
+export function copyRevision(
   projectId: number,
-  planningId: number,
-  payload: PlanningSnapshotRestore,
+  revisionId: number,
+  payload: RevisionCopyInput,
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
 ) {
-  return authRequest<PlanningDetail>(
-    `/projects/${projectId}/plannings/${planningId}/tasks/restore`,
+  return authRequest<RevisionCreated>(
+    `/projects/${projectId}/revisions/${revisionId}/copy`,
     tokens,
     {
-      method: "PUT",
+      method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     },
@@ -2133,30 +2105,22 @@ export function restorePlanningSnapshot(
   );
 }
 
-export function setPlanningReference(
+/** Validates a draft and freezes its document: from there on every write is REVISION_IMMUTABLE. */
+export function validateRevision(
   projectId: number,
-  planningId: number,
+  revisionId: number,
+  payload: RevisionValidateInput,
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
 ) {
-  return authRequest<Project>(
-    `/projects/${projectId}/plannings/${planningId}/reference`,
+  return authRequest<RevisionValidated>(
+    `/projects/${projectId}/revisions/${revisionId}/validate`,
     tokens,
-    { method: "POST" },
-    onSessionRefresh,
-  );
-}
-
-export function setDisplayedPlanning(
-  projectId: number,
-  planningId: number,
-  tokens: SessionTokens,
-  onSessionRefresh: (next: SessionTokens) => void,
-) {
-  return authRequest<Project>(
-    `/projects/${projectId}/plannings/${planningId}/display`,
-    tokens,
-    { method: "POST" },
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
     onSessionRefresh,
   );
 }

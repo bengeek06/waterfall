@@ -80,6 +80,8 @@ paths:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1plannings
   /projects/{projectId}/plannings/{planningId}:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1plannings~1{planningId}
+  /projects/{projectId}/revisions:
+    $ref: ./paths/revisions.yaml#/~1projects~1{projectId}~1revisions
   /projects/{projectId}/revisions/{revisionId}/nodes:
     $ref: ./paths/revisions.yaml#/~1projects~1{projectId}~1revisions~1{revisionId}~1nodes
   /projects/{projectId}/revisions/{revisionId}/aggregates:

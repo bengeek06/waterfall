@@ -6,20 +6,27 @@ import {
   createEstimateRoleAssignment,
   createEstimateTask,
   deleteEstimateRoleAssignment,
-  deletePlanningTasks,
+  copyRevision,
+  createRevisionTask,
+  deleteRevisionNodes,
   describeMissingRateCoverage,
+  getRevisionNodes,
   getCalendars,
   getCostTypes,
   getMissingRateCoverage,
   getPlanning,
-  getPlanningTaskDeleteConflict,
+  getRevisionLockConflict,
   getProjects,
   getResourceNodes,
   getResourceRoles,
   getUsers,
   isEstimateTaskCreateRequiresPlanningDraft,
   listEstimateRoleAssignments,
-  movePlanningTasks,
+  listRevisions,
+  moveRevisionNodes,
+  replaceRevisionPredecessors,
+  updateRevisionPlanFacet,
+  validateRevision,
   updateEstimateRoleAssignment,
   updateResourceRole,
 } from "./backend";
@@ -430,16 +437,15 @@ describe("parseError", () => {
     ).rejects.toMatchObject({ status: 404, message: "Role not found" } as Partial<ApiError>);
   });
 
-  it("turns a PLANNING_REVISION_CONFLICT detail into a readable message", async () => {
+  it("turns a REVISION_LOCK_CONFLICT detail into a readable message", async () => {
     const fetchMock = vi.fn(async () =>
       new Response(
         JSON.stringify({
           detail: {
-            code: "PLANNING_REVISION_CONFLICT",
-            project_id: 1,
-            planning_id: 7,
-            expected_revision: 0,
-            current_revision: 1,
+            code: "REVISION_LOCK_CONFLICT",
+            revision_id: 7,
+            expected_lock_version: 0,
+            current_lock_version: 1,
           },
         }),
         { status: 409, headers: { "Content-Type": "application/json" } },
@@ -448,16 +454,16 @@ describe("parseError", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(
-      movePlanningTasks(
+      moveRevisionNodes(
         1,
         7,
-        { task_uids: [1], target_parent_uid: null, position: 1, expected_revision: 0 },
+        { expected_lock_version: 0, node_ids: [1], mode: "up" },
         { accessToken: "token" },
         vi.fn(),
       ),
     ).rejects.toMatchObject({
       status: 409,
-      message: "Ce planning a été modifié entre-temps : recharge-le avant de réessayer.",
+      message: "Cette révision a été modifiée entre-temps : recharge-la avant de réessayer.",
     } as Partial<ApiError>);
   });
 
@@ -471,10 +477,10 @@ describe("parseError", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(
-      movePlanningTasks(
+      moveRevisionNodes(
         1,
         7,
-        { task_uids: [1], target_parent_uid: null, position: 1, expected_revision: 0 },
+        { expected_lock_version: 0, node_ids: [1], mode: "up" },
         { accessToken: "token" },
         vi.fn(),
       ),
@@ -494,10 +500,10 @@ describe("parseError", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(
-      movePlanningTasks(
+      moveRevisionNodes(
         1,
         7,
-        { task_uids: [1], target_parent_uid: null, position: 1, expected_revision: 0 },
+        { expected_lock_version: 0, node_ids: [1], mode: "up" },
         { accessToken: "token" },
         vi.fn(),
       ),
@@ -517,10 +523,10 @@ describe("parseError", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(
-      movePlanningTasks(
+      moveRevisionNodes(
         1,
         7,
-        { task_uids: [1], target_parent_uid: null, position: 1, expected_revision: 0 },
+        { expected_lock_version: 0, node_ids: [1], mode: "up" },
         { accessToken: "token" },
         vi.fn(),
       ),
@@ -540,10 +546,10 @@ describe("parseError", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(
-      movePlanningTasks(
+      moveRevisionNodes(
         1,
         7,
-        { task_uids: [1], target_parent_uid: null, position: 1, expected_revision: 0 },
+        { expected_lock_version: 0, node_ids: [1], mode: "up" },
         { accessToken: "token" },
         vi.fn(),
       ),
@@ -554,15 +560,129 @@ describe("parseError", () => {
   });
 });
 
-describe("getPlanningTaskDeleteConflict", () => {
+describe("revision endpoints", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it("turns a CASCADE_CONFIRMATION_REQUIRED conflict into a readable message and exposes the descendant uids", async () => {
+  function stubJson(body: unknown) {
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+      async () => jsonResponse(body),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("reads a project's revisions from the list endpoint", async () => {
+    const fetchMock = stubJson({ items: [], reference_revision_id: null, displayed_revision_id: null });
+
+    await listRevisions(4, { accessToken: "token" }, vi.fn());
+
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/projects/4/revisions");
+    expect(fetchMock.mock.calls[0][1]?.method).toBe("GET");
+  });
+
+  it("reads the whole tree in a single unpaginated request", async () => {
+    // Unlike getPlanning, which pages: an editable tree needs every node to rebuild the hierarchy,
+    // and a page boundary would produce orphaned parents.
+    const fetchMock = stubJson({ revision_id: 9, nodes: [] });
+
+    await getRevisionNodes(4, 9, { accessToken: "token" }, vi.fn());
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/projects/4/revisions/9/nodes");
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain("limit=");
+  });
+
+  it("sends a move as a mode plus the selected node ids, with no destination", async () => {
+    const fetchMock = stubJson({ revision_id: 9, lock_version: 4 });
+
+    await moveRevisionNodes(
+      4,
+      9,
+      { expected_lock_version: 3, node_ids: [11, 12], mode: "outdent" },
+      { accessToken: "token" },
+      vi.fn(),
+    );
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/projects/4/revisions/9/nodes/move");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({
+      expected_lock_version: 3,
+      node_ids: [11, 12],
+      mode: "outdent",
+    });
+  });
+
+  it("sends every other write with the lock counter the next one will need", async () => {
+    const fetchMock = stubJson({ revision_id: 9, lock_version: 4, node_id: 20, work_item_id: 30 });
+
+    await createRevisionTask(
+      4,
+      9,
+      { expected_lock_version: 3, name: "Étude", is_milestone: false, parent_id: null, position: null },
+      { accessToken: "token" },
+      vi.fn(),
+    );
+    await updateRevisionPlanFacet(
+      4,
+      9,
+      20,
+      { expected_lock_version: 4, duration_minutes: 480 },
+      { accessToken: "token" },
+      vi.fn(),
+    );
+    await replaceRevisionPredecessors(
+      4,
+      9,
+      20,
+      { expected_lock_version: 5, predecessors: [] },
+      { accessToken: "token" },
+      vi.fn(),
+    );
+    await deleteRevisionNodes(4, 9, { expected_lock_version: 6, node_ids: [20] }, { accessToken: "token" }, vi.fn());
+    await copyRevision(4, 9, { expected_lock_version: 7 }, { accessToken: "token" }, vi.fn());
+    await validateRevision(4, 9, { expected_lock_version: 8 }, { accessToken: "token" }, vi.fn());
+
+    const requests = fetchMock.mock.calls.map(([url, init]) => ({
+      url: String(url),
+      method: init?.method,
+      body: JSON.parse(String(init?.body)) as { expected_lock_version: number },
+    }));
+    expect(requests.map((request) => request.method)).toEqual([
+      "POST",
+      "PATCH",
+      "PUT",
+      "POST",
+      "POST",
+      "POST",
+    ]);
+    expect(requests.map((request) => request.body.expected_lock_version)).toEqual([3, 4, 5, 6, 7, 8]);
+    expect(requests[1].url).toContain("/revisions/9/nodes/20/planning");
+    expect(requests[2].url).toContain("/revisions/9/nodes/20/predecessors");
+    expect(requests[3].url).toContain("/revisions/9/nodes/delete");
+    expect(requests[4].url).toContain("/revisions/9/copy");
+    expect(requests[5].url).toContain("/revisions/9/validate");
+  });
+});
+
+describe("getRevisionLockConflict", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("reads the stored counter off a stale-write 409 so the caller can resynchronise", async () => {
     const fetchMock = vi.fn(async () =>
       new Response(
-        JSON.stringify({ detail: { code: "CASCADE_CONFIRMATION_REQUIRED", descendant_uids: [2, 3] } }),
+        JSON.stringify({
+          detail: {
+            code: "REVISION_LOCK_CONFLICT",
+            revision_id: 7,
+            expected_lock_version: 3,
+            current_lock_version: 5,
+          },
+        }),
         { status: 409, headers: { "Content-Type": "application/json" } },
       ),
     );
@@ -570,10 +690,10 @@ describe("getPlanningTaskDeleteConflict", () => {
 
     let thrown: unknown;
     try {
-      await deletePlanningTasks(
+      await deleteRevisionNodes(
         1,
         7,
-        { task_uids: [1], confirm_cascade: false, expected_revision: 0 },
+        { expected_lock_version: 3, node_ids: [42] },
         { accessToken: "token" },
         vi.fn(),
       );
@@ -581,57 +701,22 @@ describe("getPlanningTaskDeleteConflict", () => {
       thrown = cause;
     }
 
-    expect(thrown).toBeInstanceOf(ApiError);
-    expect((thrown as ApiError).message).toBe(
-      "Cette tâche a des tâches enfants et nécessite une confirmation.",
-    );
-    expect(getPlanningTaskDeleteConflict(thrown)).toEqual({
-      code: "CASCADE_CONFIRMATION_REQUIRED",
-      descendantUids: [2, 3],
-      taskUids: undefined,
+    expect(getRevisionLockConflict(thrown)).toEqual({
+      revisionId: 7,
+      expectedLockVersion: 3,
+      currentLockVersion: 5,
     });
   });
 
-  it("turns a TASK_REFERENCED conflict into a readable message and exposes the referenced task uids", async () => {
-    const fetchMock = vi.fn(async () =>
-      new Response(JSON.stringify({ detail: { code: "TASK_REFERENCED", task_uids: [4] } }), {
-        status: 409,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    let thrown: unknown;
-    try {
-      await deletePlanningTasks(
-        1,
-        7,
-        { task_uids: [4], confirm_cascade: true, expected_revision: 0 },
-        { accessToken: "token" },
-        vi.fn(),
-      );
-    } catch (cause) {
-      thrown = cause;
-    }
-
-    expect((thrown as ApiError).message).toBe(
-      "Cette tâche est référencée par un devis, une affectation ou une charge.",
-    );
-    expect(getPlanningTaskDeleteConflict(thrown)).toEqual({
-      code: "TASK_REFERENCED",
-      descendantUids: undefined,
-      taskUids: [4],
-    });
-  });
-
-  it("returns null for a non-409 error, a 409 without a structured detail, or an unrelated error", () => {
-    expect(getPlanningTaskDeleteConflict(new ApiError(404, "Not found"))).toBeNull();
-    expect(getPlanningTaskDeleteConflict(new ApiError(409, "Conflict"))).toBeNull();
-    expect(getPlanningTaskDeleteConflict(new Error("boom"))).toBeNull();
+  it("returns null for a refusal that is not a stale counter", () => {
+    // REVISION_IMMUTABLE is a 409 too, but carries no counter and has no retry: a caller must not
+    // mistake it for something a reload would fix.
+    expect(getRevisionLockConflict(new ApiError(409, "Figée", { code: "REVISION_IMMUTABLE" }))).toBeNull();
+    expect(getRevisionLockConflict(new ApiError(404, "Not found"))).toBeNull();
+    expect(getRevisionLockConflict(new Error("boom"))).toBeNull();
   });
 });
 
-// E6-06/#67: creates a task directly from the Devis screen.
 describe("createEstimateTask", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
