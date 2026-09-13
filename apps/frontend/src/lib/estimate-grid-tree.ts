@@ -1,5 +1,6 @@
 import type { CostRate, EstimateCostLine, EstimateRoleAssignment, EstimateTaskRow, Task } from "@/lib/backend";
 import { computeIndicativeLaborCost, resolveIndicativeHourlyRate, resolveRoleAssignmentYear } from "@/lib/estimate-role-assignment";
+import type { TreeRowIdentity } from "@/lib/tree-rows";
 
 // E12-10/#292: replaces the old fixed task-grouping (lib/estimate-grid.ts's
 // buildEstimateGridEntries) with a real tree, built directly from the merged tasks + grid-node
@@ -180,30 +181,19 @@ export function buildEstimateGridTreeRows(
   });
 }
 
-// Filters `rows` (already in depth-first document order, see buildEstimateGridTreeRows) down to
-// the rows currently visible given `collapsedUids` -- a single forward pass works because a
-// parent always precedes its own descendants in that order: once a collapsed row is seen, every
-// following row whose `parentUid` chain passes through it is hidden too.
-export function filterVisibleEstimateGridRows(
-  rows: EstimateGridTreeRow[],
-  collapsedUids: ReadonlySet<number>,
-): EstimateGridTreeRow[] {
-  const hiddenUids = new Set<number>();
-  const visible: EstimateGridTreeRow[] = [];
-  for (const row of rows) {
-    if (row.parentUid != null && hiddenUids.has(row.parentUid)) {
-      if (row.uid != null) {
-        hiddenUids.add(row.uid);
-      }
-      continue;
-    }
-    visible.push(row);
-    if (row.hasChildren && row.uid != null && collapsedUids.has(row.uid)) {
-      hiddenUids.add(row.uid);
-    }
-  }
-  return visible;
-}
+// How the shared editable-tree base (lib/tree-rows.ts, hooks/use-tree-*) reads a devis grid row.
+// E14-09 (#335): the grid's own collapse/expand + selection implementation is gone, replaced by
+// that base; only this description of what a grid row *is* remains here.
+//
+// `isSelectable` excludes task rows: the devis move toolbar never reorders tasks (their order is
+// dictated by the planning), so a click on a task row must not enter the selection -- while a
+// task row is still navigable and collapsible like any other.
+export const estimateGridRowIdentity: TreeRowIdentity<EstimateGridTreeRow> = {
+  uidOf: (row) => row.uid,
+  parentUidOf: (row) => row.parentUid,
+  hasChildrenOf: (row) => row.hasChildren,
+  isSelectable: (row) => row.kind !== "task",
+};
 
 export type EstimateGridRowTotals = { quantity: number; hours: number; debours: number; pru: number };
 

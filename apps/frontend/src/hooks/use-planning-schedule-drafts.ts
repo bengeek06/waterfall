@@ -1,5 +1,6 @@
-import { useState, type KeyboardEvent } from "react";
+import { useState } from "react";
 
+import { useTreeRowDrafts } from "@/hooks/use-tree-row-drafts";
 import type { PlanningTaskScheduleUpdate } from "@/lib/backend";
 import { formatCalendarDurationForEditing, parseCalendarDuration, type ProjectCalendar } from "@/lib/planning-calendar";
 import { combineDateWithExistingTime, toDateInputValue, type ScheduleDraft } from "@/lib/planning-schedule";
@@ -85,10 +86,15 @@ function buildAutomaticPayload(draft: ScheduleDraft, calendar: ProjectCalendar):
 // manual/automatic mode. Owns its own reset() called from PlanningTreeTable's render-phase
 // versionKey-change block -- see that component for why this must stay a synchronous render-body
 // reset, not a useEffect.
+//
+// E14-09 (#335): the draft bookkeeping itself (which rows hold an uncommitted value, the
+// never-edited fallback, discard-only-on-success, Enter = blur = commit) now comes from the shared
+// useTreeRowDrafts. What stays here is what is genuinely planning's: the ScheduleDraft ->
+// PlanningTaskScheduleUpdate payload builders above, the milestone/manual/automatic rules, and the
+// per-row duration format error.
 export function usePlanningScheduleDrafts({ onScheduleUpdate, mutationBusy, calendar }: UsePlanningScheduleDraftsParams) {
-  const [scheduleDrafts, setScheduleDrafts] = useState<Record<number, ScheduleDraft>>({});
   // Per-row format-parsing error message for the duration field (see ScheduleCommitResult above).
-  // Kept alongside scheduleDrafts (one entry per row, same lifecycle) rather than a single shared
+  // Kept alongside the row drafts (one entry per row, same lifecycle) rather than a single shared
   // value, so an error on one row never leaks onto another's cell.
   const [durationErrors, setDurationErrors] = useState<Record<number, string>>({});
 
@@ -108,8 +114,14 @@ export function usePlanningScheduleDrafts({ onScheduleUpdate, mutationBusy, cale
     };
   }
 
+  const drafts = useTreeRowDrafts<PlanningTreeRow, ScheduleDraft>({
+    rowKeyOf: (row) => row.uid,
+    defaultDraftFor: defaultScheduleDraft,
+    busy: mutationBusy,
+  });
+
   function scheduleDraftFor(row: PlanningTreeRow): ScheduleDraft {
-    return scheduleDrafts[row.uid] ?? defaultScheduleDraft(row);
+    return drafts.draftFor(row);
   }
 
   function durationErrorFor(row: PlanningTreeRow): string | null {
@@ -128,10 +140,7 @@ export function usePlanningScheduleDrafts({ onScheduleUpdate, mutationBusy, cale
   }
 
   function updateScheduleDraft(row: PlanningTreeRow, field: keyof ScheduleDraft, value: string) {
-    setScheduleDrafts((current) => ({
-      ...current,
-      [row.uid]: { ...(current[row.uid] ?? defaultScheduleDraft(row)), [field]: value },
-    }));
+    drafts.updateDraftField(row, field, value);
     // Any further edit implicitly retracts the previous attempt's format error -- the next commit
     // will re-validate and re-report it if it's still invalid.
     if (field === "duration_minutes") {
@@ -139,61 +148,43 @@ export function usePlanningScheduleDrafts({ onScheduleUpdate, mutationBusy, cale
     }
   }
 
-  function clearScheduleDraft(uid: number) {
-    setScheduleDrafts((current) => {
-      if (!(uid in current)) {
-        return current;
-      }
-      const next = { ...current };
-      delete next[uid];
-      return next;
-    });
+  function clearScheduleDraft(row: PlanningTreeRow) {
+    drafts.clearDraft(row);
     // A stale format-parsing error from a previous failed attempt on this row must not survive
     // once the draft itself is discarded (e.g. after a successful commitModeChange): otherwise the
     // now-reset, valid field would still display the old error message next to it. Redundant with
     // the clearDurationError already called separately by commitScheduleEdit's success path, but
     // harmless there (see clearDurationError's own no-op guard when the uid isn't present).
-    clearDurationError(uid);
+    clearDurationError(row.uid);
   }
 
   async function commitScheduleEdit(row: PlanningTreeRow) {
-    if (!onScheduleUpdate || mutationBusy) {
+    if (!onScheduleUpdate) {
       return;
     }
-    // No draft entry means the user never actually typed into one of this row's fields (e.g. just
-    // tabbed through on focus/blur): nothing changed, so nothing should be committed.
-    if (!(row.uid in scheduleDrafts)) {
-      return;
-    }
-    const draft = scheduleDraftFor(row);
-    const result: ScheduleCommitResult = row.is_milestone
-      ? buildMilestonePayload(row, draft)
-      : row.is_manual
-        ? buildManualPayload(row, draft, calendar)
-        : buildAutomaticPayload(draft, calendar);
-    // Bail out before the request instead of sending one guaranteed to fail or to be a no-op (see
-    // buildMilestonePayload/buildAutomaticPayload above); the draft is intentionally left in place
-    // (not cleared) so the user's in-progress, still-invalid value stays visible to correct rather
-    // than silently reverting to the last committed value.
-    if (result === null) {
-      return;
-    }
-    if ("error" in result) {
-      // Unlike the business-validation null above, an unrecognized *format* is actionable by the
-      // user -- surface it via durationErrorFor so the cell can render it next to the field.
-      setDurationErrors((current) => ({ ...current, [row.uid]: result.error }));
-      return;
-    }
-    clearDurationError(row.uid);
-    // Only discard the draft once the update is confirmed persisted server-side: clearing it
-    // beforehand (or on failure) would make scheduleDraftFor(row) fall back to defaultScheduleDraft,
-    // which reflects the stale, pre-edit `row` values -- silently reverting the user's input to a
-    // value that was never actually saved, with no way to recover it. On failure the draft is left
-    // in place so the user still sees what they typed and can retry or correct it.
-    const succeeded = await onScheduleUpdate(row.uid, result);
-    if (succeeded) {
-      clearScheduleDraft(row.uid);
-    }
+    // commitDraft owns the "mutation already in flight" and "this row holds no draft at all"
+    // guards, and discards the draft only when the callback below reports success -- returning
+    // false keeps the user's in-progress value visible instead of silently reverting it.
+    await drafts.commitDraft(row, async (draft) => {
+      const result: ScheduleCommitResult = row.is_milestone
+        ? buildMilestonePayload(row, draft)
+        : row.is_manual
+          ? buildManualPayload(row, draft, calendar)
+          : buildAutomaticPayload(draft, calendar);
+      // Bail out before the request instead of sending one guaranteed to fail or to be a no-op
+      // (see buildMilestonePayload/buildAutomaticPayload above).
+      if (result === null) {
+        return false;
+      }
+      if ("error" in result) {
+        // Unlike the business-validation null above, an unrecognized *format* is actionable by the
+        // user -- surface it via durationErrorFor so the cell can render it next to the field.
+        setDurationErrors((current) => ({ ...current, [row.uid]: result.error }));
+        return false;
+      }
+      clearDurationError(row.uid);
+      return onScheduleUpdate(row.uid, result);
+    });
   }
 
   async function commitModeChange(row: PlanningTreeRow, isManual: boolean) {
@@ -219,24 +210,12 @@ export function usePlanningScheduleDrafts({ onScheduleUpdate, mutationBusy, cale
     // success so the fields reflect the row's new, server-confirmed values.
     const succeeded = await onScheduleUpdate(row.uid, payload);
     if (succeeded) {
-      clearScheduleDraft(row.uid);
-    }
-  }
-
-  function onScheduleFieldKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    // Editing a field must never bubble up to the row's own navigation shortcuts (arrows, space...).
-    event.stopPropagation();
-    if (event.key === "Enter") {
-      event.preventDefault();
-      // Blurring alone triggers the field's onBlur handler, which already commits the edit;
-      // calling commitScheduleEdit here too would fire two identical PATCH requests in the
-      // same tick, since the mutationBusy guard has not re-rendered yet at that point.
-      event.currentTarget.blur();
+      clearScheduleDraft(row);
     }
   }
 
   function reset() {
-    setScheduleDrafts({});
+    drafts.reset();
     setDurationErrors({});
   }
 
@@ -246,7 +225,9 @@ export function usePlanningScheduleDrafts({ onScheduleUpdate, mutationBusy, cale
     updateScheduleDraft,
     commitScheduleEdit,
     commitModeChange,
-    onScheduleFieldKeyDown,
+    // Editing a field must never bubble up to the row's own navigation shortcuts (arrows, space...),
+    // and Enter must blur rather than commit a second time -- both come from the shared hook.
+    onScheduleFieldKeyDown: drafts.onFieldKeyDown,
     reset,
   };
 }

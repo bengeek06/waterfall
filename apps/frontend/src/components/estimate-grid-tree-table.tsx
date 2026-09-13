@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { PlanningTreeToolbar } from "@/components/planning-tree-toolbar";
 import { useEstimateGridDrafts } from "@/hooks/use-estimate-grid-drafts";
-import { useEstimateGridSelection } from "@/hooks/use-estimate-grid-selection";
+import { stopRowKeys, useTreeTableSelection } from "@/hooks/use-tree-table-selection";
 import type {
   CostCategory,
   CostRate,
@@ -25,11 +25,13 @@ import { computeIndicativeLaborCost, resolveIndicativeHourlyRate, resolveRoleAss
 import {
   buildEstimateGridTreeRows,
   computeEstimateGridRowTotals,
+  estimateGridRowIdentity,
   type EstimateGridLaborRow,
   type EstimateGridLineRow,
   type EstimateGridTreeRow,
 } from "@/lib/estimate-grid-tree";
 import { computeGridIndentCommand, computeGridOutdentCommand, computeGridReorderCommand, type EstimateGridMoveCommand } from "@/lib/estimate-grid-move";
+import { isRowSelectable } from "@/lib/tree-rows";
 
 export type EstimateGridTreeTableProps = {
   taskRows: EstimateTaskRow[];
@@ -110,6 +112,14 @@ function resolveDeptColumns(nodeId: number | null | undefined, nodes: ResourceNo
   return [segments[0] ?? "-", segments[1] ?? "-"];
 }
 
+/** The user-visible name of a row, whichever kind it is -- used for its own accessible labels. */
+function rowLabel(row: EstimateGridTreeRow): string {
+  if (row.kind === "task") {
+    return row.taskRow.task_name;
+  }
+  return row.kind === "line" ? row.line.label : row.assignment.role_name;
+}
+
 function formatLocked(value: number | null | undefined): string {
   return value == null ? "—" : String(value);
 }
@@ -117,9 +127,10 @@ function formatLocked(value: number | null | undefined): string {
 // E12-10/#292: replaces cost-lines-table.tsx's fixed task-grouping + single-row "Modifier/Sauver"
 // edit mode with a real tree table (row_number/uid/parent_uid/position, E12-07..E12-09) where
 // every cell commits itself independently on blur/Enter -- see use-estimate-grid-drafts.ts.
-// Structurally modeled after PlanningTreeTable (collapse/expand, click-to-select, Indenter/
-// Désindenter/Monter/Descendre toolbar): see lib/estimate-grid-move.ts for why this grid's own
-// move semantics deliberately differ from planning-tree.ts's in a couple of spots.
+// Collapse/expand, click-to-select and keyboard navigation come from the shared editable-tree base
+// (hooks/use-tree-table-selection.ts, E14-09/#335), driven by estimateGridRowIdentity -- this grid
+// no longer carries its own copy of them. Its move semantics still deliberately differ from
+// planning-tree.ts's in a couple of spots: see lib/estimate-grid-move.ts.
 export function EstimateGridTreeTable({
   taskRows,
   costLines,
@@ -148,11 +159,14 @@ export function EstimateGridTreeTable({
 }: EstimateGridTreeTableProps) {
   const [renderedVersionKey, setRenderedVersionKey] = useState(versionKey);
 
-  const rows = buildEstimateGridTreeRows(taskRows, costLines, roleAssignments);
+  const rows = useMemo(
+    () => buildEstimateGridTreeRows(taskRows, costLines, roleAssignments),
+    [taskRows, costLines, roleAssignments],
+  );
   const totalsByUid = computeEstimateGridRowTotals(rows, costRates, planningTasks);
   const resourceRoleById = new Map(resourceRoles.map((role) => [role.id, role]));
 
-  const selection = useEstimateGridSelection(rows);
+  const selection = useTreeTableSelection(rows, estimateGridRowIdentity);
   const drafts = useEstimateGridDrafts({ mutationBusy, onRenameTask, onUpdateCostLine, onUpdateRoleAssignment });
 
   // A different estimate version must never reuse another version's expand/selection/draft state
@@ -203,7 +217,7 @@ export function EstimateGridTreeTable({
       />
     ) : (
       <span title={taskRenameLocked ? "Cette tâche n'a pas d'identifiant projet valide et ne peut pas être renommée depuis le devis." : undefined}>
-        {row.kind === "task" ? row.taskRow.task_name : row.kind === "line" ? row.line.label : row.assignment.role_name}
+        {rowLabel(row)}
       </span>
     );
     return (
@@ -211,8 +225,12 @@ export function EstimateGridTreeTable({
         {row.hasChildren && row.uid != null ? (
           <button
             type="button"
-            aria-label={selection.collapsedUids.has(row.uid) ? "Déplier" : "Replier"}
+            // Named after the row it folds, like the planning table's own chevron: a screen-reader
+            // user listing the buttons of a large grid would otherwise hear "Déplier" repeated
+            // with nothing to tell the rows apart.
+            aria-label={`${selection.collapsedUids.has(row.uid) ? "Déplier" : "Replier"} ${rowLabel(row)}`}
             className="flex size-6 shrink-0 items-center justify-center"
+            {...stopRowKeys}
             onClick={(event) => {
               event.stopPropagation();
               selection.toggleCollapsed(row.uid as number);
@@ -245,6 +263,7 @@ export function EstimateGridTreeTable({
         className="h-8 rounded-md border border-input bg-background px-2 text-sm"
         value={row.line.cost_category_id}
         disabled={mutationBusy}
+        {...stopRowKeys}
         onChange={(event) => void onUpdateCostLine(row.line.id, { cost_category_id: Number(event.target.value) })}
       >
         {!currentInList ? (
@@ -375,13 +394,13 @@ export function EstimateGridTreeTable({
       // reachable from this row's right-click context menu (see renderContextMenuItems below),
       // which calls the exact same onOpenMilestoneDialog prop, never a parallel implementation.
       return (
-        <Button size="sm" variant="destructive" type="button" disabled={mutationBusy} onClick={() => onRequestDeleteCostLine(row.line)}>
+        <Button size="sm" variant="destructive" type="button" disabled={mutationBusy} {...stopRowKeys} onClick={() => onRequestDeleteCostLine(row.line)}>
           Supprimer
         </Button>
       );
     }
     return (
-      <Button size="sm" variant="destructive" type="button" disabled={mutationBusy} onClick={() => onRequestDeleteRoleAssignment(row.assignment)}>
+      <Button size="sm" variant="destructive" type="button" disabled={mutationBusy} {...stopRowKeys} onClick={() => onRequestDeleteRoleAssignment(row.assignment)}>
         Supprimer
       </Button>
     );
@@ -461,10 +480,25 @@ export function EstimateGridTreeTable({
             const rowElement = (
               <TableRow
                 key={key}
+                // Row focus/keyboard plumbing, shared with the planning table since E14-09/#335:
+                // exactly one row is a tab stop, and the arrow keys then walk/fold the tree from
+                // there. A cell-level control (an Input, the Type <select>, the bulk-assign
+                // Checkbox) stops its own keystrokes before they reach this handler.
+                ref={(element) => selection.registerRow(row, element)}
+                tabIndex={row.uid != null && selection.focusableUid === row.uid ? 0 : -1}
                 data-state={selected ? "selected" : undefined}
-                aria-selected={selected}
-                className={row.kind === "task" ? undefined : "cursor-pointer"}
+                // Only announced on a row that can actually be selected: a task row's `selected` is
+                // constantly false, and announcing "not selected" on a row where Enter/Space will
+                // never do anything tells an assistive-technology user the opposite of the truth.
+                aria-selected={isRowSelectable(row, estimateGridRowIdentity) ? selected : undefined}
+                className={row.kind === "task" ? "outline-none" : "cursor-pointer outline-none"}
                 onClick={(event) => selection.selectRow(row, event)}
+                onFocus={() => {
+                  if (row.uid != null) {
+                    selection.setFocusedUid(row.uid);
+                  }
+                }}
+                onKeyDown={(event) => selection.onRowKeyDown(event, row)}
               >
                 {canEditEstimate ? (
                   <TableCell>
@@ -473,6 +507,7 @@ export function EstimateGridTreeTable({
                         aria-label={`Sélectionner ${row.line.label}`}
                         checked={selectedCostLineIds.has(row.line.id)}
                         disabled={bulkAssignBusy}
+                        {...stopRowKeys}
                         onCheckedChange={(checked) => toggleCostLine(row.line.id, Boolean(checked))}
                       />
                     ) : null}

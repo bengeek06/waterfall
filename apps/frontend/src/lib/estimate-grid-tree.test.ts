@@ -4,8 +4,9 @@ import type { EstimateCostLine, EstimateRoleAssignment, EstimateTaskRow } from "
 import {
   buildEstimateGridTreeRows,
   computeEstimateGridRowTotals,
-  filterVisibleEstimateGridRows,
+  estimateGridRowIdentity,
 } from "@/lib/estimate-grid-tree";
+import { filterVisibleTreeRows } from "@/lib/tree-rows";
 
 function makeTaskRow(overrides: Partial<EstimateTaskRow> = {}): EstimateTaskRow {
   return {
@@ -123,14 +124,14 @@ describe("buildEstimateGridTreeRows", () => {
   });
 });
 
-describe("filterVisibleEstimateGridRows", () => {
+describe("filterVisibleTreeRows over the devis grid identity", () => {
   it("hides every descendant of a collapsed row", () => {
     const task = makeTaskRow({ id: 1, task_id: 10, row_number: 1 });
     const line = makeLine({ id: 100, uid: -1, parent_uid: 10, row_number: 2 });
     const childLine = makeLine({ id: 101, uid: -2, parent_uid: -1, row_number: 3 });
     const rows = buildEstimateGridTreeRows([task], [line, childLine], []);
 
-    const visible = filterVisibleEstimateGridRows(rows, new Set([10]));
+    const visible = filterVisibleTreeRows(rows, new Set([10]), estimateGridRowIdentity);
 
     expect(visible.map((row) => row.uid)).toEqual([10]);
   });
@@ -140,7 +141,7 @@ describe("filterVisibleEstimateGridRows", () => {
     const line = makeLine({ id: 100, uid: -1, parent_uid: 10, row_number: 2 });
     const rows = buildEstimateGridTreeRows([task], [line], []);
 
-    expect(filterVisibleEstimateGridRows(rows, new Set())).toHaveLength(2);
+    expect(filterVisibleTreeRows(rows, new Set(), estimateGridRowIdentity)).toHaveLength(2);
   });
 });
 

@@ -8,7 +8,17 @@ export type EstimateGridMoveCommand = {
 
 // E12-10/#292: only cost-line/role-assignment ("grid node") rows are reorderable from this
 // toolbar -- task ordering stays out of scope for this EPIC (dictated by the Planning, see
-// PlanningTreeTable's own move actions instead). Mirrors lib/planning-tree.ts's own
+// PlanningTreeTable's own move actions instead).
+//
+// E14-09/#335 did *not* touch this module: it is live production code, not leftover dead code
+// awaiting deletion. EstimateGridTreeTable calls the three compute*Command functions below on
+// every render; their results drive the Indenter/Désindenter/Monter/Descendre buttons' enabled
+// state and the payload sent to `POST .../grid-nodes/move`. The same is true of
+// planning-tree.ts's own compute*Command trio for PlanningTreeTable. Unifying the two move models
+// (#337) is therefore a rewrite of working behavior, with the toolbars of both tables as its
+// blast radius -- not a deferred dead-code cleanup.
+//
+// Mirrors lib/planning-tree.ts's own
 // computeIndentCommand/computeOutdentCommand/computeReorderCommand, scoped to grid nodes: sibling
 // order/local position is always read from each grid node's own `position` field (matching the
 // backend's `move_estimate_grid_nodes`, whose `siblings_by_parent` is built purely from
@@ -51,11 +61,14 @@ function hasSelectedAncestor(
 }
 
 // Normalizes a selection to its top-level roots (a descendant is dropped when an ancestor is
-// also selected, since it moves implicitly with it) -- mirrors
-// lib/planning-tree.ts's normalizeSelectionToRoots. `rows` is already in depth-first document
-// order (row_number), so a plain filter preserves that same order for the roots -- no separate
-// re-traversal needed, unlike the planning-tree.ts original (which orders a plain Task[], not
-// already row_number-sorted).
+// also selected, since it moves implicitly with it).
+//
+// Same *rule* as lib/planning-tree.ts's normalizeSelectionToRoots, but a genuinely different
+// implementation, not a copy of it: `rows` here is already in depth-first document order
+// (row_number), so a plain filter preserves that order for the roots, whereas the planning
+// version has to rebuild childrenByParent and re-walk it depth-first to order a plain, unsorted
+// Task[]. Collapsing the two would mean giving them a common input shape first -- which is #337's
+// job, not something E14-09 could do by deleting one of them.
 export function normalizeGridSelectionToRoots(
   rows: EstimateGridTreeRow[],
   selectedUids: ReadonlySet<number>,

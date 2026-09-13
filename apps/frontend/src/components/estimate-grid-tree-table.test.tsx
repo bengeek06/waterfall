@@ -93,6 +93,37 @@ function renderTable(overrides: Partial<EstimateGridTreeTableProps> = {}) {
 describe("EstimateGridTreeTable", () => {
   afterEach(() => cleanup());
 
+  // E14-09/#335: the grid now consumes the shared editable-tree base (useTreeTableSelection), so
+  // the keyboard navigation and the collapse/expand that used to exist on the planning side only
+  // (#316) work here too, without this component carrying its own implementation of either.
+  it("gives exactly one row a tab stop and moves the focus with the arrow keys", () => {
+    renderTable({
+      taskRows: [makeTaskRow({ task_id: 1, row_number: 1 })],
+      costLines: [makeLine({ uid: -1, parent_uid: 1, row_number: 2 })],
+    });
+
+    const [taskRow, lineRow] = screen.getAllByRole("row").slice(1);
+    expect(taskRow).toHaveAttribute("tabindex", "0");
+    expect(lineRow).toHaveAttribute("tabindex", "-1");
+
+    fireEvent.keyDown(taskRow, { key: "ArrowDown" });
+
+    expect(document.activeElement).toBe(lineRow);
+  });
+
+  it("folds a subtree with ArrowLeft on the parent row", () => {
+    renderTable({
+      taskRows: [makeTaskRow({ task_id: 1, row_number: 1 })],
+      costLines: [makeLine({ uid: -1, parent_uid: 1, row_number: 2, label: "Ligne enfant" })],
+    });
+
+    expect(screen.getByLabelText("Libellé de Ligne enfant")).toBeInTheDocument();
+
+    fireEvent.keyDown(screen.getAllByRole("row")[1], { key: "ArrowLeft" });
+
+    expect(screen.queryByLabelText("Libellé de Ligne enfant")).not.toBeInTheDocument();
+  });
+
   it("never shows a 'Sauver' button on this grid -- every cell auto-saves on blur", () => {
     renderTable({
       taskRows: [makeTaskRow()],
@@ -207,6 +238,116 @@ describe("EstimateGridTreeTable", () => {
     expect(screen.getByLabelText("Qté de Ligne 2")).toBeDisabled();
     expect(screen.getByLabelText("Débours de Ligne 2")).toBeDisabled();
     expect(screen.getByLabelText("Type de Ligne 2")).toBeDisabled();
+  });
+
+  // E14-09/#335 round-2 H1: onRowKeyDown preventDefault()s Enter and Space to drive the row
+  // selection, and cancelling a keydown on a <button> also cancels its native activation. Every
+  // focusable control living inside a row therefore spreads `stopRowKeys` (exported next to the
+  // shared base), without which tabbing to "Supprimer" and pressing Enter/Space would delete
+  // nothing and silently move the selection instead -- WCAG 2.1.1.
+  it("keeps a cost line's 'Supprimer' button operable: Enter and Space never reach the row", () => {
+    const line = makeLine({ id: 7, label: "Fourniture", uid: -1, row_number: 1 });
+    renderTable({ costLines: [line] });
+
+    const lineRow = screen.getByLabelText("Libellé de Fourniture").closest("tr")!;
+    const deleteButton = screen.getByRole("button", { name: "Supprimer" });
+
+    fireEvent.keyDown(deleteButton, { key: " " });
+    expect(lineRow).toHaveAttribute("aria-selected", "false");
+
+    fireEvent.keyDown(deleteButton, { key: "Enter" });
+    expect(lineRow).toHaveAttribute("aria-selected", "false");
+  });
+
+  it("keeps a labor row's 'Supprimer' button operable: Enter and Space never reach the row", () => {
+    const assignment = makeAssignment({ id: 9, uid: -2, row_number: 1, role_name: "Développeur" });
+    renderTable({ roleAssignments: [assignment] });
+
+    const laborRow = screen.getByLabelText("Heures de Développeur").closest("tr")!;
+
+    fireEvent.keyDown(screen.getByRole("button", { name: "Supprimer" }), { key: " " });
+
+    expect(laborRow).toHaveAttribute("aria-selected", "false");
+  });
+
+  it("keeps the fold/unfold chevron operable: Space on it neither folds nor selects the row", () => {
+    renderTable({
+      taskRows: [makeTaskRow({ task_id: 1, row_number: 1 })],
+      costLines: [makeLine({ uid: -1, parent_uid: 1, row_number: 2, label: "Ligne enfant" })],
+    });
+
+    const chevron = screen.getByRole("button", { name: "Replier Terrassement" });
+    fireEvent.keyDown(chevron, { key: " " });
+
+    // The keystroke reached neither the row's selection handler nor its collapse handler: in a
+    // real browser it would instead have activated the chevron natively (which jsdom does not
+    // simulate), which is exactly the point.
+    expect(screen.getByLabelText("Libellé de Ligne enfant")).toBeInTheDocument();
+    expect(screen.getAllByRole("row")[1]).not.toHaveAttribute("aria-selected");
+  });
+
+  it("keeps the bulk-assign Checkbox's and the Type select's own keystrokes off the row", () => {
+    const line = makeLine({ id: 7, label: "Fourniture", uid: -1, row_number: 1 });
+    renderTable({ costLines: [line] });
+
+    const lineRow = screen.getByLabelText("Libellé de Fourniture").closest("tr")!;
+
+    fireEvent.keyDown(screen.getByLabelText("Sélectionner Fourniture"), { key: " " });
+    expect(lineRow).toHaveAttribute("aria-selected", "false");
+
+    fireEvent.keyDown(screen.getByLabelText("Type de Fourniture"), { key: "Enter" });
+    expect(lineRow).toHaveAttribute("aria-selected", "false");
+  });
+
+  // A "line"/"labor" row is rendered through <ContextMenuTrigger render={rowElement} />, so its
+  // ref/tabIndex/onKeyDown all reach the <tr> through Base UI's prop merging -- unlike a task row,
+  // which is returned as-is. The keyboard wiring is asserted on that path specifically, since that
+  // is where a merge regression would hide.
+  it("routes the arrow keys through a cost-line row rendered by the context-menu trigger", () => {
+    renderTable({
+      taskRows: [makeTaskRow({ task_id: 1, row_number: 1 })],
+      costLines: [makeLine({ uid: -1, parent_uid: 1, row_number: 2 })],
+    });
+
+    const [taskRow, lineRow] = screen.getAllByRole("row").slice(1);
+
+    fireEvent.keyDown(lineRow, { key: "ArrowUp" });
+
+    expect(document.activeElement).toBe(taskRow);
+  });
+
+  it("selects a cost-line row on Enter and adds a second one on Space", () => {
+    renderTable({
+      costLines: [
+        makeLine({ id: 1, label: "Ligne 1", uid: -1, row_number: 1 }),
+        makeLine({ id: 2, label: "Ligne 2", uid: -2, row_number: 2 }),
+      ],
+    });
+
+    const [firstRow, secondRow] = screen.getAllByRole("row").slice(1);
+
+    fireEvent.keyDown(firstRow, { key: "Enter" });
+    expect(firstRow).toHaveAttribute("aria-selected", "true");
+
+    fireEvent.keyDown(secondRow, { key: " " });
+    expect(firstRow).toHaveAttribute("aria-selected", "true");
+    expect(secondRow).toHaveAttribute("aria-selected", "true");
+  });
+
+  // E14-09/#335 round-2 M4: a task row's `selected` is constantly false (the grid's identity
+  // excludes it from the selection), so announcing "not selected" on it would tell an assistive
+  // technology the opposite of the truth -- all the more so as the task row is usually the grid's
+  // default tab stop.
+  it("announces aria-selected on selectable rows only, never on a task row", () => {
+    renderTable({
+      taskRows: [makeTaskRow({ task_id: 1, row_number: 1 })],
+      costLines: [makeLine({ uid: -1, parent_uid: 1, row_number: 2 })],
+    });
+
+    const [taskRow, lineRow] = screen.getAllByRole("row").slice(1);
+
+    expect(taskRow).not.toHaveAttribute("aria-selected");
+    expect(lineRow).toHaveAttribute("aria-selected", "false");
   });
 
   it("indents the selected cost line via the toolbar, dispatching the computed move command", () => {

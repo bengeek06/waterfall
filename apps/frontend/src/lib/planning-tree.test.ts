@@ -2,12 +2,18 @@ import { describe, expect, it } from "vitest";
 
 import type { Task } from "./backend";
 import {
-  buildVisibleRows,
+  buildPlanningTreeRows,
   computeIndentCommand,
   computeOutdentCommand,
   computeReorderCommand,
   normalizeSelectionToRoots,
+  planningTreeRowIdentity,
 } from "./planning-tree";
+import { filterVisibleTreeRows } from "./tree-rows";
+
+function visibleRows(input: Task[], collapsedUids: ReadonlySet<number>) {
+  return filterVisibleTreeRows(buildPlanningTreeRows(input), collapsedUids, planningTreeRowIdentity);
+}
 
 function task(overrides: Partial<Task>): Task {
   return {
@@ -150,9 +156,9 @@ describe("computeReorderCommand", () => {
   });
 });
 
-describe("buildVisibleRows", () => {
+describe("buildPlanningTreeRows", () => {
   it("flattens the tree depth-first, annotating depth and hasChildren", () => {
-    const rows = buildVisibleRows(tasks, new Set());
+    const rows = visibleRows(tasks, new Set());
     expect(rows.map((row) => [row.uid, row.depth, row.hasChildren])).toEqual([
       [1, 0, true],
       [2, 1, false],
@@ -162,7 +168,7 @@ describe("buildVisibleRows", () => {
   });
 
   it("skips the descendants of a collapsed uid but keeps the collapsed row itself", () => {
-    const rows = buildVisibleRows(tasks, new Set([1]));
+    const rows = visibleRows(tasks, new Set([1]));
     expect(rows.map((row) => row.uid)).toEqual([1, 4]);
   });
 
@@ -171,7 +177,7 @@ describe("buildVisibleRows", () => {
       task({ uid: 1, name: "Sans position", parent_uid: null, position: undefined }),
       task({ uid: 2, name: "Position 1", parent_uid: null, position: 1 }),
     ];
-    const rows = buildVisibleRows(unordered, new Set());
+    const rows = visibleRows(unordered, new Set());
     expect(rows.map((row) => row.uid)).toEqual([2, 1]);
   });
 });
