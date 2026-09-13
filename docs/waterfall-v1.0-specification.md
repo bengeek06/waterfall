@@ -939,7 +939,7 @@ Quatre sections, dans cet ordre :
 |---|---|---|
 | **Projets** | Tous les projets, puis les projets récents | 7.2 |
 | **Management** | Ce qui agrège plusieurs projets : plan de charge, portefeuille | 16 |
-| **Administration** | Utilisateurs, sauvegarde, santé système | 19 |
+| **Administration** | Utilisateurs, sauvegarde, santé système | 20 |
 | **Paramètres** | Organisation, coûts, calendriers | 19 |
 
 ```
