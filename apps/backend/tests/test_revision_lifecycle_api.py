@@ -1093,3 +1093,77 @@ def test_a_copy_answers_the_kind_it_wrote_and_not_the_one_it_was_asked_for() -> 
         }
     assert stored[inherited["revision_id"]] == inherited["kind"]
     assert stored[chosen["revision_id"]] == chosen["kind"]
+
+
+# --------------------------------------------------------------------------------------
+# Listing the revisions of a project (E14-10, #336)
+# --------------------------------------------------------------------------------------
+
+
+def test_listing_revisions_answers_every_version_oldest_first_with_its_pointers() -> None:
+    """The read the frontend needs before it can open anything.
+
+    Until it existed, a revision id only ever reached a client as the by-product of
+    an import: no history, no way to open a validated revision, no way to copy one.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        fixture = _seed(client, headers)
+        assert _validate(client, headers, fixture).status_code == 200
+        copy = _body(_copy(client, headers, fixture, expected_lock_version=1))
+
+        response = client.get(f"/projects/{fixture.project_id}/revisions", headers=headers)
+
+    assert response.status_code == 200
+    body = _body(response)
+    items = cast(list[dict[str, Any]], body["items"])
+    assert [item["revision_id"] for item in items] == [fixture.revision_id, copy["revision_id"]]
+    assert [item["version_number"] for item in items] == [1, 2]
+    assert [item["status"] for item in items] == ["validated", "draft"]
+    # The counter travels with the summary: `POST .../copy` quotes the *source*'s,
+    # so a draft opens from a validated revision without downloading its tree first.
+    with get_session_factory()() as session:
+        source = session.get(ProjectRevision, fixture.revision_id)
+        assert source is not None
+        assert items[0]["lock_version"] == source.lock_version
+    assert items[0]["validated_at"] is not None
+    assert items[1]["validated_at"] is None
+    # Copying points the project at the draft being worked on; the reference is only
+    # fixed by entering `en_cours`, which this project never did.
+    assert body["displayed_revision_id"] == copy["revision_id"]
+    assert body["reference_revision_id"] is None
+
+
+def test_listing_revisions_of_a_project_without_any_answers_an_empty_list() -> None:
+    """A project created from the lotissement holds no revision yet, and says so.
+
+    Answering 404 here would make "no version yet" indistinguishable from "no such
+    project", which is the one thing the planning screen has to tell apart before it
+    can offer to import a file rather than report an error.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        created = client.post("/projects", json={"name": "Sans revision"}, headers=headers)
+        assert created.status_code == 201
+        project_id = cast(int, created.json()["id"])
+
+        response = client.get(f"/projects/{project_id}/revisions", headers=headers)
+
+    assert response.status_code == 200
+    assert _body(response) == {
+        "items": [],
+        "reference_revision_id": None,
+        "displayed_revision_id": None,
+    }
+
+
+def test_listing_the_revisions_of_somebody_elses_project_is_not_found() -> None:
+    with TestClient(app) as client:
+        owner = _auth_headers(client)
+        fixture = _seed(client, owner)
+        intruder = _auth_headers(client)
+
+        response = client.get(f"/projects/{fixture.project_id}/revisions", headers=intruder)
+
+    assert response.status_code == 404
+    assert _detail(response) == {"code": "PROJECT_NOT_FOUND"}

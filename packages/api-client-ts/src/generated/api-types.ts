@@ -454,6 +454,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{projectId}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Lister les revisions d'un projet
+         * @description La seule lecture qui repond « quelles revisions existent » (E14-10). Avant elle, un identifiant de revision n'atteignait un client que comme sous-produit d'un import (`ImportRunAcceptedResponse.revisionId`) : aucune autre revision que celle qui venait d'etre importee n'etait ouvrable, donc ni historique, ni ouverture en lecture seule d'une revision validee, ni copie vers un brouillon. Volontairement pas de `GET .../revisions/{revisionId}` a cote : l'en-tete d'une revision revient deja avec son arbre sur `GET .../nodes`.
+         */
+        get: operations["listRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/projects/{projectId}/revisions/{revisionId}/nodes": {
         parameters: {
             query?: never;
@@ -2282,6 +2302,27 @@ export interface components {
         ProjectSetupWarningsRead: {
             warnings: components["schemas"]["ProjectSetupWarning"][];
         };
+        /** @description Une revision d'un projet, sans son arbre : l'en-tete de `RevisionTreeRead` plus les deux dates dont un ecran d'historique a besoin. `lock_version` y figure pour la seule commande qui a besoin du compteur d'une revision dont l'arbre n'a pas ete lu -- `POST .../copy` prend celui de la **source**, donc un brouillon s'ouvre depuis une revision validee listee ici sans la telecharger d'abord. */
+        RevisionSummaryRead: {
+            revision_id: number;
+            project_id: number;
+            version_number: number;
+            /** @enum {string} */
+            kind: "initial" | "contract_reference" | "forecast_remaining";
+            /** @enum {string} */
+            status: "draft" | "validated" | "superseded";
+            lock_version: number;
+            note: string | null;
+            /** Format: date-time */
+            created_at: string;
+            validated_at: string | null;
+        };
+        /** @description Toutes les revisions d'un projet, de la plus ancienne a la plus recente, et les deux pointeurs qui les designent. Les pointeurs voyagent avec la liste plutot que sur `ProjectRead` parce qu'ils n'ont de sens que face a elle et que `ms_project` ne les porte pas : ils vivent sur `wf_project_revision_pointer` precisement pour ne refermer aucun cycle de cle etrangere sur le projet. Un client qui tient cette liste a de quoi decider quoi afficher -- `displayed_revision_id` quand un brouillon est a l'ecran, la reference sinon, et la derniere par `version_number` quand aucun des deux n'est renseigne. Volontairement non paginee : un projet a des versions, pas un flux de versions. */
+        RevisionListRead: {
+            items: components["schemas"]["RevisionSummaryRead"][];
+            reference_revision_id: number | null;
+            displayed_revision_id: number | null;
+        };
         /** @description Un chiffrage que le moteur de calcul n'a pu rattacher a aucune annee, donc valoriser sur aucune ligne. Le pendant de `RevisionMissingRateRead`, et le manque que celui-ci ne pouvait pas signaler : une facette de main-d'oeuvre portee par une tache sans dates n'a aucune annee sur laquelle etaler ses heures, ne produit donc aucune ligne valorisee, et n'apparait dans aucun couple (categorie de cout, annee) -- la matiere meme dont `missing_cost_rates` est faite. L'ecran affichait `total_labor_cost: 0` avec `missing_cost_rates: []` a cote : un zero sans rien pour l'expliquer. `POST .../validate` refuse desormais sur ce manque (`REVISION_UNPRICEABLE_FACET`), et c'est ici que le client lit quoi corriger : `bearing_*` designe la tache a dater, la facette elle-meme etant parfaitement valide. `reason` vaut `bearing_task_undated` (la tache n'a pas de `start_at` et/ou pas de `finish_at`) ou `bearing_task_empty_range` (son `finish_at` precede son `start_at`), les deux remedes n'etant pas les memes. */
         RevisionUnpriceableFacetRead: {
             node_id: number;
@@ -3626,6 +3667,31 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["PlanningNotFound"];
+        };
+    };
+    listRevisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revisions du projet, de la plus ancienne a la plus recente */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionListRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["RevisionNotFound"];
         };
     };
     readRevisionNodes: {

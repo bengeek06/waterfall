@@ -1,21 +1,22 @@
 import { useState } from "react";
 
 import { useTreeRowDrafts } from "@/hooks/use-tree-row-drafts";
-import type { PlanningTaskScheduleUpdate } from "@/lib/backend";
+import type { RevisionPlanFacetUpdateInput } from "@/lib/backend";
 import { formatCalendarDurationForEditing, parseCalendarDuration, type ProjectCalendar } from "@/lib/planning-calendar";
 import { combineDateWithExistingTime, toDateInputValue, type ScheduleDraft } from "@/lib/planning-schedule";
-import type { PlanningTreeRow } from "@/lib/planning-tree";
+import type { PlanningRow } from "@/lib/planning-tree";
 
-type SchedulePayload = Omit<PlanningTaskScheduleUpdate, "expected_revision">;
+/** What a commit sends: the planning facet's schedule fields, without the lock counter the caller adds. */
+export type SchedulePayload = Omit<RevisionPlanFacetUpdateInput, "expected_lock_version">;
 
-// A duration-field commit can now fail for a reason the user needs to actually see and fix (an
-// unrecognized format, e.g. "3jj") in addition to the pre-existing, silent business-validation
-// abort (see buildAutomaticPayload's null return) -- this discriminates the two so
-// commitScheduleEdit can react differently: surface the former, stay silent for the latter.
+// A duration-field commit can fail for a reason the user needs to actually see and fix (an
+// unrecognized format, e.g. "3jj") in addition to the silent business-validation abort (see
+// buildAutomaticPayload's null return) -- this discriminates the two so commitScheduleEdit can
+// react differently: surface the former, stay silent for the latter.
 type ScheduleCommitResult = SchedulePayload | { error: string } | null;
 
 type UsePlanningScheduleDraftsParams = {
-  onScheduleUpdate?: (taskUid: number, payload: SchedulePayload) => Promise<boolean>;
+  onScheduleUpdate?: (nodeId: number, payload: SchedulePayload) => Promise<boolean>;
   mutationBusy: boolean;
   calendar: ProjectCalendar;
 };
@@ -23,29 +24,24 @@ type UsePlanningScheduleDraftsParams = {
 // A milestone only exposes its start date: duration and finish are always forced by the server,
 // so omitting them here avoids conflicting with a stale finish_at/duration. Returns null when the
 // draft's start date cannot be committed (see the comment at its call site in commitScheduleEdit).
-function buildMilestonePayload(row: PlanningTreeRow, draft: ScheduleDraft): SchedulePayload | null {
-  const startAt = combineDateWithExistingTime(draft.start_at, row.start_at);
+function buildMilestonePayload(row: PlanningRow, draft: ScheduleDraft): SchedulePayload | null {
+  const startAt = combineDateWithExistingTime(draft.start_at, row.planning.start_at);
   if (startAt === null) {
     return null;
   }
-  return { is_manual: Boolean(row.is_manual), start_at: startAt };
+  return { is_manual: row.planning.is_manual, start_at: startAt };
 }
 
-// Intentional: `is_manual: null/undefined` (e.g. a task imported without an explicit mode) is
-// treated the same as `false` here, so the first edit on such a task -- regardless of which field
-// the user touched -- assigns it "automatique". This is a deliberate product decision, not an
-// oversight; do not "fix" it into a three-way branch.
-//
-// duration_minutes parsing: the format is validated by parseCalendarDuration (unit
-// suffixes/raw minutes, see lib/planning-calendar.ts) before any business-rule validation; an
-// unrecognized format is reported back as { error } so the caller can surface it, distinct from
-// the historical, silent null returned for a business-invalid value.
-function buildManualPayload(row: PlanningTreeRow, draft: ScheduleDraft, calendar: ProjectCalendar): ScheduleCommitResult {
+// duration_minutes parsing: the format is validated by parseCalendarDuration (unit suffixes/raw
+// minutes, see lib/planning-calendar.ts) before any business-rule validation; an unrecognized
+// format is reported back as { error } so the caller can surface it, distinct from the historical,
+// silent null returned for a business-invalid value.
+function buildManualPayload(row: PlanningRow, draft: ScheduleDraft, calendar: ProjectCalendar): ScheduleCommitResult {
   if (draft.duration_minutes === "") {
     return {
       is_manual: true,
-      start_at: combineDateWithExistingTime(draft.start_at, row.start_at),
-      finish_at: combineDateWithExistingTime(draft.finish_at, row.finish_at),
+      start_at: combineDateWithExistingTime(draft.start_at, row.planning.start_at),
+      finish_at: combineDateWithExistingTime(draft.finish_at, row.planning.finish_at),
       duration_minutes: null,
     };
   }
@@ -55,17 +51,16 @@ function buildManualPayload(row: PlanningTreeRow, draft: ScheduleDraft, calendar
   }
   return {
     is_manual: true,
-    start_at: combineDateWithExistingTime(draft.start_at, row.start_at),
-    finish_at: combineDateWithExistingTime(draft.finish_at, row.finish_at),
+    start_at: combineDateWithExistingTime(draft.start_at, row.planning.start_at),
+    finish_at: combineDateWithExistingTime(draft.finish_at, row.planning.finish_at),
     duration_minutes: parsedDuration.minutes,
   };
 }
 
 // Automatic, non-milestone tasks only allow editing the duration; start/finish are always
-// recomputed by the server from the calendar and predecessors. Returns null when
-// _apply_automatic_schedule would reject the duration (null/zero/negative) with a 400 -- this
-// business-rule check happens only *after* a successful format parse, per the same split as
-// buildManualPayload above.
+// recomputed by the server from the calendar and predecessors. Returns null when the automatic
+// scheduler would reject the duration (null/zero/negative) with a 400 -- this business-rule check
+// happens only *after* a successful format parse, per the same split as buildManualPayload above.
 function buildAutomaticPayload(draft: ScheduleDraft, calendar: ProjectCalendar): ScheduleCommitResult {
   if (draft.duration_minutes === "") {
     return null;
@@ -82,16 +77,14 @@ function buildAutomaticPayload(draft: ScheduleDraft, calendar: ProjectCalendar):
 
 // Extracted from PlanningTreeTable (E4-12 / #152): the inline schedule-field draft state (one
 // local, uncommitted start/finish/duration per row) and the commit logic that turns a draft into
-// a PlanningTaskScheduleUpdate payload once the user blurs/Enters a field, or switches a row's
-// manual/automatic mode. Owns its own reset() called from PlanningTreeTable's render-phase
-// versionKey-change block -- see that component for why this must stay a synchronous render-body
-// reset, not a useEffect.
+// a planning-facet update once the user blurs/Enters a field, or switches a row's manual/automatic
+// mode. Owns its own reset() called from PlanningTreeTable's render-phase revision-change block --
+// see that component for why this must stay a synchronous render-body reset, not a useEffect.
 //
-// E14-09 (#335): the draft bookkeeping itself (which rows hold an uncommitted value, the
-// never-edited fallback, discard-only-on-success, Enter = blur = commit) now comes from the shared
-// useTreeRowDrafts. What stays here is what is genuinely planning's: the ScheduleDraft ->
-// PlanningTaskScheduleUpdate payload builders above, the milestone/manual/automatic rules, and the
-// per-row duration format error.
+// E14-09 (#335): the draft bookkeeping itself comes from the shared useTreeRowDrafts. E14-10
+// (#336): what a row carries is now a **planning facet** hung on a revision node, keyed by
+// node_id, and what a commit sends is a PATCH on that facet. The milestone/manual/automatic rules
+// below did not change.
 export function usePlanningScheduleDrafts({ onScheduleUpdate, mutationBusy, calendar }: UsePlanningScheduleDraftsParams) {
   // Per-row format-parsing error message for the duration field (see ScheduleCommitResult above).
   // Kept alongside the row drafts (one entry per row, same lifecycle) rather than a single shared
@@ -99,66 +92,64 @@ export function usePlanningScheduleDrafts({ onScheduleUpdate, mutationBusy, cale
   const [durationErrors, setDurationErrors] = useState<Record<number, string>>({});
 
   // The default (never-yet-edited) value is shown formatted per the project's calendar (e.g. "1j"
-  // rather than "480"), for symmetry with what the field now also accepts as input -- but only
-  // when that formatting round-trips losslessly back to the same duration_minutes (see
+  // rather than "480"), for symmetry with what the field also accepts as input -- but only when
+  // that formatting round-trips losslessly back to the same duration_minutes (see
   // formatCalendarDurationForEditing's own doc comment): a lossy compound value instead falls back
   // to the plain minute count, so the field never silently misrepresents a task's stored duration.
-  function defaultScheduleDraft(row: PlanningTreeRow): ScheduleDraft {
+  function defaultScheduleDraft(row: PlanningRow): ScheduleDraft {
     return {
-      start_at: toDateInputValue(row.start_at),
-      finish_at: toDateInputValue(row.finish_at),
+      start_at: toDateInputValue(row.planning.start_at),
+      finish_at: toDateInputValue(row.planning.finish_at),
       duration_minutes:
-        row.duration_minutes === null || row.duration_minutes === undefined
+        row.planning.duration_minutes === null
           ? ""
-          : formatCalendarDurationForEditing(row.duration_minutes, calendar),
+          : formatCalendarDurationForEditing(row.planning.duration_minutes, calendar),
     };
   }
 
-  const drafts = useTreeRowDrafts<PlanningTreeRow, ScheduleDraft>({
-    rowKeyOf: (row) => row.uid,
+  const drafts = useTreeRowDrafts<PlanningRow, ScheduleDraft>({
+    rowKeyOf: (row) => row.node_id,
     defaultDraftFor: defaultScheduleDraft,
     busy: mutationBusy,
   });
 
-  function scheduleDraftFor(row: PlanningTreeRow): ScheduleDraft {
+  function scheduleDraftFor(row: PlanningRow): ScheduleDraft {
     return drafts.draftFor(row);
   }
 
-  function durationErrorFor(row: PlanningTreeRow): string | null {
-    return durationErrors[row.uid] ?? null;
+  function durationErrorFor(row: PlanningRow): string | null {
+    return durationErrors[row.node_id] ?? null;
   }
 
-  function clearDurationError(uid: number) {
+  function clearDurationError(nodeId: number) {
     setDurationErrors((current) => {
-      if (!(uid in current)) {
+      if (!(nodeId in current)) {
         return current;
       }
       const next = { ...current };
-      delete next[uid];
+      delete next[nodeId];
       return next;
     });
   }
 
-  function updateScheduleDraft(row: PlanningTreeRow, field: keyof ScheduleDraft, value: string) {
+  function updateScheduleDraft(row: PlanningRow, field: keyof ScheduleDraft, value: string) {
     drafts.updateDraftField(row, field, value);
     // Any further edit implicitly retracts the previous attempt's format error -- the next commit
     // will re-validate and re-report it if it's still invalid.
     if (field === "duration_minutes") {
-      clearDurationError(row.uid);
+      clearDurationError(row.node_id);
     }
   }
 
-  function clearScheduleDraft(row: PlanningTreeRow) {
+  function clearScheduleDraft(row: PlanningRow) {
     drafts.clearDraft(row);
     // A stale format-parsing error from a previous failed attempt on this row must not survive
     // once the draft itself is discarded (e.g. after a successful commitModeChange): otherwise the
-    // now-reset, valid field would still display the old error message next to it. Redundant with
-    // the clearDurationError already called separately by commitScheduleEdit's success path, but
-    // harmless there (see clearDurationError's own no-op guard when the uid isn't present).
-    clearDurationError(row.uid);
+    // now-reset, valid field would still display the old error message next to it.
+    clearDurationError(row.node_id);
   }
 
-  async function commitScheduleEdit(row: PlanningTreeRow) {
+  async function commitScheduleEdit(row: PlanningRow) {
     if (!onScheduleUpdate) {
       return;
     }
@@ -166,9 +157,9 @@ export function usePlanningScheduleDrafts({ onScheduleUpdate, mutationBusy, cale
     // guards, and discards the draft only when the callback below reports success -- returning
     // false keeps the user's in-progress value visible instead of silently reverting it.
     await drafts.commitDraft(row, async (draft) => {
-      const result: ScheduleCommitResult = row.is_milestone
+      const result: ScheduleCommitResult = row.planning.is_milestone
         ? buildMilestonePayload(row, draft)
-        : row.is_manual
+        : row.planning.is_manual
           ? buildManualPayload(row, draft, calendar)
           : buildAutomaticPayload(draft, calendar);
       // Bail out before the request instead of sending one guaranteed to fail or to be a no-op
@@ -179,36 +170,32 @@ export function usePlanningScheduleDrafts({ onScheduleUpdate, mutationBusy, cale
       if ("error" in result) {
         // Unlike the business-validation null above, an unrecognized *format* is actionable by the
         // user -- surface it via durationErrorFor so the cell can render it next to the field.
-        setDurationErrors((current) => ({ ...current, [row.uid]: result.error }));
+        setDurationErrors((current) => ({ ...current, [row.node_id]: result.error }));
         return false;
       }
-      clearDurationError(row.uid);
-      return onScheduleUpdate(row.uid, result);
+      clearDurationError(row.node_id);
+      return onScheduleUpdate(row.node_id, result);
     });
   }
 
-  async function commitModeChange(row: PlanningTreeRow, isManual: boolean) {
+  async function commitModeChange(row: PlanningRow, isManual: boolean) {
     if (!onScheduleUpdate || mutationBusy) {
       return;
     }
-    const payload: SchedulePayload = row.is_milestone
-      ? { is_manual: isManual, start_at: row.start_at ?? null }
+    const payload: SchedulePayload = row.planning.is_milestone
+      ? { is_manual: isManual, start_at: row.planning.start_at }
       : {
           is_manual: isManual,
-          start_at: row.start_at ?? null,
-          finish_at: row.finish_at ?? null,
-          duration_minutes: row.duration_minutes ?? null,
+          start_at: row.planning.start_at,
+          finish_at: row.planning.finish_at,
+          duration_minutes: row.planning.duration_minutes,
         };
-    // The mode change itself has no draft of its own to reconcile (unlike commitScheduleEdit):
-    // the Select is driven directly by row.is_manual, so on failure it simply re-renders with the
-    // same (unchanged) value once the parent's data reload reflects the rejected request -- no
-    // stale-draft/lost-input risk from *this* request to guard against. However, a *previous*
-    // schedule-field edit on this same row may have failed and left its draft in place
-    // (deliberately, so the user's invalid/unsaved input stays visible -- see commitScheduleEdit).
-    // If this mode change then succeeds, the server returns fresh start/finish/duration values,
-    // but scheduleDraftFor(row) would keep serving that stale leftover draft instead. Clear it on
-    // success so the fields reflect the row's new, server-confirmed values.
-    const succeeded = await onScheduleUpdate(row.uid, payload);
+    // The mode change itself has no draft of its own to reconcile (unlike commitScheduleEdit): the
+    // Select is driven directly by the facet. However a *previous* schedule-field edit on this row
+    // may have failed and left its draft in place (deliberately, so the user's unsaved input stays
+    // visible). If this mode change then succeeds, the server returns fresh start/finish/duration
+    // values, but scheduleDraftFor(row) would keep serving that stale leftover draft instead.
+    const succeeded = await onScheduleUpdate(row.node_id, payload);
     if (succeeded) {
       clearScheduleDraft(row);
     }

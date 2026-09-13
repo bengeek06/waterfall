@@ -1,23 +1,23 @@
 import { useMemo, useState } from "react";
 
-import type { Task, TaskLinkWrite } from "@/lib/backend";
-import { createLinkRowDraft, type LinkRowDraft } from "@/lib/planning-links";
-import type { PlanningTreeRow } from "@/lib/planning-tree";
+import type { RevisionPredecessorWrite } from "@/lib/backend";
+import { createLinkRowDraft, linkRowToPredecessorWrite, type LinkRowDraft } from "@/lib/planning-links";
+import type { PlanningRow } from "@/lib/planning-tree";
 
 type UsePlanningTaskLinksParams = {
-  tasks: Task[];
-  onEditLinks?: (payload: { taskUid: number; links: TaskLinkWrite[] }) => Promise<void>;
+  rows: PlanningRow[];
+  onEditLinks?: (payload: { nodeId: number; predecessors: RevisionPredecessorWrite[] }) => Promise<void>;
 };
 
 // Every row must reference a predecessor before submitting; returns the first validation error
 // found, or null when every row is valid.
 function validateLinkRows(rows: LinkRowDraft[]): string | null {
-  if (rows.some((row) => row.predecessorUid === null)) {
+  if (rows.some((row) => row.predecessorNodeId === null)) {
     return "Sélectionnez une tâche prédécesseure pour chaque ligne.";
   }
   const seen = new Set<string>();
   for (const row of rows) {
-    const dedupeKey = `${row.predecessorUid}-${row.linkType}`;
+    const dedupeKey = `${row.predecessorNodeId}-${row.linkType}`;
     if (seen.has(dedupeKey)) {
       return "Deux lignes ne peuvent pas référencer la même tâche prédécesseure avec le même type de lien.";
     }
@@ -28,59 +28,58 @@ function validateLinkRows(rows: LinkRowDraft[]): string | null {
 
 // Converts already-validated draft rows into the write payload, or returns an error message if a
 // row's lag is out of the backend's representable range. Assumes validateLinkRows already passed.
-function buildLinksPayload(rows: LinkRowDraft[]): TaskLinkWrite[] | string {
-  const links: TaskLinkWrite[] = [];
+function buildPredecessorsPayload(rows: LinkRowDraft[]): RevisionPredecessorWrite[] | string {
+  const predecessors: RevisionPredecessorWrite[] = [];
   for (const row of rows) {
-    const trimmedLag = row.lagMinutes.trim();
-    const lagMinutesValue = trimmedLag === "" ? 0 : Number(trimmedLag);
-    // Checked after scaling, not on lagMinutesValue alone: a finite input large enough
-    // (e.g. 1e308) overflows to Infinity once multiplied by 10, which JSON.stringify
-    // would then silently turn into null instead of the entered value. The upper/lower
-    // bounds mirror the backend's lag_tenth_minute range (a PostgreSQL Integer column),
-    // so an out-of-range value is rejected here instead of via an avoidable failed request.
-    const lagTenthMinute = Math.round(lagMinutesValue * 10);
-    if (!Number.isFinite(lagTenthMinute) || lagTenthMinute < -2_147_483_648 || lagTenthMinute > 2_147_483_647) {
+    const written = linkRowToPredecessorWrite(row);
+    // Checked after scaling, not on the typed value alone: a finite input large enough (e.g.
+    // 1e308) overflows to Infinity once multiplied by 10, which JSON.stringify would then silently
+    // turn into null instead of the entered value. The bounds mirror the backend's
+    // lag_tenth_minute range (a PostgreSQL Integer column), so an out-of-range value is rejected
+    // here instead of via an avoidable failed request.
+    if (
+      !written ||
+      !Number.isFinite(written.lag_tenth_minute) ||
+      (written.lag_tenth_minute ?? 0) < -2_147_483_648 ||
+      (written.lag_tenth_minute ?? 0) > 2_147_483_647
+    ) {
       return "Le décalage doit être un nombre de minutes valide.";
     }
-    links.push({
-      predecessor_uid: row.predecessorUid as number,
-      link_type: row.linkType,
-      lag_tenth_minute: lagTenthMinute,
-      // Preserve the row's existing lag_format rather than overwriting it: this dialog
-      // only edits predecessor/type/lag value, never the lag's working-time/elapsed unit.
-      lag_format: row.lagFormat,
-    });
+    predecessors.push(written);
   }
-  return links;
+  return predecessors;
 }
 
-// Extracted from PlanningTreeTable (E4-12 / #152): the predecessor-links dialog's state (which
-// task is being edited, its draft rows) and submit flow. Owns its own reset() called from
-// PlanningTreeTable's render-phase versionKey-change block -- see that component for why this
-// must stay a synchronous render-body reset, not a useEffect.
-export function usePlanningTaskLinks({ tasks, onEditLinks }: UsePlanningTaskLinksParams) {
-  const [editingTaskUid, setEditingTaskUid] = useState<number | null>(null);
+// Extracted from PlanningTreeTable (E4-12 / #152): the predecessor-links dialog's state (which row
+// is being edited, its draft rows) and submit flow. Owns its own reset() called from
+// PlanningTreeTable's render-phase revision-change block -- see that component for why this must
+// stay a synchronous render-body reset, not a useEffect.
+//
+// E14-10 (#336): a link designates a **node**, never an uid, and replacing a node's predecessors
+// is a PUT of the whole list -- an empty list erases them, and is the only way to.
+export function usePlanningTaskLinks({ rows, onEditLinks }: UsePlanningTaskLinksParams) {
+  const [editingNodeId, setEditingNodeId] = useState<number | null>(null);
   const [linkRows, setLinkRows] = useState<LinkRowDraft[]>([]);
   const [linkFormError, setLinkFormError] = useState<string | null>(null);
   const [linkFormBusy, setLinkFormBusy] = useState(false);
 
-  const editingTask = useMemo(
-    () => (editingTaskUid !== null ? (tasks.find((task) => task.uid === editingTaskUid) ?? null) : null),
-    [tasks, editingTaskUid],
+  const editingRow = useMemo(
+    () => (editingNodeId !== null ? (rows.find((row) => row.node_id === editingNodeId) ?? null) : null),
+    [rows, editingNodeId],
   );
-  const linkCandidateTasks = useMemo(
-    () => tasks.filter((task) => task.uid !== editingTaskUid),
-    [tasks, editingTaskUid],
+  const linkCandidateRows = useMemo(
+    () => rows.filter((row) => row.node_id !== editingNodeId),
+    [rows, editingNodeId],
   );
 
-  function openLinksDialog(row: PlanningTreeRow) {
-    setEditingTaskUid(row.uid);
-    setLinkRows((row.predecessor_links ?? []).map((link) => createLinkRowDraft(link)));
+  function openLinksDialog(row: PlanningRow) {
+    setEditingNodeId(row.node_id);
+    setLinkRows(row.predecessors.map((link) => createLinkRowDraft(link)));
     setLinkFormError(null);
   }
 
   function closeLinksDialog() {
-    setEditingTaskUid(null);
+    setEditingNodeId(null);
     setLinkRows([]);
     setLinkFormError(null);
   }
@@ -98,7 +97,7 @@ export function usePlanningTaskLinks({ tasks, onEditLinks }: UsePlanningTaskLink
   }
 
   async function submitLinks() {
-    if (editingTaskUid === null || !onEditLinks) {
+    if (editingNodeId === null || !onEditLinks) {
       return;
     }
     const validationError = validateLinkRows(linkRows);
@@ -106,7 +105,7 @@ export function usePlanningTaskLinks({ tasks, onEditLinks }: UsePlanningTaskLink
       setLinkFormError(validationError);
       return;
     }
-    const built = buildLinksPayload(linkRows);
+    const built = buildPredecessorsPayload(linkRows);
     if (typeof built === "string") {
       setLinkFormError(built);
       return;
@@ -114,7 +113,7 @@ export function usePlanningTaskLinks({ tasks, onEditLinks }: UsePlanningTaskLink
     setLinkFormError(null);
     setLinkFormBusy(true);
     try {
-      await onEditLinks({ taskUid: editingTaskUid, links: built });
+      await onEditLinks({ nodeId: editingNodeId, predecessors: built });
       closeLinksDialog();
     } catch (cause) {
       setLinkFormError(cause instanceof Error ? cause.message : "Impossible de mettre à jour les prédécesseurs.");
@@ -124,15 +123,15 @@ export function usePlanningTaskLinks({ tasks, onEditLinks }: UsePlanningTaskLink
   }
 
   function reset() {
-    setEditingTaskUid(null);
+    setEditingNodeId(null);
     setLinkRows([]);
     setLinkFormError(null);
     setLinkFormBusy(false);
   }
 
   return {
-    editingTask,
-    linkCandidateTasks,
+    editingRow,
+    linkCandidateRows,
     linkRows,
     linkFormError,
     linkFormBusy,

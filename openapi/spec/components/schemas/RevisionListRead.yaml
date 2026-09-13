@@ -1,0 +1,28 @@
+type: object
+required:
+- items
+- reference_revision_id
+- displayed_revision_id
+properties:
+  items:
+    items:
+      $ref: RevisionSummaryRead.yaml
+    type: array
+  reference_revision_id:
+    anyOf:
+    - type: integer
+    - type: 'null'
+  displayed_revision_id:
+    anyOf:
+    - type: integer
+    - type: 'null'
+description: >-
+  Toutes les revisions d'un projet, de la plus ancienne a la plus recente, et les
+  deux pointeurs qui les designent. Les pointeurs voyagent avec la liste plutot que
+  sur `ProjectRead` parce qu'ils n'ont de sens que face a elle et que `ms_project`
+  ne les porte pas : ils vivent sur `wf_project_revision_pointer` precisement pour
+  ne refermer aucun cycle de cle etrangere sur le projet. Un client qui tient cette
+  liste a de quoi decider quoi afficher -- `displayed_revision_id` quand un
+  brouillon est a l'ecran, la reference sinon, et la derniere par `version_number`
+  quand aucun des deux n'est renseigne. Volontairement non paginee : un projet a des
+  versions, pas un flux de versions.

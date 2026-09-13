@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { PlanningDetail, PlanningStructureDraftRead } from "@/lib/backend";
 import { ApiError } from "@/lib/backend";
-import { createEmptyPlanningHistory, type PlanningHistoryState } from "@/lib/planning-history";
 
 const mocks = vi.hoisted(() => ({
   getPlanning: vi.fn(),
@@ -28,9 +27,7 @@ import {
   deriveStructureDraftRows,
   isPlanningLoadResultCurrent,
   isPlanningLoadStillActive,
-  recordRevisionConflictIfAny,
   usePlanningDetailEffect,
-  type PlanningRevisionConflict,
 } from "@/hooks/use-planning-detail";
 
 function makeDetail(overrides: Partial<PlanningDetail> = {}): PlanningDetail {
@@ -134,49 +131,6 @@ describe("deriveStructureDraftRows", () => {
   });
 });
 
-describe("recordRevisionConflictIfAny", () => {
-  it("records a conflict when the tracked history revision differs from the detail's revision", () => {
-    const history: PlanningHistoryState = { ...createEmptyPlanningHistory(), revision: 3 };
-    const detail = makeDetail({ revision: 5 });
-    const setPlanningConflictByPlanningId = vi.fn();
-
-    recordRevisionConflictIfAny(history, detail, 7, 1, setPlanningConflictByPlanningId);
-
-    expect(setPlanningConflictByPlanningId).toHaveBeenCalledTimes(1);
-    const updater = setPlanningConflictByPlanningId.mock.calls[0][0] as (
-      previous: Record<number, PlanningRevisionConflict>,
-    ) => Record<number, PlanningRevisionConflict>;
-    expect(updater({})).toEqual({
-      7: {
-        projectId: 1,
-        expectedRevision: 3,
-        currentRevision: 5,
-        message: "Ce planning a été modifié entre-temps : recharge-le avant de continuer.",
-      },
-    });
-  });
-
-  it("does not record a conflict when the revisions match", () => {
-    const history: PlanningHistoryState = { ...createEmptyPlanningHistory(), revision: 5 };
-    const detail = makeDetail({ revision: 5 });
-    const setPlanningConflictByPlanningId = vi.fn();
-
-    recordRevisionConflictIfAny(history, detail, 7, 1, setPlanningConflictByPlanningId);
-
-    expect(setPlanningConflictByPlanningId).not.toHaveBeenCalled();
-  });
-
-  it("does not record a conflict when the history has no tracked revision yet", () => {
-    const history = createEmptyPlanningHistory();
-    const detail = makeDetail({ revision: 5 });
-    const setPlanningConflictByPlanningId = vi.fn();
-
-    recordRevisionConflictIfAny(history, detail, 7, 1, setPlanningConflictByPlanningId);
-
-    expect(setPlanningConflictByPlanningId).not.toHaveBeenCalled();
-  });
-});
-
 describe("isPlanningLoadStillActive", () => {
   it("is true when not cancelled and the generation still matches", () => {
     expect(isPlanningLoadStillActive(false, 2, 2)).toBe(true);
@@ -235,10 +189,8 @@ describe("usePlanningDetailEffect", () => {
         router: router as never,
         planningLoadGenerationRef: { current: 0 },
         selectedPlanningIdRef: { current: 1 },
-        historyByPlanningIdRef: { current: {} },
         setPlanningDetail: vi.fn(),
         setPlanningDetailBusy: vi.fn(),
-        setPlanningConflictByPlanningId: vi.fn(),
         setStructureDraft: vi.fn(),
         setError,
       }),
@@ -283,10 +235,8 @@ describe("usePlanningDetailEffect", () => {
           router: router as never,
           planningLoadGenerationRef,
           selectedPlanningIdRef: { current: selectedPlanningId },
-          historyByPlanningIdRef: { current: {} },
           setPlanningDetail: vi.fn(),
           setPlanningDetailBusy: vi.fn(),
-          setPlanningConflictByPlanningId: vi.fn(),
           setStructureDraft: vi.fn(),
           setError,
         }),

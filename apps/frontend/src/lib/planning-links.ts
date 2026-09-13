@@ -1,17 +1,17 @@
-import type { Task, TaskLinkWrite } from "./backend";
+import type { MspdiLagFormat, RevisionPredecessor, RevisionPredecessorWrite } from "./backend";
 import { formatCalendarDuration, type ProjectCalendar } from "./planning-calendar";
 
 // Pure predecessor-link domain helpers extracted from planning-tree-table.tsx (E4-12 / #152):
 // shared by the tree table's own "Prédécesseurs" column and the use-planning-task-links hook /
 // planning-task-links-dialog component.
 
-// MS Project standard predecessor link type codes (see wf_planning_link_snapshot check constraint).
+// MS Project standard predecessor link type codes, as `wf_revision_node_link.link_type` constrains
+// them (E14-10 / #336: the link now designates a node, never an uid).
 export const LINK_TYPE_LABELS: Record<number, string> = { 0: "FF", 1: "FS", 2: "SF", 3: "SS" };
 export const LINK_TYPE_OPTIONS = Object.entries(LINK_TYPE_LABELS).map(
   ([value, label]) => [Number(value), label] as const,
 );
 
-export type MspdiLagFormat = NonNullable<TaskLinkWrite["lag_format"]>;
 const MSPDI_LAG_FORMATS: ReadonlySet<number> = new Set([
   3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 19, 20, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 51, 52,
 ]);
@@ -25,10 +25,11 @@ export function normalizeLagFormat(value: number | null | undefined): MspdiLagFo
     : null;
 }
 
-// Local editing state for one row of the predecessor links dialog; converted to a TaskLinkWrite on submit.
+// Local editing state for one row of the predecessor links dialog; converted to a
+// RevisionPredecessorWrite on submit.
 export type LinkRowDraft = {
   rowId: string;
-  predecessorUid: number | null;
+  predecessorNodeId: number | null;
   linkType: number;
   lagMinutes: string;
   // Preserved from the loaded link's lag_format (7=working-time day, 8/null=elapsed) so
@@ -38,37 +39,50 @@ export type LinkRowDraft = {
 };
 
 let nextLinkRowId = 0;
-export function createLinkRowDraft(link?: {
-  predecessor_uid: number;
-  link_type: number;
-  lag_tenth_minute?: number | null;
-  lag_format?: number | null;
-}): LinkRowDraft {
+export function createLinkRowDraft(link?: RevisionPredecessor): LinkRowDraft {
   nextLinkRowId += 1;
   return {
     rowId: `link-row-${nextLinkRowId}`,
-    predecessorUid: link?.predecessor_uid ?? null,
+    predecessorNodeId: link?.predecessor_node_id ?? null,
     linkType: link?.link_type ?? 1,
     lagMinutes: link?.lag_tenth_minute ? String(link.lag_tenth_minute / 10) : "",
     lagFormat: link ? normalizeLagFormat(link.lag_format) : 7,
   };
 }
 
-// `rowNumberByUid` resolves each link's technical `predecessor_uid` (a stable identifier, never
-// shown to the user) to the predecessor task's current positional `row_number` (E9): the only
-// identifier the "Prédécesseurs" column may display. Built once by the caller (see
-// planning-tree-table.tsx) from the full task list, not recomputed per link/row. A missing entry
-// should never happen in practice (every predecessor_uid should reference a task in the same
-// planning), but falls back to "?" rather than showing the technical uid or throwing.
+/** Turns a dialog row back into the write shape, once its predecessor has actually been picked. */
+export function linkRowToPredecessorWrite(row: LinkRowDraft): RevisionPredecessorWrite | null {
+  if (row.predecessorNodeId === null) {
+    return null;
+  }
+  const lagMinutes = row.lagMinutes.trim() === "" ? 0 : Number(row.lagMinutes);
+  if (!Number.isFinite(lagMinutes)) {
+    return null;
+  }
+  return {
+    predecessor_node_id: row.predecessorNodeId,
+    link_type: row.linkType,
+    // The wire unit is the tenth of a minute (a 6-second resolution the MSPDI format carries);
+    // the field edits plain minutes, which is what a user types.
+    lag_tenth_minute: Math.round(lagMinutes * 10),
+    lag_format: row.lagFormat,
+  };
+}
+
+// `rowNumberByNodeId` resolves each link's technical `predecessor_node_id` (a stable identifier,
+// never shown to the user) to the predecessor's current positional `row_number` (E9): the only
+// identifier the "Prédécesseurs" column may display. Built once by the caller from the whole tree
+// (see lib/revision-tree.ts), not recomputed per link/row. A missing entry should never happen in
+// practice, but falls back to "?" rather than showing the technical id or throwing.
 export function predecessorsLabel(
-  task: Task,
+  predecessors: readonly RevisionPredecessor[],
   calendar: ProjectCalendar,
-  rowNumberByUid: Map<number, number>,
+  rowNumberByNodeId: Map<number, number>,
 ): string {
-  if (!task.predecessor_links?.length) {
+  if (!predecessors.length) {
     return "-";
   }
-  return task.predecessor_links
+  return predecessors
     .map((link) => {
       const type = LINK_TYPE_LABELS[link.link_type] ?? String(link.link_type);
       const lagMinutes = link.lag_tenth_minute ? link.lag_tenth_minute / 10 : 0;
@@ -77,7 +91,7 @@ export function predecessorsLabel(
       // non-negative duration (see its own doc comment).
       const lagSign = lagMinutes > 0 ? "+" : lagMinutes < 0 ? "-" : "";
       const lag = lagMinutes ? ` ${lagSign}${formatCalendarDuration(Math.abs(lagMinutes), calendar)}` : "";
-      const rowNumber = rowNumberByUid.get(link.predecessor_uid) ?? "?";
+      const rowNumber = rowNumberByNodeId.get(link.predecessor_node_id) ?? "?";
       return `${rowNumber} (${type}${lag})`;
     })
     .join(", ");

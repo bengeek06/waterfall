@@ -1,9 +1,15 @@
-import type { Task } from "./backend";
+import type { RevisionPlanFacet, RevisionPredecessor } from "./backend";
+import type { PlanningRow } from "./planning-tree";
 
 // Pure, presentation-agnostic schedule formatting/parsing helpers extracted from
 // planning-tree-table.tsx (E4-12 / #152): shared by the tree table's own row rendering, the
 // use-planning-schedule-drafts hook and the planning-schedule-cells component, none of which
 // should duplicate this logic or the naive-UTC/date-only conventions documented below.
+//
+// E14-10 (#336): a schedule is now read off a node's **planning facet** rather than off a task
+// row of the old snapshot model. The date conventions below did not change -- the backend still
+// answers naive-UTC datetimes -- but what carries them did, and a predecessor now designates its
+// predecessor by node id and never by uid.
 
 export type ScheduleDraft = {
   start_at: string;
@@ -95,50 +101,45 @@ export function combineDateWithExistingTime(
   return date.toISOString();
 }
 
-export function taskModeLabel(task: Task): string {
-  if (task.is_manual === null || task.is_manual === undefined) {
-    return "-";
-  }
-  return task.is_manual ? "Manuel" : "Automatique";
+export function planningModeLabel(facet: RevisionPlanFacet): string {
+  return facet.is_manual ? "Manuel" : "Automatique";
 }
 
-// Shared with the direct duration-edit guard in commitScheduleEdit: _apply_automatic_schedule
+// Shared with the direct duration-edit guard in commitScheduleEdit: the automatic scheduler
 // rejects a null/zero/negative duration with a 400, so both the "switch to automatic" affordance
 // and the direct edit must treat 0/negative the same as missing.
-export function durationInvalidForAutomatic(task: Task): boolean {
-  return (
-    task.duration_minutes === null ||
-    task.duration_minutes === undefined ||
-    task.duration_minutes <= 0
-  );
+export function durationInvalidForAutomatic(facet: RevisionPlanFacet): boolean {
+  return facet.duration_minutes === null || facet.duration_minutes <= 0;
 }
 
-type PredecessorLink = NonNullable<Task["predecessor_links"]>[number];
-
-// A predecessor link only actually resolves to a start anchor server-side
-// (_resolve_predecessor_constraints) if the predecessor itself already carries the date the link
-// type depends on: FS/FF (link_type 1/0) derive from the predecessor's finish_at, SS/SF
-// (link_type 3/2) derive from the predecessor's start_at. Both columns are nullable (e.g. the
+// A predecessor link only actually resolves to a start anchor server-side if the predecessor
+// itself already carries the date the link type depends on: FS/FF (link_type 1/0) derive from the
+// predecessor's finish_at, SS/SF (link_type 3/2) derive from its start_at. Both are nullable (the
 // predecessor can itself be an unanchored automatic task), so "a link exists" alone is not
 // sufficient -- see LINK_TYPE_LABELS (lib/planning-links.ts) for the code mapping.
-function predecessorResolvesStartAnchor(link: PredecessorLink, tasksByUid: Map<number, Task>): boolean {
-  const predecessor = tasksByUid.get(link.predecessor_uid);
+function predecessorResolvesStartAnchor(
+  link: RevisionPredecessor,
+  rowsByNodeId: Map<number, PlanningRow>,
+): boolean {
+  const predecessor = rowsByNodeId.get(link.predecessor_node_id);
   if (!predecessor) {
     return false;
   }
   if (link.link_type === 1 || link.link_type === 0) {
-    return Boolean(predecessor.finish_at);
+    return Boolean(predecessor.planning.finish_at);
   }
-  return Boolean(predecessor.start_at);
+  return Boolean(predecessor.planning.start_at);
 }
 
-// _apply_automatic_schedule/_apply_automatic_milestone_schedule both require either a stored
-// start_at or at least one predecessor link that resolves to a start anchor (see
-// predecessorResolvesStartAnchor) to derive one; without either, the server rejects the automatic
-// scheduling with a 400 regardless of the task being a milestone or not.
-export function missingStartAnchorForAutomatic(task: Task, tasksByUid: Map<number, Task>): boolean {
-  if (task.start_at) {
+// Automatic scheduling requires either a stored start_at or at least one predecessor link that
+// resolves to a start anchor (see predecessorResolvesStartAnchor) to derive one; without either,
+// the server rejects the automatic mode with a 400, milestone or not.
+export function missingStartAnchorForAutomatic(
+  row: PlanningRow,
+  rowsByNodeId: Map<number, PlanningRow>,
+): boolean {
+  if (row.planning.start_at) {
     return false;
   }
-  return !task.predecessor_links?.some((link) => predecessorResolvesStartAnchor(link, tasksByUid));
+  return !row.predecessors.some((link) => predecessorResolvesStartAnchor(link, rowsByNodeId));
 }

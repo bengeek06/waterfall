@@ -5,8 +5,10 @@ import {
   ApiError,
   createPlanningStructure,
   getPlanning,
+  getPlanningStructureDraft,
   getProject,
   listPlannings,
+  reopenPlanningStructure,
   Planning,
   PlanningDetail,
   Project,
@@ -17,6 +19,8 @@ import {
 import { clearSession, type SessionTokens } from "@/lib/session";
 import {
   buildPlanningStructurePayload,
+  getPlanningStructureDraftRows,
+  structureToDraftRows,
   type PlanningStructureDraftRow,
 } from "@/lib/planning-structure";
 import type { PlanningStructureGroup } from "@/components/planning-structure-editor";
@@ -74,7 +78,7 @@ export function usePlanningStructureEditor({
   // them runs (they mutate the same project/structure state, so they must be mutually exclusive),
   // but tracking *which* action is running lets each button show its own progress label instead
   // of all three claiming to be busy at once.
-  const [structureAction, setStructureAction] = useState<"save" | "generate" | "skip" | null>(null);
+  const [structureAction, setStructureAction] = useState<"save" | "generate" | "skip" | "reopen" | null>(null);
   const structureBusy = structureAction !== null;
 
   const postGroups = useMemo(() => {
@@ -264,6 +268,61 @@ export function usePlanningStructureEditor({
     }
   }
 
+  /**
+   * Re-opens the lotissement editor on the current planning (E14-10 / #336: moved here from the
+   * planning-tree mutation hook the revision model replaced).
+   *
+   * Still expressed against the **legacy** planning endpoints, deliberately: the lotissement is
+   * not carried by a revision and its five `planning-structure` routes are untouched by this EPIC
+   * -- the epic states their fate belongs to the information-architecture work, not here.
+   */
+  async function reopenStructure() {
+    if (!session || isReadOnlyProject) {
+      return;
+    }
+    setStructureAction("reopen");
+    setError(null);
+    try {
+      const updatedProject = await reopenPlanningStructure(projectId, session, onSessionRefresh);
+      const planningMetadata = await listPlannings(projectId, session, onSessionRefresh);
+      const nextPlanningId = updatedProject.displayed_planning_id ?? planningMetadata.at(-1)?.id ?? null;
+      const reopenedDetail = nextPlanningId
+        ? await getPlanning(projectId, nextPlanningId, session, onSessionRefresh)
+        : null;
+      const savedDraft = await getPlanningStructureDraft(projectId, session, onSessionRefresh);
+      setProject(updatedProject);
+      setPlannings(planningMetadata);
+      updateSelectedPlanningId(nextPlanningId);
+      const rows = savedDraft
+        ? structureToDraftRows(savedDraft.structure)
+        : getPlanningStructureDraftRows(reopenedDetail);
+      if (
+        rows.length &&
+        rows.every(
+          (row) =>
+            row.postKey.trim() &&
+            row.postName.trim() &&
+            row.lotKey.trim() &&
+            row.lotName.trim() &&
+            row.deliverables.trim(),
+        )
+      ) {
+        setStructureDraft(rows);
+      }
+      setPlanningDetail(reopenedDetail);
+      setStructureOpen(true);
+    } catch (cause) {
+      if (isSessionExpiredCause(cause)) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      setError(cause instanceof ApiError ? cause.message : "Impossible de rouvrir la structure.");
+    } finally {
+      setStructureAction(null);
+    }
+  }
+
   return {
     structureDraft,
     setStructureDraft,
@@ -281,5 +340,6 @@ export function usePlanningStructureEditor({
     savePlanningStructure,
     generatePlanningStructure,
     skipStructure,
+    reopenStructure,
   };
 }

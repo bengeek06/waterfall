@@ -370,6 +370,7 @@ describe("usePlanningImport confirmPlanningImport", () => {
         setImportFeedback: vi.fn(),
         setImportBusy: vi.fn(),
         setError,
+        onImported: vi.fn(),
       }),
     );
 
@@ -380,5 +381,43 @@ describe("usePlanningImport confirmPlanningImport", () => {
     expect(mocks.clearSession).toHaveBeenCalled();
     expect(router.push).toHaveBeenCalledWith("/login");
     expect(setError).not.toHaveBeenCalledWith("Impossible d'importer le planning.");
+  });
+
+  it("hands the revision the file landed in to the caller before refreshing anything else", async () => {
+    // The client never chooses the target revision -- the import always writes into the latest one
+    // by version number -- so this is the only place the screen learns where the file went (#332).
+    mocks.runImportBatch.mockResolvedValue({ batchId: 1, revisionId: 12, revisionCreated: true });
+    mocks.getImportBatchStatus.mockResolvedValue({ status: "success" } as ImportBatchStatus);
+    mocks.getProject.mockResolvedValue({ id: 1 } as Project);
+    mocks.listPlannings.mockResolvedValue([]);
+    const onImported = vi.fn();
+
+    const { result } = renderHook(() =>
+      usePlanningImport({
+        session,
+        project: { id: 1 } as Project,
+        importReview: { batchId: 1, diff: {} as never },
+        projectId: 1,
+        onSessionRefresh,
+        router: { push: vi.fn() } as never,
+        plannings: [],
+        setProject: vi.fn(),
+        setPlannings: vi.fn(),
+        setPlanningDetail: vi.fn(),
+        updateSelectedPlanningId: vi.fn(),
+        setImportReview: vi.fn(),
+        setImportFile: vi.fn(),
+        setImportFeedback: vi.fn(),
+        setImportBusy: vi.fn(),
+        setError: vi.fn(),
+        onImported,
+      }),
+    );
+
+    await act(async () => {
+      await result.current();
+    });
+
+    expect(onImported).toHaveBeenCalledWith({ revisionId: 12, revisionCreated: true });
   });
 });

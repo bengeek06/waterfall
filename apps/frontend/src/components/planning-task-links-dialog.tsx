@@ -10,12 +10,12 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import type { Task } from "@/lib/backend";
 import { LINK_TYPE_OPTIONS, type LinkRowDraft } from "@/lib/planning-links";
+import type { PlanningRow } from "@/lib/planning-tree";
 
 export type PlanningTaskLinksDialogProps = Readonly<{
-  editingTask: Task | null;
-  linkCandidateTasks: Task[];
+  editingRow: PlanningRow | null;
+  linkCandidateRows: PlanningRow[];
   linkRows: LinkRowDraft[];
   linkFormError: string | null;
   linkFormBusy: boolean;
@@ -27,11 +27,12 @@ export type PlanningTaskLinksDialogProps = Readonly<{
   onSubmit: () => void;
 }>;
 
-// Extracted from PlanningTreeTable (E4-12 / #152): the "Prédécesseurs de <tâche>" dialog, verbatim
-// JSX move -- see that component's use-planning-task-links hook for the state/logic it is driven by.
+// Extracted from PlanningTreeTable (E4-12 / #152): the "Prédécesseurs de <tâche>" dialog -- see
+// that component's use-planning-task-links hook for the state/logic it is driven by. E14-10
+// (#336): a candidate is designated by its node id and displayed by its positional row_number.
 export function PlanningTaskLinksDialog({
-  editingTask,
-  linkCandidateTasks,
+  editingRow,
+  linkCandidateRows,
   linkRows,
   linkFormError,
   linkFormBusy,
@@ -44,7 +45,7 @@ export function PlanningTaskLinksDialog({
 }: PlanningTaskLinksDialogProps) {
   return (
     <Dialog
-      open={editingTask !== null}
+      open={editingRow !== null}
       onOpenChange={(open) => {
         // Ignore close attempts (Escape, backdrop click, the header X) while a submission is
         // in flight, otherwise the dialog could close before we know if it actually succeeded.
@@ -52,10 +53,10 @@ export function PlanningTaskLinksDialog({
       }}
     >
       <DialogContent>
-        {editingTask ? (
+        {editingRow ? (
           <>
             <DialogHeader>
-              <DialogTitle>Prédécesseurs de {editingTask.name}</DialogTitle>
+              <DialogTitle>Prédécesseurs de {editingRow.planning.name}</DialogTitle>
               <DialogDescription>
                 Ajoutez, modifiez ou supprimez les tâches prédécesseures de cette tâche.
               </DialogDescription>
@@ -69,18 +70,18 @@ export function PlanningTaskLinksDialog({
                   <select
                     aria-label="Tâche prédécesseure"
                     className="h-8 rounded-md border border-input bg-background px-2 text-sm"
-                    value={row.predecessorUid ?? ""}
+                    value={row.predecessorNodeId ?? ""}
                     disabled={linkFormBusy}
                     onChange={(event) =>
                       onUpdateRow(row.rowId, {
-                        predecessorUid: event.target.value ? Number(event.target.value) : null,
+                        predecessorNodeId: event.target.value ? Number(event.target.value) : null,
                       })
                     }
                   >
                     <option value="">Sélectionner une tâche</option>
-                    {linkCandidateTasks.map((candidate) => (
-                      <option key={candidate.uid} value={candidate.uid}>
-                        {candidate.row_number} - {candidate.name}
+                    {linkCandidateRows.map((candidate) => (
+                      <option key={candidate.node_id} value={candidate.node_id}>
+                        {candidate.row_number} - {candidate.planning.name}
                       </option>
                     ))}
                   </select>
@@ -121,7 +122,7 @@ export function PlanningTaskLinksDialog({
                 type="button"
                 variant="outline"
                 size="sm"
-                disabled={linkCandidateTasks.length === 0 || linkFormBusy}
+                disabled={linkCandidateRows.length === 0 || linkFormBusy}
                 onClick={onAddRow}
               >
                 Ajouter une ligne

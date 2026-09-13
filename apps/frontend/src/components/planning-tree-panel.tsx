@@ -1,84 +1,107 @@
 "use client";
 
+import { useMemo } from "react";
+
 import { PlanningTreeTable } from "@/components/planning-tree-table";
 import { ReadOnlyGantt } from "@/components/read-only-gantt";
-import type { Planning, PlanningDetail, PlanningTaskScheduleUpdate, TaskLinkWrite } from "@/lib/backend";
+import type { RevisionPredecessorWrite, RevisionTree } from "@/lib/backend";
+import type { CreateTaskCommand } from "@/hooks/use-planning-create-task-dialog";
+import type { SchedulePayload } from "@/hooks/use-planning-schedule-drafts";
 import type { ProjectCalendar } from "@/lib/planning-calendar";
-import type { PlanningMoveCommand } from "@/lib/planning-tree";
+import { buildPlanningRows, type PlanningMoveMode } from "@/lib/planning-tree";
+import { rowNumberByNodeId } from "@/lib/revision-tree";
 
 export type PlanningTreePanelProps = {
-  planningDetailBusy: boolean;
-  planningDetail: PlanningDetail | null;
-  selectedPlanning: Planning | null;
+  treeBusy: boolean;
+  /** True while the list of revisions is being read: there is nothing to conclude from it yet. */
+  revisionsBusy: boolean;
+  /** Whether the project holds at least one revision, as the freshly-read list reports it. */
+  hasRevisions: boolean;
+  /** True when the page is already showing an error banner, so the panel keeps quiet about it. */
+  hasError: boolean;
+  tree: RevisionTree | null;
   isReadOnlyProject: boolean;
-  selectedPlanningHasConflict: boolean;
-  planningMutationBusy: boolean;
+  hasConflict: boolean;
+  mutationBusy: boolean;
   /** The owning project's working calendar -- see PlanningTreeTableProps.calendar. */
   calendar: ProjectCalendar;
-  onMove: (command: PlanningMoveCommand) => void;
-  onScheduleUpdate: (
-    taskUid: number,
-    payload: Omit<PlanningTaskScheduleUpdate, "expected_revision">,
-  ) => Promise<boolean>;
-  onEditLinks: (payload: { taskUid: number; links: TaskLinkWrite[] }) => Promise<void>;
-  onCreateTask: (command: {
-    name: string;
-    isMilestone: boolean;
-    targetParentUid?: number;
-    insertAfterUid?: number;
-  }) => void;
-  onDeleteTasks: (
-    taskUids: number[],
-    confirmCascade: boolean,
-    versionKey: number | string | null,
-  ) => Promise<void>;
+  onMove: (mode: PlanningMoveMode, nodeIds: number[]) => void;
+  onScheduleUpdate: (nodeId: number, payload: SchedulePayload) => Promise<boolean>;
+  onEditLinks: (payload: { nodeId: number; predecessors: RevisionPredecessorWrite[] }) => Promise<void>;
+  onCreateTask: (command: CreateTaskCommand) => void;
+  onDeleteNodes: (nodeIds: number[]) => void;
 };
 
-// A planning still under construction (its own draft not yet validated) is only editable while
-// it stays the selected draft with no pending revision conflict -- mirrors the guard duplicated
-// across every planning mutation handler in ProjectDetailsPage (see selectPlanning et al.).
-function isPlanningTreeReadOnly(
+/**
+ * A revision is editable only while it is a draft (INV-03: a validated or superseded revision
+ * refuses every write, with the same code on both facets), the project is not read-only, and no
+ * unresolved lock conflict is pending.
+ */
+export function isPlanningTreeReadOnly(
   isReadOnlyProject: boolean,
-  selectedPlanningHasConflict: boolean,
-  selectedPlanning: Planning | null,
+  hasConflict: boolean,
+  tree: RevisionTree | null,
 ): boolean {
-  return isReadOnlyProject || selectedPlanningHasConflict || (selectedPlanning ? selectedPlanning.status !== "draft" : false);
+  return isReadOnlyProject || hasConflict || (tree ? tree.status !== "draft" : false);
 }
 
-// Extracted from ProjectDetailsPage (E4-11 / #151): the busy/empty states plus the read-only
-// Gantt and the editable tree table for the currently-selected planning version. Verbatim JSX
-// move -- see page.tsx call site for wiring.
+// Extracted from ProjectDetailsPage (E4-11 / #151): the busy/empty states plus the read-only Gantt
+// and the editable tree table for the currently-displayed revision.
 export function PlanningTreePanel({
-  planningDetailBusy,
-  planningDetail,
-  selectedPlanning,
+  treeBusy,
+  revisionsBusy,
+  hasRevisions,
+  hasError,
+  tree,
   isReadOnlyProject,
-  selectedPlanningHasConflict,
-  planningMutationBusy,
+  hasConflict,
+  mutationBusy,
   calendar,
   onMove,
   onScheduleUpdate,
   onEditLinks,
   onCreateTask,
-  onDeleteTasks,
+  onDeleteNodes,
 }: PlanningTreePanelProps) {
+  // Memoised on `tree`, not recomputed per render: `rows` is the input of useTreeTableSelection,
+  // whose four useMemo all list it as a dependency. A new array on every render invalidates the
+  // lot -- and ProjectDetailsPage re-renders on every keystroke in the project-name field, which
+  // would rebuild the whole table per character typed.
+  const rows = useMemo(() => (tree ? buildPlanningRows(tree.nodes) : []), [tree]);
+  const rowNumbers = useMemo(() => (tree ? rowNumberByNodeId(tree.nodes) : new Map<number, number>()), [tree]);
+  // Nothing is empty until both reads have answered: on the very first render the list has not
+  // been requested yet, and saying "no revision, import one" over a network round-trip -- or,
+  // worse, over a list that failed to load -- invites the user to fix the wrong problem.
+  const showEmptyState = !revisionsBusy && !treeBusy && !hasError && !hasRevisions;
   return (
     <>
-      {planningDetailBusy ? <p className="text-sm text-muted-foreground" role="status">Chargement du planning...</p> : null}
-      {!planningDetailBusy && !planningDetail ? <p className="py-6 text-sm text-muted-foreground">Aucun planning sélectionné.</p> : null}
-      {planningDetail?.tasks.length ? <ReadOnlyGantt tasks={planningDetail.tasks} /> : null}
-      {planningDetail ? (
+      {/* Only the tree read is announced here: while the *list* is loading, the header above
+          already says so, and two live regions repeating it would be announced twice. */}
+      {treeBusy ? (
+        <p className="text-sm text-muted-foreground" role="status">
+          Chargement de la révision...
+        </p>
+      ) : null}
+      {showEmptyState ? (
+        <p className="py-6 text-sm text-muted-foreground">
+          Aucune révision à afficher. Importe un planning MS Project pour en créer une.
+        </p>
+      ) : null}
+      {rows.length ? <ReadOnlyGantt rows={rows} /> : null}
+      {tree ? (
         <PlanningTreeTable
-          tasks={planningDetail.tasks}
-          versionKey={selectedPlanning?.id ?? null}
+          rows={rows}
+          treeNodes={tree.nodes}
+          rowNumberByNodeId={rowNumbers}
+          revisionKey={tree.revision_id}
           calendar={calendar}
-          readOnly={isPlanningTreeReadOnly(isReadOnlyProject, selectedPlanningHasConflict, selectedPlanning)}
+          readOnly={isPlanningTreeReadOnly(isReadOnlyProject, hasConflict, tree)}
           onMove={onMove}
           onScheduleUpdate={onScheduleUpdate}
           onEditLinks={onEditLinks}
           onCreateTask={onCreateTask}
-          onDeleteTasks={onDeleteTasks}
-          mutationBusy={planningMutationBusy}
+          onDeleteNodes={onDeleteNodes}
+          mutationBusy={mutationBusy}
         />
       ) : null}
     </>

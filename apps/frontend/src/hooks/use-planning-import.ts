@@ -133,6 +133,9 @@ export async function refreshPlanningDetailAfterImport(
   }
 }
 
+/** What the import answered about where the file landed (E14-06's ImportRunAcceptedResponse). */
+export type ImportLanding = { revisionId: number | null; revisionCreated: boolean | null };
+
 interface UsePlanningImportParams {
   session: SessionTokens | null;
   project: Project | null;
@@ -150,11 +153,20 @@ interface UsePlanningImportParams {
   setImportFeedback: (message: string | null) => void;
   setImportBusy: (busy: boolean) => void;
   setError: (message: string | null) => void;
+  /**
+   * Called with the revision the import actually wrote into, before the legacy refreshes below.
+   *
+   * The import targets the **latest** revision of the project by version number and the client
+   * does not choose it: without this, a user who believes they are feeding a draft while a more
+   * recent one exists would never find out (#332). The callback re-reads the revision list, moves
+   * the displayed revision onto that one, and lets the import panel say where the file landed.
+   */
+  onImported: (landing: ImportLanding) => Promise<void>;
 }
 
 // Extracted verbatim from ProjectDetailsPage (E4-10 / #150): confirms a previously-reviewed
-// MS Project import batch, polls it to completion, then refreshes the project/plannings/planning
-// detail state. Pure mechanical move -- see page.tsx call site (import review "Confirmer" button)
+// MS Project import batch, polls it to completion, then refreshes the revision it wrote into
+// (E14-10 / #336) and the project/plannings/planning detail state. Pure mechanical move -- see page.tsx call site (import review "Confirmer" button)
 // for wiring. preparePlanningImport (the earlier step of the same import flow) is out of scope
 // for this ticket and stays in page.tsx.
 export function usePlanningImport({
@@ -174,6 +186,7 @@ export function usePlanningImport({
   setImportFeedback,
   setImportBusy,
   setError,
+  onImported,
 }: UsePlanningImportParams) {
   async function confirmPlanningImport() {
     if (!session || !project || !importReview) {
@@ -183,12 +196,17 @@ export function usePlanningImport({
     setError(null);
     setImportFeedback(null);
     try {
-      await runImportBatch(importReview.batchId, session, onSessionRefresh, false, true);
+      const accepted = await runImportBatch(importReview.batchId, session, onSessionRefresh, false, true);
       await pollImportBatchStatus(importReview.batchId, session, onSessionRefresh);
 
       setImportReview(null);
       setImportFile(null);
       setImportFeedback("Import réussi. Actualisation du projet en cours...");
+
+      // The revision the file landed in, first: it is what the Planning tab now displays, and what
+      // the panel reports. The legacy planning refreshes below still run because the Devis tab is
+      // not on the revision model yet (E14-11 / #337).
+      await onImported({ revisionId: accepted.revisionId, revisionCreated: accepted.revisionCreated });
 
       const [projectRefresh, planningsRefresh] = await Promise.allSettled([
         getProject(projectId, session, onSessionRefresh),

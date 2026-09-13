@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import type { CreateTaskPositionMode } from "@/hooks/use-planning-create-task-dialog";
-import type { Task } from "@/lib/backend";
+import type { PlanningRow } from "@/lib/planning-tree";
 
 export type PlanningCreateTaskDialogProps = Readonly<{
   open: boolean;
@@ -20,7 +20,7 @@ export type PlanningCreateTaskDialogProps = Readonly<{
   isMilestone: boolean;
   positionMode: CreateTaskPositionMode;
   error: string | null;
-  singleSelectedTask: Task | null;
+  singleSelectedRow: PlanningRow | null;
   mutationBusy: boolean;
   onNameChange: (value: string) => void;
   onMilestoneChange: (value: boolean) => void;
@@ -38,7 +38,7 @@ export function PlanningCreateTaskDialog({
   isMilestone,
   positionMode,
   error,
-  singleSelectedTask,
+  singleSelectedRow,
   mutationBusy,
   onNameChange,
   onMilestoneChange,
@@ -86,12 +86,13 @@ export function PlanningCreateTaskDialog({
               value={positionMode}
               onChange={(event) => onPositionModeChange(event.target.value as CreateTaskPositionMode)}
             >
-              <option value="root">Ajouter en tête du planning</option>
-              {singleSelectedTask ? (
-                <option value="after">Ajouter après « {singleSelectedTask.name} » (même niveau)</option>
+              <option value="root">Ajouter à la fin du planning</option>
+              {singleSelectedRow ? (
+                <option value="after">Ajouter après « {singleSelectedRow.planning.name} » (même niveau)</option>
               ) : null}
-              {singleSelectedTask && !singleSelectedTask.is_milestone ? (
-                <option value="child">Ajouter comme enfant de « {singleSelectedTask.name} »</option>
+              {/* A jalon carries no children (INV-27): the option is simply not offered. */}
+              {singleSelectedRow && !singleSelectedRow.planning.is_milestone ? (
+                <option value="child">Ajouter comme enfant de « {singleSelectedRow.planning.name} »</option>
               ) : null}
             </select>
           </div>

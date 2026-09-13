@@ -95,9 +95,9 @@ interface UseEstimateCostLinesParams {
   // submitCreateTask attaches the new task to the project's *displayed* planning, so
   // `planningDetail` -- otherwise only loaded by usePlanningDetailEffect -- must be refreshed
   // here too, or the "Tâche parente" selector and the Planning tab never see it without a
-  // full page reload. `selectedPlanningIdRef` mirrors the same ref page.tsx already threads
-  // through use-planning-tree-mutations.ts, so the guard after the refetch's `await` uses the
-  // exact same up-to-date-read pattern as the rest of the codebase.
+  // full page reload. `selectedPlanningIdRef` carries the same up-to-date-read pattern the rest
+  // of the codebase uses after an `await` -- a ref written synchronously alongside the state, read
+  // back once the response lands -- rather than trusting the captured `selectedPlanningId`.
   selectedPlanningId: number | null;
   selectedPlanningIdRef: RefObject<number | null>;
   setPlanningDetail: (detail: PlanningDetail | null) => void;
@@ -274,7 +274,7 @@ export function useEstimateCostLines({
   // stale batch's success/failure banner must never be attributed to whatever version
   // happens to be displayed once it resolves. React forbids writing to a ref during
   // render, so this is kept fresh via useLayoutEffect rather than a synchronous body
-  // write -- same precedent as use-planning-delete-selection.ts's versionKeyRef.
+  // write -- the same precedent every "which version was this aimed at?" ref follows here.
   const selectedEstimateIdRef = useRef(selectedEstimateId);
   useLayoutEffect(() => {
     selectedEstimateIdRef.current = selectedEstimateId;

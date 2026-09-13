@@ -244,6 +244,52 @@ class RevisionTreeRead(BaseModel):
     nodes: list[RevisionNodeRead]
 
 
+class RevisionSummaryRead(BaseModel):
+    """One revision of a project, without its tree (E14-10, #336).
+
+    The header of :class:`RevisionTreeRead` plus the two dates a history screen
+    needs, and deliberately **not** the nodes: this is what a client reads to know
+    which revisions exist before choosing one to open, and loading every tree of
+    every version to draw a selector would be the opposite of what the unpaginated
+    ``GET .../nodes`` is for.
+
+    ``lock_version`` is carried here too, for the one command that needs the
+    counter of a revision whose tree has not been read: ``POST .../copy`` takes the
+    **source**'s counter, so a draft can be opened from a validated revision listed
+    here without first downloading it.
+    """
+
+    revision_id: int
+    project_id: int
+    version_number: int
+    kind: RevisionKind
+    status: RevisionStatus
+    lock_version: int
+    note: str | None
+    created_at: datetime
+    validated_at: datetime | None
+
+
+class RevisionListRead(BaseModel):
+    """Every revision of a project, oldest first, and the two pointers to it.
+
+    The pointers travel with the list rather than on ``ProjectRead`` because they
+    are only meaningful against it, and because ``ms_project`` does not carry them:
+    they live on `wf_project_revision_pointer` precisely so no foreign-key cycle is
+    closed back onto the project (see :class:`ProjectRevisionPointer`). A client
+    that has this list has everything it needs to decide what to display --
+    ``displayed_revision_id`` when there is a draft on screen, the reference
+    otherwise, and the latest by ``version_number`` when neither is set.
+
+    Not paginated: a project has versions, not a stream of them, and the caller is
+    a version selector that needs them all to be honest about what exists.
+    """
+
+    items: list[RevisionSummaryRead]
+    reference_revision_id: int | None
+    displayed_revision_id: int | None
+
+
 class RevisionWriteRead(BaseModel):
     """What every write answers: the revision, and the counter its next write needs."""
 
