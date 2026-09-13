@@ -255,3 +255,235 @@ def test_move_lock_conflict_serializes_and_rejects_the_loser(
         moved = verify.get(RevisionNode, second_node)
         assert moved is not None
         assert moved.position == 1
+
+
+# --------------------------------------------------------------------------------------
+# E14-08 (#334): the project row is what serialises the allocation of a version number
+# --------------------------------------------------------------------------------------
+
+
+def _second_draft_revision(session: Session, project_id: int) -> int:
+    """A second draft of the same project, so two copies can start from two sources."""
+    from waterfall.models.revision import ProjectRevision
+
+    revision = ProjectRevision(
+        project_id=project_id, version_number=2, status="draft", lock_version=0
+    )
+    session.add(revision)
+    session.commit()
+    return revision.id
+
+
+def test_two_copies_from_two_sources_of_one_project_do_not_collide_on_the_version_number(
+    postgres_app_database_url: str,
+) -> None:
+    """#352, constat 2, closed where the issue said it had to be: on the route.
+
+    ``create_revision_from`` locks the **source** revision, and two copies made from
+    two *different* sources of the same project therefore lock two different rows,
+    never wait for each other, and both allocate the same ``version_number`` -- which
+    collides on ``uq_wf_revision_project_version`` as a raw ``IntegrityError``, and
+    used to surface as a 500 with an unusable session.
+
+    The route takes the project row instead (``_writable_project``), and holds it for
+    the whole request. This test proves the second request *blocks* on it rather than
+    racing past -- observed in ``pg_stat_activity``, not inferred from a result -- and
+    that it allocates the next number once it is let through.
+    """
+    from waterfall.api.routes.revisions import copy_revision
+    from waterfall.models.revision import ProjectRevision
+    from waterfall.models.user import User
+    from waterfall.schemas.revisions import RevisionCopy
+
+    engine = create_engine(postgres_app_database_url, future=True)
+    session_factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    try:
+        with session_factory() as seed_session:
+            owner_id, project_id, first_revision, _first, _second = (
+                _seed_draft_revision_with_two_root_tasks(seed_session)
+            )
+            second_revision = _second_draft_revision(seed_session, project_id)
+
+        session_a = session_factory()
+        session_b = session_factory()
+        try:
+            # Session A holds the *project* row, exactly as the route does between
+            # `_writable_project` and its commit.
+            session_a.execute(
+                text("SELECT id FROM ms_project WHERE id = :id FOR UPDATE"), {"id": project_id}
+            )
+
+            backend_pid_b = session_b.execute(text("SELECT pg_backend_pid()")).scalar()
+            assert backend_pid_b is not None
+
+            results: dict[str, Any] = {}
+
+            def _run_session_b() -> None:
+                try:
+                    results["created"] = copy_revision(
+                        project_id,
+                        second_revision,
+                        RevisionCopy(expected_lock_version=0),
+                        db=session_b,
+                        current_user=User(id=owner_id),
+                    )
+                except HTTPException as exc:  # pragma: no cover -- a failure to report
+                    results["error"] = exc
+
+            thread = threading.Thread(target=_run_session_b)
+            thread.start()
+            try:
+                # The proof: session B is *waiting on a lock*, not reading past it.
+                _wait_until_backend_blocked_on_lock(engine, backend_pid_b)
+
+                # Session A allocates version 3 under its own lock and commits.
+                session_a.add(
+                    ProjectRevision(
+                        project_id=project_id,
+                        version_number=3,
+                        status="draft",
+                        lock_version=0,
+                        source_revision_id=first_revision,
+                    )
+                )
+                session_a.commit()
+
+                thread.join(timeout=10)
+                assert not thread.is_alive(), "session B never returned -- looks like a deadlock"
+            finally:
+                session_b.rollback()
+
+            assert "error" not in results, f"the second copy was refused: {results.get('error')}"
+            # Unblocked, it sees the revision A committed and takes the next number --
+            # where, without the project lock, it would have tried 3 as well.
+            assert results["created"].version_number == 4
+        finally:
+            session_a.close()
+            session_b.close()
+    finally:
+        engine.dispose()
+
+    with sessionmaker(bind=create_engine(postgres_app_database_url, future=True))() as verify:
+        numbers = sorted(
+            row.version_number
+            for row in verify.query(ProjectRevision).filter(
+                ProjectRevision.project_id == project_id
+            )
+        )
+        assert numbers == [1, 2, 3, 4]
+
+
+# --------------------------------------------------------------------------------------
+# E14-08 review (M1): the project status routes write the pointer, so they take the lock
+# --------------------------------------------------------------------------------------
+
+
+def test_entering_en_cours_twice_at_once_waits_on_the_project_row(
+    postgres_app_database_url: str,
+) -> None:
+    """``PATCH /projects/{id}/status`` blocks on `ms_project`, like the revision routes.
+
+    The route grew two writes it did not have before #334: it inserts
+    `wf_project_revision_pointer` and it *reads* `wf_revision` to decide what to put
+    there. Left unlocked -- which it was -- both were broken by concurrency, and one
+    lock closes both:
+
+    * the pointer's primary key is ``project_id``, so two requests reading
+      ``en_reponse_appel_offre`` at the same time both passed the transition and both
+      inserted. The second raised an ``IntegrityError`` this route has no ``_commit``
+      helper to translate: a 500, on a double-clicked button;
+    * ``reference_revision_candidate`` selects a ``validated`` revision under no lock,
+      while a concurrent ``POST .../validate`` -- which *does* hold the project row --
+      supersedes that very revision. The composite foreign key guarantees the revision
+      belongs to the project, not that it is still validated, so the reference could be
+      fixed on a ``superseded`` one.
+
+    Proved the way #352 was: session B is observed **waiting in ``pg_stat_activity``**,
+    not inferred from its result. Once let through it re-reads the status session A
+    committed, finds the transition already made, and answers it -- so a double click
+    is a no-op and not a conflict, which is the better of the two acceptable answers.
+    """
+    from waterfall.api.routes.projects import update_project_status
+    from waterfall.models.ms_core import MsProject
+    from waterfall.models.revision import ProjectRevision, ProjectRevisionPointer
+    from waterfall.models.user import User
+    from waterfall.schemas.projects import ProjectStatusUpdate
+
+    engine = create_engine(postgres_app_database_url, future=True)
+    session_factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    try:
+        with session_factory() as seed_session:
+            owner_id, project_id, revision_id, _first, _second = (
+                _seed_draft_revision_with_two_root_tasks(seed_session)
+            )
+            # The state the transition needs: a project one step away from `en_cours`
+            # and a validated revision for it to be run against.
+            seed_session.query(MsProject).filter(MsProject.id == project_id).update(
+                {MsProject.status: "en_reponse_appel_offre"}
+            )
+            seed_session.query(ProjectRevision).filter(ProjectRevision.id == revision_id).update(
+                {ProjectRevision.status: "validated", ProjectRevision.kind: "initial"}
+            )
+            seed_session.commit()
+
+        session_a = session_factory()
+        session_b = session_factory()
+        try:
+            # Session A holds the project row and makes the very writes the route
+            # makes, exactly as a first click would.
+            session_a.execute(
+                text("SELECT id FROM ms_project WHERE id = :id FOR UPDATE"), {"id": project_id}
+            )
+
+            backend_pid_b = session_b.execute(text("SELECT pg_backend_pid()")).scalar()
+            assert backend_pid_b is not None
+
+            results: dict[str, Any] = {}
+
+            def _run_session_b() -> None:
+                try:
+                    results["project"] = update_project_status(
+                        project_id,
+                        ProjectStatusUpdate(status="en_cours"),
+                        db=session_b,
+                        current_user=User(id=owner_id),
+                    )
+                except Exception as exc:  # pragma: no cover -- a failure to report
+                    results["error"] = exc
+
+            thread = threading.Thread(target=_run_session_b)
+            thread.start()
+            try:
+                _wait_until_backend_blocked_on_lock(engine, backend_pid_b)
+
+                session_a.query(MsProject).filter(MsProject.id == project_id).update(
+                    {MsProject.status: "en_cours"}
+                )
+                session_a.add(
+                    ProjectRevisionPointer(project_id=project_id, reference_revision_id=revision_id)
+                )
+                session_a.commit()
+
+                thread.join(timeout=10)
+                assert not thread.is_alive(), "session B never returned -- looks like a deadlock"
+            finally:
+                session_b.rollback()
+
+            assert "error" not in results, f"the second entry failed: {results.get('error')}"
+            assert results["project"].status == "en_cours"
+        finally:
+            session_a.close()
+            session_b.close()
+    finally:
+        engine.dispose()
+
+    with sessionmaker(bind=create_engine(postgres_app_database_url, future=True))() as verify:
+        # One row, not two -- and the `IntegrityError` the second insert used to raise
+        # was never reached, so no 500 and no unusable session.
+        pointers = (
+            verify.query(ProjectRevisionPointer)
+            .filter(ProjectRevisionPointer.project_id == project_id)
+            .all()
+        )
+        assert len(pointers) == 1
+        assert pointers[0].reference_revision_id == revision_id

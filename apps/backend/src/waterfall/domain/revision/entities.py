@@ -243,16 +243,31 @@ class FrozenLine:
     Carries identities (``work_item_id``, ``bearing_work_item_id``) and copied
     labels/amounts only -- never a node id, a facet or a line of another revision
     (INV-23).
+
+    ``nature`` is carried rather than inferred: this one table replaces the two the
+    legacy socle split MO from Achat *by table name*, and reading the split back off
+    ``role_name IS NOT NULL`` would make a document say by accident what it used to
+    say on purpose.
+
+    ``cost_code`` is a copied **string** and not a ``cost_code_id``, exactly like
+    ``accounting_code`` and ``category_code``: the ventilation by code d'imputation
+    a validated devis published since #63 has to stay readable years later, and
+    joining ``wf_project_cost_code`` to get it back would make a frozen document
+    depend on a mutable, renamable, deletable tree -- which is precisely what INV-23
+    and Règle 2 forbid.
     """
 
     revision_id: int
     work_item_id: int
     bearing_work_item_id: int | None
     label: str
+    nature: CostNature
     bearing_task_name: str | None = None
     role_name: str | None = None
     accounting_code: str | None = None
     category_code: str | None = None
+    #: The project cost code's ``code``, copied. See the class docstring.
+    cost_code: str | None = None
     year: int | None = None
     quantity: Decimal = Decimal("1")
     hours: Decimal | None = None
@@ -321,6 +336,10 @@ class Project:
     roles: dict[int, Role] = field(default_factory=dict[int, Role])
     #: Cost category id -> accounting code, only used to copy a label onto a frozen line.
     cost_categories: dict[int, str] = field(default_factory=dict[int, str])
+    #: Project cost code id -> its ``code``, likewise: the only reason the domain
+    #: knows about the imputation tree at all is to copy a label off it at
+    #: validation time, so that a frozen line never has to join it back (INV-23).
+    cost_codes: dict[int, str] = field(default_factory=dict[int, str])
     revisions: dict[int, ProjectRevision] = field(default_factory=dict[int, ProjectRevision])
     reference_revision_id: int | None = None
     next_work_item_id: int = 1

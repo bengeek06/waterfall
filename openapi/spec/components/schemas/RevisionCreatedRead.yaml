@@ -1,0 +1,27 @@
+type: object
+required:
+- revision_id
+- lock_version
+- source_revision_id
+- version_number
+- kind
+properties:
+  revision_id:
+    type: integer
+  lock_version:
+    type: integer
+  source_revision_id:
+    type: integer
+  version_number:
+    type: integer
+  kind:
+    type: string
+    enum:
+    - initial
+    - contract_reference
+    - forecast_remaining
+description: >-
+  Brouillon issu d'une copie. `lock_version` est celui de **la copie** et part de
+  0 : copier lit la source et ecrit une nouvelle revision, la source ressort donc
+  exactement comme elle est entree -- ce qui est precisement ce qui permet de
+  copier une revision validee (INV-03, INV-07).

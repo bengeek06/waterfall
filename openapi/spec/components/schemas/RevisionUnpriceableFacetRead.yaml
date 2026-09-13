@@ -1,0 +1,51 @@
+type: object
+required:
+- node_id
+- work_item_id
+- label
+- hours
+- bearing_node_id
+- bearing_work_item_id
+- bearing_task_name
+- reason
+properties:
+  node_id:
+    type: integer
+  work_item_id:
+    type: integer
+  label:
+    type: string
+  hours:
+    type: string
+    pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+  bearing_node_id:
+    anyOf:
+    - type: integer
+    - type: 'null'
+  bearing_work_item_id:
+    anyOf:
+    - type: integer
+    - type: 'null'
+  bearing_task_name:
+    anyOf:
+    - type: string
+    - type: 'null'
+  reason:
+    type: string
+    enum:
+    - bearing_task_undated
+    - bearing_task_empty_range
+description: >-
+  Un chiffrage que le moteur de calcul n'a pu rattacher a aucune annee, donc
+  valoriser sur aucune ligne. Le pendant de `RevisionMissingRateRead`, et le manque
+  que celui-ci ne pouvait pas signaler : une facette de main-d'oeuvre portee par une
+  tache sans dates n'a aucune annee sur laquelle etaler ses heures, ne produit donc
+  aucune ligne valorisee, et n'apparait dans aucun couple (categorie de cout, annee)
+  -- la matiere meme dont `missing_cost_rates` est faite. L'ecran affichait
+  `total_labor_cost: 0` avec `missing_cost_rates: []` a cote : un zero sans rien pour
+  l'expliquer. `POST .../validate` refuse desormais sur ce manque
+  (`REVISION_UNPRICEABLE_FACET`), et c'est ici que le client lit quoi corriger :
+  `bearing_*` designe la tache a dater, la facette elle-meme etant parfaitement
+  valide. `reason` vaut `bearing_task_undated` (la tache n'a pas de `start_at` et/ou
+  pas de `finish_at`) ou `bearing_task_empty_range` (son `finish_at` precede son
+  `start_at`), les deux remedes n'etant pas les memes.

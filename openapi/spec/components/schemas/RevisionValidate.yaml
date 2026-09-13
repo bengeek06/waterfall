@@ -1,0 +1,14 @@
+type: object
+required:
+- expected_lock_version
+properties:
+  expected_lock_version:
+    type: integer
+    maximum: 2147483647
+    minimum: 0
+description: >-
+  Validation d'un brouillon : le verrou optimiste, et rien d'autre. Tout ce
+  qu'une validation ecrit est derive -- les lignes figees des facettes cout et du
+  referentiel de taux, la mise en `superseded` de la precedente (INV-22) -- donc
+  il n'y a rien a fournir, et tout attribut accepte ici serait un attribut de la
+  revision qui aurait du etre saisi tant qu'elle etait brouillon.

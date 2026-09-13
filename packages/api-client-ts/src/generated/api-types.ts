@@ -483,7 +483,7 @@ export interface paths {
         };
         /**
          * Lire les totaux d'une revision
-         * @description Totaux calcules a partir des facettes cout de la revision, pas de lignes figees : un brouillon a donc un total, ce que le devis historique ne savait pas produire. La tache porteuse de chaque ligne est resolue dans l'arbre (INV-01), jamais lue dans une colonne, et une facette cout placee a la racine -- sans tache porteuse -- compte dans le total comme les autres. Un taux horaire ou un coefficient d'inflation manquant est signale dans le corps de la reponse et jamais leve : ceci est une lecture, et un 500 rendrait illisible un brouillon parfaitement editable.
+         * @description Totaux calcules a partir des facettes cout de la revision, pas de lignes figees : un brouillon a donc un total, ce que le devis historique ne savait pas produire. La tache porteuse de chaque ligne est resolue dans l'arbre (INV-01), jamais lue dans une colonne, et une facette cout placee a la racine -- sans tache porteuse -- compte dans le total comme les autres. Un taux horaire ou un coefficient d'inflation manquant est signale dans le corps de la reponse et jamais leve : ceci est une lecture, et un 500 rendrait illisible un brouillon parfaitement editable. `unpriceable_facets` signale de la meme maniere les chiffrages que le moteur n'a pu rattacher a aucune annee, que `missing_cost_rates` ne peut pas nommer et sur lesquels la validation refuse desormais.
          */
         get: operations["readRevisionAggregates"];
         put?: never;
@@ -629,6 +629,46 @@ export interface paths {
          * @description Edition partielle : libelle, quantite, debours, role, heures, suivi appro, date prevue, code de cout, commentaire. Un champ absent est laisse tel quel ; `null` est une valeur. `nature` n'est pas modifiable : en changer retournerait tout le jeu d'attributs de la ligne, ce qui est une autre ligne. Quel que soit le nombre d'attributs modifies, `lock_version` n'avance que d'un cran. Aucune suppression ici : `POST .../nodes/delete` retire le noeud et ses deux facettes, et nomme le chiffrage emporte.
          */
         patch: operations["updateRevisionCostFacet"];
+        trace?: never;
+    };
+    "/projects/{projectId}/revisions/{revisionId}/copy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Creer un brouillon a partir d'une revision existante
+         * @description Copie l'arbre et les deux facettes de la revision source dans un nouveau brouillon : chaque noeud de la copie designe le **meme** `work_item` que son homologue, aucune identite de noeud n'est partagee, les liens de precedence sont retraduits sur les noeuds de la copie (INV-08) et les lignes figees d'une source validee ne sont pas copiees -- un brouillon n'en porte aucune (INV-24). Quel que soit le statut de la source : copier **est** la seule maniere de modifier une revision validee (INV-03), et c'est aussi la maniere d'ouvrir une seconde variante de chiffrage -- deux variantes sont deux revisions completes, chacune avec son arbre, et editer l'une n'a aucun effet sur l'autre. La ligne projet est verrouillee le temps de la requete, ce qui serialise l'allocation de `version_number` a l'echelle du projet.
+         */
+        post: operations["copyRevision"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{projectId}/revisions/{revisionId}/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Valider une revision et figer son document
+         * @description La revision passe en `validated`, `validated_at` est horodate, les lignes figees sont produites -- une par (chiffrage, annee), portant le taux annuel et le coefficient d'inflation sous lesquels elles ont ete chiffrees -- et la revision precedemment validee **de meme nature** passe en `superseded` (INV-22). A partir de la, toute ecriture sur cette revision est refusee avec le meme code `REVISION_IMMUTABLE`, sur la facette planification comme sur la facette cout, et la seule maniere de modifier quoi que ce soit est `POST .../copy`. Un referentiel de taux incomplet refuse la validation (`REVISION_RATE_COVERAGE_MISSING`), et un chiffrage que le moteur ne peut rattacher a aucune annee -- une facette de main-d'oeuvre portee par une tache sans dates -- la refuse aussi (`REVISION_UNPRICEABLE_FACET`) : les deux figeraient un zero a la place d'un prix. La lecture des totaux, elle, tolere les deux manques et les signale dans son corps de reponse. La revision validee cesse d'etre la revision affichee du projet (`displayed_revision_id` repasse a `null`) : cette colonne designe le brouillon en cours de travail, et il n'y en a plus. Le pointeur de reference, lui, n'est pas touche -- seule l'entree en `en_cours` le fixe.
+         */
+        post: operations["validateRevision"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/projects/{projectId}/revisions/{revisionId}/export.xlsx": {
@@ -2242,6 +2282,18 @@ export interface components {
         ProjectSetupWarningsRead: {
             warnings: components["schemas"]["ProjectSetupWarning"][];
         };
+        /** @description Un chiffrage que le moteur de calcul n'a pu rattacher a aucune annee, donc valoriser sur aucune ligne. Le pendant de `RevisionMissingRateRead`, et le manque que celui-ci ne pouvait pas signaler : une facette de main-d'oeuvre portee par une tache sans dates n'a aucune annee sur laquelle etaler ses heures, ne produit donc aucune ligne valorisee, et n'apparait dans aucun couple (categorie de cout, annee) -- la matiere meme dont `missing_cost_rates` est faite. L'ecran affichait `total_labor_cost: 0` avec `missing_cost_rates: []` a cote : un zero sans rien pour l'expliquer. `POST .../validate` refuse desormais sur ce manque (`REVISION_UNPRICEABLE_FACET`), et c'est ici que le client lit quoi corriger : `bearing_*` designe la tache a dater, la facette elle-meme etant parfaitement valide. `reason` vaut `bearing_task_undated` (la tache n'a pas de `start_at` et/ou pas de `finish_at`) ou `bearing_task_empty_range` (son `finish_at` precede son `start_at`), les deux remedes n'etant pas les memes. */
+        RevisionUnpriceableFacetRead: {
+            node_id: number;
+            work_item_id: number;
+            label: string;
+            hours: string;
+            bearing_node_id: number | null;
+            bearing_work_item_id: number | null;
+            bearing_task_name: string | null;
+            /** @enum {string} */
+            reason: "bearing_task_undated" | "bearing_task_empty_range";
+        };
         /** @description Une combinaison (categorie de cout, annee) que la table des taux ne couvre pas. Memes quatre champs que `MissingRateCoverageEntry`, que le devis historique renvoie dans un `detail` 400 ; ici elle fait partie d'une reponse 200 : lire les totaux d'un brouillon dont le taux 2031 n'a pas encore ete saisi doit repondre, donc la ligne est valorisee a taux nul et le manque est nomme a cote. */
         RevisionMissingRateRead: {
             category_id: number;
@@ -2249,7 +2301,7 @@ export interface components {
             accounting_code: string;
             year: number;
         };
-        /** @description Totaux d'une revision, calcules a partir de ses facettes cout. Remplace `GET .../estimates/{estimateId}/aggregates`, qui ne savait sommer que les lignes figees ecrites par une validation : un devis en cours n'avait aucun total. Ceux-ci sont calcules a la lecture, donc un brouillon en a un, et une facette cout placee a la racine de l'arbre (sans tache porteuse, INV-01) y compte comme les autres. `by_category` est indexe par code comptable, `by_cost_code` par code d'imputation. Tous les montants sont publies au centime : le moteur somme les produits en pleine precision, et l'arrondi a deux decimales -- que portait jusqu'ici la colonne `Numeric(16, 2)` du devis -- est applique a la frontiere de reponse. */
+        /** @description Totaux d'une revision, calcules a partir de ses facettes cout. Remplace `GET .../estimates/{estimateId}/aggregates`, qui ne savait sommer que les lignes figees ecrites par une validation : un devis en cours n'avait aucun total. Ceux-ci sont calcules a la lecture, donc un brouillon en a un, et une facette cout placee a la racine de l'arbre (sans tache porteuse, INV-01) y compte comme les autres. `by_category` est indexe par code comptable, `by_cost_code` par code d'imputation. Tous les montants sont publies au centime : le moteur somme les produits en pleine precision, et l'arrondi a deux decimales -- que portait jusqu'ici la colonne `Numeric(16, 2)` du devis -- est applique a la frontiere de reponse. `unpriceable_facets` signale l'autre manque, aux memes conditions que `missing_cost_rates` : un chiffrage porte par une tache sans dates n'est etale sur aucune annee, donc valorise sur aucune ligne, donc invisible pour `missing_cost_rates`. Les deux refusent une validation et les deux sont nommes ici, parce que c'est sur cet ecran que l'utilisateur les corrige. */
         RevisionAggregatesRead: {
             revision_id: number;
             total_labor_cost: string;
@@ -2261,8 +2313,40 @@ export interface components {
             by_cost_code: {
                 [key: string]: string;
             };
+            unpriceable_facets: components["schemas"]["RevisionUnpriceableFacetRead"][];
             missing_cost_rates: components["schemas"]["RevisionMissingRateRead"][];
             missing_inflation_years: number[];
+        };
+        /** @description Creation d'un brouillon reproduisant une revision existante (INV-07). `kind` absent conserve celle de la source ; le nommer est la maniere de produire les deux documents derives du modele -- un `contract_reference` copie du devis qui a emporte la commande, un `forecast_remaining` copie du budget auquel il sera compare. `expected_lock_version` est celui de la **source** et garde ce qui est copie : une source qui a bouge depuis la lecture produirait la copie d'un arbre que l'appelant n'a jamais vu. */
+        RevisionCopy: {
+            expected_lock_version: number;
+            kind?: ("initial" | "contract_reference" | "forecast_remaining") | null;
+            note?: string | null;
+        };
+        /** @description Brouillon issu d'une copie. `lock_version` est celui de **la copie** et part de 0 : copier lit la source et ecrit une nouvelle revision, la source ressort donc exactement comme elle est entree -- ce qui est precisement ce qui permet de copier une revision validee (INV-03, INV-07). */
+        RevisionCreatedRead: {
+            revision_id: number;
+            lock_version: number;
+            source_revision_id: number;
+            version_number: number;
+            /** @enum {string} */
+            kind: "initial" | "contract_reference" | "forecast_remaining";
+        };
+        /** @description Validation d'un brouillon : le verrou optimiste, et rien d'autre. Tout ce qu'une validation ecrit est derive -- les lignes figees des facettes cout et du referentiel de taux, la mise en `superseded` de la precedente (INV-22) -- donc il n'y a rien a fournir, et tout attribut accepte ici serait un attribut de la revision qui aurait du etre saisi tant qu'elle etait brouillon. */
+        RevisionValidate: {
+            expected_lock_version: number;
+        };
+        /** @description Ce qu'une validation a produit : une revision immuable et son document fige. `frozen_line_count` est la taille de ce document au grain ou il est decoupe -- une ligne par (chiffrage, annee) -- donc une revision portant trois lignes MO a cheval sur plusieurs annees en annonce davantage que trois. `superseded_revision_ids` nomme la revision qui a cesse d'etre la validee de sa nature (INV-22), pour qu'un client tenant une reference perimee l'apprenne ici plutot qu'au prochain 409. */
+        RevisionValidatedRead: {
+            revision_id: number;
+            lock_version: number;
+            version_number: number;
+            /** @enum {string} */
+            status: "draft" | "validated" | "superseded";
+            /** Format: date-time */
+            validated_at: string;
+            frozen_line_count: number;
+            superseded_revision_ids: number[];
         };
         /** @description Un probleme ou une modification ignoree trouve dans un classeur de reconciliation. `sheet`/`row` designent la cellule Excel exacte (`row` est le numero de ligne Excel, ligne d'en-tete comprise) ; les deux valent `null` pour un probleme qu'aucune ligne du fichier ne porte -- une suppression n'a par definition plus de ligne dans le fichier. */
         RevisionReconciliationIssueRead: {
@@ -2474,7 +2558,7 @@ export interface components {
                 "application/json": components["schemas"]["RevisionErrorResponse"];
             };
         };
-        /** @description Ecriture refusee sur l'etat stocke. Deux codes principaux : REVISION_LOCK_CONFLICT quand `expected_lock_version` est perime (le corps porte alors `revision_id`, `expected_lock_version` et `current_lock_version`, et rien n'a ete modifie), et REVISION_IMMUTABLE quand la revision est `validated` ou `superseded` et refuse toute ecriture (INV-03) -- code identique sur la facette planification et sur la facette cout. Egalement PROJECT_READ_ONLY quand le statut du projet est `perdu`, `termine` ou `abandonne` (distinct d'INV-03 : la revision visee peut etre un brouillon parfaitement editable), PROJECT_CALENDAR_MISSING, REVISION_DUPLICATE_WORK_ITEM, REVISION_EXTERNAL_UID_CONFLICT, REVISION_LIFECYCLE_CONFLICT, REVISION_WRITE_REFUSED et REVISION_INTEGRITY_CONFLICT. */
+        /** @description Ecriture refusee sur l'etat stocke. Deux codes principaux : REVISION_LOCK_CONFLICT quand `expected_lock_version` est perime (le corps porte alors `revision_id`, `expected_lock_version` et `current_lock_version`, et rien n'a ete modifie), et REVISION_IMMUTABLE quand la revision est `validated` ou `superseded` et refuse toute ecriture (INV-03) -- code identique sur la facette planification et sur la facette cout. Egalement PROJECT_READ_ONLY quand le statut du projet est `perdu`, `termine` ou `abandonne` (distinct d'INV-03 : la revision visee peut etre un brouillon parfaitement editable), PROJECT_CALENDAR_MISSING, REVISION_DUPLICATE_WORK_ITEM, REVISION_EXTERNAL_UID_CONFLICT, REVISION_LIFECYCLE_CONFLICT, REVISION_WRITE_REFUSED et REVISION_INTEGRITY_CONFLICT. Enfin REVISION_RATE_COVERAGE_MISSING, propre a la validation : le referentiel ne couvre pas tous les couples (categorie de cout, annee) de la revision, et un document fige pour de bon ne doit pas enregistrer un prix de zero a la place d'un taux manquant -- la liste des taux absents se lit sur `GET .../revisions/{revisionId}/aggregates`, qui la renvoie dans un 200. Et son frere REVISION_UNPRICEABLE_FACET, propre a la validation lui aussi : un chiffrage porte par une tache sans dates n'a aucune annee sur laquelle etre valorise, donc aucun referentiel ne peut le couvrir et il echappait au code precedent -- il etait fige a zero sans que rien ne le signale. Les facettes concernees se lisent sur le meme endpoint d'agregats, dans `unpriceable_facets`, et le remede est de dater la tache porteuse. */
         RevisionConflict: {
             headers: {
                 [name: string]: unknown;
@@ -3837,6 +3921,74 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RevisionWriteRead"];
+                };
+            };
+            400: components["responses"]["RevisionBadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["RevisionNotFound"];
+            409: components["responses"]["RevisionConflict"];
+            422: components["responses"]["RevisionUnprocessable"];
+        };
+    };
+    copyRevision: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la revision (arbre + facettes planification et cout) */
+                revisionId: components["parameters"]["RevisionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RevisionCopy"];
+            };
+        };
+        responses: {
+            /** @description Brouillon cree, avec son propre `lock_version` */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionCreatedRead"];
+                };
+            };
+            400: components["responses"]["RevisionBadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["RevisionNotFound"];
+            409: components["responses"]["RevisionConflict"];
+            422: components["responses"]["RevisionUnprocessable"];
+        };
+    };
+    validateRevision: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la revision (arbre + facettes planification et cout) */
+                revisionId: components["parameters"]["RevisionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RevisionValidate"];
+            };
+        };
+        responses: {
+            /** @description Revision validee, avec la taille de son document fige */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionValidatedRead"];
                 };
             };
             400: components["responses"]["RevisionBadRequest"];

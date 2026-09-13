@@ -268,6 +268,10 @@ def test_static_openapi_matches_runtime_operation_ids_and_components() -> None:
         # in place of the frozen `wf_estimate_line` rows the devis aggregate summed.
         "RevisionAggregatesRead",
         "RevisionMissingRateRead",
+        # E14-08 review (H2): the gap `RevisionMissingRateRead` structurally cannot
+        # report -- a chiffrage priced into no year at all -- published beside it on
+        # the same read, and refused by the validation.
+        "RevisionUnpriceableFacetRead",
         # E14-07c (#365): the reconciliation round trip, on the same revision -- the
         # devis-scoped `ReconciliationPlanRead` above stays anchored beside it until
         # E14-12 (#339) removes the routes that still answer it.
@@ -455,7 +459,7 @@ def test_revision_endpoints_document_their_structured_error_responses() -> None:
     static_components = cast(dict[str, Any], static_document["components"])
 
     revision_paths = [path for path in static_paths if "/revisions/" in path]
-    assert len(revision_paths) == 13
+    assert len(revision_paths) == 15
     for path in revision_paths:
         for method, operation in cast(dict[str, Any], static_paths[path]).items():
             if method not in {"get", "post", "put", "patch", "delete"}:

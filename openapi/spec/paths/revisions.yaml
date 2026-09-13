@@ -43,6 +43,9 @@
       compte dans le total comme les autres. Un taux horaire ou un coefficient
       d'inflation manquant est signale dans le corps de la reponse et jamais leve : ceci
       est une lecture, et un 500 rendrait illisible un brouillon parfaitement editable.
+      `unpriceable_facets` signale de la meme maniere les chiffrages que le moteur n'a
+      pu rattacher a aucune annee, que `missing_cost_rates` ne peut pas nommer et sur
+      lesquels la validation refuse desormais.
     operationId: readRevisionAggregates
     security:
     - bearerAuth: []
@@ -528,5 +531,103 @@
         $ref: ../components/responses/RevisionReconciliationConfirmConflict.yaml
       '413':
         $ref: ../components/responses/RevisionPayloadTooLarge.yaml
+      '422':
+        $ref: ../components/responses/RevisionUnprocessable.yaml
+/projects/{projectId}/revisions/{revisionId}/copy:
+  post:
+    tags:
+    - projects
+    summary: Creer un brouillon a partir d'une revision existante
+    description: >-
+      Copie l'arbre et les deux facettes de la revision source dans un nouveau
+      brouillon : chaque noeud de la copie designe le **meme** `work_item` que son
+      homologue, aucune identite de noeud n'est partagee, les liens de precedence
+      sont retraduits sur les noeuds de la copie (INV-08) et les lignes figees
+      d'une source validee ne sont pas copiees -- un brouillon n'en porte aucune
+      (INV-24). Quel que soit le statut de la source : copier **est** la seule
+      maniere de modifier une revision validee (INV-03), et c'est aussi la maniere
+      d'ouvrir une seconde variante de chiffrage -- deux variantes sont deux
+      revisions completes, chacune avec son arbre, et editer l'une n'a aucun effet
+      sur l'autre. La ligne projet est verrouillee le temps de la requete, ce qui
+      serialise l'allocation de `version_number` a l'echelle du projet.
+    operationId: copyRevision
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/RevisionId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/RevisionCopy.yaml
+    responses:
+      '201':
+        description: Brouillon cree, avec son propre `lock_version`
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/RevisionCreatedRead.yaml
+      '400':
+        $ref: ../components/responses/RevisionBadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/RevisionNotFound.yaml
+      '409':
+        $ref: ../components/responses/RevisionConflict.yaml
+      '422':
+        $ref: ../components/responses/RevisionUnprocessable.yaml
+/projects/{projectId}/revisions/{revisionId}/validate:
+  post:
+    tags:
+    - projects
+    summary: Valider une revision et figer son document
+    description: >-
+      La revision passe en `validated`, `validated_at` est horodate, les lignes
+      figees sont produites -- une par (chiffrage, annee), portant le taux annuel
+      et le coefficient d'inflation sous lesquels elles ont ete chiffrees -- et la
+      revision precedemment validee **de meme nature** passe en `superseded`
+      (INV-22). A partir de la, toute ecriture sur cette revision est refusee avec
+      le meme code `REVISION_IMMUTABLE`, sur la facette planification comme sur la
+      facette cout, et la seule maniere de modifier quoi que ce soit est
+      `POST .../copy`. Un referentiel de taux incomplet refuse la validation
+      (`REVISION_RATE_COVERAGE_MISSING`), et un chiffrage que le moteur ne peut
+      rattacher a aucune annee -- une facette de main-d'oeuvre portee par une tache
+      sans dates -- la refuse aussi (`REVISION_UNPRICEABLE_FACET`) : les deux
+      figeraient un zero a la place d'un prix. La lecture des totaux, elle, tolere
+      les deux manques et les signale dans son corps de reponse. La revision validee
+      cesse d'etre la revision affichee du projet (`displayed_revision_id` repasse a
+      `null`) : cette colonne designe le brouillon en cours de travail, et il n'y en
+      a plus. Le pointeur de reference, lui, n'est pas touche -- seule l'entree en
+      `en_cours` le fixe.
+    operationId: validateRevision
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/RevisionId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/RevisionValidate.yaml
+    responses:
+      '200':
+        description: Revision validee, avec la taille de son document fige
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/RevisionValidatedRead.yaml
+      '400':
+        $ref: ../components/responses/RevisionBadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/RevisionNotFound.yaml
+      '409':
+        $ref: ../components/responses/RevisionConflict.yaml
       '422':
         $ref: ../components/responses/RevisionUnprocessable.yaml

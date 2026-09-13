@@ -29,10 +29,13 @@ and *both* its facets (INV-02), and names the chiffrage it took away. A
 ``DELETE .../cost-lines/{id}`` would have been that same operation under a second
 name.
 
-What is **not** here: the lifecycle of a revision -- creating one, validating it,
-pointing the project's reference at it. That is E14-08 (#334), which owns the
-``wf_revision`` row itself; this module only ever reads its status and its
-``lock_version``.
+The lifecycle of a revision is here too since E14-08 (#334): copying one into a new
+draft and validating it are the two endpoints that own the ``wf_revision`` row
+itself, where every other endpoint of this module only reads its status and its
+``lock_version``. Pointing the project's *reference* at a revision is deliberately
+not one of them -- it happens when the project enters ``en_cours``, on the project
+routes, so that a reference cannot be set on a project that is not running
+(``services.project_lifecycle.enter_status``).
 
 Every write takes ``expected_lock_version`` and answers with the new one. Every
 refusal goes through :mod:`waterfall.api.revision_errors` -- one table for both
@@ -68,10 +71,12 @@ from waterfall.models.revision import ProjectRevision
 from waterfall.models.user import User
 from waterfall.schemas.revisions import (
     RevisionAggregatesRead,
+    RevisionCopy,
     RevisionCostFacetRead,
     RevisionCostFacetUpdate,
     RevisionCostLineCreate,
     RevisionCostLossRead,
+    RevisionCreatedRead,
     RevisionMissingRateRead,
     RevisionNodeDelete,
     RevisionNodeDeleteRead,
@@ -86,6 +91,9 @@ from waterfall.schemas.revisions import (
     RevisionReconciliationPlanRead,
     RevisionTaskCreate,
     RevisionTreeRead,
+    RevisionUnpriceableFacetRead,
+    RevisionValidate,
+    RevisionValidatedRead,
     RevisionWriteRead,
 )
 from waterfall.services import revision_tree
@@ -101,7 +109,11 @@ from waterfall.services.estimate_reconciliation_import import (
     parse_revision_reconciliation_workbook,
     reconcile_revision,
 )
-from waterfall.services.project_lifecycle import READ_ONLY_PROJECT_STATUSES
+from waterfall.services.project_lifecycle import (
+    READ_ONLY_PROJECT_STATUSES,
+    clear_displayed_revision,
+    set_displayed_revision,
+)
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -304,6 +316,14 @@ def read_revision_aggregates(
     raised: this is a read, and a 500 would make an editable draft unreadable. See
     :class:`~waterfall.schemas.revisions.RevisionMissingRateRead`.
 
+    ``unpriceable_facets`` reports the other gap, on the same terms: a chiffrage
+    borne by a task with no dates is spread over no year, priced into no line, and
+    therefore invisible to ``missing_cost_rates`` -- which is built from the
+    ``(cost category, year)`` pairs those lines produce. Both refuse a validation
+    and both are named here, because the screen a user corrects them on is this one
+    (E14-08 review, H2). See
+    :class:`~waterfall.schemas.revisions.RevisionUnpriceableFacetRead`.
+
     Every amount is already in euros at the cent when it gets here: the rounding is
     :func:`~waterfall.services.estimate_calculation.calculate_revision_aggregates`'s,
     applied per priced line before anything is summed, because that -- and not a
@@ -323,6 +343,19 @@ def read_revision_aggregates(
         total_unburdened_cost=aggregates["total_unburdened_cost"],
         by_category=dict(aggregates["by_category"]),
         by_cost_code=dict(aggregates["by_cost_code"]),
+        unpriceable_facets=[
+            RevisionUnpriceableFacetRead(
+                node_id=facet.node_id,
+                work_item_id=facet.work_item_id,
+                label=facet.label,
+                hours=facet.hours,
+                bearing_node_id=facet.bearing_node_id,
+                bearing_work_item_id=facet.bearing_work_item_id,
+                bearing_task_name=facet.bearing_task_name,
+                reason=facet.reason.value,
+            )
+            for facet in aggregates["unpriceable_facets"]
+        ],
         missing_cost_rates=[
             RevisionMissingRateRead(
                 category_id=category.id,
@@ -711,6 +744,141 @@ def update_revision_cost_facet(
 
 
 # --------------------------------------------------------------------------------------
+# The lifecycle of a revision (E14-08, #334)
+# --------------------------------------------------------------------------------------
+
+
+@router.post(
+    "/{project_id}/revisions/{revision_id}/copy",
+    response_model=RevisionCreatedRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def copy_revision(
+    project_id: int,
+    revision_id: int,
+    payload: RevisionCopy,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> RevisionCreatedRead:
+    """Create a draft reproducing an existing revision, whatever its status (INV-07).
+
+    The only way to edit a validated revision, and the only way to open a second
+    variant of a chiffrage: two variants are two complete revisions, each with its
+    own tree, and editing one cannot touch the other because they share no node --
+    only ``work_item`` identities, which is what keeps them comparable.
+
+    Why the **project** row is locked and not just the source revision (#352)
+    ------------------------------------------------------------------------
+
+    ``create_revision_from`` allocates a ``version_number`` from the revisions it can
+    see, and locking the *source* row does not serialise that: two copies made from
+    two different sources of the same project lock two different rows, never wait for
+    each other, and both allocate the same number -- colliding on
+    ``uq_wf_revision_project_version`` as a raw ``IntegrityError``. ``_writable_project``
+    takes a ``SELECT ... FOR UPDATE`` on `ms_project` and holds it until this request
+    commits, which serialises every creation of the project behind one row. The
+    contention is on the project, so the lock is on the project.
+
+    That closes the collision. It does **not** make a double-clicked button
+    idempotent: copying leaves the source's ``lock_version`` alone -- INV-03 forbids
+    writing a validated revision -- so a replayed request carries a value that is
+    still current and passes. Refusing the second one is not open either: two drafts
+    copied from the same source is exactly what a second variant of a chiffrage *is*
+    (the acceptance criterion this issue takes over from E12/#272). An idempotency
+    token supplied by the client is the remedy, and it is #371's, not this route's.
+    """
+    _writable_project(db, project_id, current_user.id)
+    source = _get_revision_or_404(db, project_id, revision_id)
+    # `domain.RevisionKind(...)` and not `cast(...)`: `ProjectRevision.kind` is a
+    # `str` column whose values only a `CheckConstraint` guarantees, and a `cast`
+    # would silence the type checker on exactly the string it cannot check. The
+    # constructor checks it, and a row the constraint somehow let through raises
+    # here instead of travelling on as a `RevisionKind` that is not one.
+    kind = (
+        domain.RevisionKind(source.kind)
+        if payload.kind is None
+        else domain.RevisionKind(payload.kind)
+    )
+    with revision_operation(db):
+        created = revision_tree.create_revision_from(
+            db,
+            revision_id,
+            expected_lock_version=payload.expected_lock_version,
+            kind=kind,
+            note=payload.note,
+        )
+        # The draft just created is what the user is now working on. The reference
+        # pointer is untouched: a draft is never a reference (INV-24 aside, it has
+        # frozen nothing), and only entering `en_cours` moves that one.
+        set_displayed_revision(db, project_id, created.revision_id)
+        db.commit()
+    return RevisionCreatedRead(
+        revision_id=created.revision_id,
+        lock_version=created.lock_version,
+        source_revision_id=created.source_revision_id,
+        version_number=created.version_number,
+        # The kind the *copy carries*, read off the revision the service persisted
+        # and not off this route's own input: a response that restates the request
+        # cannot report a value the service chose.
+        kind=created.kind.value,
+    )
+
+
+@router.post(
+    "/{project_id}/revisions/{revision_id}/validate",
+    response_model=RevisionValidatedRead,
+    status_code=status.HTTP_200_OK,
+)
+def validate_revision(
+    project_id: int,
+    revision_id: int,
+    payload: RevisionValidate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> RevisionValidatedRead:
+    """Freeze a draft into an immutable document and supersede the previous one.
+
+    After this call every write endpoint of **both** facets answers 409
+    ``REVISION_IMMUTABLE`` on this revision -- the planning ones and the cost ones
+    alike, from the single guard they all go through -- and the only way to change
+    anything is ``POST .../copy``.
+
+    Three refusals are specific to this endpoint. A revision that is not a draft is
+    already ``REVISION_IMMUTABLE``: validating a validated revision is a write like
+    any other. A rate table that cannot price the revision is
+    ``REVISION_RATE_COVERAGE_MISSING``, and a chiffrage the engine can put in **no
+    year at all** -- a labour facet borne by a task with no dates -- is
+    ``REVISION_UNPRICEABLE_FACET``. The two are the same decision twice: the *read*
+    endpoints (``GET .../aggregates``) report both gaps in a 200 body, because a
+    draft whose 2031 rate is not entered and whose tasks are not scheduled yet must
+    stay readable, and a document frozen for good must record neither zero as a
+    price. That body is also where a client reads which rates and which facets to
+    fix.
+
+    On success the project stops *displaying* this revision: ``displayed_revision_id``
+    names the draft being worked on, and there is no draft here any more. The
+    reference pointer is untouched -- only entering ``en_cours`` fixes that one.
+    """
+    _writable_project(db, project_id, current_user.id)
+    _get_revision_or_404(db, project_id, revision_id)
+    with revision_operation(db):
+        validated = revision_tree.validate_revision(
+            db, revision_id, expected_lock_version=payload.expected_lock_version
+        )
+        clear_displayed_revision(db, project_id, revision_id)
+        db.commit()
+    return RevisionValidatedRead(
+        revision_id=validated.revision_id,
+        lock_version=validated.lock_version,
+        version_number=validated.version_number,
+        status="validated",
+        validated_at=validated.validated_at,
+        frozen_line_count=validated.frozen_line_count,
+        superseded_revision_ids=list(validated.superseded_revision_ids),
+    )
+
+
+# --------------------------------------------------------------------------------------
 # The devis exports and the reconciliation round trip (E14-07c, #365)
 # --------------------------------------------------------------------------------------
 
@@ -981,8 +1149,9 @@ async def confirm_revision_reconciliation_import(
 
     The much wider **preview to confirm** window -- minutes, while the user edits the
     spreadsheet -- is not closed by either, and cannot be from here: the file carries
-    no version, so the client would have to send one. That is #334's, with the rest
-    of the revision lifecycle.
+    no version, so the client would have to send one. That is #371's, a confirmation
+    token of its own; the revision lifecycle E14-08 (#334) shipped is what it will
+    hang off, not what closes it.
 
     INV-03 is refused by the *second* pass and by it alone, which is why the
     precheck is allowed to run on a validated revision: it writes nothing, and

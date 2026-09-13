@@ -18,7 +18,9 @@ from waterfall.models.resources import (
 )
 from waterfall.models.revision import (
     ProjectRevision,
+    ProjectRevisionPointer,
     RevisionCostFacet,
+    RevisionFrozenLine,
     RevisionNode,
     RevisionNodeLink,
     RevisionPlanFacet,
@@ -59,6 +61,8 @@ __all__ = [
     "RevisionPlanFacet",
     "RevisionCostFacet",
     "RevisionNodeLink",
+    "RevisionFrozenLine",
+    "ProjectRevisionPointer",
     "User",
     "WfChargeLine",
     "WfExcelImport",

@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from waterfall.api.dependencies import get_current_active_user
 from waterfall.api.pagination import ListParams, list_params
 from waterfall.api.routes.project_access import (
+    get_mutable_project_lock,
     get_project_or_404,
 )
 from waterfall.db.session import get_db
@@ -54,7 +55,7 @@ from waterfall.services import (
 )
 from waterfall.services.project_lifecycle import (
     ensure_project_mutable,
-    validate_project_status_transition,
+    enter_status,
 )
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -449,8 +450,28 @@ def update_project(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> ProjectRead:
-    project = get_project_or_404(db, project_id, current_user.id)
-    ensure_project_mutable(project)
+    """Update a project, and fix its reference revision when the status moves.
+
+    The project row is taken ``FOR UPDATE`` and not merely read: since E14-08 (#334)
+    this route *writes* `wf_project_revision_pointer` through
+    :func:`~waterfall.services.project_lifecycle.enter_status`, and it reads
+    `wf_revision` to decide what to write there. Both need the serialisation the
+    revision routes already take (``revisions._writable_project``), for two reasons
+    that the one lock closes together:
+
+    * the pointer's primary key is ``project_id``, so a double-clicked "passer en
+      cours" had both requests read ``en_reponse_appel_offre``, both pass the
+      transition and both ``INSERT`` -- an ``IntegrityError`` this route has no
+      ``_commit`` helper to translate, and therefore a 500. Under the lock the second
+      request reads the status the first one committed, finds the transition it asked
+      for already done, and returns it;
+    * ``reference_revision_candidate`` selects a ``validated`` revision. A concurrent
+      ``POST .../revisions/{id}/validate`` -- which holds this very row -- supersedes
+      that revision, and the composite foreign keys of the pointer table guarantee
+      the revision belongs to the project, **not** that it is still validated. The
+      reference would be fixed on a ``superseded`` revision.
+    """
+    project = get_mutable_project_lock(db, project_id, current_user.id)
 
     values = payload.model_dump(exclude_unset=True)
     if "name" in values:
@@ -468,9 +489,9 @@ def update_project(
             values["short_description"].strip() if values["short_description"] else None
         )
     if "status" in values and values["status"] is not None:
-        new_status = values["status"]
-        validate_project_status_transition(db, project, new_status)
-        project.status = new_status
+        # Status and reference revision in one place, for both routes: see
+        # `project_lifecycle.enter_status`.
+        enter_status(db, project, values["status"])
 
     db.add(project)
     db.commit()
@@ -486,10 +507,14 @@ def update_project_status(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> ProjectRead:
-    project = get_project_or_404(db, project_id, current_user.id)
-    ensure_project_mutable(project)
-    validate_project_status_transition(db, project, payload.status)
-    project.status = payload.status
+    """Move a project to a status -- the same write as ``PATCH /projects/{id}``.
+
+    Locked for the same two reasons, and through the same helper: see
+    :func:`update_project`. Two routes reaching one write take one lock, or the
+    protocol holds on whichever of them the reviewer happened to read.
+    """
+    project = get_mutable_project_lock(db, project_id, current_user.id)
+    enter_status(db, project, payload.status)
     db.commit()
     db.refresh(project)
     return to_project_read(project)

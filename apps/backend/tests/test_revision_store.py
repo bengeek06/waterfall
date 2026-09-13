@@ -908,8 +908,15 @@ def test_a_position_to_be_written_inside_the_parking_band_is_refused() -> None:
             save_revision(session, loaded)
 
 
-def test_a_revision_carrying_frozen_lines_is_refused() -> None:
-    """`wf_revision_frozen_line` belongs to the validation of a revision, E14-08."""
+def test_the_frozen_document_of_a_validated_revision_is_written_and_read_back() -> None:
+    """E14-08 (#334): the refusal this test used to assert is now a write.
+
+    `wf_revision_frozen_line` did not exist when #329 shipped -- its shape could
+    only be judged once the calculation engine existed -- so the adapter turned
+    every frozen line away by name. It writes them now, once, and reads them back,
+    which is what keeps ``check_invariants`` able to see INV-24 on a reloaded
+    revision instead of reporting a document that was silently dropped.
+    """
     with get_session_factory()() as session:
         _, revision_id = _seed_small_tree(session)
         loaded = load_revision(session, revision_id)
@@ -918,11 +925,39 @@ def test_a_revision_carrying_frozen_lines_is_refused() -> None:
         )
         assert loaded.revision.frozen_lines
 
-        with pytest.raises(RevisionStoreError, match="#334"):
-            save_revision(session, loaded)
+        save_revision(session, loaded)
         session.commit()
 
-        assert load_revision(session, revision_id).revision.status is domain.RevisionStatus.DRAFT
+        reloaded = load_revision(session, revision_id)
+        assert reloaded.revision.status is domain.RevisionStatus.VALIDATED
+        assert [line.label for line in reloaded.revision.frozen_lines] == ["Study"]
+        # Every identity on the line is a work item of the project, and none of them
+        # is a node id (INV-23, Règle 2).
+        line = reloaded.revision.frozen_lines[0]
+        assert line.work_item_id in reloaded.project.work_items
+        assert domain.check_invariants(reloaded.project, reloaded.revision) == []
+
+
+def test_a_draft_carrying_frozen_lines_is_refused() -> None:
+    """INV-24: a document belongs to the validation that produced it, never to a draft."""
+    with get_session_factory()() as session:
+        _, revision_id = _seed_small_tree(session)
+        loaded = load_revision(session, revision_id)
+        loaded.revision.frozen_lines = [
+            domain.FrozenLine(
+                revision_id=loaded.revision.id,
+                work_item_id=next(iter(loaded.project.work_items)),
+                bearing_work_item_id=None,
+                label="Smuggled",
+                nature=domain.CostNature.LABOR,
+            )
+        ]
+
+        with pytest.raises(RevisionStoreError, match="INV-24"):
+            save_revision(session, loaded)
+        session.rollback()
+
+        assert load_revision(session, revision_id).revision.frozen_lines == []
 
 
 def test_a_revision_the_database_holds_as_validated_is_never_overwritten() -> None:

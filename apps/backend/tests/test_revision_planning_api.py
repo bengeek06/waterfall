@@ -1695,7 +1695,7 @@ def test_every_revision_operation_documents_the_422_it_can_answer() -> None:
     paths = cast(dict[str, Any], document["paths"])
 
     revision_paths = [path for path in paths if "/revisions/" in path]
-    assert len(revision_paths) == 13
+    assert len(revision_paths) == 15
     for path in revision_paths:
         for method, operation in cast(dict[str, Any], paths[path]).items():
             if method not in {"get", "post", "put", "patch", "delete"}:

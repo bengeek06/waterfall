@@ -45,6 +45,12 @@ WorkItemKind = Literal["task", "cost"]
 CalendarSource = Literal["project", "role", "manual"]
 CostNature = Literal["labor", "non_labor"]
 SupplyStatus = Literal["planned", "ordered", "received", "cancelled"]
+#: Why the calculation engine could put a chiffrage in no year at all. Restated as a
+#: ``Literal`` like every enumeration of this module rather than imported from
+#: ``services.estimate_calculation.UnpriceableReason``: a request/response model
+#: publishes the *contract*, and pinning the two strings here is what makes renaming
+#: the service-side enum a visible break instead of a silent one.
+UnpriceableReason = Literal["bearing_task_undated", "bearing_task_empty_range"]
 
 #: MSPDI link types, as `wf_revision_node_link.link_type` constrains them.
 LinkType = Annotated[int, Field(ge=0, le=3)]
@@ -245,6 +251,36 @@ class RevisionWriteRead(BaseModel):
     lock_version: int
 
 
+class RevisionCreatedRead(RevisionWriteRead):
+    """The draft revision a copy produced (E14-08, #334).
+
+    ``lock_version`` is the **copy's** counter and starts at 0: copying reads the
+    source and writes a new revision, so the source comes out exactly as it went in
+    -- which is what lets a validated revision be copied at all (INV-03, INV-07).
+    """
+
+    source_revision_id: int
+    version_number: int
+    kind: RevisionKind
+
+
+class RevisionValidatedRead(RevisionWriteRead):
+    """What a validation produced: an immutable revision and its frozen document.
+
+    ``frozen_line_count`` is the size of that document, at the grain it is cut at --
+    one line per (chiffrage, year), so a revision with three multi-year MO lines
+    answers more than three. ``superseded_revision_ids`` names the revision that
+    stopped being the validated one of its kind (INV-22), so that a client holding a
+    stale reference learns it here rather than on its next 409.
+    """
+
+    version_number: int
+    status: RevisionStatus
+    validated_at: datetime
+    frozen_line_count: int
+    superseded_revision_ids: list[int]
+
+
 class RevisionNodeWriteRead(RevisionWriteRead):
     """A node that was just created, by the ids the database allocated."""
 
@@ -293,14 +329,47 @@ class RevisionMissingRateRead(BaseModel):
     legacy devis returns inside a 400 ``detail``. Here it is part of a **200**:
     reading the totals of a draft whose 2031 rate has not been entered yet has to
     answer, so the line is priced at a zero rate and the gap is named beside it.
-    Refusing a *validation* on the same gap stays the right answer, and stays
-    E14-08's (#334).
+    Refusing a *validation* on the same gap is the right answer and is what
+    ``POST .../validate`` does since E14-08 (#334), with the code
+    ``REVISION_RATE_COVERAGE_MISSING``: this body is where a client reads *which*
+    rates it has to complete.
     """
 
     category_id: int
     category_name: str
     accounting_code: str
     year: int
+
+
+class RevisionUnpriceableFacetRead(BaseModel):
+    """One chiffrage the engine could put in **no year at all** (E14-08 review, H2).
+
+    The gap beside :class:`RevisionMissingRateRead`, and the one it could never
+    report: a labour facet borne by a task with no dates has no year to spread its
+    hours over, so it produces no priced line, so it lands in none of the
+    ``(cost category, year)`` pairs ``missing_cost_rates`` is built from. The screen
+    showed ``total_labor_cost: 0`` with ``missing_cost_rates: []`` beside it -- a
+    zero with nothing to explain it -- and ``POST .../validate`` froze that zero.
+
+    Published here for the same reason the missing rates are: a validation now
+    refuses on this (``REVISION_UNPRICEABLE_FACET``), and a user who discovers the
+    refusal at validation time without knowing what to correct has been told the
+    wrong half of it. ``bearing_*`` names the task to date, which is where the fix
+    is: the facet itself carries its role and its hours and is perfectly valid.
+
+    ``reason`` is ``bearing_task_undated`` (the task has no ``start_at`` and/or no
+    ``finish_at``) or ``bearing_task_empty_range`` (its ``finish_at`` precedes its
+    ``start_at``), the two remedies being different.
+    """
+
+    node_id: int
+    work_item_id: int
+    label: str
+    hours: Decimal
+    bearing_node_id: int | None
+    bearing_work_item_id: int | None
+    bearing_task_name: str | None
+    reason: UnpriceableReason
 
 
 class RevisionAggregatesRead(BaseModel):
@@ -335,6 +404,7 @@ class RevisionAggregatesRead(BaseModel):
     total_unburdened_cost: Decimal
     by_category: dict[str, Decimal]
     by_cost_code: dict[str, Decimal]
+    unpriceable_facets: list[RevisionUnpriceableFacetRead]
     missing_cost_rates: list[RevisionMissingRateRead]
     missing_inflation_years: list[int]
 
@@ -400,6 +470,38 @@ class RevisionWrite(BaseModel):
     """Base of every write payload: the optimistic lock, and nothing else."""
 
     expected_lock_version: int = Field(ge=0, le=_MAX_INT32)
+
+
+class RevisionCopy(RevisionWrite):
+    """Create a draft revision reproducing an existing one (INV-07).
+
+    ``kind`` absent keeps the source's own: a plain "work on a new version of this".
+    Naming one is how the two derived documents of the model are made -- a
+    ``contract_reference`` copied from the estimate that won the order, a
+    ``forecast_remaining`` copied from the budget it will be compared against -- and
+    it is the only attribute of the copy a caller gets to choose, everything else
+    being reproduced from the source.
+
+    ``expected_lock_version`` is the **source's**, and guards *what is copied*: a
+    source that moved on since the caller read it would produce a copy of a tree the
+    caller never saw.
+    """
+
+    kind: RevisionKind | None = None
+    note: str | None = Field(default=None, max_length=10000)
+
+    _normalize_note = field_validator("note")(_optional_text)
+
+
+class RevisionValidate(RevisionWrite):
+    """Validate a draft: freeze its document and make it immutable.
+
+    Carries the optimistic lock and nothing else. Everything a validation writes is
+    derived -- the frozen lines from the cost facets and the rate table, the
+    supersession from INV-22 -- so there is nothing for a caller to supply, and any
+    attribute accepted here would be an attribute of the revision that should have
+    been set while it was still a draft.
+    """
 
 
 class RevisionTaskCreate(RevisionWrite):

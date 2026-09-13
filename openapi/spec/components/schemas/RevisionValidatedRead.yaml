@@ -1,0 +1,39 @@
+type: object
+required:
+- revision_id
+- lock_version
+- version_number
+- status
+- validated_at
+- frozen_line_count
+- superseded_revision_ids
+properties:
+  revision_id:
+    type: integer
+  lock_version:
+    type: integer
+  version_number:
+    type: integer
+  status:
+    type: string
+    enum:
+    - draft
+    - validated
+    - superseded
+  validated_at:
+    type: string
+    format: date-time
+  frozen_line_count:
+    type: integer
+  superseded_revision_ids:
+    items:
+      type: integer
+    type: array
+description: >-
+  Ce qu'une validation a produit : une revision immuable et son document fige.
+  `frozen_line_count` est la taille de ce document au grain ou il est decoupe --
+  une ligne par (chiffrage, annee) -- donc une revision portant trois lignes MO a
+  cheval sur plusieurs annees en annonce davantage que trois.
+  `superseded_revision_ids` nomme la revision qui a cesse d'etre la validee de sa
+  nature (INV-22), pour qu'un client tenant une reference perimee l'apprenne ici
+  plutot qu'au prochain 409.
