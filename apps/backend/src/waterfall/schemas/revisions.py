@@ -93,6 +93,19 @@ _MAX_INT32 = 2_147_483_647
 _MIN_LAG = _MIN_INT32
 _MAX_LAG = _MAX_INT32
 
+#: The two ``Numeric`` precisions of `wf_revision_cost_facet`, named once so the
+#: cost payloads below cannot drift from the columns they land in:
+#: ``quantity``/``hours`` are ``Numeric(14, 2)``, ``unit_cost`` ``Numeric(16, 2)``.
+#: Both are spelled as ``max_digits``/``decimal_places`` rather than as a numeric
+#: range, because that is exactly what PostgreSQL refuses on: a value with more
+#: than ``max_digits - decimal_places`` integer digits raises ``DataError`` on
+#: flush, which is *not* an ``IntegrityError`` -- the 500-without-a-code the module
+#: docstring above describes. SQLite stores the same value happily, so no test on
+#: the default backend can catch it and the bound is the only guard.
+_COST_AMOUNT_DIGITS = 14
+_COST_UNIT_COST_DIGITS = 16
+_COST_DECIMAL_PLACES = 2
+
 #: Upper bound of a predecessor list. Cycle detection walks the candidate link set
 #: once per supplied link, so an unbounded list is quadratic in the size of the
 #: request body; a task with a thousand predecessors is already beyond anything a
@@ -147,8 +160,19 @@ class RevisionCostFacetRead(BaseModel):
 
     Exposed by the tree read so that a client sees *one* tree rather than two
     filtered views of it -- moving a cost line is a move of the same tree, which is
-    the whole point of the model. Its **edition** is E14-07's (#333), which owns
-    every write on this facet.
+    the whole point of the model.
+
+    ``bearing_task_node_id``/``bearing_task_name`` are the task this line hangs
+    under (INV-01), **resolved on read and stored in no column** -- the same
+    treatment as ``row_number``, and for the same reason: it is a consequence of
+    where the node sits, so moving the node (or moving the task above it) changes
+    it with nothing to update. Both are ``null`` on a line placed at the root,
+    which is a project-wide global cost and explicitly allowed.
+
+    Unbounded on purpose, like every read model of this module: the values come out
+    of the database, where the bound was enforced on the way in, and a constrained
+    ``response_model`` would turn a stored value into a ``ResponseValidationError``
+    -- a 500 on a ``GET``, making the row unreadable rather than unwritable.
     """
 
     model_config = ConfigDict(from_attributes=True)
@@ -165,6 +189,8 @@ class RevisionCostFacetRead(BaseModel):
     planned_date: date | None
     cost_code_id: int | None
     comment: str | None
+    bearing_task_node_id: int | None
+    bearing_task_name: str | None
 
 
 class RevisionNodeRead(BaseModel):
@@ -277,6 +303,119 @@ class RevisionTaskCreate(RevisionWrite):
 
     _normalize_name = field_validator("name")(_required_text)
     _normalize_description = field_validator("description")(_optional_text)
+
+
+class RevisionCostLineCreate(RevisionWrite):
+    """Create a cost node -- a new ``work_item`` of kind ``cost`` and its cost facet.
+
+    The cost-side twin of :class:`RevisionTaskCreate`, on the *same* tree: ``parent_id``
+    absent means "at the root", and a line at the root is a project-wide cost with no
+    bearing task at all, which INV-01 explicitly allows. ``position`` absent means
+    "last child of the parent".
+
+    Which attributes a line carries is decided by its ``nature`` -- a labour line has a
+    role and hours, a non-labour one a cost type, a category and a débours (INV-19,
+    INV-20) -- and that rule is deliberately **not** restated here as a
+    ``model_validator``. It is the domain's
+    (:func:`~waterfall.domain.revision.invariants.check_cost_facet_shape`), it is
+    enforced by the table's own check constraint, and a third formulation on the wire
+    is exactly the duplication EPIC #326 exists to remove. A malformed shape therefore
+    comes back as a 400 carrying ``REVISION_FACET_CONTRACT``, not as a 422.
+
+    What *is* decided here is the numeric bounds, for the reason the module docstring
+    gives: they are properties of the ``Numeric`` columns, and nothing below this layer
+    would turn an over-wide value into anything but a 500.
+    """
+
+    nature: CostNature
+    label: str = Field(min_length=1, max_length=512)
+    parent_id: int | None = Field(default=None, gt=0, le=_MAX_INT32)
+    position: int | None = Field(default=None, ge=1, le=_MAX_INT32)
+    quantity: Decimal = Field(
+        default=Decimal("1"),
+        gt=0,
+        max_digits=_COST_AMOUNT_DIGITS,
+        decimal_places=_COST_DECIMAL_PLACES,
+    )
+    role_id: int | None = Field(default=None, gt=0, le=_MAX_INT32)
+    hours: Decimal | None = Field(
+        default=None, ge=0, max_digits=_COST_AMOUNT_DIGITS, decimal_places=_COST_DECIMAL_PLACES
+    )
+    cost_type_id: int | None = Field(default=None, gt=0, le=_MAX_INT32)
+    cost_category_id: int | None = Field(default=None, gt=0, le=_MAX_INT32)
+    unit_cost: Decimal | None = Field(
+        default=None, ge=0, max_digits=_COST_UNIT_COST_DIGITS, decimal_places=_COST_DECIMAL_PLACES
+    )
+    supply_status: SupplyStatus | None = None
+    planned_date: date | None = None
+    cost_code_id: int | None = Field(default=None, gt=0, le=_MAX_INT32)
+    comment: str | None = Field(default=None, max_length=10000)
+    description: str | None = Field(default=None, max_length=10000)
+
+    _normalize_label = field_validator("label")(_required_text)
+    _normalize_comment = field_validator("comment")(_optional_text)
+    _normalize_description = field_validator("description")(_optional_text)
+
+
+class RevisionCostFacetUpdate(RevisionWrite):
+    """Partial edit of a node's cost facet: label, quantité, débours, rôle, heures.
+
+    Partial in exactly the sense :class:`RevisionPlanFacetUpdate` is: an absent field
+    is left alone and ``null`` is a *value* (clear the planned date, drop the cost
+    code, erase the comment), read through ``model_fields_set`` and never through "is
+    not None".
+
+    ``nature`` is absent, and that is the one deliberate asymmetry with the creation
+    payload. Flipping it would swap the entire attribute set of the line in a single
+    request -- role and hours out, cost type, category and débours in -- so what a
+    client wants there is a *different* line, and deleting this one and creating
+    another says so without inventing a half-state the check constraint would refuse
+    anyway.
+
+    ``label`` and ``quantity`` refuse an explicit ``null`` for the same reason the four
+    planning fields do: their columns are ``NOT NULL`` and they have no cleared state,
+    so accepting ``null`` and doing nothing would answer 200, advance ``lock_version``
+    and change nothing -- the one response a client cannot tell from success.
+    """
+
+    #: Fields whose declared ``| None`` means "may be omitted", never "may be nulled".
+    NON_NULLABLE_FIELDS: ClassVar[tuple[str, ...]] = ("label", "quantity")
+
+    label: str | None = Field(default=None, min_length=1, max_length=512)
+    quantity: Decimal | None = Field(
+        default=None, gt=0, max_digits=_COST_AMOUNT_DIGITS, decimal_places=_COST_DECIMAL_PLACES
+    )
+    role_id: int | None = Field(default=None, gt=0, le=_MAX_INT32)
+    hours: Decimal | None = Field(
+        default=None, ge=0, max_digits=_COST_AMOUNT_DIGITS, decimal_places=_COST_DECIMAL_PLACES
+    )
+    cost_type_id: int | None = Field(default=None, gt=0, le=_MAX_INT32)
+    cost_category_id: int | None = Field(default=None, gt=0, le=_MAX_INT32)
+    unit_cost: Decimal | None = Field(
+        default=None, ge=0, max_digits=_COST_UNIT_COST_DIGITS, decimal_places=_COST_DECIMAL_PLACES
+    )
+    supply_status: SupplyStatus | None = None
+    planned_date: date | None = None
+    cost_code_id: int | None = Field(default=None, gt=0, le=_MAX_INT32)
+    comment: str | None = Field(default=None, max_length=10000)
+
+    _normalize_label = field_validator("label")(_optional_text)
+    _normalize_comment = field_validator("comment")(_optional_text)
+
+    @model_validator(mode="after")
+    def validate_no_null_on_mandatory_fields(self) -> "RevisionCostFacetUpdate":
+        supplied = self.model_fields_set
+        nulled = [
+            name
+            for name in RevisionCostFacetUpdate.NON_NULLABLE_FIELDS
+            if name in supplied and getattr(self, name) is None
+        ]
+        if nulled:
+            raise ValueError(
+                f"{', '.join(nulled)} cannot be set to null: omit the field to leave it "
+                "unchanged, there is no cleared state for it"
+            )
+        return self
 
 
 class RevisionNodeMove(RevisionWrite):

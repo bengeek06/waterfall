@@ -34,7 +34,7 @@ properties:
     items:
       type: integer
       minimum: 1
-    description: Identifiants `EstimateTaskRow.id` proposes a la suppression.
+    description: Identifiants `wf_estimate_task_row.id` proposes a la suppression.
   labor_to_create:
     type: integer
     minimum: 0

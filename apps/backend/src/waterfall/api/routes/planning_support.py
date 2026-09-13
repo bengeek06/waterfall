@@ -363,6 +363,12 @@ def order_estimate_grid_depth_first(
     root" fallback already covers -- the same graceful degradation already
     relied on for an out-of-scope planning ancestor, extended to this merged
     tree without any extra logic.
+
+    No caller left since E14-07 (#333): the devis-grid routes that ordered a
+    merged tree are gone, and the revision tree has its own traversal
+    (``services/revision_tree.py``). Kept, unused, until E14-12 (#339) removes
+    ``EstimateGridNode`` itself -- deleting it here would have spread that
+    sweep across two issues.
     """
     translated_grid_rows = (
         (

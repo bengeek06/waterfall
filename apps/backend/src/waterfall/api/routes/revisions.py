@@ -1,8 +1,12 @@
-"""The planning facet of a revision, over HTTP (E14-05, issue #331).
+"""Both facets of a revision, over HTTP (E14-05 #331, then E14-07 #333).
 
 Replaces the eight endpoints that read and edited a planning through
 `wf_planning_task_snapshot` -- the move/create/delete/schedule/links/restore
-family of ``plannings.py``, ``GET /planning-tree`` and ``GET /tasks``.
+family of ``plannings.py``, ``GET /planning-tree`` and ``GET /tasks`` -- and, since
+#333, the devis-side family that described the same structure a second time:
+``GET .../estimates/{id}/task-rows``, ``POST .../estimates/{id}/tasks``,
+``POST .../estimates/{id}/grid-nodes/move`` and the whole ``cost-lines`` /
+``role-assignments`` CRUD.
 
 Why ``/projects/{project_id}/revisions/{revision_id}/...`` and not ``/plannings``
 --------------------------------------------------------------------------------
@@ -16,15 +20,26 @@ structure endpoints below (create, move, delete) are deliberately facet-agnostic
 and scoped to ``/nodes``: they are the same operation whichever facet the selected
 node carries, which is the whole point.
 
+That is why #333 added **two** endpoints and no more. Creating a cost line needs a
+payload of its own (``POST .../cost-lines``, the twin of ``POST .../tasks``) and
+editing its attributes needs another (``PATCH .../nodes/{node_id}/cost``); moving
+one and deleting one do not, because ``POST .../nodes/move`` and
+``POST .../nodes/delete`` already do it -- the latter removes the node, its subtree
+and *both* its facets (INV-02), and names the chiffrage it took away. A
+``DELETE .../cost-lines/{id}`` would have been that same operation under a second
+name.
+
 What is **not** here: the lifecycle of a revision -- creating one, validating it,
 pointing the project's reference at it. That is E14-08 (#334), which owns the
 ``wf_revision`` row itself; this module only ever reads its status and its
 ``lock_version``.
 
 Every write takes ``expected_lock_version`` and answers with the new one. Every
-refusal goes through :mod:`waterfall.api.revision_errors`, which is also what #333
-will use, so "a validated revision refuses every write" is literally the same
-response on either facet.
+refusal goes through :mod:`waterfall.api.revision_errors` -- one table for both
+facets, so "a validated revision refuses every write" is literally the same
+``REVISION_IMMUTABLE`` response whichever facet was aimed at, and "a jalon holds no
+children" is the same ``REVISION_MILESTONE_HAS_CHILDREN`` whether a task or a cost
+line was hung under it.
 
 Two refusals are decided here rather than there, because they are about the
 *project* and not about the revision: ``PROJECT_NOT_FOUND`` (404, also the answer
@@ -47,6 +62,8 @@ from waterfall.models.revision import ProjectRevision
 from waterfall.models.user import User
 from waterfall.schemas.revisions import (
     RevisionCostFacetRead,
+    RevisionCostFacetUpdate,
+    RevisionCostLineCreate,
     RevisionCostLossRead,
     RevisionNodeDelete,
     RevisionNodeDeleteRead,
@@ -184,6 +201,10 @@ def _to_node_read(row: revision_tree.TreeRow) -> RevisionNodeRead:
                 planned_date=row.cost.planned_date,
                 cost_code_id=row.cost.cost_code_id,
                 comment=row.cost.comment,
+                bearing_task_node_id=(
+                    None if row.bearing_task is None else row.bearing_task.node_id
+                ),
+                bearing_task_name=(None if row.bearing_task is None else row.bearing_task.name),
             )
         ),
         predecessors=[
@@ -275,6 +296,69 @@ def create_revision_task(
             start_at=payload.start_at,
             finish_at=payload.finish_at,
             calendar_id=payload.calendar_id,
+        )
+        db.commit()
+    return RevisionNodeWriteRead(
+        revision_id=created.revision_id,
+        lock_version=created.lock_version,
+        node_id=created.node_id,
+        work_item_id=created.work_item_id,
+    )
+
+
+@router.post(
+    "/{project_id}/revisions/{revision_id}/cost-lines",
+    response_model=RevisionNodeWriteRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_revision_cost_line(
+    project_id: int,
+    revision_id: int,
+    payload: RevisionCostLineCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> RevisionNodeWriteRead:
+    """Create a cost node: a new ``work_item`` of kind ``cost`` and its cost facet.
+
+    The cost-side twin of :func:`create_revision_task`, on the same tree and under the
+    same lock. ``parent_id`` absent puts the line at the root, where it is a
+    project-wide cost with no bearing task (INV-01, and explicitly allowed).
+
+    No milestone check here, and that absence is the point of #333's third deliverable:
+    "a jalon holds no children" is INV-27, it lives in
+    ``domain.revision.tree._reject_milestone_parent``, and every insertion path already
+    goes through it -- so hanging a cost line under a milestone comes back as a 400
+    carrying ``REVISION_MILESTONE_HAS_CHILDREN``. The legacy reconciliation import
+    still carries its own ``TASK_PARENT_IS_MILESTONE`` check against ``MsTask``
+    (``estimates.py``); this path deliberately does not restate it, because a second
+    formulation of one rule is what this EPIC exists to remove.
+    """
+    _writable_project(db, project_id, current_user.id)
+    _get_revision_or_404(db, project_id, revision_id)
+    with revision_operation(db):
+        created = revision_tree.add_cost_line(
+            db,
+            revision_id,
+            expected_lock_version=payload.expected_lock_version,
+            nature=domain.CostNature(payload.nature),
+            label=payload.label,
+            parent_id=payload.parent_id,
+            position=payload.position,
+            quantity=payload.quantity,
+            role_id=payload.role_id,
+            hours=payload.hours,
+            cost_type_id=payload.cost_type_id,
+            cost_category_id=payload.cost_category_id,
+            unit_cost=payload.unit_cost,
+            supply_status=(
+                None
+                if payload.supply_status is None
+                else domain.SupplyStatus(payload.supply_status)
+            ),
+            planned_date=payload.planned_date,
+            cost_code_id=payload.cost_code_id,
+            comment=payload.comment,
+            description=payload.description,
         )
         db.commit()
     return RevisionNodeWriteRead(
@@ -475,3 +559,76 @@ def replace_revision_predecessors(
         )
         db.commit()
     return _to_write_read(replaced)
+
+
+@router.patch(
+    "/{project_id}/revisions/{revision_id}/nodes/{node_id}/cost",
+    response_model=RevisionWriteRead,
+)
+def update_revision_cost_facet(
+    project_id: int,
+    revision_id: int,
+    node_id: int,
+    payload: RevisionCostFacetUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> RevisionWriteRead:
+    """Edit a node's cost facet: label, quantité, débours, rôle, heures, suivi appro.
+
+    Partial in exactly the way :func:`update_revision_plan_facet` is, and read the same
+    way: ``model_fields_set`` decides whether a field was supplied, because ``null`` is
+    a legitimate value here (clear the planned date, drop the cost code). The two
+    fields with no cleared state -- ``label`` and ``quantity`` -- are guarded one layer
+    up by
+    :meth:`~waterfall.schemas.revisions.RevisionCostFacetUpdate.validate_no_null_on_mandatory_fields`,
+    which answers 422 rather than letting a ``null`` become a silent no-op.
+
+    ``nature`` is not editable: see
+    :class:`~waterfall.schemas.revisions.RevisionCostFacetUpdate`.
+
+    A body carrying nothing but ``expected_lock_version`` is legal and bumps
+    ``lock_version`` by one, for the reason the planning facet gives: the counter
+    records "a write happened".
+    """
+    _writable_project(db, project_id, current_user.id)
+    _get_revision_or_404(db, project_id, revision_id)
+    supplied = payload.model_fields_set
+    with revision_operation(db):
+        updated = revision_tree.update_cost_facet(
+            db,
+            revision_id,
+            node_id,
+            expected_lock_version=payload.expected_lock_version,
+            # As on the planning facet, the ``is not None`` halves narrow the declared
+            # ``T | None`` down to the ``T | Unset`` the service takes; the rule -- "no
+            # explicit null on these two" -- is the schema's, and answers 422.
+            label=(
+                payload.label if "label" in supplied and payload.label is not None else domain.UNSET
+            ),
+            quantity=(
+                payload.quantity
+                if "quantity" in supplied and payload.quantity is not None
+                else domain.UNSET
+            ),
+            role_id=payload.role_id if "role_id" in supplied else domain.UNSET,
+            hours=payload.hours if "hours" in supplied else domain.UNSET,
+            cost_type_id=payload.cost_type_id if "cost_type_id" in supplied else domain.UNSET,
+            cost_category_id=(
+                payload.cost_category_id if "cost_category_id" in supplied else domain.UNSET
+            ),
+            unit_cost=payload.unit_cost if "unit_cost" in supplied else domain.UNSET,
+            supply_status=(
+                (
+                    None
+                    if payload.supply_status is None
+                    else domain.SupplyStatus(payload.supply_status)
+                )
+                if "supply_status" in supplied
+                else domain.UNSET
+            ),
+            planned_date=payload.planned_date if "planned_date" in supplied else domain.UNSET,
+            cost_code_id=payload.cost_code_id if "cost_code_id" in supplied else domain.UNSET,
+            comment=payload.comment if "comment" in supplied else domain.UNSET,
+        )
+        db.commit()
+    return _to_write_read(updated)

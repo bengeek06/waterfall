@@ -12,6 +12,7 @@ like a human editing the exported workbook would.
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from io import BytesIO
 from typing import Any, cast
@@ -23,19 +24,27 @@ from httpx import Response
 from openpyxl import Workbook, load_workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
-from _estimate_grid_support import seed_root_grid_node
+from _estimate_grid_support import seed_cost_line, seed_root_grid_node
 from waterfall.core.config import get_settings
 from waterfall.db.session import get_session_factory
 from waterfall.main import app
 from waterfall.models.ms_core import MsProject, MsTask
-from waterfall.models.planning import WfPlanningLinkSnapshot, WfPlanningTaskSnapshot
+from waterfall.models.planning import (
+    WfPlanning,
+    WfPlanningLinkSnapshot,
+    WfPlanningTaskSnapshot,
+)
 from waterfall.models.resources import (
     CostCategory,
     CostType,
+    Estimate,
+    EstimateCostLine,
     EstimateRoleAssignment,
+    EstimateTaskRow,
     ResourceNode,
     ResourceRole,
 )
+from waterfall.services.estimate_task_display import resolve_live_task_display
 
 _XLSX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -210,22 +219,43 @@ def _remove_task_from_planning_snapshot(project_id: int, task_uid: int) -> None:
 
 
 def _create_standalone_task(
-    client: TestClient,
-    headers: dict[str, str],
     project_id: int,
     estimate_id: int,
     name: str,
     *,
     is_milestone: bool = False,
 ) -> dict[str, Any]:
-    """A root task with no children and no MO/Non-MO reference (E6-06/#67's own endpoint)."""
-    response = client.post(
-        f"/projects/{project_id}/estimates/{estimate_id}/tasks",
-        json={"name": name, "is_milestone": is_milestone},
-        headers=headers,
+    """A root task with no children and no MO/Non-MO reference.
+
+    E14-07 (#333) removed ``POST .../estimates/{id}/tasks`` -- creating a task is now
+    ``POST .../revisions/{id}/tasks``, on the revision node model. The snapshot/``MsTask``
+    twin/``EstimateTaskRow`` wiring that endpoint performed is still needed by the
+    reconciliation import itself, and still lives in ``estimates._create_estimate_planning_task``
+    (it is what ``_apply_task_creates`` calls), so this seeds through that very helper
+    rather than reproducing three inserts by hand.
+    """
+    from waterfall.api.routes.estimates import (
+        _create_estimate_planning_task,  # pyright: ignore[reportPrivateUsage]
     )
-    assert response.status_code == 201
-    return cast(dict[str, Any], response.json())
+
+    with get_session_factory()() as session:
+        project = session.query(MsProject).filter(MsProject.id == project_id).one()
+        planning = (
+            session.query(WfPlanning).filter(WfPlanning.id == project.displayed_planning_id).one()
+        )
+        task, row = _create_estimate_planning_task(
+            session,
+            project_id,
+            estimate_id,
+            planning,
+            name=name,
+            is_milestone=is_milestone,
+            target_parent_uid=None,
+            insert_after_uid=None,
+        )
+        planning.revision += 1
+        session.commit()
+        return {"id": row.id, "task_id": task.id}
 
 
 def _create_sub_cost_code(
@@ -320,6 +350,141 @@ def _create_estimate_role_assignment(
         session.add(assignment)
         session.commit()
         return assignment.id
+
+
+def _create_estimate_cost_line(
+    estimate_id: int,
+    task_id: int | None,
+    cost_category_id: int,
+    *,
+    label: str,
+    quantity: str = "1.00",
+    unit_cost: str = "0.00",
+    planned_date: datetime | None = None,
+    cost_code_id: int | None = None,
+    supply_status: str | None = None,
+) -> int:
+    """Insert an ``EstimateCostLine`` directly via the ORM, scoped to ``estimate_id``.
+
+    The Non-MO twin of :func:`_create_estimate_role_assignment`, and it exists for one
+    more reason than that one: E14-07 (#333) removed ``POST .../estimates/{id}/cost-lines``
+    altogether -- the cost facet of a revision replaces it. This module is about the
+    reconciliation import (E6-09), whose subject is the *workbook*, not the route a row
+    happened to be created through, so the rows it works on are seeded where they live.
+    """
+    with get_session_factory()() as session:
+        line = seed_cost_line(
+            session,
+            estimate_id=estimate_id,
+            cost_category_id=cost_category_id,
+            label=label,
+            quantity=quantity,
+            unit_cost=unit_cost,
+            task_id=task_id,
+            cost_code_id=cost_code_id,
+            planned_date=planned_date,
+            supply_status=supply_status,
+        )
+        session.commit()
+        return line.id
+
+
+def _cost_line_rows(estimate_id: int) -> list[dict[str, Any]]:
+    """The estimate's Non-MO lines, read straight from the ORM.
+
+    Replaces ``GET .../estimates/{id}/cost-lines``, removed by E14-07 (#333). What
+    these tests assert on is what the import wrote, so reading the rows themselves
+    says it more directly than the read model that used to wrap them ever did.
+    """
+    with get_session_factory()() as session:
+        return [
+            {
+                "id": line.id,
+                "task_id": line.task_id,
+                "label": line.label,
+                "quantity": line.quantity,
+                "unit_cost": line.unit_cost,
+                "planned_date": line.planned_date,
+                "supply_status": line.supply_status,
+                "cost_code_id": line.cost_code_id,
+            }
+            for line in session.query(EstimateCostLine)
+            .filter(EstimateCostLine.estimate_id == estimate_id)
+            .order_by(EstimateCostLine.id)
+            .all()
+        ]
+
+
+def _role_assignment_rows(estimate_id: int) -> list[dict[str, Any]]:
+    """The estimate's MO rows, read straight from the ORM -- see :func:`_cost_line_rows`."""
+    with get_session_factory()() as session:
+        return [
+            {
+                "id": assignment.id,
+                "task_id": assignment.task_id,
+                "role_id": assignment.role_id,
+                "quantity": assignment.quantity,
+                "hours": assignment.hours,
+                "comment": assignment.comment,
+                "cost_code_id": assignment.cost_code_id,
+            }
+            for assignment in session.query(EstimateRoleAssignment)
+            .filter(EstimateRoleAssignment.estimate_id == estimate_id)
+            .order_by(EstimateRoleAssignment.id)
+            .all()
+        ]
+
+
+def _task_row_rows(estimate_id: int) -> list[dict[str, Any]]:
+    """The estimate's ``Tâches`` rows, read straight from the ORM.
+
+    ``task_name`` is the **stored** column, which is exactly the baseline this import
+    compares against and never writes (E12-08). The *live* name the removed
+    ``GET .../task-rows`` resolved on the fly is a different question, and
+    :func:`_live_task_row_names` is the one that answers it.
+    """
+    with get_session_factory()() as session:
+        return [
+            {
+                "id": row.id,
+                "task_id": row.task_id,
+                "task_name": row.task_name,
+                "position": row.position,
+            }
+            for row in session.query(EstimateTaskRow)
+            .filter(EstimateTaskRow.estimate_id == estimate_id)
+            .order_by(EstimateTaskRow.id)
+            .all()
+        ]
+
+
+def _live_task_row_names(project_id: int, estimate_id: int) -> dict[int, str]:
+    """``{task_row_id: live name}``, resolved the way the export sheet resolves it.
+
+    E14-07 (#333) removed the JSON read that used to expose this resolution;
+    ``services/estimate_task_display.resolve_live_task_display`` is still what performs
+    it for the reconciliation export, so the tests that care about a *live* rename call
+    it directly rather than through a route that no longer exists.
+
+    The ``status == "draft"`` guard is the export's own (E12-08/#290: only a draft
+    devis's task rows are live, a validated one exports its frozen stored columns).
+    Every devis in this module is a draft, so it changes nothing here -- it is kept so
+    that a future test seeding a *validated* devis reads what the export would really
+    produce, instead of a drift E12-08 forbids, silently reintroduced by a helper.
+    """
+    with get_session_factory()() as session:
+        project = session.query(MsProject).filter(MsProject.id == project_id).one()
+        estimate = session.query(Estimate).filter(Estimate.id == estimate_id).one()
+        rows = (
+            session.query(EstimateTaskRow).filter(EstimateTaskRow.estimate_id == estimate_id).all()
+        )
+        resolved = (
+            resolve_live_task_display(session, project, rows) if estimate.status == "draft" else {}
+        )
+        return {
+            row.id: (resolved[row.id].task_name if row.id in resolved else row.task_name)
+            for row in rows
+        }
 
 
 def _estimate_role_assignment(assignment_id: int) -> EstimateRoleAssignment:
@@ -471,27 +636,17 @@ def _seed_fixture(client: TestClient, headers: dict[str, str]) -> dict[str, Any]
         comment="Initial",
     )
 
-    cost_line_response = client.post(
-        f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
-        json={
-            "task_id": deliverable.id,
-            "cost_category_id": category_id,
-            "label": "Materiel initial",
-            "quantity": "1.00",
-            "unit_cost": "50.00",
-        },
-        headers=headers,
+    cost_line_id = _create_estimate_cost_line(
+        estimate_id,
+        deliverable.id,
+        category_id,
+        label="Materiel initial",
+        quantity="1.00",
+        unit_cost="50.00",
     )
-    assert cost_line_response.status_code == 201
-    cost_line_id = cast(int, cost_line_response.json()["id"])
 
-    task_rows_response = _get(
-        client, f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers
-    )
-    assert task_rows_response.status_code == 200
-    task_row_id = next(
-        row["id"] for row in _items(task_rows_response.json()) if row["task_id"] == deliverable.id
-    )
+    task_rows_response = _task_row_rows(estimate_id)
+    task_row_id = next(row["id"] for row in task_rows_response if row["task_id"] == deliverable.id)
 
     return {
         "project_id": project_id,
@@ -579,15 +734,8 @@ def test_reconciliation_import_updates_only_modified_cost_line_quantity() -> Non
         confirm = _confirm(client, headers, fixture["project_id"], fixture["estimate_id"], edited)
         assert confirm.status_code == 200
 
-        cost_lines = _get(
-            client,
-            f"/projects/{fixture['project_id']}/estimates/{fixture['estimate_id']}/cost-lines",
-            headers,
-        )
-        assert cost_lines.status_code == 200
-        updated = next(
-            item for item in _items(cost_lines.json()) if item["id"] == fixture["cost_line_id"]
-        )
+        cost_lines = _cost_line_rows(fixture["estimate_id"])
+        updated = next(item for item in cost_lines if item["id"] == fixture["cost_line_id"])
         assert float(updated["quantity"]) == 9.0
 
 
@@ -609,29 +757,15 @@ def test_reconciliation_import_flags_and_then_applies_deletion() -> None:
         assert plan["applied"] is False
 
         # Preview never writes: the cost line must still be there afterwards.
-        cost_lines_after_preview = _get(
-            client,
-            f"/projects/{fixture['project_id']}/estimates/{fixture['estimate_id']}/cost-lines",
-            headers,
-        )
-        assert any(
-            item["id"] == fixture["cost_line_id"]
-            for item in _items(cost_lines_after_preview.json())
-        )
+        cost_lines_after_preview = _cost_line_rows(fixture["estimate_id"])
+        assert any(item["id"] == fixture["cost_line_id"] for item in cost_lines_after_preview)
 
         confirm = _confirm(client, headers, fixture["project_id"], fixture["estimate_id"], edited)
         assert confirm.status_code == 200
         assert _plan(confirm.json())["applied"] is True
 
-        cost_lines_after_confirm = _get(
-            client,
-            f"/projects/{fixture['project_id']}/estimates/{fixture['estimate_id']}/cost-lines",
-            headers,
-        )
-        assert not any(
-            item["id"] == fixture["cost_line_id"]
-            for item in _items(cost_lines_after_confirm.json())
-        )
+        cost_lines_after_confirm = _cost_line_rows(fixture["estimate_id"])
+        assert not any(item["id"] == fixture["cost_line_id"] for item in cost_lines_after_confirm)
 
 
 def test_reconciliation_import_rejects_validated_estimate() -> None:
@@ -715,19 +849,11 @@ def test_reconciliation_import_creates_task_labor_and_non_labor_rows() -> None:
         assert confirm.status_code == 200
         assert _plan(confirm.json())["applied"] is True
 
-        task_rows = _get(
-            client,
-            f"/projects/{fixture['project_id']}/estimates/{fixture['estimate_id']}/task-rows",
-            headers,
-        )
-        assert any(row["task_name"] == "Nouvelle tache" for row in _items(task_rows.json()))
+        task_rows = _task_row_rows(fixture["estimate_id"])
+        assert any(row["task_name"] == "Nouvelle tache" for row in task_rows)
 
-        cost_lines = _get(
-            client,
-            f"/projects/{fixture['project_id']}/estimates/{fixture['estimate_id']}/cost-lines",
-            headers,
-        )
-        assert any(item["label"] == "Nouvelle ligne" for item in _items(cost_lines.json()))
+        cost_lines = _cost_line_rows(fixture["estimate_id"])
+        assert any(item["label"] == "Nouvelle ligne" for item in cost_lines)
 
 
 def test_reconciliation_import_confirm_bumps_estimate_revision_on_new_rows() -> None:
@@ -838,14 +964,8 @@ def test_reconciliation_import_task_name_change_is_warning_not_applied() -> None
         confirm = _confirm(client, headers, fixture["project_id"], fixture["estimate_id"], edited)
         assert confirm.status_code == 200
 
-        task_rows = _get(
-            client,
-            f"/projects/{fixture['project_id']}/estimates/{fixture['estimate_id']}/task-rows",
-            headers,
-        )
-        row = next(
-            item for item in _items(task_rows.json()) if item["id"] == fixture["task_row_id"]
-        )
+        task_rows = _task_row_rows(fixture["estimate_id"])
+        row = next(item for item in task_rows if item["id"] == fixture["task_row_id"])
         assert row["task_name"] == "Requirements"
 
 
@@ -872,15 +992,8 @@ def test_reconciliation_import_still_ignores_task_name_after_a_live_rename() -> 
         assert rename.status_code == 200
         assert rename.json()["name"] == "Requirements (Renamed Live)"
 
-        live_task_rows = _get(
-            client,
-            f"/projects/{fixture['project_id']}/estimates/{fixture['estimate_id']}/task-rows",
-            headers,
-        )
-        live_row = next(
-            item for item in _items(live_task_rows.json()) if item["id"] == fixture["task_row_id"]
-        )
-        assert live_row["task_name"] == "Requirements (Renamed Live)"
+        live_names = _live_task_row_names(fixture["project_id"], fixture["estimate_id"])
+        assert live_names[fixture["task_row_id"]] == "Requirements (Renamed Live)"
 
         workbook = load_workbook(BytesIO(content))
         _set_cell(workbook["Tâches"], "id", fixture["task_row_id"], "task_name", "From Excel")
@@ -895,16 +1008,14 @@ def test_reconciliation_import_still_ignores_task_name_after_a_live_rename() -> 
         confirm = _confirm(client, headers, fixture["project_id"], fixture["estimate_id"], edited)
         assert confirm.status_code == 200
 
-        task_rows_after = _get(
-            client,
-            f"/projects/{fixture['project_id']}/estimates/{fixture['estimate_id']}/task-rows",
-            headers,
-        )
-        row_after = next(
-            item for item in _items(task_rows_after.json()) if item["id"] == fixture["task_row_id"]
-        )
+        task_rows_after = _task_row_rows(fixture["estimate_id"])
+        row_after = next(item for item in task_rows_after if item["id"] == fixture["task_row_id"])
+        # The stored column the import compares against is untouched by both channels;
+        # the live resolution the export sheet performs is what reports the rename.
+        assert row_after["task_name"] == "Requirements"
+        live_names_after = _live_task_row_names(fixture["project_id"], fixture["estimate_id"])
         # Neither the import's own name nor the pre-rename original -- the live name.
-        assert row_after["task_name"] == "Requirements (Renamed Live)"
+        assert live_names_after[fixture["task_row_id"]] == "Requirements (Renamed Live)"
 
 
 def test_export_reconciliation_tasks_sheet_reflects_live_task_rename() -> None:
@@ -1087,13 +1198,8 @@ def test_reconciliation_import_delete_and_recreate_same_pair_succeeds() -> None:
         assert confirm.status_code == 200
         assert _plan(confirm.json())["applied"] is True
 
-        assignments_response = _get(
-            client,
-            f"/projects/{fixture['project_id']}/estimates/{fixture['estimate_id']}/role-assignments",
-            headers,
-        )
-        assert assignments_response.status_code == 200
-        items = _items(assignments_response.json())
+        assignments_response = _role_assignment_rows(fixture["estimate_id"])
+        items = assignments_response
         # Exactly one assignment for this (task, role) pair: the delete and the
         # creation both happened, never a rejected/duplicated pair. The recreated
         # row's id may or may not coincide with the deleted one's (SQLite is free to
@@ -1245,14 +1351,8 @@ def test_reconciliation_import_blank_cost_line_task_id_does_not_clear_it() -> No
         assert confirm.status_code == 200
         assert _plan(confirm.json())["applied"] is True
 
-        cost_lines = _get(
-            client,
-            f"/projects/{fixture['project_id']}/estimates/{fixture['estimate_id']}/cost-lines",
-            headers,
-        )
-        updated = next(
-            item for item in _items(cost_lines.json()) if item["id"] == fixture["cost_line_id"]
-        )
+        cost_lines = _cost_line_rows(fixture["estimate_id"])
+        updated = next(item for item in cost_lines if item["id"] == fixture["cost_line_id"])
         assert updated["task_id"] == fixture["deliverable_id"]
 
 
@@ -1264,20 +1364,15 @@ def test_reconciliation_import_blank_cost_line_planned_date_does_not_clear_it() 
         headers = _auth_headers(client)
         fixture = _seed_fixture(client, headers)
 
-        cost_line_response = client.post(
-            f"/projects/{fixture['project_id']}/estimates/{fixture['estimate_id']}/cost-lines",
-            json={
-                "task_id": fixture["deliverable_id"],
-                "cost_category_id": fixture["category_id"],
-                "label": "Materiel date",
-                "quantity": "1.00",
-                "unit_cost": "10.00",
-                "planned_date": "2026-01-15",
-            },
-            headers=headers,
+        dated_cost_line_id = _create_estimate_cost_line(
+            fixture["estimate_id"],
+            fixture["deliverable_id"],
+            fixture["category_id"],
+            label="Materiel date",
+            quantity="1.00",
+            unit_cost="10.00",
+            planned_date=datetime(2026, 1, 15, tzinfo=UTC),
         )
-        assert cost_line_response.status_code == 201
-        dated_cost_line_id = cast(int, cost_line_response.json()["id"])
 
         content = _export_workbook(client, headers, fixture["project_id"], fixture["estimate_id"])
         workbook = load_workbook(BytesIO(content))
@@ -1292,16 +1387,10 @@ def test_reconciliation_import_blank_cost_line_planned_date_does_not_clear_it() 
         assert confirm.status_code == 200
         assert _plan(confirm.json())["applied"] is True
 
-        cost_lines = _get(
-            client,
-            f"/projects/{fixture['project_id']}/estimates/{fixture['estimate_id']}/cost-lines",
-            headers,
-        )
-        updated = next(
-            item for item in _items(cost_lines.json()) if item["id"] == dated_cost_line_id
-        )
+        cost_lines = _cost_line_rows(fixture["estimate_id"])
+        updated = next(item for item in cost_lines if item["id"] == dated_cost_line_id)
         assert updated["planned_date"] is not None
-        assert cast(str, updated["planned_date"]).startswith("2026-01-15")
+        assert cast(datetime, updated["planned_date"]).date() == date(2026, 1, 15)
 
 
 def test_reconciliation_import_cost_line_update_supply_status_incompatible_is_blocking() -> None:
@@ -1344,14 +1433,8 @@ def test_reconciliation_import_cost_line_update_supply_status_incompatible_is_bl
             for issue in confirmed_plan["blocking_issues"]
         )
 
-        cost_lines = _get(
-            client,
-            f"/projects/{fixture['project_id']}/estimates/{fixture['estimate_id']}/cost-lines",
-            headers,
-        )
-        unchanged = next(
-            item for item in _items(cost_lines.json()) if item["id"] == fixture["cost_line_id"]
-        )
+        cost_lines = _cost_line_rows(fixture["estimate_id"])
+        unchanged = next(item for item in cost_lines if item["id"] == fixture["cost_line_id"])
         assert unchanged["supply_status"] is None
 
 
@@ -1404,14 +1487,8 @@ def test_reconciliation_import_cost_line_create_supply_status_incompatible_is_bl
             for issue in confirmed_plan["blocking_issues"]
         )
 
-        cost_lines = _get(
-            client,
-            f"/projects/{fixture['project_id']}/estimates/{fixture['estimate_id']}/cost-lines",
-            headers,
-        )
-        assert not any(
-            item["label"] == "Nouvelle ligne invalide" for item in _items(cost_lines.json())
-        )
+        cost_lines = _cost_line_rows(fixture["estimate_id"])
+        assert not any(item["label"] == "Nouvelle ligne invalide" for item in cost_lines)
 
 
 def test_reconciliation_import_deletes_task_row_without_children_or_references() -> None:
@@ -1430,7 +1507,7 @@ def test_reconciliation_import_deletes_task_row_without_children_or_references()
         headers = _auth_headers(client)
         fixture = _seed_fixture(client, headers)
         standalone = _create_standalone_task(
-            client, headers, fixture["project_id"], fixture["estimate_id"], "Standalone"
+            fixture["project_id"], fixture["estimate_id"], "Standalone"
         )
         task_row_id = cast(int, standalone["id"])
         task_id = cast(int, standalone["task_id"])
@@ -1456,12 +1533,8 @@ def test_reconciliation_import_deletes_task_row_without_children_or_references()
         assert confirm.status_code == 200
         assert _plan(confirm.json())["applied"] is True
 
-        task_rows = _get(
-            client,
-            f"/projects/{fixture['project_id']}/estimates/{fixture['estimate_id']}/task-rows",
-            headers,
-        )
-        assert not any(row["id"] == task_row_id for row in _items(task_rows.json()))
+        task_rows = _task_row_rows(fixture["estimate_id"])
+        assert not any(row["id"] == task_row_id for row in task_rows)
         assert not _snapshot_exists(fixture["project_id"], task_uid)
 
 
@@ -1474,14 +1547,8 @@ def test_reconciliation_import_task_deletion_with_children_requires_cascade() ->
         fixture = _seed_fixture(client, headers)
         lot = _lot_task(fixture["project_id"])
 
-        task_rows_response = _get(
-            client,
-            f"/projects/{fixture['project_id']}/estimates/{fixture['estimate_id']}/task-rows",
-            headers,
-        )
-        lot_row_id = next(
-            row["id"] for row in _items(task_rows_response.json()) if row["task_id"] == lot.id
-        )
+        task_rows_response = _task_row_rows(fixture["estimate_id"])
+        lot_row_id = next(row["id"] for row in task_rows_response if row["task_id"] == lot.id)
 
         content = _export_workbook(client, headers, fixture["project_id"], fixture["estimate_id"])
         workbook = load_workbook(BytesIO(content))
@@ -1506,12 +1573,8 @@ def test_reconciliation_import_task_deletion_with_children_requires_cascade() ->
             for issue in confirmed_plan["blocking_issues"]
         )
 
-        task_rows_after = _get(
-            client,
-            f"/projects/{fixture['project_id']}/estimates/{fixture['estimate_id']}/task-rows",
-            headers,
-        )
-        assert any(row["id"] == lot_row_id for row in _items(task_rows_after.json()))
+        task_rows_after = _task_row_rows(fixture["estimate_id"])
+        assert any(row["id"] == lot_row_id for row in task_rows_after)
         assert _mstask_exists(lot.id)
 
 
@@ -1543,12 +1606,8 @@ def test_reconciliation_import_task_deletion_still_referenced_is_blocked() -> No
             issue["code"] == "TASK_DELETE_REFERENCED" for issue in confirmed_plan["blocking_issues"]
         )
 
-        task_rows_after = _get(
-            client,
-            f"/projects/{fixture['project_id']}/estimates/{fixture['estimate_id']}/task-rows",
-            headers,
-        )
-        assert any(row["id"] == fixture["task_row_id"] for row in _items(task_rows_after.json()))
+        task_rows_after = _task_row_rows(fixture["estimate_id"])
+        assert any(row["id"] == fixture["task_row_id"] for row in task_rows_after)
         assert _mstask_exists(fixture["deliverable_id"])
 
 
@@ -1561,7 +1620,7 @@ def test_reconciliation_import_task_mutation_blocked_when_planning_not_draft() -
         headers = _auth_headers(client)
         fixture = _seed_fixture(client, headers)
         standalone = _create_standalone_task(
-            client, headers, fixture["project_id"], fixture["estimate_id"], "Standalone"
+            fixture["project_id"], fixture["estimate_id"], "Standalone"
         )
         standalone_row_id = cast(int, standalone["id"])
         standalone_task_id = cast(int, standalone["task_id"])
@@ -1592,12 +1651,8 @@ def test_reconciliation_import_task_mutation_blocked_when_planning_not_draft() -
             issue["code"] == "PLANNING_NOT_DRAFT" for issue in confirmed_plan["blocking_issues"]
         )
 
-        task_rows_after = _get(
-            client,
-            f"/projects/{fixture['project_id']}/estimates/{fixture['estimate_id']}/task-rows",
-            headers,
-        )
-        rows_after = _items(task_rows_after.json())
+        task_rows_after = _task_row_rows(fixture["estimate_id"])
+        rows_after = task_rows_after
         assert any(row["id"] == standalone_row_id for row in rows_after)
         assert not any(row["task_name"] == "Nouvelle tache bloquee" for row in rows_after)
         assert _mstask_exists(standalone_task_id)
@@ -1746,20 +1801,15 @@ def test_reconciliation_import_blank_cost_line_cost_code_id_does_not_clear_it() 
             client, headers, fixture["project_id"], "LOT-CRIT-NONMO"
         )
 
-        cost_line_response = client.post(
-            f"/projects/{fixture['project_id']}/estimates/{fixture['estimate_id']}/cost-lines",
-            json={
-                "task_id": fixture["deliverable_id"],
-                "cost_category_id": fixture["category_id"],
-                "cost_code_id": sub_cost_code_id,
-                "label": "Materiel avec code",
-                "quantity": "1.00",
-                "unit_cost": "10.00",
-            },
-            headers=headers,
+        cost_line_id = _create_estimate_cost_line(
+            fixture["estimate_id"],
+            fixture["deliverable_id"],
+            fixture["category_id"],
+            label="Materiel avec code",
+            quantity="1.00",
+            unit_cost="10.00",
+            cost_code_id=sub_cost_code_id,
         )
-        assert cost_line_response.status_code == 201
-        cost_line_id = cast(int, cost_line_response.json()["id"])
 
         content = _export_workbook(client, headers, fixture["project_id"], fixture["estimate_id"])
         workbook = load_workbook(BytesIO(content))
@@ -1775,12 +1825,8 @@ def test_reconciliation_import_blank_cost_line_cost_code_id_does_not_clear_it() 
         assert confirm.status_code == 200
         assert _plan(confirm.json())["applied"] is True
 
-        cost_lines = _get(
-            client,
-            f"/projects/{fixture['project_id']}/estimates/{fixture['estimate_id']}/cost-lines",
-            headers,
-        )
-        updated = next(item for item in _items(cost_lines.json()) if item["id"] == cost_line_id)
+        cost_lines = _cost_line_rows(fixture["estimate_id"])
+        updated = next(item for item in cost_lines if item["id"] == cost_line_id)
         assert updated["cost_code_id"] == sub_cost_code_id
         assert float(updated["quantity"]) == 9.0
 
@@ -1797,12 +1843,7 @@ def test_reconciliation_import_task_parent_is_milestone_is_blocking() -> None:
         headers = _auth_headers(client)
         fixture = _seed_fixture(client, headers)
         milestone = _create_standalone_task(
-            client,
-            headers,
-            fixture["project_id"],
-            fixture["estimate_id"],
-            "Jalon",
-            is_milestone=True,
+            fixture["project_id"], fixture["estimate_id"], "Jalon", is_milestone=True
         )
         milestone_task_id = cast(int, milestone["task_id"])
 
@@ -1829,14 +1870,8 @@ def test_reconciliation_import_task_parent_is_milestone_is_blocking() -> None:
             for issue in confirmed_plan["blocking_issues"]
         )
 
-        task_rows = _get(
-            client,
-            f"/projects/{fixture['project_id']}/estimates/{fixture['estimate_id']}/task-rows",
-            headers,
-        )
-        assert not any(
-            row["task_name"] == "Sous-tache interdite" for row in _items(task_rows.json())
-        )
+        task_rows = _task_row_rows(fixture["estimate_id"])
+        assert not any(row["task_name"] == "Sous-tache interdite" for row in task_rows)
 
 
 def test_reconciliation_import_task_deletion_referenced_by_new_labor_row_is_blocked() -> None:
@@ -1850,7 +1885,7 @@ def test_reconciliation_import_task_deletion_referenced_by_new_labor_row_is_bloc
         headers = _auth_headers(client)
         fixture = _seed_fixture(client, headers)
         standalone = _create_standalone_task(
-            client, headers, fixture["project_id"], fixture["estimate_id"], "Standalone"
+            fixture["project_id"], fixture["estimate_id"], "Standalone"
         )
         standalone_row_id = cast(int, standalone["id"])
         standalone_task_id = cast(int, standalone["task_id"])
@@ -1895,12 +1930,8 @@ def test_reconciliation_import_task_deletion_referenced_by_new_labor_row_is_bloc
             for issue in confirmed_plan["blocking_issues"]
         )
 
-        task_rows_after = _get(
-            client,
-            f"/projects/{fixture['project_id']}/estimates/{fixture['estimate_id']}/task-rows",
-            headers,
-        )
-        assert any(row["id"] == standalone_row_id for row in _items(task_rows_after.json()))
+        task_rows_after = _task_row_rows(fixture["estimate_id"])
+        assert any(row["id"] == standalone_row_id for row in task_rows_after)
         assert _mstask_exists(standalone_task_id)
 
 
@@ -1910,7 +1941,7 @@ def test_reconciliation_import_task_deletion_referenced_by_new_cost_line_is_bloc
         headers = _auth_headers(client)
         fixture = _seed_fixture(client, headers)
         standalone = _create_standalone_task(
-            client, headers, fixture["project_id"], fixture["estimate_id"], "Standalone"
+            fixture["project_id"], fixture["estimate_id"], "Standalone"
         )
         standalone_row_id = cast(int, standalone["id"])
         standalone_task_id = cast(int, standalone["task_id"])
@@ -1956,12 +1987,8 @@ def test_reconciliation_import_task_deletion_referenced_by_new_cost_line_is_bloc
             for issue in confirmed_plan["blocking_issues"]
         )
 
-        task_rows_after = _get(
-            client,
-            f"/projects/{fixture['project_id']}/estimates/{fixture['estimate_id']}/task-rows",
-            headers,
-        )
-        assert any(row["id"] == standalone_row_id for row in _items(task_rows_after.json()))
+        task_rows_after = _task_row_rows(fixture["estimate_id"])
+        assert any(row["id"] == standalone_row_id for row in task_rows_after)
         assert _mstask_exists(standalone_task_id)
 
 
@@ -2001,15 +2028,137 @@ def test_reconciliation_import_cost_line_update_blank_category_now_inactive_is_b
             for issue in confirmed_plan["blocking_issues"]
         )
 
-        cost_lines = _get(
-            client,
-            f"/projects/{fixture['project_id']}/estimates/{fixture['estimate_id']}/cost-lines",
-            headers,
-        )
-        unchanged = next(
-            item for item in _items(cost_lines.json()) if item["id"] == fixture["cost_line_id"]
-        )
+        cost_lines = _cost_line_rows(fixture["estimate_id"])
+        unchanged = next(item for item in cost_lines if item["id"] == fixture["cost_line_id"])
         assert float(unchanged["quantity"]) == 1.0
+
+
+def _deactivate_cost_code(
+    client: TestClient, headers: dict[str, str], project_id: int, cost_code_id: int
+) -> None:
+    """Deactivate a project cost code through its own endpoint (E6-02/#63's soft delete)."""
+    response = client.delete(f"/projects/{project_id}/cost-codes/{cost_code_id}", headers=headers)
+    assert response.status_code == 204, response.text
+
+
+def test_reconciliation_import_attaches_rows_to_an_explicit_cost_code() -> None:
+    """The explicit-``cost_code_id`` branch of ``resolve_cost_code_id``, on both paths.
+
+    E14-07 (#333) removed ``POST/PATCH .../estimates/{id}/cost-lines``, which were the
+    routes the four ``..._cost_code_id`` tests of ``test_projects_api`` drove that
+    branch through. ``resolve_cost_code_id`` itself is *not* dead: the reconciliation
+    import calls it on all four of its apply paths
+    (``_apply_labor_creates``/``_apply_cost_line_creates``/``_apply_labor_updates``/
+    ``_apply_cost_line_updates``), so the branch keeps a live production caller and is
+    re-pinned here, where that caller is.
+
+    Creation and update in one file, because they are distinct call sites:
+    ``_apply_cost_line_creates`` always resolves, while ``_apply_cost_line_updates``
+    and ``_apply_labor_updates`` resolve only ``if update.cost_code_id is not None`` --
+    a blank cell means "unchanged" (see
+    ``test_reconciliation_import_blank_cost_line_cost_code_id_does_not_clear_it``), so
+    only a *filled* cell reaches the resolution at all.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        fixture = _seed_fixture(client, headers)
+        created_code_id = _create_sub_cost_code(
+            client, headers, fixture["project_id"], "LOT-EXPLICIT-NEW"
+        )
+        updated_code_id = _create_sub_cost_code(
+            client, headers, fixture["project_id"], "LOT-EXPLICIT-UPD"
+        )
+
+        content = _export_workbook(client, headers, fixture["project_id"], fixture["estimate_id"])
+        workbook = load_workbook(BytesIO(content))
+        workbook["Non-MO"].append(
+            [
+                None,
+                fixture["deliverable_id"],
+                None,
+                None,
+                fixture["category_id"],
+                None,
+                None,
+                created_code_id,
+                "Ligne imputee",
+                2,
+                20,
+                None,
+                None,
+                None,
+            ]
+        )
+        _set_cell(
+            workbook["Non-MO"], "id", fixture["cost_line_id"], "cost_code_id", updated_code_id
+        )
+        # The MO sheet reaches the same resolution through its own call site,
+        # ``_apply_labor_updates``, guarded by the same "a filled cell only" condition.
+        _set_cell(workbook["MO"], "id", fixture["assignment_id"], "cost_code_id", updated_code_id)
+        edited = _dump_workbook(workbook)
+
+        preview = _preview(client, headers, fixture["project_id"], fixture["estimate_id"], edited)
+        assert preview.status_code == 200, preview.text
+        plan = _plan(preview.json())
+        assert plan["blocking_issues"] == []
+        assert plan["non_labor_to_create"] == 1
+        assert plan["non_labor_to_update"] == [fixture["cost_line_id"]]
+        assert plan["labor_to_update"] == [fixture["assignment_id"]]
+
+        confirm = _confirm(client, headers, fixture["project_id"], fixture["estimate_id"], edited)
+        assert confirm.status_code == 200, confirm.text
+        assert _plan(confirm.json())["applied"] is True
+
+        cost_lines = _cost_line_rows(fixture["estimate_id"])
+        created = next(item for item in cost_lines if item["label"] == "Ligne imputee")
+        assert created["cost_code_id"] == created_code_id
+        updated = next(item for item in cost_lines if item["id"] == fixture["cost_line_id"])
+        assert updated["cost_code_id"] == updated_code_id
+        assert _estimate_role_assignment(fixture["assignment_id"]).cost_code_id == updated_code_id
+
+
+def test_reconciliation_import_deactivated_cost_code_is_blocking_before_the_apply_guard() -> None:
+    """A deactivated cost code never reaches ``resolve_cost_code_id``'s own refusal.
+
+    ``_cost_code_valid`` (``estimates.py``, "read-only mirror of
+    ``resolve_cost_code_id``'s own validation") applies the very same two conditions --
+    belongs to the project, and is active -- at *staging* time, so the import answers a
+    structured ``COST_LINE_COST_CODE_INVALID`` 409 and never runs the apply. The two
+    ``raise HTTPException`` in ``resolve_cost_code_id`` are therefore defensive on this
+    path: what is asserted here is the condition being caught, not which of the two
+    formulations catches it.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        fixture = _seed_fixture(client, headers)
+        retired_code_id = _create_sub_cost_code(
+            client, headers, fixture["project_id"], "LOT-RETIRED"
+        )
+
+        content = _export_workbook(client, headers, fixture["project_id"], fixture["estimate_id"])
+        _deactivate_cost_code(client, headers, fixture["project_id"], retired_code_id)
+
+        workbook = load_workbook(BytesIO(content))
+        _set_cell(
+            workbook["Non-MO"], "id", fixture["cost_line_id"], "cost_code_id", retired_code_id
+        )
+        edited = _dump_workbook(workbook)
+
+        preview = _preview(client, headers, fixture["project_id"], fixture["estimate_id"], edited)
+        assert preview.status_code == 200, preview.text
+        plan = _plan(preview.json())
+        assert any(
+            issue["code"] == "COST_LINE_COST_CODE_INVALID" for issue in plan["blocking_issues"]
+        )
+        assert plan["applied"] is False
+
+        confirm = _confirm(client, headers, fixture["project_id"], fixture["estimate_id"], edited)
+        assert confirm.status_code == 409, confirm.text
+        assert _plan(confirm.json())["applied"] is False
+
+        cost_lines = _cost_line_rows(fixture["estimate_id"])
+        unchanged = next(item for item in cost_lines if item["id"] == fixture["cost_line_id"])
+        assert unchanged["cost_code_id"] != retired_code_id
 
 
 def _mutate_task_name_required(fixture: dict[str, Any], workbook: Workbook) -> None:

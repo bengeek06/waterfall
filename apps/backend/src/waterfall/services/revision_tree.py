@@ -213,6 +213,12 @@ class TreeRow:
     description: str | None
     plan: domain.PlanFacet | None
     cost: domain.CostFacet | None
+    #: The task this node hangs under (INV-01), resolved on read exactly like
+    #: ``row_number`` and stored in no column -- which is what makes moving a cost
+    #: line under another task enough to change what bears it (E14-07, #333).
+    #: ``None`` on a task node, where the question is meaningless, and on a cost
+    #: node no task encloses: a project-wide global cost, explicitly allowed.
+    bearing_task: BearingTask | None
     predecessors: tuple[domain.NodeLink, ...]
 
 
@@ -700,6 +706,17 @@ def read_revision_tree(db: Session, revision_id: int) -> RevisionTree:
     predecessors: dict[int, list[domain.NodeLink]] = {}
     for link in revision.links:
         predecessors.setdefault(link.node_id, []).append(link)
+
+    def bearing_task_of(node_id: int) -> BearingTask | None:
+        bearing = domain.resolve_bearing_task(revision, node_id)
+        if bearing is None:
+            return None
+        return BearingTask(
+            node_id=bearing.id,
+            work_item_id=bearing.work_item_id,
+            name=revision.plan_facets[bearing.id].name,
+        )
+
     rows = tuple(
         TreeRow(
             node_id=node.id,
@@ -713,6 +730,9 @@ def read_revision_tree(db: Session, revision_id: int) -> RevisionTree:
             description=loaded.project.work_items[node.work_item_id].description,
             plan=revision.plan_facets.get(node.id),
             cost=revision.cost_facets.get(node.id),
+            bearing_task=(
+                None if node.id not in revision.cost_facets else bearing_task_of(node.id)
+            ),
             predecessors=tuple(
                 sorted(
                     predecessors.get(node.id, []),
@@ -778,6 +798,58 @@ def update_plan_facet(
             is_milestone=is_milestone,
             is_manual=is_manual,
             calendar_id=calendar_id,
+        ),
+    )
+
+
+def update_cost_facet(
+    db: Session,
+    revision_id: int,
+    node_id: int,
+    *,
+    expected_lock_version: int,
+    label: str | domain.Unset = domain.UNSET,
+    quantity: Decimal | domain.Unset = domain.UNSET,
+    role_id: int | None | domain.Unset = domain.UNSET,
+    hours: Decimal | None | domain.Unset = domain.UNSET,
+    cost_type_id: int | None | domain.Unset = domain.UNSET,
+    cost_category_id: int | None | domain.Unset = domain.UNSET,
+    unit_cost: Decimal | None | domain.Unset = domain.UNSET,
+    supply_status: domain.SupplyStatus | None | domain.Unset = domain.UNSET,
+    planned_date: date | None | domain.Unset = domain.UNSET,
+    cost_code_id: int | None | domain.Unset = domain.UNSET,
+    comment: str | None | domain.Unset = domain.UNSET,
+) -> TreeWrite:
+    """Edit the cost facet of one node: label, quantity, MO or non-MO attributes.
+
+    One domain call, therefore one ``lock_version`` bump, whatever the number of
+    attributes the request carries -- the same rule
+    :func:`update_plan_facet` follows, and for the same reason.
+
+    ``nature`` is not editable: see
+    :func:`~waterfall.domain.revision.facets.update_cost_facet`. The shape of the
+    edited facet (INV-19/INV-20) is judged by the domain, before anything is
+    assigned, so a refused patch writes nothing at all.
+    """
+    return _mutate(
+        db,
+        revision_id,
+        expected_lock_version,
+        lambda project, revision: domain.update_cost_facet(
+            project,
+            revision,
+            node_id,
+            label=label,
+            quantity=quantity,
+            role_id=role_id,
+            hours=hours,
+            cost_type_id=cost_type_id,
+            cost_category_id=cost_category_id,
+            unit_cost=unit_cost,
+            supply_status=supply_status,
+            planned_date=planned_date,
+            cost_code_id=cost_code_id,
+            comment=comment,
         ),
     )
 

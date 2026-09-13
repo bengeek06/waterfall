@@ -1,0 +1,86 @@
+type: object
+required:
+- expected_lock_version
+properties:
+  expected_lock_version:
+    type: integer
+    maximum: 2147483647
+    minimum: 0
+  label:
+    anyOf:
+    - type: string
+      maxLength: 512
+      minLength: 1
+    - type: 'null'
+  quantity:
+    anyOf:
+    - type: number
+      exclusiveMinimum: 0
+    - type: string
+      pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,12}|(?=[\d.]{1,15}0*$)\d{0,12}\.\d{0,2}0*$)
+    - type: 'null'
+  role_id:
+    anyOf:
+    - type: integer
+      maximum: 2147483647
+      exclusiveMinimum: 0
+    - type: 'null'
+  hours:
+    anyOf:
+    - type: number
+      minimum: 0
+    - type: string
+      pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,12}|(?=[\d.]{1,15}0*$)\d{0,12}\.\d{0,2}0*$)
+    - type: 'null'
+  cost_type_id:
+    anyOf:
+    - type: integer
+      maximum: 2147483647
+      exclusiveMinimum: 0
+    - type: 'null'
+  cost_category_id:
+    anyOf:
+    - type: integer
+      maximum: 2147483647
+      exclusiveMinimum: 0
+    - type: 'null'
+  unit_cost:
+    anyOf:
+    - type: number
+      minimum: 0
+    - type: string
+      pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,14}|(?=[\d.]{1,17}0*$)\d{0,14}\.\d{0,2}0*$)
+    - type: 'null'
+  supply_status:
+    anyOf:
+    - type: string
+      enum:
+      - planned
+      - ordered
+      - received
+      - cancelled
+    - type: 'null'
+  planned_date:
+    anyOf:
+    - type: string
+      format: date
+    - type: 'null'
+  cost_code_id:
+    anyOf:
+    - type: integer
+      maximum: 2147483647
+      exclusiveMinimum: 0
+    - type: 'null'
+  comment:
+    anyOf:
+    - type: string
+      maxLength: 10000
+    - type: 'null'
+description: >-
+  Edition partielle de la facette cout d'un noeud. Un champ absent est laisse tel
+  quel ; `null` est une valeur (effacer la date prevue, retirer le code de cout,
+  vider le commentaire). `label` et `quantity` refusent un `null` explicite : leurs
+  colonnes sont NOT NULL et n'ont pas d'etat efface, donc omettre le champ est la
+  seule facon de ne pas y toucher (sinon 422). `nature` est absent volontairement :
+  en changer retournerait tout le jeu d'attributs de la ligne (INV-19, INV-20), ce
+  qui est une autre ligne.

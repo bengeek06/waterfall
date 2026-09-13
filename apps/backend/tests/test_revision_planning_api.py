@@ -1666,14 +1666,19 @@ def test_the_docstring_table_is_the_inventory_it_claims_to_be() -> None:
     assert tabled == emitted
 
 
-def test_the_six_operations_document_the_422_they_can_answer() -> None:
-    """M6: 422 was reachable on all six and named nowhere in the contract."""
+def test_every_revision_operation_documents_the_422_it_can_answer() -> None:
+    """M6: 422 was reachable on all of them and named nowhere in the contract.
+
+    Six operations when #331 wrote this, eight since #333 added the cost facet's own
+    creation and edition -- the count is asserted so that an operation added without a
+    documented 422 fails here rather than silently widening the exception.
+    """
     raw_document: object = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
     document = cast(dict[str, Any], raw_document)
     paths = cast(dict[str, Any], document["paths"])
 
     revision_paths = [path for path in paths if "/revisions/" in path]
-    assert len(revision_paths) == 6
+    assert len(revision_paths) == 8
     for path in revision_paths:
         for method, operation in cast(dict[str, Any], paths[path]).items():
             if method not in {"get", "post", "put", "patch", "delete"}:

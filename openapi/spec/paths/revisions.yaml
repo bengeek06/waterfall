@@ -221,3 +221,88 @@
         $ref: ../components/responses/RevisionConflict.yaml
       '422':
         $ref: ../components/responses/RevisionUnprocessable.yaml
+/projects/{projectId}/revisions/{revisionId}/cost-lines:
+  post:
+    tags:
+    - projects
+    summary: Creer un noeud ligne de cout dans une revision
+    description: >-
+      Le pendant de `POST .../tasks` sur la facette cout, dans le meme arbre : une
+      ligne MO porte un role et des heures, une ligne non-MO un type de cout, une
+      categorie et un debours (INV-19, INV-20) ; toute autre forme est refusee avec
+      `detail.code` = REVISION_FACET_CONTRACT. `parent_id` absent place la ligne a
+      la racine, ou elle est un cout global de projet sans tache porteuse (INV-01),
+      ce qui est explicitement autorise. Rattacher une ligne a une tache-jalon est
+      refuse par le domaine (INV-27, `detail.code` = REVISION_MILESTONE_HAS_CHILDREN).
+    operationId: createRevisionCostLine
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/RevisionId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/RevisionCostLineCreate.yaml
+    responses:
+      '201':
+        description: Noeud cree, avec le nouveau `lock_version` de la revision
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/RevisionNodeWriteRead.yaml
+      '400':
+        $ref: ../components/responses/RevisionBadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/RevisionNotFound.yaml
+      '409':
+        $ref: ../components/responses/RevisionConflict.yaml
+      '422':
+        $ref: ../components/responses/RevisionUnprocessable.yaml
+/projects/{projectId}/revisions/{revisionId}/nodes/{nodeId}/cost:
+  patch:
+    tags:
+    - projects
+    summary: Modifier la facette cout d'un noeud
+    description: >-
+      Edition partielle : libelle, quantite, debours, role, heures, suivi appro,
+      date prevue, code de cout, commentaire. Un champ absent est laisse tel quel ;
+      `null` est une valeur. `nature` n'est pas modifiable : en changer
+      retournerait tout le jeu d'attributs de la ligne, ce qui est une autre ligne.
+      Quel que soit le nombre d'attributs modifies, `lock_version` n'avance que d'un
+      cran. Aucune suppression ici : `POST .../nodes/delete` retire le noeud et ses
+      deux facettes, et nomme le chiffrage emporte.
+    operationId: updateRevisionCostFacet
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/RevisionId.yaml
+    - $ref: ../components/parameters/RevisionNodeId.yaml
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/RevisionCostFacetUpdate.yaml
+    responses:
+      '200':
+        description: Facette mise a jour, avec le nouveau `lock_version`
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/RevisionWriteRead.yaml
+      '400':
+        $ref: ../components/responses/RevisionBadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/RevisionNotFound.yaml
+      '409':
+        $ref: ../components/responses/RevisionConflict.yaml
+      '422':
+        $ref: ../components/responses/RevisionUnprocessable.yaml

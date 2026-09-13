@@ -209,6 +209,76 @@ def update_plan_facet(
     touch(revision)
 
 
+def update_cost_facet(
+    project: Project,
+    revision: ProjectRevision,
+    node_id: int,
+    *,
+    label: str | Unset = UNSET,
+    quantity: Decimal | Unset = UNSET,
+    role_id: int | None | Unset = UNSET,
+    hours: Decimal | None | Unset = UNSET,
+    cost_type_id: int | None | Unset = UNSET,
+    cost_category_id: int | None | Unset = UNSET,
+    unit_cost: Decimal | None | Unset = UNSET,
+    supply_status: SupplyStatus | None | Unset = UNSET,
+    planned_date: date | None | Unset = UNSET,
+    cost_code_id: int | None | Unset = UNSET,
+    comment: str | None | Unset = UNSET,
+) -> None:
+    """Apply a *partial* edit of one cost facet, as a single write (E14-07, #333).
+
+    The cost-side twin of :func:`update_plan_facet`, and it exists for the very
+    same reason: every single-attribute setter above bumps the optimistic lock
+    counter, so a transport layer editing a quantity *and* a débours in one request
+    by calling two of them would consume two versions and hand the caller back an
+    ``expected_lock_version`` off by one. One request, one ``touch``.
+
+    ``nature`` is deliberately **not** a parameter. Flipping it would swap the whole
+    attribute set of the line (INV-19/INV-20) in one call -- role and hours out,
+    cost type, category and débours in -- so what a client actually wants there is a
+    different line, and deleting this one and adding another says so. Every other
+    attribute of either nature is editable here, and the *shape* stays the domain's
+    to judge: the candidate facet is checked by :func:`check_cost_facet_shape`
+    before a single field is assigned, so a refused patch leaves the facet exactly
+    as it was rather than half applied.
+
+    ``role_id`` carries Règle 1 to its end: a labour line's role is what decides the
+    calendar of the tasks above it, so changing it resynchronises them from this
+    node up, exactly as :func:`assign_role` already does.
+
+    Numeric domains (a strictly positive quantity, non-negative hours) are not
+    checked here, for the reason :func:`update_plan_facet` gives: the specification
+    assigns them to the column constraints, and the transport layer bounds them on
+    the way in.
+    """
+    require_draft(revision)
+    facet = _cost_facet(revision, node_id)
+    changes: dict[str, object] = {
+        name: value
+        for name, value in (
+            ("label", label),
+            ("quantity", quantity),
+            ("role_id", role_id),
+            ("hours", hours),
+            ("cost_type_id", cost_type_id),
+            ("cost_category_id", cost_category_id),
+            ("unit_cost", unit_cost),
+            ("supply_status", supply_status),
+            ("planned_date", planned_date),
+            ("cost_code_id", cost_code_id),
+            ("comment", comment),
+        )
+        if not isinstance(value, _Unset)
+    }
+    _reject_invalid_cost_facet(node_id, replace(facet, **changes))
+    for name, value in changes.items():
+        setattr(facet, name, value)
+    if "role_id" in changes:
+        resynchronize_from_node(project, revision, node_id)
+    touch(revision)
+
+
 def assign_role(
     project: Project,
     revision: ProjectRevision,

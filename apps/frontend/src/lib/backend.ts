@@ -15,10 +15,231 @@ export type InflationRate = components["schemas"]["InflationRateRead"];
 export type RoleCapacity = components["schemas"]["RoleCapacityRead"];
 export type Project = components["schemas"]["ProjectRead"];
 export type ProjectEstimate = components["schemas"]["ProjectEstimateRead"];
-export type EstimateTaskRow = components["schemas"]["EstimateTaskRowRead"];
-export type EstimateCostLine = components["schemas"]["EstimateCostLineRead"];
-export type EstimateRoleAssignment = components["schemas"]["EstimateRoleAssignmentRead"];
 export type ProjectCostCode = components["schemas"]["ProjectCostCodeRead"];
+
+// E14-07 (#333) removed the devis-grid endpoints from the backend and, with them,
+// their request/response schemas from the OpenAPI contract. The Devis screen below
+// still calls them and is rebuilt on the revision model by E14-11 (#337); until then
+// these payload shapes are declared here, verbatim as the contract last generated
+// them, so this wrapper keeps compiling against a contract that no longer describes
+// them. Same bridge #331 already put in place for the planning editor just above.
+/**
+ * @deprecated Hand-copied from the OpenAPI contract, which no longer describes `EstimateTaskRowRead`:
+ * E14-07 (#333) removed the devis-grid endpoints (`task-rows`, `tasks`, `cost-lines`,
+ * `role-assignments`, `grid-nodes/move`) -- the cost facet of a revision replaces them.
+ * The devis grid below is rebuilt on the revision model by E14-11 (#337); this alias
+ * disappears with it.
+ */
+export type EstimateTaskRow = {
+  id: number;
+  estimate_id: number;
+  task_id?: number | null;
+  task_uid?: number | null;
+  readonly row_number?: number | null;
+  parent_task_id?: number | null;
+  position: number;
+  task_name: string;
+  outline_number?: string | null;
+  outline_level?: number | null;
+  is_milestone: boolean;
+};
+/**
+ * @deprecated Hand-copied from the OpenAPI contract, which no longer describes `EstimateTaskRowListRead`:
+ * E14-07 (#333) removed the devis-grid endpoints (`task-rows`, `tasks`, `cost-lines`,
+ * `role-assignments`, `grid-nodes/move`) -- the cost facet of a revision replaces them.
+ * The devis grid below is rebuilt on the revision model by E14-11 (#337); this alias
+ * disappears with it.
+ */
+export type EstimateTaskRowListRead = components["schemas"]["PaginationMeta"] & {
+  items: EstimateTaskRow[];
+};
+/**
+ * @deprecated Hand-copied from the OpenAPI contract, which no longer describes `EstimateTaskCreate`:
+ * E14-07 (#333) removed the devis-grid endpoints (`task-rows`, `tasks`, `cost-lines`,
+ * `role-assignments`, `grid-nodes/move`) -- the cost facet of a revision replaces them.
+ * The devis grid below is rebuilt on the revision model by E14-11 (#337); this alias
+ * disappears with it.
+ */
+export type EstimateTaskCreate = {
+  name: string;
+  is_milestone: boolean;
+  target_parent_uid?: number | null;
+  insert_after_uid?: number | null;
+};
+/**
+ * @deprecated Hand-copied from the OpenAPI contract, which no longer describes `EstimateCostLineRead`:
+ * E14-07 (#333) removed the devis-grid endpoints (`task-rows`, `tasks`, `cost-lines`,
+ * `role-assignments`, `grid-nodes/move`) -- the cost facet of a revision replaces them.
+ * The devis grid below is rebuilt on the revision model by E14-11 (#337); this alias
+ * disappears with it.
+ */
+export type EstimateCostLine = {
+  id: number;
+  estimate_id: number;
+  task_id?: number | null;
+  cost_type_id: number;
+  cost_category_id: number;
+  cost_code_id?: number | null;
+  cost_type_code: string;
+  accounting_code: string;
+  category_code?: string | null;
+  label: string;
+  quantity: number;
+  unit_cost: number;
+  purchase_cost: number;
+  supply_status?: components["schemas"]["SupplyStatus"] | null;
+  planned_date?: string | null;
+  uid: number;
+  parent_uid?: number | null;
+  position: number;
+  readonly row_number: number;
+};
+/**
+ * @deprecated Hand-copied from the OpenAPI contract, which no longer describes `EstimateCostLineListRead`:
+ * E14-07 (#333) removed the devis-grid endpoints (`task-rows`, `tasks`, `cost-lines`,
+ * `role-assignments`, `grid-nodes/move`) -- the cost facet of a revision replaces them.
+ * The devis grid below is rebuilt on the revision model by E14-11 (#337); this alias
+ * disappears with it.
+ */
+export type EstimateCostLineListRead = components["schemas"]["PaginationMeta"] & {
+  items: EstimateCostLine[];
+};
+/**
+ * @deprecated Hand-copied from the OpenAPI contract, which no longer describes `EstimateCostLineCreate`:
+ * E14-07 (#333) removed the devis-grid endpoints (`task-rows`, `tasks`, `cost-lines`,
+ * `role-assignments`, `grid-nodes/move`) -- the cost facet of a revision replaces them.
+ * The devis grid below is rebuilt on the revision model by E14-11 (#337); this alias
+ * disappears with it.
+ */
+export type EstimateCostLineCreate = {
+  task_id?: number | null;
+  cost_category_id: number;
+  cost_code_id?: number | null;
+  label: string;
+  quantity: number;
+  unit_cost: number;
+  supply_status?: components["schemas"]["SupplyStatus"] | null;
+  planned_date?: string | null;
+  target_parent_uid?: number | null;
+  insert_after_uid?: number | null;
+};
+/**
+ * @deprecated Hand-copied from the OpenAPI contract, which no longer describes `EstimateCostLineUpdate`:
+ * E14-07 (#333) removed the devis-grid endpoints (`task-rows`, `tasks`, `cost-lines`,
+ * `role-assignments`, `grid-nodes/move`) -- the cost facet of a revision replaces them.
+ * The devis grid below is rebuilt on the revision model by E14-11 (#337); this alias
+ * disappears with it.
+ */
+export type EstimateCostLineUpdate = {
+  task_id?: number | null;
+  cost_category_id?: number;
+  cost_code_id?: number | null;
+  label?: string;
+  quantity?: number;
+  unit_cost?: number;
+  supply_status?: components["schemas"]["SupplyStatus"] | null;
+  planned_date?: string | null;
+};
+/**
+ * @deprecated Hand-copied from the OpenAPI contract, which no longer describes `EstimateRoleAssignmentRead`:
+ * E14-07 (#333) removed the devis-grid endpoints (`task-rows`, `tasks`, `cost-lines`,
+ * `role-assignments`, `grid-nodes/move`) -- the cost facet of a revision replaces them.
+ * The devis grid below is rebuilt on the revision model by E14-11 (#337); this alias
+ * disappears with it.
+ */
+export type EstimateRoleAssignment = {
+  id: number;
+  estimate_id: number;
+  task_id: number | null;
+  role_id: number;
+  role_code: string;
+  role_name: string;
+  cost_category_id: number;
+  accounting_code: string;
+  cost_code_id?: number | null;
+  quantity: number;
+  hours: number;
+  comment?: string | null;
+  created_at: string;
+  updated_at: string;
+  uid: number;
+  parent_uid?: number | null;
+  position: number;
+  readonly row_number: number;
+};
+/**
+ * @deprecated Hand-copied from the OpenAPI contract, which no longer describes `EstimateRoleAssignmentListRead`:
+ * E14-07 (#333) removed the devis-grid endpoints (`task-rows`, `tasks`, `cost-lines`,
+ * `role-assignments`, `grid-nodes/move`) -- the cost facet of a revision replaces them.
+ * The devis grid below is rebuilt on the revision model by E14-11 (#337); this alias
+ * disappears with it.
+ */
+export type EstimateRoleAssignmentListRead = components["schemas"]["PaginationMeta"] & {
+  items: EstimateRoleAssignment[];
+};
+/**
+ * @deprecated Hand-copied from the OpenAPI contract, which no longer describes `EstimateRoleAssignmentCreate`:
+ * E14-07 (#333) removed the devis-grid endpoints (`task-rows`, `tasks`, `cost-lines`,
+ * `role-assignments`, `grid-nodes/move`) -- the cost facet of a revision replaces them.
+ * The devis grid below is rebuilt on the revision model by E14-11 (#337); this alias
+ * disappears with it.
+ */
+export type EstimateRoleAssignmentCreate = {
+  task_id: number;
+  role_id: number;
+  cost_code_id?: number | null;
+  quantity: number;
+  hours: number;
+  comment?: string | null;
+  target_parent_uid?: number | null;
+  insert_after_uid?: number | null;
+};
+/**
+ * @deprecated Hand-copied from the OpenAPI contract, which no longer describes `EstimateRoleAssignmentUpdate`:
+ * E14-07 (#333) removed the devis-grid endpoints (`task-rows`, `tasks`, `cost-lines`,
+ * `role-assignments`, `grid-nodes/move`) -- the cost facet of a revision replaces them.
+ * The devis grid below is rebuilt on the revision model by E14-11 (#337); this alias
+ * disappears with it.
+ */
+export type EstimateRoleAssignmentUpdate = {
+  cost_code_id?: number | null;
+  quantity?: number;
+  hours?: number;
+  comment?: string | null;
+};
+/**
+ * @deprecated Hand-copied from the OpenAPI contract, which no longer describes `MilestoneTemplate`:
+ * E14-07 (#333) removed the devis-grid endpoints (`task-rows`, `tasks`, `cost-lines`,
+ * `role-assignments`, `grid-nodes/move`) -- the cost facet of a revision replaces them.
+ * The devis grid below is rebuilt on the revision model by E14-11 (#337); this alias
+ * disappears with it.
+ */
+export type MilestoneTemplate = "fourniture" | "sous_traitance";
+/**
+ * @deprecated Hand-copied from the OpenAPI contract, which no longer describes `EstimateCostLineMilestonesCreate`:
+ * E14-07 (#333) removed the devis-grid endpoints (`task-rows`, `tasks`, `cost-lines`,
+ * `role-assignments`, `grid-nodes/move`) -- the cost facet of a revision replaces them.
+ * The devis grid below is rebuilt on the revision model by E14-11 (#337); this alias
+ * disappears with it.
+ */
+export type EstimateCostLineMilestonesCreate = {
+  template: MilestoneTemplate;
+  intermediate_milestones_count: number;
+  lag_minutes: number;
+};
+/**
+ * @deprecated Hand-copied from the OpenAPI contract, which no longer describes `EstimateGridNodeMove`:
+ * E14-07 (#333) removed the devis-grid endpoints (`task-rows`, `tasks`, `cost-lines`,
+ * `role-assignments`, `grid-nodes/move`) -- the cost facet of a revision replaces them.
+ * The devis grid below is rebuilt on the revision model by E14-11 (#337); this alias
+ * disappears with it.
+ */
+export type EstimateGridNodeMove = {
+  node_uids: number[];
+  target_parent_uid?: number | null;
+  position: number;
+  expected_revision: number;
+};
 export type Task = components["schemas"]["TaskRead"];
 export type PlanningStructureCreate = components["schemas"]["PlanningStructureCreate"];
 export type PlanningStructureRead = components["schemas"]["PlanningStructureRead"];
@@ -1127,7 +1348,7 @@ export async function listEstimateTaskRows(
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
 ): Promise<EstimateTaskRow[]> {
-  const page = await authRequest<components["schemas"]["EstimateTaskRowListRead"]>(
+  const page = await authRequest<EstimateTaskRowListRead>(
     `/projects/${projectId}/estimates/${estimateId}/task-rows`,
     tokens,
     { method: "GET" },
@@ -1136,7 +1357,6 @@ export async function listEstimateTaskRows(
   return page.items;
 }
 
-export type EstimateTaskCreate = components["schemas"]["EstimateTaskCreate"];
 
 // Adds a task directly from the Devis screen (E6-06/#67): creates a snapshot task in the
 // project's *displayed* planning (which must be a draft) and a matching EstimateTaskRow in
@@ -1181,7 +1401,7 @@ export async function listEstimateCostLines(
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
 ): Promise<EstimateCostLine[]> {
-  const page = await authRequest<components["schemas"]["EstimateCostLineListRead"]>(
+  const page = await authRequest<EstimateCostLineListRead>(
     `/projects/${projectId}/estimates/${estimateId}/cost-lines`,
     tokens,
     { method: "GET" },
@@ -1190,8 +1410,6 @@ export async function listEstimateCostLines(
   return page.items;
 }
 
-export type EstimateCostLineCreate = components["schemas"]["EstimateCostLineCreate"];
-export type EstimateCostLineUpdate = components["schemas"]["EstimateCostLineUpdate"];
 
 export function createEstimateCostLine(
   projectId: number,
@@ -1252,8 +1470,6 @@ export function deleteEstimateCostLine(
 // themselves from EstimateCostLine's own: `task_id`/`role_id` are only ever set at creation
 // (immutable afterward, see EstimateRoleAssignmentUpdate's own doc comment in the OpenAPI spec),
 // so `EstimateRoleAssignmentUpdate` doesn't carry either field at all.
-export type EstimateRoleAssignmentCreate = components["schemas"]["EstimateRoleAssignmentCreate"];
-export type EstimateRoleAssignmentUpdate = components["schemas"]["EstimateRoleAssignmentUpdate"];
 
 export async function listEstimateRoleAssignments(
   projectId: number,
@@ -1261,7 +1477,7 @@ export async function listEstimateRoleAssignments(
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
 ): Promise<EstimateRoleAssignment[]> {
-  const page = await authRequest<components["schemas"]["EstimateRoleAssignmentListRead"]>(
+  const page = await authRequest<EstimateRoleAssignmentListRead>(
     `/projects/${projectId}/estimates/${estimateId}/role-assignments`,
     tokens,
     { method: "GET" },
@@ -1324,7 +1540,6 @@ export function deleteEstimateRoleAssignment(
   );
 }
 
-export type EstimateCostLineMilestonesCreate = components["schemas"]["EstimateCostLineMilestonesCreate"];
 
 // Applies a chained-milestone template to a non-labor cost line (E6-07/#68): creates 2
 // ("fourniture") or `2 + intermediate_milestones_count` ("sous_traitance") milestone tasks in the
@@ -1344,7 +1559,7 @@ export async function applyEstimateCostLineMilestoneTemplate(
   tokens: SessionTokens,
   onSessionRefresh: (next: SessionTokens) => void,
 ): Promise<EstimateTaskRow[]> {
-  const page = await authRequest<components["schemas"]["EstimateTaskRowListRead"]>(
+  const page = await authRequest<EstimateTaskRowListRead>(
     `/projects/${projectId}/estimates/${estimateId}/cost-lines/${lineId}/milestones`,
     tokens,
     {
@@ -1384,7 +1599,6 @@ export function validateProjectEstimate(
 // with a fresh `listEstimateCostLines`/`listEstimateRoleAssignments`/`listEstimateTaskRows` to
 // see the tree's new `row_number`/`position`/`parent_uid` (see this issue's own review note:
 // never recompute those client-side after a move).
-export type EstimateGridNodeMove = components["schemas"]["EstimateGridNodeMove"];
 
 export function moveEstimateGridNodes(
   projectId: number,
