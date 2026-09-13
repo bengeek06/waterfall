@@ -98,6 +98,14 @@ paths:
     $ref: ./paths/revisions.yaml#/~1projects~1{projectId}~1revisions~1{revisionId}~1cost-lines
   /projects/{projectId}/revisions/{revisionId}/nodes/{nodeId}/cost:
     $ref: ./paths/revisions.yaml#/~1projects~1{projectId}~1revisions~1{revisionId}~1nodes~1{nodeId}~1cost
+  /projects/{projectId}/revisions/{revisionId}/export.xlsx:
+    $ref: ./paths/revisions.yaml#/~1projects~1{projectId}~1revisions~1{revisionId}~1export.xlsx
+  /projects/{projectId}/revisions/{revisionId}/export-reconciliation.xlsx:
+    $ref: ./paths/revisions.yaml#/~1projects~1{projectId}~1revisions~1{revisionId}~1export-reconciliation.xlsx
+  /projects/{projectId}/revisions/{revisionId}/import-reconciliation/preview:
+    $ref: ./paths/revisions.yaml#/~1projects~1{projectId}~1revisions~1{revisionId}~1import-reconciliation~1preview
+  /projects/{projectId}/revisions/{revisionId}/import-reconciliation/confirm:
+    $ref: ./paths/revisions.yaml#/~1projects~1{projectId}~1revisions~1{revisionId}~1import-reconciliation~1confirm
   /projects/{projectId}/plannings/{planningId}/validate:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1plannings~1{planningId}~1validate
   /projects/{projectId}/plannings/{planningId}/reference:

@@ -631,6 +631,86 @@ export interface paths {
         patch: operations["updateRevisionCostFacet"];
         trace?: never;
     };
+    "/projects/{projectId}/revisions/{revisionId}/export.xlsx": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Exporter le devis d'une revision au format Excel
+         * @description Remplace /projects/{projectId}/estimates/{estimateId}/export.xlsx. Meme classeur -- feuilles `Devis` et `Agregats`, memes colonnes, memes sous-totaux -- mais construit a partir des facettes cout de la revision et chiffre en direct : un brouillon exporte donc aussi ses lignes MO, ce que la grille historique ne savait faire qu'une fois la validation passee. Chaque montant est publie en euros au centime, arrondi ligne a ligne avant toute addition, exactement ce que faisaient les colonnes Numeric(16,2) du socle remplace. Lecture pure : autorisee quel que soit le statut de la revision, et un taux horaire manquant chiffre sa ligne a zero plutot que de rendre illisible un brouillon parfaitement editable.
+         */
+        get: operations["exportRevisionExcel"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{projectId}/revisions/{revisionId}/export-reconciliation.xlsx": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Exporter une revision au format Excel reconciliable
+         * @description Remplace /projects/{projectId}/estimates/{estimateId}/export-reconciliation.xlsx. Trois feuilles (Taches / MO / Non-MO), mais toutes les trois sont des vues du meme arbre : chaque ligne porte son `node_id`, son `parent_node_id` et sa `position` -- un identifiant la ou le fichier historique en portait deux par ligne, et le placement qui rend reconstructible la tache porteuse de chaque ligne de cout (INV-01). Les colonnes `bearing_task_node_id` / `bearing_task_name` sont informatives : la tache porteuse est une consequence du placement, jamais une donnee que la reimportation lit. Lecture pure, refusee sur rien : ce qu'une revision validee refuse, c'est la reimportation de ce fichier (REVISION_IMMUTABLE).
+         */
+        get: operations["exportRevisionReconciliationExcel"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{projectId}/revisions/{revisionId}/import-reconciliation/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Previsualiser la reconciliation d'un classeur Excel dans une revision
+         * @description Analyse le fichier reexporte par /export-reconciliation.xlsx, eventuellement edite, et calcule le diff (creations / mises a jour / suppressions) sans rien ecrire. Execute exactement l'analyse que /confirm execute sur le meme fichier, donc l'apercu predit la confirmation au lieu de l'approcher. Ne prend aucun verrou et n'est refuse sur aucun statut de revision : montrer ce qu'un fichier changerait est sans effet, et refuser l'apercu masquerait la raison meme pour laquelle la confirmation va etre refusee. Le refus est celui de /confirm, et c'est REVISION_IMMUTABLE.
+         */
+        post: operations["previewRevisionReconciliationImport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{projectId}/revisions/{revisionId}/import-reconciliation/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirmer la reconciliation d'un classeur Excel dans une revision
+         * @description Rejoue exactement l'analyse de /preview sur le fichier resoumis (aucune session d'import stockee cote serveur) et l'applique en une seule transaction si `blocking_issues` est vide. Ordre d'application : suppressions, mises a jour, puis creations -- une creation doit trouver son parent vivant, ce que le fichier est refuse s'il ne le garantit pas. L'upload, le controle de taille et l'analyse openpyxl ont tous lieu avant toute prise de verrou ; seul un precheck sans probleme prend le verrou du projet et rejoue la mise en scene sous ce verrou, ce qui ferme la fenetre TOCTOU. Si des problemes bloquants sont trouves, rien n'est ecrit et la reponse est un 409 portant le `RevisionReconciliationPlanRead` complet (`applied=false`), jamais un 2xx trompeur. Une revision `validated` ou `superseded` refuse l'ecriture avec REVISION_IMMUTABLE (INV-03), le meme code que toute autre ecriture sur l'une ou l'autre facette.
+         */
+        post: operations["confirmRevisionReconciliationImport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/projects/{projectId}/plannings/{planningId}/validate": {
         parameters: {
             query?: never;
@@ -1821,6 +1901,10 @@ export interface components {
             detail: {
                 /** @description Code stable de refus, traduit par la couche API depuis l'erreur de domaine ou de service (voir `waterfall.api.revision_errors`). REVISION_IMMUTABLE est le code d'INV-03 : il est identique sur la facette planification et sur la facette cout. */
                 code: string;
+                /** @description Presente sur le seul refus qui ne parle pas de la revision mais du fichier soumis : RECONCILIATION_FORMAT_ERROR (E14-07c). Porte tous les problemes de format trouves dans le classeur d'un coup -- jamais le premier seulement -- chacun avec son `code`, son `message`, et la `sheet`/`row` d'ou il vient quand il est attribuable a une ligne. */
+                issues?: {
+                    [key: string]: unknown;
+                }[];
             };
         };
         /** @description Conflit d'ecriture sur une revision. Le conflit de verrou optimiste porte de quoi se resynchroniser sans relecture devinee ; les autres conflits ne portent que leur `code`. */
@@ -2180,6 +2264,30 @@ export interface components {
             missing_cost_rates: components["schemas"]["RevisionMissingRateRead"][];
             missing_inflation_years: number[];
         };
+        /** @description Un probleme ou une modification ignoree trouve dans un classeur de reconciliation. `sheet`/`row` designent la cellule Excel exacte (`row` est le numero de ligne Excel, ligne d'en-tete comprise) ; les deux valent `null` pour un probleme qu'aucune ligne du fichier ne porte -- une suppression n'a par definition plus de ligne dans le fichier. */
+        RevisionReconciliationIssueRead: {
+            code: string;
+            message: string;
+            sheet: string | null;
+            row: number | null;
+        };
+        /** @description Ce qu'un classeur de reconciliation ferait -- ou a fait -- a une revision. Retourne par /preview (toujours `applied=false`, rien n'est ecrit) et par /confirm, qui rejoue exactement la meme analyse sur le meme fichier : un apercu predit donc exactement ce qu'une confirmation fera. `blocking_issues` non vide signifie que rien n'a ete ecrit et que rien ne le sera ; les compteurs et listes d'identifiants decrivent quand meme le diff que le fichier enonce, puisque c'est ce sur quoi l'utilisateur doit agir. Tous les identifiants sont des identifiants de noeud, la ou le plan historique en portait trois familles : un arbre, une sorte d'identifiant. `cost_losses` est le garde-fou de la Regle 3 : une ligne que le fichier ne mentionne plus est une suppression, et une suppression qui emporte du chiffrage le nomme. Les montants sont en euros au centime. `lock_version` est le compteur de la revision -- inchange sur un apercu, le nouveau apres une confirmation appliquee. */
+        RevisionReconciliationPlanRead: {
+            revision_id: number;
+            lock_version: number;
+            blocking_issues: components["schemas"]["RevisionReconciliationIssueRead"][];
+            warnings: components["schemas"]["RevisionReconciliationIssueRead"][];
+            tasks_to_create: number;
+            tasks_to_delete: number[];
+            labor_to_create: number;
+            labor_to_update: number[];
+            labor_to_delete: number[];
+            non_labor_to_create: number;
+            non_labor_to_update: number[];
+            non_labor_to_delete: number[];
+            cost_losses: components["schemas"]["RevisionCostLossRead"][];
+            applied: boolean;
+        };
         /**
          * @description Issue #65 (E6-04) : une tache "reelle" du planning (ni recapitulative ni
          *     jalon) qui n'a ni affectation de role de ce devis (`EstimateRoleAssignment`,
@@ -2348,7 +2456,7 @@ export interface components {
                 "application/json": components["schemas"]["FastAPIErrorResponse"];
             };
         };
-        /** @description Requete refusee par le domaine de revision : selection vide ou incoherente, position hors plage, deplacement circulaire, tache placee sous une ligne de cout, noeud place sous un jalon, lien de precedence invalide, ou predecesseur n'appartenant pas a cette revision. `detail.code` porte le code stable (REVISION_SELECTION_INVALID, REVISION_POSITION_INVALID, REVISION_TREE_CYCLE, REVISION_FACET_PLACEMENT_INVALID, REVISION_MILESTONE_HAS_CHILDREN, REVISION_LINK_INVALID, REVISION_CROSS_REVISION, REVISION_FACET_CONTRACT, REVISION_PROJECT_MISMATCH, REVISION_WORK_BREAKDOWN_INVALID, REVISION_IMPORT_STRUCTURE_INVALID, REVISION_REFUSED). REVISION_MILESTONE_HAS_CHILDREN est le refus d'INV-27 : un jalon ne porte aucun enfant, ni sous-tache ni ligne de cout, et la regle se lit dans les deux sens -- on ne rattache rien sous un jalon, et on ne marque pas comme jalon une tache qui porte deja des enfants. REVISION_CROSS_REVISION signifie « cet identifiant de noeud n'est pas un des notres » : il couvre aussi bien un noeud d'une autre revision qu'un identifiant qui ne designe aucun noeud, distinction que cette revision ne peut pas faire et ne pretend pas faire. */
+        /** @description Requete refusee par le domaine de revision : selection vide ou incoherente, position hors plage, deplacement circulaire, tache placee sous une ligne de cout, noeud place sous un jalon, lien de precedence invalide, ou predecesseur n'appartenant pas a cette revision. `detail.code` porte le code stable (REVISION_SELECTION_INVALID, REVISION_POSITION_INVALID, REVISION_TREE_CYCLE, REVISION_FACET_PLACEMENT_INVALID, REVISION_MILESTONE_HAS_CHILDREN, REVISION_LINK_INVALID, REVISION_CROSS_REVISION, REVISION_FACET_CONTRACT, REVISION_PROJECT_MISMATCH, REVISION_WORK_BREAKDOWN_INVALID, REVISION_IMPORT_STRUCTURE_INVALID, REVISION_REFUSED). REVISION_MILESTONE_HAS_CHILDREN est le refus d'INV-27 : un jalon ne porte aucun enfant, ni sous-tache ni ligne de cout, et la regle se lit dans les deux sens -- on ne rattache rien sous un jalon, et on ne marque pas comme jalon une tache qui porte deja des enfants. REVISION_CROSS_REVISION signifie « cet identifiant de noeud n'est pas un des notres » : il couvre aussi bien un noeud d'une autre revision qu'un identifiant qui ne designe aucun noeud, distinction que cette revision ne peut pas faire et ne pretend pas faire. RECONCILIATION_FORMAT_ERROR est le seul code de cette liste qui ne parle pas de la revision mais du fichier : le classeur de reconciliation soumis n'est pas lisible comme donnee structuree (feuille absente, ligne d'en-tete qui ne correspond pas a l'export, cellule d'un type impossible), et `detail.issues` porte tous les problemes trouves d'un coup, jamais le premier seulement. */
         RevisionBadRequest: {
             headers: {
                 [name: string]: unknown;
@@ -2427,6 +2535,24 @@ export interface components {
             };
             content: {
                 "application/json": components["schemas"]["FastAPIErrorResponse"];
+            };
+        };
+        /** @description Classeur de reconciliation trop volumineux : la taille depasse la limite configuree (`import_max_upload_bytes`, la meme que celle de l'import MS Project). `detail.code` vaut RECONCILIATION_TOO_LARGE. Rien n'a ete lu ni ecrit -- le refus tombe des que la limite est franchie, pas apres avoir mis tout le fichier en memoire. */
+        RevisionPayloadTooLarge: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["RevisionErrorResponse"];
+            };
+        };
+        /** @description Soit des problemes bloquants ont ete trouves et rien n'a ete applique -- le corps est alors le `RevisionReconciliationPlanRead` complet (pas l'enveloppe `detail` habituelle), avec `applied=false` ; soit la revision ou le projet a refuse l'ecriture, et le corps est l'enveloppe structuree de toutes les autres routes de revision (`RevisionLockConflict`), portant notamment REVISION_IMMUTABLE (INV-03 : la revision est `validated` ou `superseded`), PROJECT_READ_ONLY, ou REVISION_LOCK_CONFLICT -- ce dernier signifiant que la revision a ete ecrite entre le pre-controle et l'application : rien n'a ete applique, il faut re-exporter le classeur et recommencer. C'est la seule operation de revision dont le 409 n'est pas directement `RevisionConflict`, parce que c'est la seule dont le refus "metier" est un diagnostic complet et non un code. */
+        RevisionReconciliationConfirmConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["RevisionReconciliationPlanRead"] | components["schemas"]["RevisionLockConflict"];
             };
         };
         /** @description Soit la reference de planning n'est pas validee, elle ne peut donc pas servir de base a la reouverture de la structure (code `PLANNING_STRUCTURE_REOPEN_REQUIRES_VALIDATION`), soit la reouverture entre en conflit avec les donnees existantes lors de l'enregistrement (code `PLANNING_STRUCTURE_REOPEN_INTEGRITY_CONFLICT`). */
@@ -3717,6 +3843,148 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["RevisionNotFound"];
             409: components["responses"]["RevisionConflict"];
+            422: components["responses"]["RevisionUnprocessable"];
+        };
+    };
+    exportRevisionExcel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la revision (arbre + facettes planification et cout) */
+                revisionId: components["parameters"]["RevisionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Classeur Excel du devis de la revision */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": string;
+                };
+            };
+            400: components["responses"]["RevisionBadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["RevisionNotFound"];
+            409: components["responses"]["RevisionConflict"];
+            422: components["responses"]["RevisionUnprocessable"];
+        };
+    };
+    exportRevisionReconciliationExcel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la revision (arbre + facettes planification et cout) */
+                revisionId: components["parameters"]["RevisionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Classeur Excel reconciliable (feuilles Taches / MO / Non-MO) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": string;
+                };
+            };
+            400: components["responses"]["RevisionBadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["RevisionNotFound"];
+            409: components["responses"]["RevisionConflict"];
+            422: components["responses"]["RevisionUnprocessable"];
+        };
+    };
+    previewRevisionReconciliationImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la revision (arbre + facettes planification et cout) */
+                revisionId: components["parameters"]["RevisionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /**
+                     * Format: binary
+                     * @description Classeur Excel reconciliable (voir /export-reconciliation.xlsx)
+                     */
+                    file: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Diagnostic de reconciliation (apercu, rien n'est applique) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionReconciliationPlanRead"];
+                };
+            };
+            400: components["responses"]["RevisionBadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["RevisionNotFound"];
+            409: components["responses"]["RevisionConflict"];
+            413: components["responses"]["RevisionPayloadTooLarge"];
+            422: components["responses"]["RevisionUnprocessable"];
+        };
+    };
+    confirmRevisionReconciliationImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la revision (arbre + facettes planification et cout) */
+                revisionId: components["parameters"]["RevisionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /**
+                     * Format: binary
+                     * @description Le meme classeur Excel que celui soumis a /preview
+                     */
+                    file: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Reconciliation appliquee */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionReconciliationPlanRead"];
+                };
+            };
+            400: components["responses"]["RevisionBadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["RevisionNotFound"];
+            409: components["responses"]["RevisionReconciliationConfirmConflict"];
+            413: components["responses"]["RevisionPayloadTooLarge"];
             422: components["responses"]["RevisionUnprocessable"];
         };
     };

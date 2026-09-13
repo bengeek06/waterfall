@@ -12,25 +12,34 @@ E14-12/#339 removes it) and once on the revision tree and its cost facets -- run
 comparison is possible; it is the whole reason the EPIC was amended to be "additif
 d'abord".
 
-The figures are deliberately mundane -- an hourly rate, an inflation coefficient, a
-task spanning two years -- and every one of them is derived from the *current*
-calendar year rather than hardcoded, because both engines price an undated line at
-``datetime.now(UTC).year`` and a fixed year would make the suite go red on the 1st
-of January.
+That doubly-mounted fixture now lives in ``_estimate_socle_support.py``: #365 has to
+build the two *workbooks* from the same figures and compare them, which is this same
+comparison one level up, and two copies of the seeds would have made "the same
+figures" a claim rather than a fact. The figures themselves, and why every year is
+derived from the current one, are documented there.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from uuid import uuid4
 
 import pytest
-from sqlalchemy.orm import Session
 
 from _calendar_support import ensure_default_calendar
 from _estimate_grid_support import seed_cost_line, seed_root_grid_node
+from _estimate_socle_support import (
+    INFLATION_ONE,
+    RATE_ONE,
+    YEAR_ONE,
+    YEAR_THREE,
+    YEAR_TWO,
+    BothSides,
+    seed_both_sides,
+    seed_project,
+    seed_referential,
+)
 from _revision_db_support import (
     ReferenceData,
     insert_labor_line,
@@ -40,17 +49,12 @@ from _revision_db_support import (
     seed_annual_rate,
 )
 from waterfall.db.session import get_session_factory
-from waterfall.models.ms_core import MsProject, MsTask
+from waterfall.models.ms_core import MsTask
 from waterfall.models.resources import (
-    CostCategory,
     CostRate,
-    CostType,
     Estimate,
     EstimateLine,
     EstimateRoleAssignment,
-    ProjectCostCode,
-    ResourceNode,
-    ResourceRole,
 )
 from waterfall.services import revision_tree
 from waterfall.services.estimate_calculation import (
@@ -61,18 +65,6 @@ from waterfall.services.estimate_calculation import (
     calculate_revision_aggregates,
     price_revision,
 )
-
-#: Both engines price a line with no dated bearing task at the current calendar year.
-YEAR_ONE = datetime.now(UTC).year
-YEAR_TWO = YEAR_ONE + 1
-YEAR_THREE = YEAR_ONE + 2
-
-RATE_ONE = Decimal("100.00")
-RATE_TWO = Decimal("110.00")
-RATE_THREE = Decimal("120.00")
-INFLATION_ONE = Decimal("1.00000000")
-INFLATION_TWO = Decimal("1.05000000")
-INFLATION_THREE = Decimal("1.10000000")
 
 #: A euro amount at the cent, as the API publishes it.
 #:
@@ -89,418 +81,10 @@ def at_the_cent(amount: Decimal) -> Decimal:
     return amount.quantize(CENTS, rounding=ROUND_HALF_UP)
 
 
-# --------------------------------------------------------------------------------------
-# The referential both sides share
-# --------------------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class Referential:
-    """One role with an annual rate, one supply category, and two cost codes per project.
-
-    Two :class:`ReferenceData` over the same project, calendar and role: the labour
-    one carries the MO cost type and the category the *role* points at (INV-19: a
-    labour line has no category of its own), the supply one carries the non-labour
-    pair ``insert_purchase_line`` reads. That is exactly the split the cost facet
-    itself makes.
-    """
-
-    labor: ReferenceData
-    supply: ReferenceData
-    role_name: str
-    labor_code: str
-    supply_code: str
-
-
-def _seed_referential(
-    session: Session, project_id: int, *, key: str, calendar_id: int
-) -> Referential:
-    """``calendar_id`` comes from :func:`ensure_default_calendar`, called by the caller
-    **before** this session was opened: that helper commits on a session of its own, and
-    SQLite refuses a second writer while an outer transaction is open."""
-    labor_type = CostType(code=f"MO-{key}", name="Main d'oeuvre", kind="labor")
-    supply_type = CostType(code=f"SUP-{key}", name="Fourniture", kind="supply")
-    session.add_all([labor_type, supply_type])
-    session.flush()
-    labor_category = CostCategory(
-        cost_type_id=labor_type.id,
-        accounting_code=f"MO-DEV-{key}",
-        category_code="IDEX",
-        name="Developpement",
-    )
-    supply_category = CostCategory(
-        cost_type_id=supply_type.id,
-        accounting_code=f"SUP-FOU-{key}",
-        category_code="FOU",
-        name="Fournitures",
-    )
-    resource_node = ResourceNode(code=f"IT-{key}", name="Informatique")
-    session.add_all([labor_category, supply_category, resource_node])
-    session.flush()
-    role = ResourceRole(
-        node_id=resource_node.id,
-        cost_category_id=labor_category.id,
-        calendar_id=calendar_id,
-        name=f"Developpeur {key}",
-    )
-    session.add(role)
-    session.flush()
-    return Referential(
-        labor=ReferenceData(
-            project_id=project_id,
-            calendar_id=calendar_id,
-            role_id=role.id,
-            cost_type_id=labor_type.id,
-            cost_category_id=labor_category.id,
-        ),
-        supply=ReferenceData(
-            project_id=project_id,
-            calendar_id=calendar_id,
-            role_id=role.id,
-            cost_type_id=supply_type.id,
-            cost_category_id=supply_category.id,
-        ),
-        role_name=role.name,
-        labor_code=labor_category.accounting_code,
-        supply_code=supply_category.accounting_code,
-    )
-
-
-def _seed_rates(session: Session, referential: Referential) -> None:
-    seed_annual_rate(
-        session, referential.labor, year=YEAR_ONE, hourly_rate=RATE_ONE, inflation=INFLATION_ONE
-    )
-    seed_annual_rate(
-        session, referential.labor, year=YEAR_TWO, hourly_rate=RATE_TWO, inflation=INFLATION_TWO
-    )
-    seed_annual_rate(
-        session,
-        referential.labor,
-        year=YEAR_THREE,
-        hourly_rate=RATE_THREE,
-        inflation=INFLATION_THREE,
-    )
-
-
-def _seed_project(session: Session, name: str) -> MsProject:
-    project = MsProject(
-        source_version=2016,
-        save_version_out=16,
-        name=name,
-        schedule_from_start=True,
-        start_date=datetime(YEAR_ONE, 1, 1, tzinfo=UTC),
-        minutes_per_day=480,
-        minutes_per_week=2400,
-        days_per_month=20,
-    )
-    session.add(project)
-    session.flush()
-    return project
-
-
-def _seed_cost_codes(session: Session, project_id: int) -> tuple[int, int]:
-    """``CC-A``/``CC-B``, by the same two ``code`` strings on either project.
-
-    ``by_cost_code`` is keyed by the *code*, not by the id, which is what lets the
-    two sides be compared at all: they are two different projects, so they carry two
-    different rows for the same code.
-    """
-    # A project holds exactly one root code (#62/E6-01, `uq_wf_project_cost_code_root`),
-    # so the two compared codes hang under it rather than beside it.
-    root = ProjectCostCode(
-        project_id=project_id, parent_id=None, code=f"PRJ-{project_id}", name="Projet"
-    )
-    session.add(root)
-    session.flush()
-    codes = [
-        ProjectCostCode(project_id=project_id, parent_id=root.id, code=code, name=code)
-        for code in ("CC-A", "CC-B")
-    ]
-    session.add_all(codes)
-    session.flush()
-    return codes[0].id, codes[1].id
-
-
-# --------------------------------------------------------------------------------------
-# The legacy side: ms_task / EstimateRoleAssignment / EstimateCostLine
-# --------------------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class LegacyFixture:
-    project_id: int
-    estimate_id: int
-
-
-def _seed_legacy(session: Session, referential: Referential, project: MsProject) -> LegacyFixture:
-    """The very same figures as :func:`_seed_revision`, on the tables the engine replaces."""
-    code_a, code_b = _seed_cost_codes(session, project.id)
-    tasks = {
-        1: MsTask(
-            project_id=project.id,
-            uid=1,
-            name="T1",
-            position=1,
-            start_at=datetime(YEAR_ONE, 3, 2, tzinfo=UTC),
-            finish_at=datetime(YEAR_TWO, 6, 30, tzinfo=UTC),
-        ),
-        2: MsTask(
-            project_id=project.id,
-            uid=2,
-            name="T2",
-            position=2,
-            start_at=datetime(YEAR_ONE, 4, 1, tzinfo=UTC),
-            finish_at=datetime(YEAR_ONE, 9, 30, tzinfo=UTC),
-        ),
-        # Dateless on purpose: the legacy engine returns no line at all for it, and
-        # the new one must not start inventing one.
-        3: MsTask(project_id=project.id, uid=3, name="T3", position=3),
-        # Three years, and hours below that no number of years divides: the engine's
-        # one inexact operation, `hours / Decimal(len(years))`. Without it the whole
-        # comparison would only ever exercise exact arithmetic -- see
-        # `test_the_two_engines_agree_on_every_aggregate`.
-        4: MsTask(
-            project_id=project.id,
-            uid=4,
-            name="T4",
-            position=4,
-            start_at=datetime(YEAR_ONE, 10, 1, tzinfo=UTC),
-            finish_at=datetime(YEAR_THREE, 2, 28, tzinfo=UTC),
-        ),
-    }
-    session.add_all(tasks.values())
-    session.flush()
-
-    estimate = Estimate(
-        project_id=project.id,
-        planning_id=None,
-        version_number=1,
-        kind="initial",
-        status="draft",
-        currency_code="EUR",
-    )
-    session.add(estimate)
-    session.flush()
-
-    for task_uid, quantity, hours, cost_code_id in (
-        (1, Decimal("2"), Decimal("100"), code_a),
-        (2, Decimal("1"), Decimal("8"), code_b),
-        (3, Decimal("1"), Decimal("40"), code_a),
-        (4, Decimal("1"), Decimal("10"), code_a),
-        (None, Decimal("1"), Decimal("10"), None),
-    ):
-        session.add(
-            EstimateRoleAssignment(
-                estimate_id=estimate.id,
-                task_id=None if task_uid is None else tasks[task_uid].id,
-                role_id=referential.labor.role_id,
-                quantity=quantity,
-                hours=hours,
-                cost_code_id=cost_code_id,
-                node_id=seed_root_grid_node(session, estimate.id, "labor"),
-            )
-        )
-    seed_cost_line(
-        session,
-        estimate_id=estimate.id,
-        cost_category_id=referential.supply.cost_category_id,
-        label="Cables",
-        quantity="3.00",
-        unit_cost="25.50",
-        task_id=tasks[2].id,
-        cost_code_id=code_b,
-    )
-    seed_cost_line(
-        session,
-        estimate_id=estimate.id,
-        cost_category_id=referential.supply.cost_category_id,
-        label="Frais de dossier",
-        quantity="2.00",
-        unit_cost="10.00",
-        task_id=None,
-    )
-    session.flush()
-    return LegacyFixture(project_id=project.id, estimate_id=estimate.id)
-
-
-# --------------------------------------------------------------------------------------
-# The revision side: one tree, two facets
-# --------------------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class RevisionFixture:
-    project_id: int
-    revision_id: int
-    task_nodes: dict[str, int]
-    cost_nodes: dict[str, int]
-
-
-def _seed_revision(
-    session: Session, referential: Referential, project: MsProject
-) -> RevisionFixture:
-    """The very same figures as :func:`_seed_legacy`, on ``wf_revision_node``."""
-    code_a, code_b = _seed_cost_codes(session, project.id)
-    labor = ReferenceData(
-        project_id=project.id,
-        calendar_id=referential.labor.calendar_id,
-        role_id=referential.labor.role_id,
-        cost_type_id=referential.labor.cost_type_id,
-        cost_category_id=referential.labor.cost_category_id,
-    )
-    supply = ReferenceData(
-        project_id=project.id,
-        calendar_id=referential.supply.calendar_id,
-        role_id=referential.supply.role_id,
-        cost_type_id=referential.supply.cost_type_id,
-        cost_category_id=referential.supply.cost_category_id,
-    )
-    revision = insert_revision(session, labor)
-
-    t1 = insert_task(
-        session,
-        labor,
-        revision,
-        name="T1",
-        position=1,
-        start_at=datetime(YEAR_ONE, 3, 2, tzinfo=UTC),
-        finish_at=datetime(YEAR_TWO, 6, 30, tzinfo=UTC),
-    )
-    t2 = insert_task(
-        session,
-        labor,
-        revision,
-        name="T2",
-        position=2,
-        start_at=datetime(YEAR_ONE, 4, 1, tzinfo=UTC),
-        finish_at=datetime(YEAR_ONE, 9, 30, tzinfo=UTC),
-    )
-    t3 = insert_task(session, labor, revision, name="T3", position=3)
-    t4 = insert_task(
-        session,
-        labor,
-        revision,
-        name="T4",
-        position=4,
-        start_at=datetime(YEAR_ONE, 10, 1, tzinfo=UTC),
-        finish_at=datetime(YEAR_THREE, 2, 28, tzinfo=UTC),
-    )
-
-    mo_t1 = insert_labor_line(
-        session,
-        labor,
-        revision,
-        label="Etude T1",
-        parent_id=t1.id,
-        quantity=Decimal("2"),
-        hours=Decimal("100"),
-        cost_code_id=code_a,
-    )
-    mo_t2 = insert_labor_line(
-        session,
-        labor,
-        revision,
-        label="Etude T2",
-        parent_id=t2.id,
-        quantity=Decimal("1"),
-        hours=Decimal("8"),
-        cost_code_id=code_b,
-    )
-    mo_t3 = insert_labor_line(
-        session,
-        labor,
-        revision,
-        label="Etude T3",
-        parent_id=t3.id,
-        quantity=Decimal("1"),
-        hours=Decimal("40"),
-        cost_code_id=code_a,
-    )
-    mo_t4 = insert_labor_line(
-        session,
-        labor,
-        revision,
-        label="Etude T4",
-        parent_id=t4.id,
-        quantity=Decimal("1"),
-        hours=Decimal("10"),
-        cost_code_id=code_a,
-    )
-    # INV-01's project-wide global cost: no strict ancestor carries a planning facet.
-    mo_root = insert_labor_line(
-        session,
-        labor,
-        revision,
-        label="Etude transverse",
-        parent_id=None,
-        position=5,
-        quantity=Decimal("1"),
-        hours=Decimal("10"),
-    )
-    cables = insert_purchase_line(
-        session,
-        supply,
-        revision,
-        label="Cables",
-        parent_id=t2.id,
-        position=2,
-        quantity=Decimal("3.00"),
-        unit_cost=Decimal("25.50"),
-        cost_code_id=code_b,
-    )
-    fees = insert_purchase_line(
-        session,
-        supply,
-        revision,
-        label="Frais de dossier",
-        parent_id=None,
-        position=6,
-        quantity=Decimal("2.00"),
-        unit_cost=Decimal("10.00"),
-    )
-    session.flush()
-    return RevisionFixture(
-        project_id=project.id,
-        revision_id=revision.id,
-        task_nodes={"T1": t1.id, "T2": t2.id, "T3": t3.id, "T4": t4.id},
-        cost_nodes={
-            "Etude T1": mo_t1.id,
-            "Etude T2": mo_t2.id,
-            "Etude T3": mo_t3.id,
-            "Etude T4": mo_t4.id,
-            "Etude transverse": mo_root.id,
-            "Cables": cables.id,
-            "Frais de dossier": fees.id,
-        },
-    )
-
-
-@dataclass(frozen=True)
-class BothSides:
-    legacy: LegacyFixture
-    revision: RevisionFixture
-    referential: Referential
-
-
 @pytest.fixture
 def both_sides() -> BothSides:
     """One set of figures, mounted on the legacy socle *and* on the revision model."""
-    key = uuid4().hex[:8]
-    # `revision_store.ensure_project_calendar` refuses to materialise a project without
-    # an organisation default calendar (Règle 1, INV-15), and it has to be committed
-    # before the seeding transaction opens -- see `_seed_referential`.
-    calendar_id = ensure_default_calendar()
-    with get_session_factory()() as session:
-        legacy_project = _seed_project(session, f"Legacy {key}")
-        revision_project = _seed_project(session, f"Revision {key}")
-        referential = _seed_referential(
-            session, legacy_project.id, key=key, calendar_id=calendar_id
-        )
-        _seed_rates(session, referential)
-        legacy = _seed_legacy(session, referential, legacy_project)
-        revision = _seed_revision(session, referential, revision_project)
-        session.commit()
-        return BothSides(legacy=legacy, revision=revision, referential=referential)
+    return seed_both_sides()
 
 
 def _comparable(line: EstimateLine | PricedLine) -> tuple[str, int, Decimal, Decimal, Decimal]:
@@ -872,11 +456,9 @@ def test_the_first_divergence_is_the_legacy_two_decimal_storage_of_a_disbursemen
     key = uuid4().hex[:8]
     calendar_id = ensure_default_calendar()
     with get_session_factory()() as session:
-        legacy_project = _seed_project(session, f"Legacy odd {key}")
-        revision_project = _seed_project(session, f"Revision odd {key}")
-        referential = _seed_referential(
-            session, legacy_project.id, key=key, calendar_id=calendar_id
-        )
+        legacy_project = seed_project(session, f"Legacy odd {key}")
+        revision_project = seed_project(session, f"Revision odd {key}")
+        referential = seed_referential(session, legacy_project.id, key=key, calendar_id=calendar_id)
         estimate = Estimate(
             project_id=legacy_project.id,
             planning_id=None,
@@ -954,11 +536,9 @@ def test_the_hour_split_does_not_diverge_because_each_line_is_published_at_the_c
     key = uuid4().hex[:8]
     calendar_id = ensure_default_calendar()
     with get_session_factory()() as session:
-        legacy_project = _seed_project(session, f"Legacy split {key}")
-        revision_project = _seed_project(session, f"Revision split {key}")
-        referential = _seed_referential(
-            session, legacy_project.id, key=key, calendar_id=calendar_id
-        )
+        legacy_project = seed_project(session, f"Legacy split {key}")
+        revision_project = seed_project(session, f"Revision split {key}")
+        referential = seed_referential(session, legacy_project.id, key=key, calendar_id=calendar_id)
         # A flat rate on all three years, so that every one of the three lines carries
         # the same residue -- three thirds of a cent, which round *down* one by one and
         # *up* once added.
@@ -1083,11 +663,9 @@ def test_the_year_of_a_disbursement_follows_its_planned_date_not_the_current_one
     calendar_id = ensure_default_calendar()
     cash_out = datetime(YEAR_TWO, 7, 15, tzinfo=UTC)
     with get_session_factory()() as session:
-        legacy_project = _seed_project(session, f"Legacy dated {key}")
-        revision_project = _seed_project(session, f"Revision dated {key}")
-        referential = _seed_referential(
-            session, legacy_project.id, key=key, calendar_id=calendar_id
-        )
+        legacy_project = seed_project(session, f"Legacy dated {key}")
+        revision_project = seed_project(session, f"Revision dated {key}")
+        referential = seed_referential(session, legacy_project.id, key=key, calendar_id=calendar_id)
         estimate = Estimate(
             project_id=legacy_project.id,
             planning_id=None,

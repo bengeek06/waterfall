@@ -283,9 +283,14 @@ class RevisionPricing:
 
     revision_id: int
     lines: tuple[PricedLine, ...]
-    #: Total amount of each cost node, summed over its years. Keyed by node id, so
-    #: it is also the lookup :meth:`amount_of` answers from.
+    #: Total amount of each cost node, summed over its years **at full precision**.
+    #: Keyed by node id, so it is also the lookup :meth:`amount_of` answers from.
     amount_by_node: Mapping[int, Decimal]
+    #: The same totals **in euros at the cent**: each priced line rounded on its own
+    #: (:func:`amount_at_the_cent`) and only then added up. Keyed by node id, and the
+    #: lookup :meth:`published_amount_of` answers from. See that method for why the
+    #: two mappings both exist and are not each other's rounding.
+    published_amount_by_node: Mapping[int, Decimal]
     missing_cost_rates: tuple[tuple[CostCategory, int], ...]
     missing_inflation_years: tuple[int, ...]
 
@@ -308,6 +313,35 @@ class RevisionPricing:
         signature the protocol fixes.
         """
         return self.amount_by_node.get(facet.node_id, Decimal("0"))
+
+    def published_amount_of(self, project: domain.Project, facet: domain.CostFacet) -> Decimal:
+        """:meth:`amount_of`, in the unit an API response is allowed to carry (#368).
+
+        The same :data:`~waterfall.domain.revision.pricing.AmountResolver` protocol,
+        and the one **every** caller quoting a
+        :class:`~waterfall.domain.revision.CostLoss` injects -- four of them since
+        #365: the node deletion (``POST .../nodes/delete``), the MS Project import
+        diff, the MS Project import run, and the reconciliation round trip (preview
+        and confirm) -- because the amount those routes carry is *published* money,
+        shown in a confirmation dialog, and 28 significant digits is a decision
+        nobody took (#368). :meth:`amount_of` stays the raw product for everything
+        that has to keep computing with it.
+
+        **Rounded per priced line, never on the node total**, which is the whole
+        reason this is a second mapping rather than a ``quantize`` at the response
+        boundary. :attr:`amount_by_node` is a sum of full-precision products: an MO
+        facet borne by a task spanning three years answers
+        ``999.9999999999999999999999999`` there, which rounds to ``1000.00`` as a
+        total but to ``333.33 + 333.33 + 333.33 = 999.99`` line by line. The second
+        is the figure every other published total of this module carries -- see
+        :func:`calculate_revision_aggregates` -- and publishing the first on one
+        route and the second on another is exactly the "two routes, two answers"
+        #364 removed.
+
+        ``project`` is unread, like :meth:`amount_of`'s, and is part of the
+        signature the protocol fixes.
+        """
+        return self.published_amount_by_node.get(facet.node_id, Decimal("0"))
 
 
 def _bearing_years(bearing_plan: domain.PlanFacet | None) -> list[int] | None:
@@ -597,15 +631,23 @@ def price_loaded_revision(db: Session, loaded: LoadedRevision) -> RevisionPricin
 
     lines: list[PricedLine] = []
     amount_by_node: dict[int, Decimal] = {}
+    published_amount_by_node: dict[int, Decimal] = {}
     for cost_node in cost_nodes:
         node_lines = _priced_lines_of(cost_node, hourly_rates, inflation)
         lines.extend(node_lines)
         amount_by_node[cost_node.node.id] = sum((line.amount for line in node_lines), Decimal("0"))
+        # The publication rule, applied once per line and before anything is added
+        # up -- never to the full-precision total just above it. See
+        # `RevisionPricing.published_amount_of`.
+        published_amount_by_node[cost_node.node.id] = sum(
+            (amount_at_the_cent(line.amount) for line in node_lines), Decimal("0")
+        )
 
     return RevisionPricing(
         revision_id=revision.id,
         lines=tuple(lines),
         amount_by_node=amount_by_node,
+        published_amount_by_node=published_amount_by_node,
         missing_cost_rates=tuple(missing_cost_rates),
         missing_inflation_years=tuple(missing_inflation_years),
     )
@@ -634,11 +676,13 @@ def amount_at_the_cent(amount: Decimal) -> Decimal:
     """One amount in euros, at the cent, ``ROUND_HALF_UP`` -- the rounding the
     ``Numeric(16, 2)`` column applied. See :data:`CENTS`.
 
-    Public because it is *the* publication rule and there must be one: the two
-    routes that quote a ``CostLoss`` (the import diff, and the node deletion) still
-    publish :attr:`RevisionPricing.amount_by_node` raw, and #368 is where they are
-    put on this same rule -- per line, then summed, so that a loss and a total of
-    losses stay additive exactly as the five figures below do.
+    Public because it is *the* publication rule and there must be one: every
+    caller that quotes a ``CostLoss`` -- the node deletion, the MS Project import
+    diff, the MS Project import run and the reconciliation round trip, four since
+    #365 -- is on it too since #368, through
+    :attr:`RevisionPricing.published_amount_by_node`, which applies it per line and
+    then sums, so that a loss and a total of losses stay additive exactly as the
+    five figures below do.
     """
     return amount.quantize(CENTS, rounding=ROUND_HALF_UP)
 
@@ -701,8 +745,37 @@ def calculate_revision_aggregates(db: Session, revision_id: int) -> RevisionAggr
     :attr:`RevisionPricing.amount_by_node` are the raw products, because that object
     is also the resolver the pure domain calls (see :func:`_priced_lines_of`).
     Publication starts here and not before.
+
+    Loads and prices the revision **once** and hands the result to
+    :func:`aggregates_of_pricing`, which is where the summation itself lives: a
+    caller that already holds a :class:`RevisionPricing` -- the devis workbook
+    builder, which prints the priced grid and these totals in the same file -- calls
+    that one directly instead of asking for a second, independent snapshot of the
+    same revision. See its docstring for why that is a correctness matter and not an
+    optimisation.
     """
-    pricing = price_revision(db, revision_id)
+    return aggregates_of_pricing(db, price_revision(db, revision_id))
+
+
+def aggregates_of_pricing(db: Session, pricing: RevisionPricing) -> RevisionAggregates:
+    """The five totals of an **already priced** revision -- the body of
+    :func:`calculate_revision_aggregates`, minus the loading.
+
+    Split out so that a caller publishing a priced grid *and* its totals derives
+    both from one snapshot. ``build_revision_workbook`` used to price the revision
+    itself and then call :func:`calculate_revision_aggregates`, which priced it a
+    second time: the route takes no lock and the session is READ COMMITTED, so a
+    concurrent edit landing between the two reads put a line in the ``Devis`` sheet
+    that the ``Agrégats`` sheet of the *same file* did not count -- one workbook,
+    two contradictory totals. The legacy builder had the same shape but summed
+    **frozen** ``wf_estimate_line`` rows, which only a validation writes, so its
+    window was all but closed; pricing a draft live reopens it on any edit, and that
+    is an exposure this lot introduced rather than inherited.
+
+    ``db`` is read for one thing only: the ``code`` of each
+    :class:`~waterfall.models.resources.ProjectCostCode` the priced lines point at,
+    which is a label and not a figure.
+    """
     cost_code_ids = {line.cost_code_id for line in pricing.lines if line.cost_code_id is not None}
     cost_code_labels = _resolve_cost_code_labels(db, cost_code_ids)
 
@@ -801,12 +874,20 @@ def calculate_estimate_lines(db: Session, estimate_id: int) -> list[EstimateLine
     # such a row from `assignments`, and therefore from every total below, with
     # no signal at all. LEFT JOIN keeps it, with `task=None` handled explicitly
     # everywhere below (see `_generate_labor_lines`).
+    # `ORDER BY id`, like `_scoped_estimate_role_assignments` in the reconciliation
+    # export: without it the row order is whatever PostgreSQL feels like returning --
+    # stable in practice until a `VACUUM` or an `UPDATE` moves a tuple. The
+    # `EstimateLine` rows below come out in this order, and the devis workbook prints
+    # them in it, which is what #365's cell-for-cell comparison against the revision
+    # builder walks positionally. An unordered query would make that proof go red for
+    # a reason that has nothing to do with either engine.
     assignments = (
         db.query(EstimateRoleAssignment, MsTask, ResourceRole, CostCategory)
         .outerjoin(MsTask, EstimateRoleAssignment.task_id == MsTask.id)
         .join(ResourceRole, EstimateRoleAssignment.role_id == ResourceRole.id)
         .join(CostCategory, ResourceRole.cost_category_id == CostCategory.id)
         .filter(EstimateRoleAssignment.estimate_id == estimate_id)
+        .order_by(EstimateRoleAssignment.id)
         .all()
     )
 

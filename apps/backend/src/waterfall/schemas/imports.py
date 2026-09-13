@@ -88,6 +88,17 @@ class ImportCostLoss(BaseModel):
     exists. ``ImportDiffItem`` carries no ``name``, so a client that labels a removal
     by joining ``uid`` against the planning it renders gets nothing back for this one
     -- by construction, not by accident. Its ``message`` is the only label available.
+
+    ``amount`` is in **euros at the cent** (#368). It is money a confirmation dialog
+    displays, so it is published at the precision the ``Numeric(16, 2)`` column of
+    the socle this replaces carried, and the rounding is the engine's -- applied per
+    priced line and then summed, never to the node total, see
+    :meth:`~waterfall.services.estimate_calculation.RevisionPricing.published_amount_of`.
+    The same rule reaches ``POST .../revisions/{id}/nodes/delete``,
+    ``GET .../revisions/{id}/aggregates`` and -- since #365 -- the reconciliation
+    round trip (``POST .../revisions/{id}/import-reconciliation/preview`` and
+    ``/confirm``) through that same method, which is what keeps every route serving
+    Règle 3's safeguard from quoting its own figure.
     """
 
     model_config = ConfigDict(populate_by_name=True)

@@ -1,0 +1,18 @@
+description: >-
+  Soit des problemes bloquants ont ete trouves et rien n'a ete applique -- le
+  corps est alors le `RevisionReconciliationPlanRead` complet (pas l'enveloppe
+  `detail` habituelle), avec `applied=false` ; soit la revision ou le projet a
+  refuse l'ecriture, et le corps est l'enveloppe structuree de toutes les autres
+  routes de revision (`RevisionLockConflict`), portant notamment
+  REVISION_IMMUTABLE (INV-03 : la revision est `validated` ou `superseded`),
+  PROJECT_READ_ONLY, ou REVISION_LOCK_CONFLICT -- ce dernier signifiant que la
+  revision a ete ecrite entre le pre-controle et l'application : rien n'a ete
+  applique, il faut re-exporter le classeur et recommencer. C'est la seule operation de revision dont le 409 n'est pas
+  directement `RevisionConflict`, parce que c'est la seule dont le refus
+  "metier" est un diagnostic complet et non un code.
+content:
+  application/json:
+    schema:
+      oneOf:
+      - $ref: ../schemas/RevisionReconciliationPlanRead.yaml
+      - $ref: ../schemas/RevisionLockConflict.yaml
