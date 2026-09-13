@@ -1,5 +1,5 @@
 import { useTreeRowDrafts } from "@/hooks/use-tree-row-drafts";
-import type { EstimateGridTreeRow } from "@/lib/estimate-grid-tree";
+import { costNumber, isCostRow, type RevisionCostGridRow } from "@/lib/revision-cost-grid";
 
 export type EstimateGridRowDraft = {
   label: string;
@@ -8,62 +8,53 @@ export type EstimateGridRowDraft = {
   unitCost: string;
 };
 
-function rowKey(row: EstimateGridTreeRow): string {
-  if (row.kind === "task") {
-    return `task-${row.taskRow.id}`;
-  }
-  if (row.kind === "line") {
-    return `line-${row.line.id}`;
-  }
-  return `labor-${row.assignment.id}`;
+function rowKey(row: RevisionCostGridRow): number {
+  return row.node_id;
 }
 
-function defaultDraft(row: EstimateGridTreeRow): EstimateGridRowDraft {
-  if (row.kind === "task") {
-    return { label: row.taskRow.task_name, quantity: "", hours: "", unitCost: "" };
-  }
-  if (row.kind === "line") {
-    return { label: row.line.label, quantity: String(row.line.quantity), hours: "", unitCost: String(row.line.unit_cost) };
+function defaultDraft(row: RevisionCostGridRow): EstimateGridRowDraft {
+  if (!isCostRow(row)) {
+    return { label: row.planning?.name ?? "", quantity: "", hours: "", unitCost: "" };
   }
   return {
-    label: row.assignment.role_name,
-    quantity: String(row.assignment.quantity),
-    hours: String(row.assignment.hours),
-    unitCost: "",
+    label: row.cost.label,
+    quantity: String(costNumber(row.cost.quantity)),
+    hours: row.cost.hours === null ? "" : String(costNumber(row.cost.hours)),
+    unitCost: row.cost.unit_cost === null ? "" : String(costNumber(row.cost.unit_cost)),
   };
 }
 
 type UseEstimateGridDraftsParams = {
   mutationBusy: boolean;
-  // Only ever called for a "task" row -- a cost-line/role-assignment row's own Libellé goes
-  // through onUpdateCostLine instead (a labor row's `role_name` is immutable once created, see
-  // EstimateRoleAssignmentUpdate's own doc comment in lib/backend.ts, so it is never editable
-  // here at all). Returns whether the rename actually persisted, so the draft is only discarded
-  // on success -- same convention as usePlanningScheduleDrafts.commitScheduleEdit.
-  onRenameTask?: (taskUid: number, name: string) => Promise<boolean>;
-  onUpdateCostLine?: (
-    lineId: number,
-    payload: { label?: string; quantity?: number; unit_cost?: number },
+  /** Renames a task node: `PATCH .../nodes/{nodeId}/planning`, the very call the Planning tab makes. */
+  onUpdatePlanning?: (nodeId: number, payload: { name: string }) => Promise<boolean>;
+  /**
+   * Edits a cost node's facet: `PATCH .../nodes/{nodeId}/cost`.
+   *
+   * Only ever sends the one field the user just left, never the whole row: the endpoint is partial
+   * and `null` is a *value* there, so sending a field the user did not touch would be a write.
+   */
+  onUpdateCost?: (
+    nodeId: number,
+    payload: { label?: string; quantity?: number; hours?: number; unit_cost?: number },
   ) => Promise<boolean>;
-  onUpdateRoleAssignment?: (id: number, payload: { quantity?: number; hours?: number }) => Promise<boolean>;
 };
 
-// E12-10/#292: per-row draft state (uncommitted Libellé/Qté/Heures/Débours) and the blur-commit
-// logic that turns it into a single-field PATCH once the user leaves a field, over this grid's
-// three row kinds. There is deliberately no "Sauver" button anywhere in this grid (see
-// EstimateGridTreeTable): every field commits itself independently.
+// E14-11 (#337): per-row uncommitted Libellé/Qté/Heures/Débours and the blur-commit that turns
+// each of them into a single-field write on the node it belongs to. There is deliberately no
+// "Sauver" button anywhere in this grid: every cell commits itself independently.
 //
-// E14-09 (#335): the draft bookkeeping this used to duplicate from usePlanningScheduleDrafts (the
-// per-row record, the never-edited fallback, discard-only-on-confirmed-success, Enter = blur =
-// commit) now comes from the shared useTreeRowDrafts. What stays here is which endpoint each
-// column commits to and what makes a value not worth sending.
+// What changed with the revision model is only *where* a commit goes: a row is a node, so a task's
+// label is a planning-facet write and a cost line's is a cost-facet one, both on the same tree and
+// under the same optimistic lock -- instead of the three endpoints of three parallel row kinds.
+// The draft bookkeeping itself (the per-row record, the never-edited fallback, discard-only-on-
+// confirmed-success, Enter = blur = commit) stays in the shared useTreeRowDrafts (#335).
 export function useEstimateGridDrafts({
   mutationBusy,
-  onRenameTask,
-  onUpdateCostLine,
-  onUpdateRoleAssignment,
+  onUpdatePlanning,
+  onUpdateCost,
 }: UseEstimateGridDraftsParams) {
-  const drafts = useTreeRowDrafts<EstimateGridTreeRow, EstimateGridRowDraft>({
+  const drafts = useTreeRowDrafts<RevisionCostGridRow, EstimateGridRowDraft>({
     rowKeyOf: rowKey,
     defaultDraftFor: defaultDraft,
     busy: mutationBusy,
@@ -73,63 +64,47 @@ export function useEstimateGridDrafts({
   // row's draft may be discarded (persisted, or nothing left to persist), `false` to keep the
   // user's uncommitted value on screen. commitDraft itself already short-circuits when a mutation
   // is in flight or when the row holds no draft at all.
-  async function commitLabel(row: EstimateGridTreeRow) {
+  async function commitLabel(row: RevisionCostGridRow) {
     await drafts.commitDraft(row, async (draft) => {
       const trimmed = draft.label.trim();
       if (!trimmed) {
         return false;
       }
-      if (row.kind === "task") {
-        // Deliberately `row.taskRow.task_uid` here, NOT `row.uid`: this tree's shared `uid` space
-        // is built from `task_id` (`MsTask.id`, the global PK -- see lib/estimate-grid-tree.ts's
-        // own doc comment), but the rename endpoint (`onRenameTask` -> updateTaskName ->
-        // `PATCH .../tasks/{taskUid}`) resolves the task via `MsTask.uid`, the project-scoped
-        // business identifier `EstimateTaskRowRead.task_uid` exposes separately. A row with no
-        // `task_uid` (the same pre-existing degenerate case `row_number` itself falls back for,
-        // see EstimateTaskRowRead's own doc comment) has no valid target for that PATCH at all, so
-        // it is never editable in the first place -- see renderLabelCell's own `editable` guard,
-        // which this mirrors defensively.
-        const taskUid = row.taskRow.task_uid;
-        if (taskUid == null || !onRenameTask || trimmed === row.taskRow.task_name) {
+      if (!isCostRow(row)) {
+        if (!onUpdatePlanning || trimmed === row.planning?.name) {
           return true;
         }
-        return onRenameTask(taskUid, trimmed);
+        return onUpdatePlanning(row.node_id, { name: trimmed });
       }
-      if (row.kind === "line") {
-        if (!onUpdateCostLine || trimmed === row.line.label) {
-          return true;
-        }
-        return onUpdateCostLine(row.line.id, { label: trimmed });
+      if (!onUpdateCost || trimmed === row.cost.label) {
+        return true;
       }
-      // A labor row's own label (role_name) is immutable -- see this hook's own doc comment.
-      return false;
+      return onUpdateCost(row.node_id, { label: trimmed });
     });
   }
 
-  async function commitQuantity(row: EstimateGridTreeRow) {
-    if (row.kind === "task") {
+  async function commitQuantity(row: RevisionCostGridRow) {
+    if (!isCostRow(row)) {
       return;
     }
     await drafts.commitDraft(row, async (draft) => {
       const quantity = Number(draft.quantity);
+      // `quantity` is `gt=0` on the contract: a 0 or a blank field is refused here rather than
+      // sent to be refused there, and the typed value is kept on screen so nothing is lost.
       if (!(quantity > 0)) {
         return false;
       }
-      if (row.kind === "line") {
-        if (!onUpdateCostLine || quantity === row.line.quantity) {
-          return true;
-        }
-        return onUpdateCostLine(row.line.id, { quantity });
-      }
-      if (!onUpdateRoleAssignment || quantity === row.assignment.quantity) {
+      if (!onUpdateCost || quantity === costNumber(row.cost.quantity)) {
         return true;
       }
-      return onUpdateRoleAssignment(row.assignment.id, { quantity });
+      return onUpdateCost(row.node_id, { quantity });
     });
   }
 
-  async function commitHours(row: EstimateGridTreeRow) {
-    if (row.kind !== "labor") {
+  async function commitHours(row: RevisionCostGridRow) {
+    // INV-19 ↔ INV-20: only a labour facet has hours at all. A non-MO row never renders the cell,
+    // and this guard keeps a stray commit from writing a field its nature forbids.
+    if (!isCostRow(row) || row.cost.nature !== "labor") {
       return;
     }
     await drafts.commitDraft(row, async (draft) => {
@@ -137,15 +112,16 @@ export function useEstimateGridDrafts({
       if (!(hours >= 0)) {
         return false;
       }
-      if (!onUpdateRoleAssignment || hours === row.assignment.hours) {
+      if (!onUpdateCost || hours === costNumber(row.cost.hours)) {
         return true;
       }
-      return onUpdateRoleAssignment(row.assignment.id, { hours });
+      return onUpdateCost(row.node_id, { hours });
     });
   }
 
-  async function commitUnitCost(row: EstimateGridTreeRow) {
-    if (row.kind !== "line") {
+  async function commitUnitCost(row: RevisionCostGridRow) {
+    // The other half of the same rule: a disbursement is a non-MO attribute (INV-20).
+    if (!isCostRow(row) || row.cost.nature === "labor") {
       return;
     }
     await drafts.commitDraft(row, async (draft) => {
@@ -153,10 +129,10 @@ export function useEstimateGridDrafts({
       if (!(unitCost >= 0)) {
         return false;
       }
-      if (!onUpdateCostLine || unitCost === row.line.unit_cost) {
+      if (!onUpdateCost || unitCost === costNumber(row.cost.unit_cost)) {
         return true;
       }
-      return onUpdateCostLine(row.line.id, { unit_cost: unitCost });
+      return onUpdateCost(row.node_id, { unit_cost: unitCost });
     });
   }
 

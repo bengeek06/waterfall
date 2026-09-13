@@ -15,6 +15,7 @@ function renderBar(overrides: Partial<BulkCostCodeAssignmentBarProps> = {}) {
     bulkCostCodeId: "",
     onBulkCostCodeIdChange: vi.fn(),
     bulkAssignBusy: false,
+    mutationBusy: false,
     onAssign: vi.fn(),
     ...overrides,
   };
@@ -59,6 +60,17 @@ describe("BulkCostCodeAssignmentBar", () => {
     renderBar({ bulkCostCodeId: "10", bulkAssignBusy: true });
 
     expect(screen.getByRole("button", { name: "Affecter" })).toBeDisabled();
+  });
+
+  // E14-11 (#337): the assignment shares the revision's single lock counter, and the hook that
+  // owns it refuses to start a second write while one is running. Left enabled, the button was
+  // clickable and the click did nothing at all -- no write, no message.
+  it("disables 'Affecter' while another write is in flight on the same revision", () => {
+    renderBar({ bulkCostCodeId: "10", mutationBusy: true });
+
+    const assignButton = screen.getByRole("button", { name: "Affecter" });
+    expect(assignButton).toBeDisabled();
+    expect(assignButton).toHaveAttribute("title", "Une autre écriture est en cours sur cette révision.");
   });
 
   it("reports the selected cost code back to the caller", () => {
