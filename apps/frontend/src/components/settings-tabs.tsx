@@ -15,15 +15,46 @@ const tabs: Array<[SettingsTab, string]> = [
   ["users", "Utilisateurs"],
 ];
 
-export function SettingsTabs({ activeTab, onChange }: SettingsTabsProps) {
+export function SettingsTabs({
+  activeTab,
+  onChange,
+}: SettingsTabsProps) {
   return (
-    <Tabs value={activeTab} onValueChange={(value) => onChange(value as SettingsTab)}>
-      <TabsList aria-label="Sections des paramètres" className="h-auto w-full justify-start overflow-x-auto rounded-none border-b bg-transparent p-0">
+    <Tabs
+      value={activeTab}
+      onValueChange={(value) => onChange(value as SettingsTab)}
+      className="w-full"
+    >
+      <TabsList
+        aria-label="Sections des paramètres"
+        className="
+          h-auto
+          w-full
+          justify-start
+          gap-1
+          overflow-x-auto
+          rounded-lg
+          p-1
+        "
+      >
         {tabs.map(([tab, label]) => (
           <TabsTrigger
             key={tab}
             value={tab}
-            className="shrink-0 rounded-none border-b-2 border-transparent px-3 py-2.5 text-sm data-active:border-primary data-active:bg-transparent"
+            className="
+              h-10
+              shrink-0
+              flex-none
+              px-4
+              py-0
+
+              text-sm
+              font-medium
+
+              data-active:text-foreground
+              data-active:font-semibold
+              data-active:shadow-sm
+            "
           >
             {label}
           </TabsTrigger>
