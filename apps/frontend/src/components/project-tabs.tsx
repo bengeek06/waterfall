@@ -2,7 +2,11 @@
 
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-export type ProjectTab = "planning" | "estimate" | "commitments" | "analytics";
+export type ProjectTab =
+  | "planning"
+  | "estimate"
+  | "commitments"
+  | "analytics";
 
 type ProjectTabsProps = {
   activeTab: ProjectTab;
@@ -16,15 +20,46 @@ const tabs: Array<[ProjectTab, string]> = [
   ["analytics", "Analytique"],
 ];
 
-export function ProjectTabs({ activeTab, onChange }: ProjectTabsProps) {
+export function ProjectTabs({
+  activeTab,
+  onChange,
+}: ProjectTabsProps) {
   return (
-    <Tabs value={activeTab} onValueChange={(value) => onChange(value as ProjectTab)}>
-      <TabsList aria-label="Sections du projet" className="h-auto w-full justify-start overflow-x-auto rounded-none border-b bg-transparent p-0">
+    <Tabs
+      value={activeTab}
+      onValueChange={(value) => onChange(value as ProjectTab)}
+      className="w-full"
+    >
+      <TabsList
+        aria-label="Sections du projet"
+        className="
+          h-auto
+          w-full
+          justify-start
+          gap-1
+          overflow-x-auto
+          rounded-lg
+          p-1
+        "
+      >
         {tabs.map(([tab, label]) => (
           <TabsTrigger
             key={tab}
             value={tab}
-            className="shrink-0 rounded-none border-b-2 border-transparent px-3 py-2.5 text-sm data-active:border-primary data-active:bg-transparent"
+            className="
+              h-10
+              shrink-0
+              flex-none
+              px-4
+              py-0
+
+              text-sm
+              font-medium
+
+              data-active:text-foreground
+              data-active:font-semibold
+              data-active:shadow-sm
+            "
           >
             {label}
           </TabsTrigger>

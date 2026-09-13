@@ -4,43 +4,104 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* =========================================================
+   WATERFALL — DESIGN SYSTEM
+   Direction: clean enterprise / project management
+   ========================================================= */
+
 :root {
-  /* Brand palette derived from the Waterfall logo: deep blue, light blue, anthracite. */
-  --bg: #f4f6f8;
-  --ink: #404547;
+  /* -------------------------------------------------------
+     BASE
+     ------------------------------------------------------- */
+
+  --background: #f6f8fa;
+  --foreground: #273238;
+
+  --bg: var(--background);
+  --ink: var(--foreground);
+
+  /* -------------------------------------------------------
+     SURFACES
+     ------------------------------------------------------- */
+
   --card: #ffffff;
-  --background: #ffffff;
-  --foreground: #404547;
-  --card-foreground: #404547;
+  --card-foreground: #273238;
+
   --popover: #ffffff;
-  --popover-foreground: #404547;
-  --primary: #027dc6;
+  --popover-foreground: #273238;
+
+  /* -------------------------------------------------------
+     BRAND
+     ------------------------------------------------------- */
+
+  --primary: #1677b3;
+  --primary-hover: #12679d;
   --primary-foreground: #ffffff;
-  --secondary: #eef2f5;
-  --secondary-foreground: #404547;
-  --muted: #eef2f5;
-  --muted-foreground: #6d7679;
-  --accent: #e8f4fc;
-  --accent-foreground: #045e94;
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: #e0e5e9;
-  --input: #e0e5e9;
-  --ring: #1195e1;
-  --chart-1: oklch(0.872 0.007 219.6);
-  --chart-2: oklch(0.56 0.021 213.5);
-  --chart-3: oklch(0.45 0.017 213.2);
-  --chart-4: oklch(0.378 0.015 216);
-  --chart-5: oklch(0.275 0.011 216.9);
-  --radius: 0.625rem;
+
+  /* -------------------------------------------------------
+     SECONDARY
+     ------------------------------------------------------- */
+
+  --secondary: #f1f4f6;
+  --secondary-foreground: #354148;
+
+  --muted: #f3f5f7;
+  --muted-foreground: #6b7780;
+
+  --accent: #e9f4fa;
+  --accent-foreground: #145f8d;
+
+  /* -------------------------------------------------------
+     STATUS
+     ------------------------------------------------------- */
+
+  --destructive: #c94b4b;
+
+  /* -------------------------------------------------------
+     BORDERS / INPUTS
+     ------------------------------------------------------- */
+
+  --border: #dfe6eb;
+  --input: #d5dfe5;
+  --ring: #1677b3;
+
+  /* -------------------------------------------------------
+     SIDEBAR
+     ------------------------------------------------------- */
+
   --sidebar: #ffffff;
-  --sidebar-foreground: #404547;
-  --sidebar-primary: #027dc6;
+  --sidebar-foreground: #354148;
+
+  --sidebar-primary: #1677b3;
   --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #eef2f5;
-  --sidebar-accent-foreground: #027dc6;
-  --sidebar-border: #e6eaed;
-  --sidebar-ring: #1195e1;
+
+  --sidebar-accent: #eef5f9;
+  --sidebar-accent-foreground: #145f8d;
+
+  --sidebar-border: #e2e8ec;
+  --sidebar-ring: #1677b3;
+
+  /* -------------------------------------------------------
+     CHARTS
+     ------------------------------------------------------- */
+
+  --chart-1: #1677b3;
+  --chart-2: #3f8fc2;
+  --chart-3: #6ba8cf;
+  --chart-4: #8fbcd9;
+  --chart-5: #b7d4e6;
+
+  /* -------------------------------------------------------
+     SHAPE
+     ------------------------------------------------------- */
+
+  --radius: 0.5rem;
 }
+
+
+/* =========================================================
+   DOCUMENT
+   ========================================================= */
 
 html {
   height: 100%;
@@ -56,23 +117,42 @@ body {
   min-height: 100%;
   display: flex;
   flex-direction: column;
-  color: var(--ink);
-  background: var(--bg);
+
+  color: var(--foreground);
+  background: var(--background);
+
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+
+
+/* =========================================================
+   APP BACKGROUND
+   ========================================================= */
 
 .app-bg {
   position: fixed;
   inset: 0;
   z-index: -1;
+
+  /*
+   Very subtle brand presence.
+   The background should never compete with the content.
+  */
   background:
-    radial-gradient(circle at 12% 8%, rgba(2, 125, 198, 0.12), transparent 36%),
-    radial-gradient(circle at 88% 92%, rgba(17, 149, 225, 0.08), transparent 40%),
-    linear-gradient(145deg, #f8fafc, #e9eff4 62%, #dde6ee);
+    radial-gradient(
+      circle at 0% 0%,
+      rgba(22, 119, 179, 0.045),
+      transparent 34%
+    ),
+    var(--background);
 }
 
-/* Unlayered rules would otherwise always beat Tailwind's layered utilities. */
+
+/* =========================================================
+   GLOBAL RESET
+   ========================================================= */
+
 @layer base {
   * {
     box-sizing: border-box;
@@ -86,92 +166,481 @@ a {
   text-decoration: none;
 }
 
-.dark {
-  --background: #1c2426;
-  --foreground: #eef2f4;
-  --card: #232d30;
-  --card-foreground: #eef2f4;
-  --popover: #232d30;
-  --popover-foreground: #eef2f4;
-  --primary: #1195e1;
-  --primary-foreground: #0b1a22;
-  --secondary: #2b3538;
-  --secondary-foreground: #eef2f4;
-  --muted: #2b3538;
-  --muted-foreground: #97a3a6;
-  --accent: #23384a;
-  --accent-foreground: #7fc4ee;
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: rgba(255, 255, 255, 0.12);
-  --input: rgba(255, 255, 255, 0.16);
-  --ring: #1195e1;
-  --chart-1: oklch(0.872 0.007 219.6);
-  --chart-2: oklch(0.56 0.021 213.5);
-  --chart-3: oklch(0.45 0.017 213.2);
-  --chart-4: oklch(0.378 0.015 216);
-  --chart-5: oklch(0.275 0.011 216.9);
-  --sidebar: #202a2d;
-  --sidebar-foreground: #eef2f4;
-  --sidebar-primary: #1195e1;
-  --sidebar-primary-foreground: #0b1a22;
-  --sidebar-accent: #2b3538;
-  --sidebar-accent-foreground: #7fc4ee;
-  --sidebar-border: rgba(255, 255, 255, 0.12);
-  --sidebar-ring: #1195e1;
+
+/* =========================================================
+   AUTOFILL FIX
+   Removes Chrome's yellow autofill background.
+   ========================================================= */
+
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0 1000px #ffffff inset !important;
+  -webkit-text-fill-color: var(--foreground) !important;
+
+  caret-color: var(--foreground);
+
+  transition: background-color 9999s ease-in-out 0s;
 }
+
+
+/* =========================================================
+   INPUT REFINEMENTS
+   ========================================================= */
+
+input,
+textarea,
+select {
+  border-color: var(--input);
+  background: #ffffff;
+
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease,
+    background-color 150ms ease;
+}
+
+input:hover,
+textarea:hover,
+select:hover {
+  border-color: #c7d2d9;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  border-color: var(--primary);
+
+  box-shadow:
+    0 0 0 3px rgba(22, 119, 179, 0.12);
+
+  outline: none;
+}
+
+
+/* =========================================================
+   CARD UTILITY
+   Optional utility class.
+   Use for main content surfaces.
+   ========================================================= */
+
+.app-card {
+  background: var(--card);
+
+  border: 1px solid var(--border);
+
+  border-radius: var(--radius);
+
+  /*
+   Intentionally subtle.
+   Enterprise UI should feel structured,
+   not floating.
+  */
+  box-shadow:
+    0 1px 2px rgba(16, 24, 40, 0.025);
+}
+
+
+/* =========================================================
+   PAGE HEADER
+   Optional utility.
+   ========================================================= */
+
+.page-header {
+  display: flex;
+
+  align-items: center;
+  justify-content: space-between;
+
+  gap: 1rem;
+
+  padding-bottom: 1.25rem;
+
+  border-bottom:
+    1px solid var(--border);
+}
+
+.page-title {
+  color: var(--foreground);
+
+  font-size: 1.75rem;
+  font-weight: 650;
+
+  letter-spacing: -0.025em;
+
+  line-height: 1.2;
+}
+
+.page-description {
+  margin-top: 0.375rem;
+
+  color: var(--muted-foreground);
+
+  font-size: 0.9375rem;
+}
+
+
+/* =========================================================
+   SIDEBAR
+   ========================================================= */
+
+.sidebar-item {
+  position: relative;
+
+  display: flex;
+
+  align-items: center;
+
+  gap: 0.75rem;
+
+  min-height: 2.5rem;
+
+  padding:
+    0.5rem
+    0.75rem;
+
+  border-radius:
+    calc(var(--radius) - 2px);
+
+  color: var(--sidebar-foreground);
+
+  transition:
+    background-color 150ms ease,
+    color 150ms ease;
+}
+
+.sidebar-item:hover {
+  background: #f5f8fa;
+}
+
+.sidebar-item-active {
+  position: relative;
+
+  background: var(--sidebar-accent);
+
+  color: var(--sidebar-accent-foreground);
+
+  font-weight: 600;
+}
+
+.sidebar-item-active::before {
+  content: "";
+
+  position: absolute;
+
+  left: 0;
+
+  top: 0.45rem;
+  bottom: 0.45rem;
+
+  width: 3px;
+
+  background: var(--primary);
+
+  border-radius:
+    0
+    3px
+    3px
+    0;
+}
+
+
+/* =========================================================
+   TABLE
+   ========================================================= */
+
+.app-table {
+  width: 100%;
+
+  border-collapse: collapse;
+}
+
+.app-table thead {
+  background: #fafbfc;
+}
+
+.app-table th {
+  height: 2.75rem;
+
+  padding:
+    0
+    1rem;
+
+  color: #59666d;
+
+  font-size: 0.8125rem;
+
+  font-weight: 600;
+
+  text-align: left;
+
+  border-bottom:
+    1px solid var(--border);
+}
+
+.app-table td {
+  height: 3.25rem;
+
+  padding:
+    0
+    1rem;
+
+  border-bottom:
+    1px solid #edf0f2;
+}
+
+.app-table tbody tr {
+  transition:
+    background-color 120ms ease;
+}
+
+.app-table tbody tr:hover {
+  background: #f8fbfc;
+}
+
+.app-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+
+/* =========================================================
+   BUTTONS
+   Optional helper classes if needed outside shadcn.
+   ========================================================= */
+
+.button-primary {
+  background: var(--primary);
+
+  color: var(--primary-foreground);
+
+  transition:
+    background-color 150ms ease,
+    transform 100ms ease,
+    box-shadow 150ms ease;
+}
+
+.button-primary:hover {
+  background: var(--primary-hover);
+}
+
+.button-primary:active {
+  transform: translateY(1px);
+}
+
+
+/* =========================================================
+   STATUS BADGES
+   ========================================================= */
+
+.status-badge {
+  display: inline-flex;
+
+  align-items: center;
+
+  gap: 0.375rem;
+
+  padding:
+    0.25rem
+    0.625rem;
+
+  border-radius: 999px;
+
+  font-size: 0.8125rem;
+
+  font-weight: 500;
+
+  line-height: 1;
+}
+
+.status-neutral {
+  color: #526068;
+
+  background: #f1f4f6;
+
+  border:
+    1px solid #e2e8ec;
+}
+
+.status-info {
+  color: #145f8d;
+
+  background: #e9f4fa;
+
+  border:
+    1px solid #d5eaf5;
+}
+
+
+/* =========================================================
+   DARK MODE
+   ========================================================= */
+
+.dark {
+  --background: #11181c;
+  --foreground: #edf2f4;
+
+  --card: #182126;
+  --card-foreground: #edf2f4;
+
+  --popover: #182126;
+  --popover-foreground: #edf2f4;
+
+  --primary: #2d93cc;
+  --primary-hover: #2483ba;
+  --primary-foreground: #ffffff;
+
+  --secondary: #202b31;
+  --secondary-foreground: #edf2f4;
+
+  --muted: #202b31;
+  --muted-foreground: #96a4ab;
+
+  --accent: #193647;
+  --accent-foreground: #8ec9e8;
+
+  --destructive: #e06464;
+
+  --border: rgba(255, 255, 255, 0.09);
+  --input: rgba(255, 255, 255, 0.13);
+
+  --ring: #2d93cc;
+
+  --sidebar: #141d22;
+  --sidebar-foreground: #edf2f4;
+
+  --sidebar-primary: #2d93cc;
+  --sidebar-primary-foreground: #ffffff;
+
+  --sidebar-accent: #1c3340;
+  --sidebar-accent-foreground: #8ec9e8;
+
+  --sidebar-border: rgba(255, 255, 255, 0.09);
+  --sidebar-ring: #2d93cc;
+}
+
+
+/* =========================================================
+   TAILWIND THEME BRIDGE
+   ========================================================= */
 
 @theme inline {
   --font-sans: var(--font-sans);
-  /* Same family everywhere until a final typeface is chosen. */
   --font-heading: var(--font-sans);
+
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar: var(--sidebar);
+
+  --color-sidebar-accent-foreground:
+    var(--sidebar-accent-foreground);
+
+  --color-sidebar-accent:
+    var(--sidebar-accent);
+
+  --color-sidebar-primary-foreground:
+    var(--sidebar-primary-foreground);
+
+  --color-sidebar-primary:
+    var(--sidebar-primary);
+
+  --color-sidebar-foreground:
+    var(--sidebar-foreground);
+
+  --color-sidebar:
+    var(--sidebar);
+
   --color-chart-5: var(--chart-5);
   --color-chart-4: var(--chart-4);
   --color-chart-3: var(--chart-3);
   --color-chart-2: var(--chart-2);
   --color-chart-1: var(--chart-1);
+
   --color-ring: var(--ring);
   --color-input: var(--input);
   --color-border: var(--border);
-  --color-destructive: var(--destructive);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-accent: var(--accent);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-muted: var(--muted);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-secondary: var(--secondary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-primary: var(--primary);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-popover: var(--popover);
-  --color-card-foreground: var(--card-foreground);
-  --color-card: var(--card);
-  --color-foreground: var(--foreground);
-  --color-background: var(--background);
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.4);
-  --radius-2xl: calc(var(--radius) * 1.8);
-  --radius-3xl: calc(var(--radius) * 2.2);
-  --radius-4xl: calc(var(--radius) * 2.6);
+
+  --color-destructive:
+    var(--destructive);
+
+  --color-accent-foreground:
+    var(--accent-foreground);
+
+  --color-accent:
+    var(--accent);
+
+  --color-muted-foreground:
+    var(--muted-foreground);
+
+  --color-muted:
+    var(--muted);
+
+  --color-secondary-foreground:
+    var(--secondary-foreground);
+
+  --color-secondary:
+    var(--secondary);
+
+  --color-primary-foreground:
+    var(--primary-foreground);
+
+  --color-primary:
+    var(--primary);
+
+  --color-popover-foreground:
+    var(--popover-foreground);
+
+  --color-popover:
+    var(--popover);
+
+  --color-card-foreground:
+    var(--card-foreground);
+
+  --color-card:
+    var(--card);
+
+  --color-foreground:
+    var(--foreground);
+
+  --color-background:
+    var(--background);
+
+  --radius-sm:
+    calc(var(--radius) * 0.6);
+
+  --radius-md:
+    calc(var(--radius) * 0.8);
+
+  --radius-lg:
+    var(--radius);
+
+  --radius-xl:
+    calc(var(--radius) * 1.4);
+
+  --radius-2xl:
+    calc(var(--radius) * 1.8);
+
+  --radius-3xl:
+    calc(var(--radius) * 2.2);
+
+  --radius-4xl:
+    calc(var(--radius) * 2.6);
 }
+
+
+/* =========================================================
+   SHADCN BASE
+   ========================================================= */
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
   }
+
   body {
     @apply text-foreground;
     background: transparent;
   }
+
   html {
     @apply font-sans;
   }
