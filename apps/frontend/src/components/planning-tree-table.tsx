@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type Ref } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type Ref } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,7 @@ import { PlanningCreateTaskDialog } from "@/components/planning-create-task-dial
 import { PlanningScheduleCells } from "@/components/planning-schedule-cells";
 import { PlanningTaskLinksDialog } from "@/components/planning-task-links-dialog";
 import { PlanningTreeToolbar } from "@/components/planning-tree-toolbar";
+import { TreeTableColumnResizeHandle } from "@/components/tree-table-column-resize-handle";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   PLANNING_COLUMN_ORDER,
@@ -23,14 +24,16 @@ import { usePlanningCreateTaskDialog } from "@/hooks/use-planning-create-task-di
 import { usePlanningDeleteSelection } from "@/hooks/use-planning-delete-selection";
 import { usePlanningScheduleDrafts } from "@/hooks/use-planning-schedule-drafts";
 import { usePlanningTaskLinks } from "@/hooks/use-planning-task-links";
-import { usePlanningTreeSelection } from "@/hooks/use-planning-tree-selection";
+import { stopRowKeys, useTreeTableSelection } from "@/hooks/use-tree-table-selection";
 import type { PlanningTaskScheduleUpdate, Task, TaskLinkWrite } from "@/lib/backend";
 import { DEFAULT_PROJECT_CALENDAR, type ProjectCalendar } from "@/lib/planning-calendar";
 import { predecessorsLabel } from "@/lib/planning-links";
 import {
+  buildPlanningTreeRows,
   computeIndentCommand,
   computeOutdentCommand,
   computeReorderCommand,
+  planningTreeRowIdentity,
   type PlanningMoveCommand,
 } from "@/lib/planning-tree";
 import { cn } from "@/lib/utils";
@@ -45,71 +48,6 @@ const COLUMN_HEADERS: ReadonlyArray<{ key: PlanningColumnKey; label: string }> =
   { key: "mode", label: "Mode" },
   { key: "predecessors", label: "Prédécesseurs" },
 ];
-
-// Fixed step for keyboard-driven resizing (ArrowLeft/ArrowRight), mirroring the granularity of a
-// small mouse drag.
-const COLUMN_RESIZE_KEYBOARD_STEP = 10;
-
-function ColumnResizeHandle({
-  column,
-  label,
-  width,
-  min,
-  onResizeStart,
-  onResizeBy,
-}: {
-  column: PlanningColumnKey;
-  label: string;
-  width: number;
-  min: number;
-  onResizeStart: (column: PlanningColumnKey, event: MouseEvent<HTMLSpanElement>) => void;
-  onResizeBy: (column: PlanningColumnKey, delta: number) => void;
-}) {
-  return (
-    <span
-      role="separator"
-      aria-orientation="vertical"
-      aria-label={`Redimensionner la colonne ${label}`}
-      aria-valuenow={width}
-      aria-valuemin={min}
-      aria-valuemax={PLANNING_MAX_COLUMN_WIDTH}
-      tabIndex={0}
-      data-testid={`resize-handle-${column}`}
-      // `group` + a wider (w-3 = 12px) hit area than what's visually painted (the inner bar below
-      // stays w-1 = 4px, flush against the column boundary via justify-end): a plain 4px strip is
-      // only discoverable by accidentally hovering exactly on the column boundary, and is a fiddly
-      // mouse/touch target. The outer box stays entirely inside the TableHead's own bounds (right-0,
-      // extending leftward into the current column, never past its right edge), so none of it is
-      // clipped by the parent's `overflow-hidden` (needed so the handle never visually spills into
-      // the next header).
-      className="group absolute right-0 top-0 z-10 flex h-full w-3 cursor-col-resize items-center justify-end select-none outline-none"
-      onMouseDown={(event) => onResizeStart(column, event)}
-      onKeyDown={(event) => {
-        if (event.key === "ArrowLeft") {
-          event.preventDefault();
-          onResizeBy(column, -COLUMN_RESIZE_KEYBOARD_STEP);
-        } else if (event.key === "ArrowRight") {
-          event.preventDefault();
-          onResizeBy(column, COLUMN_RESIZE_KEYBOARD_STEP);
-        }
-      }}
-    >
-      {/*
-        Visible handle bar, separate from the interactive span above: `hover:bg-border` gives
-        sighted mouse users a discoverable affordance instead of an invisible strip.
-        `group-focus-visible:bg-primary` is a background-color change rather than an
-        `outline`/`ring` utility on the handle itself, because that would be clipped by the parent
-        TableHead's `overflow-hidden` if it extended outside the handle's own box -- a background
-        change painted inside the bar's own bounds stays visible under that clipping, so keyboard
-        focus is never silently invisible.
-      */}
-      <span
-        aria-hidden="true"
-        className="h-full w-1 rounded-full bg-transparent transition-colors group-hover:bg-border group-focus-visible:bg-primary"
-      />
-    </span>
-  );
-}
 
 // Renders a task's name, interactive only when it is actually visually truncated: an ordinary,
 // non-truncated name stays a plain <span>, with no tab stop or button semantics, so keyboard/
@@ -161,7 +99,7 @@ function TaskNameLabel({ name, width, isMilestone }: { name: string; width: numb
         type="button"
         className="min-w-0 truncate text-left"
         onClick={(event: MouseEvent<HTMLButtonElement>) => event.stopPropagation()}
-        onKeyDown={(event: KeyboardEvent<HTMLButtonElement>) => event.stopPropagation()}
+        {...stopRowKeys}
       >
         {label}
       </TooltipTrigger>
@@ -250,7 +188,7 @@ export function PlanningTreeTable({
 }: PlanningTreeTableProps) {
   const [renderedVersionKey, setRenderedVersionKey] = useState(versionKey);
 
-  // Full-planning lookup (unlike selection.rows, not limited to currently-visible rows): a
+  // Full-planning lookup (unlike selection.visibleRows, not limited to currently-visible rows): a
   // predecessor referenced by a collapsed/off-screen task must still resolve correctly.
   const tasksByUid = useMemo(() => new Map(tasks.map((task) => [task.uid, task])), [tasks]);
 
@@ -275,7 +213,10 @@ export function PlanningTreeTable({
     () => PLANNING_COLUMN_ORDER.reduce((total, key) => total + columnWidths.widths[key], 0),
     [columnWidths.widths],
   );
-  const selection = usePlanningTreeSelection(tasks);
+  // Flattened once per task list, independently of what is collapsed: the shared selection hook
+  // owns collapsedUids and applies the visibility filter itself.
+  const planningRows = useMemo(() => buildPlanningTreeRows(tasks), [tasks]);
+  const selection = useTreeTableSelection(planningRows, planningTreeRowIdentity);
   const scheduleDrafts = usePlanningScheduleDrafts({ onScheduleUpdate, mutationBusy, calendar });
   const taskLinks = usePlanningTaskLinks({ tasks, onEditLinks });
   const singleSelectedTask = getSingleSelectedTask(selection.selectedUids, tasksByUid);
@@ -341,7 +282,7 @@ export function PlanningTreeTable({
           deleteDisabled={selection.selectedUids.size === 0 || mutationBusy}
           onDeleteSelection={() => void deleteSelection.requestDeleteSelection()}
         />
-        {selection.rows.length === 0 ? (
+        {selection.visibleRows.length === 0 ? (
           <p className="py-6 text-sm text-muted-foreground">Le planning ne contient aucune tâche.</p>
         ) : (
           <Table className="table-fixed w-auto" style={{ width: totalColumnWidth }}>
@@ -361,11 +302,12 @@ export function PlanningTreeTable({
                     )}
                   >
                     {label}
-                    <ColumnResizeHandle
+                    <TreeTableColumnResizeHandle
                       column={key}
                       label={label}
                       width={columnWidths.widths[key]}
                       min={PLANNING_MIN_COLUMN_WIDTHS[key]}
+                      max={PLANNING_MAX_COLUMN_WIDTH}
                       onResizeStart={columnWidths.startResize}
                       onResizeBy={columnWidths.resizeBy}
                     />
@@ -374,22 +316,14 @@ export function PlanningTreeTable({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {selection.rows.map((row) => {
+              {selection.visibleRows.map((row) => {
                 const collapsed = selection.collapsedUids.has(row.uid);
                 const selected = selection.selectedUids.has(row.uid);
-                const isFocusable =
-                  selection.focusedUid === row.uid ||
-                  (selection.focusedUid === null && row.uid === selection.rows[0]?.uid);
+                const isFocusable = selection.focusableUid === row.uid;
                 return (
                   <TableRow
                     key={row.uid}
-                    ref={(element) => {
-                      if (element) {
-                        selection.rowRefs.current.set(row.uid, element);
-                      } else {
-                        selection.rowRefs.current.delete(row.uid);
-                      }
-                    }}
+                    ref={(element) => selection.registerRow(row, element)}
                     data-state={selected ? "selected" : undefined}
                     aria-selected={selected}
                     tabIndex={isFocusable ? 0 : -1}
@@ -417,6 +351,7 @@ export function PlanningTreeTable({
                             type="button"
                             aria-label={collapsed ? `Déplier ${row.name}` : `Replier ${row.name}`}
                             className="flex size-6 shrink-0 items-center justify-center"
+                            {...stopRowKeys}
                             onClick={(event) => {
                               event.stopPropagation();
                               selection.toggleCollapsed(row.uid);
@@ -460,6 +395,7 @@ export function PlanningTreeTable({
                             className="shrink-0"
                             disabled={mutationBusy}
                             aria-label={`Éditer les prédécesseurs de ${row.name}`}
+                            {...stopRowKeys}
                             onClick={(event: MouseEvent<HTMLButtonElement>) => {
                               event.stopPropagation();
                               taskLinks.openLinksDialog(row);

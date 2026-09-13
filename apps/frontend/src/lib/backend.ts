@@ -374,16 +374,6 @@ export type TaskLinksReplace = {
   links: TaskLinkWrite[];
   expected_revision: number;
 };
-/**
- * @deprecated Body of `GET /projects/{id}/tasks`, an endpoint E14-05 (#331) removed.
- * Kept only to type the dead `getProjectTasks` below; both go with E14-06 (#332).
- */
-type LegacyTaskListRead = {
-  items: Task[];
-  total: number;
-  limit: number | null;
-  offset: number;
-};
 export type ImportBatch = components["schemas"]["ImportBatchResponse"];
 export type ImportBatchStatus = components["schemas"]["ImportBatchStatusResponse"];
 export type ImportRunAcceptedResponse = components["schemas"]["ImportRunAcceptedResponse"];
@@ -1876,26 +1866,6 @@ export function getImportBatchStatus(
     { method: "GET" },
     onSessionRefresh,
   );
-}
-
-/**
- * @deprecated Dead since E14-05 (#331): `GET /projects/{id}/tasks` no longer exists and
- * this call answers 404. No component calls it. The replacement is the revision tree
- * (`GET /projects/{id}/revisions/{id}/nodes`); E14-06 (#332) rewires the consumers and
- * deletes this export. Do not add a caller.
- */
-export async function getProjectTasks(
-  projectId: number,
-  tokens: SessionTokens,
-  onSessionRefresh: (next: SessionTokens) => void,
-): Promise<Task[]> {
-  const page = await authRequest<LegacyTaskListRead>(
-    `/projects/${projectId}/tasks`,
-    tokens,
-    { method: "GET" },
-    onSessionRefresh,
-  );
-  return page.items;
 }
 
 export function createPlanningStructure(

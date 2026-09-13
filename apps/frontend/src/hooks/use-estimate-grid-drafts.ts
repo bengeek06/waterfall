@@ -1,5 +1,4 @@
-import { useState, type KeyboardEvent } from "react";
-
+import { useTreeRowDrafts } from "@/hooks/use-tree-row-drafts";
 import type { EstimateGridTreeRow } from "@/lib/estimate-grid-tree";
 
 export type EstimateGridRowDraft = {
@@ -50,170 +49,128 @@ type UseEstimateGridDraftsParams = {
 };
 
 // E12-10/#292: per-row draft state (uncommitted Libellé/Qté/Heures/Débours) and the blur-commit
-// logic that turns it into a single-field PATCH once the user leaves a field -- modeled directly
-// after usePlanningScheduleDrafts (same "default from the row, commit on blur, discard only on
-// confirmed success" shape), generalized to this grid's three row kinds. There is deliberately no
-// "Sauver" button anywhere in this grid (see EstimateGridTreeTable): every field commits itself
-// independently.
+// logic that turns it into a single-field PATCH once the user leaves a field, over this grid's
+// three row kinds. There is deliberately no "Sauver" button anywhere in this grid (see
+// EstimateGridTreeTable): every field commits itself independently.
+//
+// E14-09 (#335): the draft bookkeeping this used to duplicate from usePlanningScheduleDrafts (the
+// per-row record, the never-edited fallback, discard-only-on-confirmed-success, Enter = blur =
+// commit) now comes from the shared useTreeRowDrafts. What stays here is which endpoint each
+// column commits to and what makes a value not worth sending.
 export function useEstimateGridDrafts({
   mutationBusy,
   onRenameTask,
   onUpdateCostLine,
   onUpdateRoleAssignment,
 }: UseEstimateGridDraftsParams) {
-  const [drafts, setDrafts] = useState<Record<string, EstimateGridRowDraft>>({});
+  const drafts = useTreeRowDrafts<EstimateGridTreeRow, EstimateGridRowDraft>({
+    rowKeyOf: rowKey,
+    defaultDraftFor: defaultDraft,
+    busy: mutationBusy,
+  });
 
-  function draftFor(row: EstimateGridTreeRow): EstimateGridRowDraft {
-    return drafts[rowKey(row)] ?? defaultDraft(row);
-  }
-
-  function updateDraftField(row: EstimateGridTreeRow, field: keyof EstimateGridRowDraft, value: string) {
-    const key = rowKey(row);
-    setDrafts((current) => ({ ...current, [key]: { ...(current[key] ?? defaultDraft(row)), [field]: value } }));
-  }
-
-  function clearDraft(row: EstimateGridTreeRow) {
-    const key = rowKey(row);
-    setDrafts((current) => {
-      if (!(key in current)) {
-        return current;
+  // Every commit below follows the same contract with the shared hook: return `true` once the
+  // row's draft may be discarded (persisted, or nothing left to persist), `false` to keep the
+  // user's uncommitted value on screen. commitDraft itself already short-circuits when a mutation
+  // is in flight or when the row holds no draft at all.
+  async function commitLabel(row: EstimateGridTreeRow) {
+    await drafts.commitDraft(row, async (draft) => {
+      const trimmed = draft.label.trim();
+      if (!trimmed) {
+        return false;
       }
-      const next = { ...current };
-      delete next[key];
-      return next;
+      if (row.kind === "task") {
+        // Deliberately `row.taskRow.task_uid` here, NOT `row.uid`: this tree's shared `uid` space
+        // is built from `task_id` (`MsTask.id`, the global PK -- see lib/estimate-grid-tree.ts's
+        // own doc comment), but the rename endpoint (`onRenameTask` -> updateTaskName ->
+        // `PATCH .../tasks/{taskUid}`) resolves the task via `MsTask.uid`, the project-scoped
+        // business identifier `EstimateTaskRowRead.task_uid` exposes separately. A row with no
+        // `task_uid` (the same pre-existing degenerate case `row_number` itself falls back for,
+        // see EstimateTaskRowRead's own doc comment) has no valid target for that PATCH at all, so
+        // it is never editable in the first place -- see renderLabelCell's own `editable` guard,
+        // which this mirrors defensively.
+        const taskUid = row.taskRow.task_uid;
+        if (taskUid == null || !onRenameTask || trimmed === row.taskRow.task_name) {
+          return true;
+        }
+        return onRenameTask(taskUid, trimmed);
+      }
+      if (row.kind === "line") {
+        if (!onUpdateCostLine || trimmed === row.line.label) {
+          return true;
+        }
+        return onUpdateCostLine(row.line.id, { label: trimmed });
+      }
+      // A labor row's own label (role_name) is immutable -- see this hook's own doc comment.
+      return false;
     });
   }
 
-  // No draft entry means the user never actually typed into this row's field (e.g. just tabbed
-  // through on focus/blur) -- nothing changed, so nothing should be committed.
-  function hasPendingDraft(row: EstimateGridTreeRow): boolean {
-    return rowKey(row) in drafts;
-  }
-
-  async function commitLabel(row: EstimateGridTreeRow) {
-    if (mutationBusy || !hasPendingDraft(row)) {
-      return;
-    }
-    const trimmed = draftFor(row).label.trim();
-    if (!trimmed) {
-      return;
-    }
-    if (row.kind === "task") {
-      // Deliberately `row.taskRow.task_uid` here, NOT `row.uid`: this tree's shared `uid` space
-      // is built from `task_id` (`MsTask.id`, the global PK -- see lib/estimate-grid-tree.ts's own
-      // doc comment), but the rename endpoint (`onRenameTask` -> updateTaskName ->
-      // `PATCH .../tasks/{taskUid}`) resolves the task via `MsTask.uid`, the project-scoped
-      // business identifier `EstimateTaskRowRead.task_uid` exposes separately. A row with no
-      // `task_uid` (the same pre-existing degenerate case `row_number` itself falls back for, see
-      // EstimateTaskRowRead's own doc comment) has no valid target for that PATCH at all, so it
-      // is never editable in the first place -- see renderLabelCell's own `editable` guard, which
-      // this mirrors defensively.
-      const taskUid = row.taskRow.task_uid;
-      if (taskUid == null || !onRenameTask || trimmed === row.taskRow.task_name) {
-        clearDraft(row);
-        return;
-      }
-      if (await onRenameTask(taskUid, trimmed)) {
-        clearDraft(row);
-      }
-      return;
-    }
-    if (row.kind === "line") {
-      if (!onUpdateCostLine || trimmed === row.line.label) {
-        clearDraft(row);
-        return;
-      }
-      if (await onUpdateCostLine(row.line.id, { label: trimmed })) {
-        clearDraft(row);
-      }
-    }
-    // A labor row's own label (role_name) is immutable -- see this hook's own doc comment.
-  }
-
   async function commitQuantity(row: EstimateGridTreeRow) {
-    if (mutationBusy || !hasPendingDraft(row) || row.kind === "task") {
+    if (row.kind === "task") {
       return;
     }
-    const quantity = Number(draftFor(row).quantity);
-    if (!(quantity > 0)) {
-      return;
-    }
-    if (row.kind === "line") {
-      if (!onUpdateCostLine || quantity === row.line.quantity) {
-        clearDraft(row);
-        return;
+    await drafts.commitDraft(row, async (draft) => {
+      const quantity = Number(draft.quantity);
+      if (!(quantity > 0)) {
+        return false;
       }
-      if (await onUpdateCostLine(row.line.id, { quantity })) {
-        clearDraft(row);
+      if (row.kind === "line") {
+        if (!onUpdateCostLine || quantity === row.line.quantity) {
+          return true;
+        }
+        return onUpdateCostLine(row.line.id, { quantity });
       }
-      return;
-    }
-    if (!onUpdateRoleAssignment || quantity === row.assignment.quantity) {
-      clearDraft(row);
-      return;
-    }
-    if (await onUpdateRoleAssignment(row.assignment.id, { quantity })) {
-      clearDraft(row);
-    }
+      if (!onUpdateRoleAssignment || quantity === row.assignment.quantity) {
+        return true;
+      }
+      return onUpdateRoleAssignment(row.assignment.id, { quantity });
+    });
   }
 
   async function commitHours(row: EstimateGridTreeRow) {
-    if (mutationBusy || !hasPendingDraft(row) || row.kind !== "labor") {
+    if (row.kind !== "labor") {
       return;
     }
-    const hours = Number(draftFor(row).hours);
-    if (!(hours >= 0)) {
-      return;
-    }
-    if (!onUpdateRoleAssignment || hours === row.assignment.hours) {
-      clearDraft(row);
-      return;
-    }
-    if (await onUpdateRoleAssignment(row.assignment.id, { hours })) {
-      clearDraft(row);
-    }
+    await drafts.commitDraft(row, async (draft) => {
+      const hours = Number(draft.hours);
+      if (!(hours >= 0)) {
+        return false;
+      }
+      if (!onUpdateRoleAssignment || hours === row.assignment.hours) {
+        return true;
+      }
+      return onUpdateRoleAssignment(row.assignment.id, { hours });
+    });
   }
 
   async function commitUnitCost(row: EstimateGridTreeRow) {
-    if (mutationBusy || !hasPendingDraft(row) || row.kind !== "line") {
+    if (row.kind !== "line") {
       return;
     }
-    const unitCost = Number(draftFor(row).unitCost);
-    if (!(unitCost >= 0)) {
-      return;
-    }
-    if (!onUpdateCostLine || unitCost === row.line.unit_cost) {
-      clearDraft(row);
-      return;
-    }
-    if (await onUpdateCostLine(row.line.id, { unit_cost: unitCost })) {
-      clearDraft(row);
-    }
-  }
-
-  // Enter validates and blurs the field (triggering the same commit as a plain blur), mirroring
-  // usePlanningScheduleDrafts.onScheduleFieldKeyDown -- also stops the keystroke from bubbling up
-  // to any row-level selection/keyboard handler.
-  function onFieldKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    event.stopPropagation();
-    if (event.key === "Enter") {
-      event.preventDefault();
-      event.currentTarget.blur();
-    }
-  }
-
-  function reset() {
-    setDrafts({});
+    await drafts.commitDraft(row, async (draft) => {
+      const unitCost = Number(draft.unitCost);
+      if (!(unitCost >= 0)) {
+        return false;
+      }
+      if (!onUpdateCostLine || unitCost === row.line.unit_cost) {
+        return true;
+      }
+      return onUpdateCostLine(row.line.id, { unit_cost: unitCost });
+    });
   }
 
   return {
-    draftFor,
-    updateDraftField,
+    draftFor: drafts.draftFor,
+    updateDraftField: drafts.updateDraftField,
     commitLabel,
     commitQuantity,
     commitHours,
     commitUnitCost,
-    onFieldKeyDown,
-    reset,
+    // Enter validates and blurs the field (triggering the same commit as a plain blur), and stops
+    // the keystroke from bubbling up to the row's own selection/navigation handler -- both come
+    // from the shared hook.
+    onFieldKeyDown: drafts.onFieldKeyDown,
+    reset: drafts.reset,
   };
 }

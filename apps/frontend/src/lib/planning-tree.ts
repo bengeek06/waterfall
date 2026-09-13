@@ -1,4 +1,5 @@
 import type { Task } from "./backend";
+import type { TreeRowIdentity } from "./tree-rows";
 
 export type PlanningMoveCommand = {
   task_uids: number[];
@@ -8,18 +9,33 @@ export type PlanningMoveCommand = {
 
 export type PlanningTreeRow = Task & { depth: number; hasChildren: boolean };
 
+// How the shared editable-tree base (lib/tree-rows.ts, hooks/use-tree-*) reads a planning row.
+//
+// `parentUidOf` deliberately returns the task's *raw* `parent_uid`, which is not always a loaded
+// task's uid: buildChildrenByParent re-roots a task whose parent is outside the loaded planning in
+// its own Map, but buildPlanningTreeRows copies the task as-is (`{ ...task }`), so such a row still
+// carries its original, unresolvable `parent_uid`. That is safe for filterVisibleTreeRows, which
+// treats a parent uid matching no preceding row as a root (see its own doc comment) -- and it is
+// precisely why useTreeTableSelection never trusts a `parentUidOf` to be focusable without
+// checking it against the navigable rows first.
+export const planningTreeRowIdentity: TreeRowIdentity<PlanningTreeRow> = {
+  uidOf: (row) => row.uid,
+  parentUidOf: (row) => row.parent_uid ?? null,
+  hasChildrenOf: (row) => row.hasChildren,
+};
+
 // Flattens the task tree into the depth-first, indentation-ordered row list the tree table
-// renders, skipping the descendants of any uid in `collapsedUids`. Extracted from
-// planning-tree-table.tsx (E4-12 / #152) alongside use-planning-tree-selection, which owns
-// collapsedUids.
-export function buildVisibleRows(tasks: Task[], collapsedUids: ReadonlySet<number>): PlanningTreeRow[] {
+// renders. Extracted from planning-tree-table.tsx (E4-12 / #152); collapsing is deliberately *not*
+// applied here (E14-09 / #335) -- the flattened list no longer depends on the collapsed set, so it
+// can be memoized on `tasks` alone and filtered by the shared useTreeTableSelection.
+export function buildPlanningTreeRows(tasks: Task[]): PlanningTreeRow[] {
   const childrenByParent = buildChildrenByParent(tasks);
   const rows: PlanningTreeRow[] = [];
   function walk(parentUid: number | null, depth: number) {
     for (const task of childrenByParent.get(parentUid) ?? []) {
       const hasChildren = (childrenByParent.get(task.uid) ?? []).length > 0;
       rows.push({ ...task, depth, hasChildren });
-      if (hasChildren && !collapsedUids.has(task.uid)) {
+      if (hasChildren) {
         walk(task.uid, depth + 1);
       }
     }

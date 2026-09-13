@@ -5,6 +5,7 @@ import type { KeyboardEvent, MouseEvent } from "react";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { TableCell } from "@/components/ui/table";
+import { stopRowKeys } from "@/hooks/use-tree-table-selection";
 import type { Task } from "@/lib/backend";
 import { formatCalendarDuration, type ProjectCalendar } from "@/lib/planning-calendar";
 import {
@@ -197,7 +198,7 @@ function ModeCell({ row, editability, mutationBusy, tasksByUid, onCommitModeChan
           aria-label={`Mode de ${row.name}`}
           size="sm"
           onClick={(event: MouseEvent<HTMLButtonElement>) => event.stopPropagation()}
-          onKeyDown={(event: KeyboardEvent<HTMLButtonElement>) => event.stopPropagation()}
+          {...stopRowKeys}
         >
           <SelectValue />
         </SelectTrigger>

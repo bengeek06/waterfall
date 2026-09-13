@@ -123,6 +123,19 @@ describe("PlanningTreeTable", () => {
     expect(screen.getByText("Livrable")).toBeInTheDocument();
   });
 
+  // E14-09/#335 round-2 H1: the row's own onKeyDown preventDefault()s Enter/Space to drive the
+  // selection, which also cancels the native activation of any <button> inside the row. Every such
+  // control spreads `stopRowKeys`; without it, a keyboard user reaching the chevron would fold
+  // nothing and move the selection instead (WCAG 2.1.1).
+  it("keeps the fold chevron operable with the keyboard: Space on it never reaches the row", () => {
+    render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
+
+    fireEvent.keyDown(screen.getByRole("button", { name: "Replier Poste" }), { key: " " });
+
+    expect(screen.getByText("Lot")).toBeInTheDocument();
+    expect(screen.getByText("Poste").closest("tr")).not.toHaveAttribute("data-state", "selected");
+  });
+
   it("supports mono-selection on click and multi-selection with ctrl+click", () => {
     render(<PlanningTreeTable tasks={threeLevelTasks} versionKey={1} />);
 
@@ -1251,6 +1264,17 @@ describe("PlanningTreeTable", () => {
 
       rerender(<PlanningTreeTable tasks={linkedTasks} versionKey={1} readOnly onEditLinks={vi.fn()} />);
       expect(screen.queryByRole("button", { name: /Éditer les prédécesseurs/ })).not.toBeInTheDocument();
+    });
+
+    // Same H1 as the fold chevron above: this button sits inside a row whose keydown handler
+    // cancels Enter/Space.
+    it("keeps the edit affordance operable with the keyboard: Enter on it never reaches the row", () => {
+      render(<PlanningTreeTable tasks={linkedTasks} versionKey={1} onEditLinks={vi.fn()} />);
+
+      const editButton = screen.getByRole("button", { name: "Éditer les prédécesseurs de Lot" });
+      fireEvent.keyDown(editButton, { key: "Enter" });
+
+      expect(editButton.closest("tr")).not.toHaveAttribute("data-state", "selected");
     });
 
     it("opens the dialog pre-filled with the task's existing predecessor links", () => {
