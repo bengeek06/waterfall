@@ -26,6 +26,7 @@ from fastapi.testclient import TestClient
 from httpx import Response
 
 from _calendar_support import ensure_default_calendar
+from _estimate_grid_support import seed_cost_line
 from _mspdi_fixture_support import (
     ALL_MSPDI_FIXTURES,
     generate_mspdi,
@@ -41,6 +42,7 @@ from waterfall.models.resources import (
     Calendar,
     CostCategory,
     CostType,
+    EstimateTaskRow,
     ResourceNode,
     ResourceRole,
 )
@@ -186,6 +188,27 @@ def _lock_version(revision_id: int) -> int:
             .filter(ProjectRevision.id == revision_id)
             .scalar()
         )
+
+
+def _estimate_task_row_uids(project_id: int, estimate_id: int) -> set[int]:
+    """The MS Project uids a devis's own task rows point at.
+
+    Replaces ``GET .../estimates/{id}/task-rows``, removed by E14-07 (#333): what this
+    module asserts is that creating a devis produced a row per imported task, and the
+    rows say that directly.
+    """
+    with get_session_factory()() as session:
+        uid_of = {
+            task.id: task.uid
+            for task in session.query(MsTask).filter(MsTask.project_id == project_id).all()
+        }
+        return {
+            uid_of[row.task_id]
+            for row in session.query(EstimateTaskRow)
+            .filter(EstimateTaskRow.estimate_id == estimate_id)
+            .all()
+            if row.task_id is not None
+        }
 
 
 def _external_uids(project_id: int) -> dict[int, str]:
@@ -391,11 +414,7 @@ def test_reimport_removes_a_task_of_a_project_that_already_carries_an_estimate()
             headers=headers,
         )
         assert estimate.status_code == 201
-        rows = client.get(
-            f"/projects/{project_id}/estimates/{estimate.json()['id']}/task-rows", headers=headers
-        )
-        assert rows.status_code == 200
-        assert {row["task_uid"] for row in rows.json()["items"]} == {1, 2}
+        assert _estimate_task_row_uids(project_id, cast(int, estimate.json()["id"])) == {1, 2}
 
         rerun = _import(client, headers, project_id, _tasks_xml(1))
 
@@ -1310,25 +1329,23 @@ def test_a_reimport_drops_a_task_priced_by_a_cost_line_and_leaves_its_ms_task_be
         )
         assert estimate.status_code == 201
         estimate_id = cast(int, estimate.json()["id"])
-        rows = client.get(
-            f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
-        )
-        assert rows.status_code == 200
-        task_id_by_uid = {
-            cast(int, row["task_uid"]): cast(int, row["task_id"]) for row in rows.json()["items"]
-        }
-        cost_line = client.post(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
-            json={
-                "task_id": task_id_by_uid[2],
-                "cost_category_id": _seed_supply_category(),
-                "label": "Cable",
-                "quantity": "2.00",
-                "unit_cost": "10.00",
-            },
-            headers=headers,
-        )
-        assert cost_line.status_code == 201, cost_line.text
+        category_id = _seed_supply_category()
+        with get_session_factory()() as session:
+            task_id = (
+                session.query(MsTask.id)
+                .filter(MsTask.project_id == project_id, MsTask.uid == 2)
+                .scalar()
+            )
+            seed_cost_line(
+                session,
+                estimate_id=estimate_id,
+                cost_category_id=category_id,
+                label="Cable",
+                quantity="2.00",
+                unit_cost="10.00",
+                task_id=cast(int, task_id),
+            )
+            session.commit()
 
         rerun = _import(client, headers, project_id, _tasks_xml(1))
 

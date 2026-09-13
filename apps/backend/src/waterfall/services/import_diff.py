@@ -387,8 +387,12 @@ def _unattributable_loss_uids(
     displayed snapshot does not. It is pinned end to end by
     ``test_a_loss_the_displayed_planning_cannot_attribute_is_degraded_not_five_hundred``.
 
-    No route writes a ``RevisionCostFacet`` yet, so nothing in production reaches it
-    today; #333 is the issue that opens that write.
+    Since E14-07 (#333) that reachability is no longer theoretical: ``POST
+    .../revisions/{id}/cost-lines`` and ``PATCH .../revisions/{id}/nodes/{id}/cost``
+    write a ``RevisionCostFacet``, so a revision carries chiffrage put there through
+    public routes, and the losses this function attributes are real money. Before
+    #333 no route wrote that table, which is why this paragraph used to read "nothing
+    in production reaches it today" -- that sentence is what #333 falsified.
 
     Degrade, do not refuse
     ----------------------
@@ -406,8 +410,8 @@ def _unattributable_loss_uids(
 
     ``WARNING`` and not ``ERROR`` (#332 review, B-2), precisely because the section
     above shows the condition is reached by a *supported* user action: redisplaying an
-    older planning answers 200, and after #333 a user who then refreshes the preview
-    five times would emit five ``ERROR`` records without a stack, for a state neither
+    older planning answers 200, and a user who then refreshes the preview five times
+    would emit five ``ERROR`` records without a stack, for a state neither
     the operator nor the platform can repair -- it is the user's display choice. Any
     alerting rule keyed on ``ERROR`` would fire on legitimate product usage. The
     record says exactly the same thing to a developer without also claiming an

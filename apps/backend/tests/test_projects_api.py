@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from httpx import Response
 from openpyxl import load_workbook
 
-from _estimate_grid_support import seed_root_grid_node
+from _estimate_grid_support import seed_cost_line, seed_root_grid_node
 from _legacy_planning_support import (
     create_legacy_planning_task,
     delete_legacy_planning_tasks,
@@ -38,6 +38,11 @@ from waterfall.models.resources import (
 )
 from waterfall.models.wf_core import WfTaskEnrichment
 from waterfall.services import PlanningTreeTaskReferencedError
+from waterfall.services.estimate_task_display import (
+    resolve_effective_task_uid,
+    resolve_live_task_display,
+    resolve_task_uid_by_id,
+)
 
 
 def _auth_headers(client: TestClient, email: str | None = None) -> dict[str, str]:
@@ -323,6 +328,78 @@ def test_patch_task_description_and_read_back() -> None:
         assert task_by_uid[1002]["description"] is None
 
 
+def _seed_estimate_cost_line(
+    estimate_id: int,
+    cost_category_id: int,
+    *,
+    label: str,
+    quantity: str,
+    unit_cost: str,
+    task_id: int | None = None,
+    cost_code_id: int | None = None,
+) -> int:
+    """Insert an ``EstimateCostLine`` through the ORM, its grid node included.
+
+    The Non-MO twin of :func:`_seed_estimate_role_assignment`. E14-07 (#333) removed
+    ``POST .../estimates/{id}/cost-lines`` -- the cost facet of a revision replaces it --
+    so the tests that need a Non-MO line to exercise validation, aggregates, the export
+    or a cascade delete seed it where it lives.
+    """
+    with get_session_factory()() as session:
+        line = seed_cost_line(
+            session,
+            estimate_id=estimate_id,
+            cost_category_id=cost_category_id,
+            label=label,
+            quantity=quantity,
+            unit_cost=unit_cost,
+            task_id=task_id,
+            cost_code_id=cost_code_id,
+        )
+        session.commit()
+        return line.id
+
+
+def _live_task_rows(project_id: int, estimate_id: int) -> list[dict[str, Any]]:
+    """An estimate's task rows, with the live display the devis read used to expose.
+
+    E14-07 (#333) removed ``GET .../estimates/{id}/task-rows``: the tree of a revision
+    replaces it. The *live resolution* it wrapped is untouched -- it is still what the
+    reconciliation export reads (``services/estimate_task_display.py``) -- so the tests
+    below keep asserting on it, through that service rather than through a route that no
+    longer exists.
+
+    Mirrors the removed read model exactly on the two points that carry the behaviour:
+    the live resolution runs for a **draft** estimate only (a validated one is a frozen
+    snapshot and must not drift), while ``task_uid`` is resolved either way, because a
+    uid is a stable identity rather than derived state.
+    """
+    with get_session_factory()() as session:
+        estimate = session.query(Estimate).filter(Estimate.id == estimate_id).one()
+        project = session.query(MsProject).filter(MsProject.id == project_id).one()
+        rows = (
+            session.query(EstimateTaskRow).filter(EstimateTaskRow.estimate_id == estimate_id).all()
+        )
+        task_uid_by_id = resolve_task_uid_by_id(session, project)
+        resolved = (
+            resolve_live_task_display(session, project, rows) if estimate.status == "draft" else {}
+        )
+        return [
+            {
+                "id": row.id,
+                "task_id": row.task_id,
+                "task_uid": resolve_effective_task_uid(row, resolved.get(row.id), task_uid_by_id),
+                "parent_task_id": (
+                    resolved[row.id].parent_task_id if row.id in resolved else row.parent_task_id
+                ),
+                "position": resolved[row.id].position if row.id in resolved else row.position,
+                "task_name": resolved[row.id].task_name if row.id in resolved else row.task_name,
+                "is_milestone": row.is_milestone,
+            }
+            for row in rows
+        ]
+
+
 def _seed_ms_task_group_with_eleven_children(owner_id: int) -> int:
     """Root summary task (uid 100) with 11 children (uid 101..111), each carrying a
     numeric ``position``/``outline_number`` pair that a plain lexicographic string sort
@@ -500,7 +577,7 @@ def test_patch_task_name_with_displayed_planning_updates_snapshot_twin_and_live_
         )
         assert display_response.status_code == 200
 
-        estimate_ids = []
+        estimate_ids: list[int] = []
         for _ in range(2):
             estimate_response: Response = client.post(
                 f"/projects/{project_id}/estimates",
@@ -512,12 +589,7 @@ def test_patch_task_name_with_displayed_planning_updates_snapshot_twin_and_live_
 
         row_ids_by_estimate: dict[int, int] = {}
         for estimate_id in estimate_ids:
-            rows = cast(
-                list[dict[str, Any]],
-                client.get(
-                    f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
-                ).json()["items"],
-            )
+            rows = _live_task_rows(project_id, estimate_id)
             row = next(item for item in rows if item["task_uid"] == 1001)
             assert row["task_name"] == "Task One"
             row_ids_by_estimate[estimate_id] = cast(int, row["id"])
@@ -548,49 +620,10 @@ def test_patch_task_name_with_displayed_planning_updates_snapshot_twin_and_live_
         # Both draft estimates already referencing the task see the new name, from
         # this single PATCH call.
         for estimate_id, row_id in row_ids_by_estimate.items():
-            rows_after = cast(
-                list[dict[str, Any]],
-                client.get(
-                    f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
-                ).json()["items"],
-            )
+            rows_after = _live_task_rows(project_id, estimate_id)
             row_after = next(item for item in rows_after if item["id"] == row_id)
             assert row_after["task_name"] == "Task One Renamed"
             assert row_after["task_uid"] == 1001
-
-
-def test_list_estimate_task_rows_pagination_reports_global_position() -> None:
-    """Finding Haute (E12-08/#290, round 5 review): `resolve_live_task_display`
-    renumbers `position` 1..N depth-first across only the rows it is given
-    (see its own docstring) -- passing it the already-paginated *page*
-    (`result.rows`, sliced by SQL `limit`/`offset` before the call) instead of
-    the estimate's full task-row set made every page after the first report
-    `position` starting back at 1, instead of the row's true position in the
-    complete devis.
-    """
-    with TestClient(app) as client:
-        headers = _auth_headers(client)
-        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
-
-        estimate_response: Response = client.post(
-            f"/projects/{project_id}/estimates",
-            json={"kind": "initial", "currency_code": "EUR"},
-            headers=headers,
-        )
-        assert estimate_response.status_code == 201
-        estimate_id = cast(int, estimate_response.json()["id"])
-
-        page_response: Response = client.get(
-            f"/projects/{project_id}/estimates/{estimate_id}/task-rows",
-            params={"limit": 1, "offset": 1, "sort": "position"},
-            headers=headers,
-        )
-        assert page_response.status_code == 200
-        body = cast(dict[str, Any], page_response.json())
-        items = cast(list[dict[str, Any]], body["items"])
-        assert len(items) == 1
-        assert items[0]["task_uid"] == 1002
-        assert items[0]["position"] == 2
 
 
 def test_patch_task_name_does_not_affect_already_validated_estimate_task_rows() -> None:
@@ -632,11 +665,7 @@ def test_patch_task_name_does_not_affect_already_validated_estimate_task_rows() 
         )
         assert rename_response.status_code == 200
 
-        rows_response: Response = client.get(
-            f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
-        )
-        assert rows_response.status_code == 200
-        rows = cast(list[dict[str, Any]], rows_response.json()["items"])
+        rows = _live_task_rows(project_id, estimate_id)
         task_names = {row["task_name"] for row in rows}
         assert "Task One" in task_names
         assert "Task One Renamed" not in task_names
@@ -693,11 +722,7 @@ def test_estimate_task_row_freezes_to_last_live_name_seen_before_validation() ->
         assert validate_response.status_code == 200
         assert validate_response.json()["status"] == "validated"
 
-        rows_response: Response = client.get(
-            f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
-        )
-        assert rows_response.status_code == 200
-        rows = cast(list[dict[str, Any]], rows_response.json()["items"])
+        rows = _live_task_rows(project_id, estimate_id)
         row = next(item for item in rows if item["task_uid"] == 1001)
         assert row["task_name"] == "Task One Renamed Twice"
 
@@ -708,10 +733,7 @@ def test_estimate_task_row_freezes_to_last_live_name_seen_before_validation() ->
             headers=headers,
         )
         assert rename_after_response.status_code == 200
-        rows_after_response: Response = client.get(
-            f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
-        )
-        rows_after = cast(list[dict[str, Any]], rows_after_response.json()["items"])
+        rows_after = _live_task_rows(project_id, estimate_id)
         row_after = next(item for item in rows_after if item["id"] == row["id"])
         assert row_after["task_name"] == "Task One Renamed Twice"
 
@@ -745,10 +767,7 @@ def test_validated_estimate_task_row_resolves_task_uid() -> None:
         assert estimate_response.status_code == 201
         estimate_id = cast(int, estimate_response.json()["id"])
 
-        draft_rows_response: Response = client.get(
-            f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
-        )
-        draft_rows = cast(list[dict[str, Any]], draft_rows_response.json()["items"])
+        draft_rows = _live_task_rows(project_id, estimate_id)
         assert {row["task_uid"] for row in draft_rows} == {1001, 1002}
 
         validate_response: Response = client.post(
@@ -757,10 +776,7 @@ def test_validated_estimate_task_row_resolves_task_uid() -> None:
         )
         assert validate_response.status_code == 200
 
-        validated_rows_response: Response = client.get(
-            f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
-        )
-        validated_rows = cast(list[dict[str, Any]], validated_rows_response.json()["items"])
+        validated_rows = _live_task_rows(project_id, estimate_id)
         assert {row["task_uid"] for row in validated_rows} == {1001, 1002}
 
 
@@ -790,17 +806,13 @@ def test_estimate_task_row_position_follows_live_planning_move() -> None:
         assert estimate_response.status_code == 201
         estimate_id = cast(int, estimate_response.json()["id"])
 
-        rows_before = client.get(
-            f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
-        ).json()["items"]
+        rows_before = _live_task_rows(project_id, estimate_id)
         position_by_uid_before = {row["task_uid"]: row["position"] for row in rows_before}
         assert position_by_uid_before == {1001: 1, 1002: 2}
 
         move_legacy_planning_tasks(project_id, planning_id, [1002], position=1)
 
-        rows_after = client.get(
-            f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
-        ).json()["items"]
+        rows_after = _live_task_rows(project_id, estimate_id)
         position_by_uid_after = {row["task_uid"]: row["position"] for row in rows_after}
         assert position_by_uid_after == {1002: 1, 1001: 2}
 
@@ -846,18 +858,14 @@ def test_delete_planning_task_referenced_by_cost_line_conflicts_without_mutation
         )
         estimate_id = cast(int, estimate_response.json()["id"])
 
-        cost_line_response: Response = client.post(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
-            json={
-                "task_id": task_id,
-                "cost_category_id": cost_category_id,
-                "label": "Materiel dedie",
-                "quantity": 1,
-                "unit_cost": 100,
-            },
-            headers=headers,
+        _seed_estimate_cost_line(
+            estimate_id,
+            cost_category_id,
+            label="Materiel dedie",
+            quantity="1",
+            unit_cost="100",
+            task_id=task_id,
         )
-        assert cost_line_response.status_code == 201
 
         with pytest.raises(PlanningTreeTaskReferencedError) as refusal:
             delete_legacy_planning_tasks(project_id, planning_id, [1001])
@@ -961,17 +969,13 @@ def test_estimate_aggregates_and_excel_export_after_validation() -> None:
         )
         estimate_id = cast(int, estimate_response.json()["id"])
 
-        cost_line_response: Response = client.post(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
-            json={
-                "cost_category_id": cost_category_id,
-                "label": "Ordinateurs",
-                "quantity": 2,
-                "unit_cost": 900,
-            },
-            headers=headers,
+        _seed_estimate_cost_line(
+            estimate_id,
+            cost_category_id,
+            label="Ordinateurs",
+            quantity="2",
+            unit_cost="900",
         )
-        assert cost_line_response.status_code == 201
 
         validate_response: Response = client.post(
             f"/projects/{project_id}/estimates/{estimate_id}/validate", headers=headers
@@ -1096,27 +1100,17 @@ def _seed_reconciliation_fixture(client: TestClient, headers: dict[str, str]) ->
         project_id, estimate_id, 1001, role_id, 2, 10, comment="Dev senior"
     )
 
-    cost_line_response: Response = client.post(
-        f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
-        json={
-            "task_id": task_id_by_uid[1002],
-            "cost_category_id": supply_category_id,
-            "label": "Cable reseau",
-            "quantity": 5,
-            "unit_cost": 12.5,
-        },
-        headers=headers,
+    cost_line_id = _seed_estimate_cost_line(
+        estimate_id,
+        supply_category_id,
+        label="Cable reseau",
+        quantity="5",
+        unit_cost="12.5",
+        task_id=task_id_by_uid[1002],
     )
-    assert cost_line_response.status_code == 201
-    cost_line_id = cast(int, cost_line_response.json()["id"])
 
-    task_rows_response: Response = client.get(
-        f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
-    )
-    assert task_rows_response.status_code == 200
     task_row_by_task_id = {
-        row["task_id"]: row["id"]
-        for row in cast(list[dict[str, Any]], task_rows_response.json()["items"])
+        row["task_id"]: row["id"] for row in _live_task_rows(project_id, estimate_id)
     }
 
     return {
@@ -1679,17 +1673,13 @@ def test_delete_project_cascades_related_data() -> None:
         assert estimate_response.status_code == 201
         estimate_id = cast(int, estimate_response.json()["id"])
 
-        cost_line_response: Response = client.post(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
-            json={
-                "cost_category_id": cost_category_id,
-                "label": "Ordinateurs",
-                "quantity": 2,
-                "unit_cost": 900,
-            },
-            headers=headers,
+        _seed_estimate_cost_line(
+            estimate_id,
+            cost_category_id,
+            label="Ordinateurs",
+            quantity="2",
+            unit_cost="900",
         )
-        assert cost_line_response.status_code == 201
 
         response: Response = client.delete(f"/projects/{project_id}", headers=headers)
         assert response.status_code == 204
@@ -2181,105 +2171,6 @@ def test_list_project_estimates_pagination_sort_and_validation() -> None:
         assert [item["note"] for item in searched.json()["items"]] == ["Chiffrage initial detaille"]
 
 
-def test_list_estimate_task_rows_pagination_sort_and_validation() -> None:
-    with TestClient(app) as client:
-        headers = _auth_headers(client)
-        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
-        estimate_id = cast(
-            int,
-            client.post(
-                f"/projects/{project_id}/estimates",
-                json={"kind": "initial", "currency_code": "EUR"},
-                headers=headers,
-            ).json()["id"],
-        )
-
-        listed = client.get(
-            f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
-        )
-        assert listed.status_code == 200
-        body = cast(dict[str, Any], listed.json())
-        assert body["limit"] is None
-        assert body["total"] == len(body["items"]) == 2
-
-        descending = client.get(
-            f"/projects/{project_id}/estimates/{estimate_id}/task-rows?sort=-task_name",
-            headers=headers,
-        )
-        assert descending.status_code == 200
-        names = [row["task_name"] for row in descending.json()["items"]]
-        assert names == ["Task Two", "Task One"]
-
-        invalid_sort = client.get(
-            f"/projects/{project_id}/estimates/{estimate_id}/task-rows?sort=unknown_column",
-            headers=headers,
-        )
-        assert invalid_sort.status_code == 400
-
-
-def test_list_estimate_cost_lines_pagination_sort_and_validation() -> None:
-    with TestClient(app) as client:
-        headers = _auth_headers(client)
-        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
-        estimate_id = cast(
-            int,
-            client.post(
-                f"/projects/{project_id}/estimates",
-                json={"kind": "initial", "currency_code": "EUR"},
-                headers=headers,
-            ).json()["id"],
-        )
-
-        session_factory = get_session_factory()
-        with session_factory() as session:
-            cost_type = CostType(code=f"MAT-{uuid4().hex[:8]}", name="Materiel")
-            session.add(cost_type)
-            session.flush()
-            cost_category = CostCategory(
-                cost_type_id=cost_type.id,
-                accounting_code=f"MATCAT-{uuid4().hex[:8]}",
-                name="Materiel",
-            )
-            session.add(cost_category)
-            session.commit()
-            cost_category_id = cost_category.id
-
-        for label in ("Bravo", "Alpha"):
-            created = client.post(
-                f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
-                json={
-                    "cost_category_id": cost_category_id,
-                    "label": label,
-                    "quantity": 1,
-                    "unit_cost": 10,
-                },
-                headers=headers,
-            )
-            assert created.status_code == 201
-
-        listed = client.get(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines", headers=headers
-        )
-        assert listed.status_code == 200
-        body = cast(dict[str, Any], listed.json())
-        assert body["limit"] is None
-        assert body["total"] == len(body["items"]) == 2
-
-        sorted_by_label = client.get(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines?sort=label",
-            headers=headers,
-        )
-        assert sorted_by_label.status_code == 200
-        labels = [line["label"] for line in sorted_by_label.json()["items"]]
-        assert labels == ["Alpha", "Bravo"]
-
-        invalid_sort = client.get(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines?sort=unknown_column",
-            headers=headers,
-        )
-        assert invalid_sort.status_code == 400
-
-
 def test_list_plannings_pagination_sort_and_validation() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)
@@ -2331,12 +2222,7 @@ def test_project_estimate_snapshots_tasks_and_validates() -> None:
         assert estimate["version_number"] == 1
         assert estimate["status"] == "draft"
 
-        rows_response = client.get(
-            f"/projects/{project_id}/estimates/{estimate_id}/task-rows",
-            headers=headers,
-        )
-        assert rows_response.status_code == 200
-        rows = cast(list[dict[str, Any]], rows_response.json()["items"])
+        rows = sorted(_live_task_rows(project_id, estimate_id), key=lambda row: row["position"])
         assert [row["task_name"] for row in rows] == ["Task One", "Task Two"]
         assert [row["position"] for row in rows] == [1, 2]
 
@@ -2409,31 +2295,23 @@ def test_validate_estimate_warns_about_uncovered_tasks_only() -> None:
         _seed_estimate_role_assignment(project_id, estimate_id, 1001, labor_role_id, 1, 1)
 
         # Task 1002 is covered via an EstimateCostLine.task_id.
-        cost_line_response = client.post(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
-            json={
-                "task_id": tasks_by_uid[1002],
-                "cost_category_id": _cost_category_id_for_role(supply_role_id),
-                "label": "Câble dédié",
-                "quantity": 1,
-                "unit_cost": 10,
-            },
-            headers=headers,
+        _seed_estimate_cost_line(
+            estimate_id,
+            _cost_category_id_for_role(supply_role_id),
+            label="Câble dédié",
+            quantity="1",
+            unit_cost="10",
+            task_id=tasks_by_uid[1002],
         )
-        assert cost_line_response.status_code == 201
 
         # A cost line with no task_id at all must not count as covering any task.
-        unattached_cost_line_response = client.post(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
-            json={
-                "cost_category_id": _cost_category_id_for_role(supply_role_id),
-                "label": "Frais generaux",
-                "quantity": 1,
-                "unit_cost": 5,
-            },
-            headers=headers,
+        _seed_estimate_cost_line(
+            estimate_id,
+            _cost_category_id_for_role(supply_role_id),
+            label="Frais generaux",
+            quantity="1",
+            unit_cost="5",
         )
-        assert unattached_cost_line_response.status_code == 201
 
         validate_response = client.post(
             f"/projects/{project_id}/estimates/{estimate_id}/validate",
@@ -2462,19 +2340,13 @@ def test_validate_estimate_reports_no_warnings_when_all_tasks_are_covered() -> N
         estimate_id = cast(int, estimate_response.json()["id"])
 
         _seed_estimate_role_assignment(project_id, estimate_id, 1001, labor_role_id, 1, 1)
-        assert (
-            client.post(
-                f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
-                json={
-                    "task_id": tasks_by_uid[1002],
-                    "cost_category_id": _cost_category_id_for_role(supply_role_id),
-                    "label": "Câble dédié",
-                    "quantity": 1,
-                    "unit_cost": 10,
-                },
-                headers=headers,
-            ).status_code
-            == 201
+        _seed_estimate_cost_line(
+            estimate_id,
+            _cost_category_id_for_role(supply_role_id),
+            label="Câble dédié",
+            quantity="1",
+            unit_cost="10",
+            task_id=tasks_by_uid[1002],
         )
 
         validate_response = client.post(
@@ -2524,13 +2396,9 @@ def test_project_estimate_can_snapshot_planning_without_legacy_tasks() -> None:
         assert estimate_response.status_code == 201
         estimate_id = cast(int, estimate_response.json()["id"])
 
-        rows_response = client.get(
-            f"/projects/{project_id}/estimates/{estimate_id}/task-rows",
-            headers=headers,
-        )
-        assert rows_response.status_code == 200
-        assert rows_response.json()["items"][0]["task_id"] is None
-        assert rows_response.json()["items"][0]["task_name"] == "Snapshot task"
+        rows = _live_task_rows(project_id, estimate_id)
+        assert rows[0]["task_id"] is None
+        assert rows[0]["task_name"] == "Snapshot task"
 
 
 def test_planning_lifecycle_snapshots_reference_and_display_selection() -> None:
@@ -2882,565 +2750,6 @@ def test_project_can_initialise_without_a_planning_structure() -> None:
         assert response.json()["status"] == "initialise"
 
 
-def test_estimate_cost_lines_support_non_labor_costs_and_draft_locking() -> None:
-    with TestClient(app) as client:
-        headers = _auth_headers(client)
-        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
-        labor_role_id, supply_role_id = _seed_roles()
-
-        session_factory = get_session_factory()
-        with session_factory() as session:
-            labor_category_id = (
-                session.query(ResourceRole)
-                .filter(ResourceRole.id == labor_role_id)
-                .one()
-                .cost_category_id
-            )
-            supply_category_id = (
-                session.query(ResourceRole)
-                .filter(ResourceRole.id == supply_role_id)
-                .one()
-                .cost_category_id
-            )
-            fee_type = CostType(code="FRAIS", name="Frais", kind="other")
-            work_unit_type = CostType(code="UO", name="Unité d'oeuvre", kind="other")
-            session.add_all([fee_type, work_unit_type])
-            session.flush()
-            fee_category = CostCategory(
-                cost_type_id=fee_type.id,
-                accounting_code="FR-TRAVEL",
-                category_code="FRAIS",
-                name="Déplacement",
-            )
-            work_unit_category = CostCategory(
-                cost_type_id=work_unit_type.id,
-                accounting_code="UO-TEST",
-                category_code="UO",
-                name="Essais",
-            )
-            session.add_all([fee_category, work_unit_category])
-            session.commit()
-            fee_category_id = fee_category.id
-            work_unit_category_id = work_unit_category.id
-
-        estimate_response = client.post(
-            f"/projects/{project_id}/estimates",
-            json={"kind": "initial", "currency_code": "EUR"},
-            headers=headers,
-        )
-        assert estimate_response.status_code == 201
-        estimate_id = cast(int, estimate_response.json()["id"])
-
-        create_response = client.post(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
-            json={
-                "task_id": 1,
-                "cost_category_id": supply_category_id,
-                "label": "Câble réseau",
-                "quantity": "3",
-                "unit_cost": "12.50",
-                "supply_status": "ordered",
-            },
-            headers=headers,
-        )
-        assert create_response.status_code == 201
-        cost_line = cast(dict[str, Any], create_response.json())
-        cost_line_id = cast(int, cost_line["id"])
-        assert cost_line["cost_type_code"] == "FOURNITURE"
-        assert cost_line["accounting_code"] == "FO-CABLE"
-        assert cost_line["category_code"] == "ACHAT"
-        assert cost_line["purchase_cost"] == "37.50"
-        assert cost_line["supply_status"] == "ordered"
-
-        other_headers = _auth_headers(client, "cost-line.other@example.com")
-        other_response = client.get(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
-            headers=other_headers,
-        )
-        assert other_response.status_code == 404
-        other_delete_response = client.delete(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines/{cost_line_id}",
-            headers=other_headers,
-        )
-        assert other_delete_response.status_code == 404
-
-        fee_response = client.post(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
-            json={
-                "cost_category_id": fee_category_id,
-                "label": "Déplacement",
-                "quantity": "2",
-                "unit_cost": "120",
-            },
-            headers=headers,
-        )
-        assert fee_response.status_code == 201
-        assert fee_response.json()["cost_type_code"] == "FRAIS"
-        assert fee_response.json()["task_id"] is None
-        assert fee_response.json()["supply_status"] is None
-
-        work_unit_response = client.post(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
-            json={
-                "cost_category_id": work_unit_category_id,
-                "label": "Essais laboratoire",
-                "quantity": "4",
-                "unit_cost": "80",
-            },
-            headers=headers,
-        )
-        assert work_unit_response.status_code == 201
-        assert work_unit_response.json()["cost_type_code"] == "UO"
-
-        status_for_fee_response = client.post(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
-            json={
-                "cost_category_id": fee_category_id,
-                "label": "Statut non valide",
-                "quantity": "1",
-                "unit_cost": "1",
-                "supply_status": "ordered",
-            },
-            headers=headers,
-        )
-        assert status_for_fee_response.status_code == 400
-
-        labor_response = client.post(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
-            json={
-                "cost_category_id": labor_category_id,
-                "label": "Non autorisé",
-                "quantity": "1",
-                "unit_cost": "1",
-            },
-            headers=headers,
-        )
-        assert labor_response.status_code == 400
-
-        invalid_task_response = client.post(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
-            json={
-                "task_id": 999999,
-                "cost_category_id": supply_category_id,
-                "label": "Tâche absente",
-                "quantity": "1",
-                "unit_cost": "1",
-            },
-            headers=headers,
-        )
-        assert invalid_task_response.status_code == 400
-
-        invalid_status_response = client.patch(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines/{cost_line_id}",
-            json={"supply_status": "received", "unit_cost": "15"},
-            headers=headers,
-        )
-        assert invalid_status_response.status_code == 200
-        assert invalid_status_response.json()["purchase_cost"] == "45.00"
-
-        validate_response = client.post(
-            f"/projects/{project_id}/estimates/{estimate_id}/validate",
-            headers=headers,
-        )
-        assert validate_response.status_code == 200
-
-        locked_response = client.delete(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines/{cost_line_id}",
-            headers=headers,
-        )
-        assert locked_response.status_code == 409
-
-
-def test_estimate_cost_line_defaults_to_project_root_cost_code() -> None:
-    """Issue #63 (E6-02): a non-labor cost line created without an explicit
-    `cost_code_id` is attached to the project's active root cost code by default."""
-    with TestClient(app) as client:
-        headers = _auth_headers(client)
-        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
-        _, supply_role_id = _seed_roles()
-        root_id = _root_cost_code_id(client, headers, project_id)
-
-        session_factory = get_session_factory()
-        with session_factory() as session:
-            supply_category_id = (
-                session.query(ResourceRole)
-                .filter(ResourceRole.id == supply_role_id)
-                .one()
-                .cost_category_id
-            )
-
-        estimate_response = client.post(
-            f"/projects/{project_id}/estimates",
-            json={"kind": "initial", "currency_code": "EUR"},
-            headers=headers,
-        )
-        estimate_id = cast(int, estimate_response.json()["id"])
-
-        create_response = client.post(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
-            json={
-                "cost_category_id": supply_category_id,
-                "label": "Câble réseau",
-                "quantity": "1",
-                "unit_cost": "1",
-            },
-            headers=headers,
-        )
-        assert create_response.status_code == 201
-        assert create_response.json()["cost_code_id"] == root_id
-
-
-def test_estimate_cost_line_accepts_explicit_sub_cost_code_and_rejects_foreign_one() -> None:
-    with TestClient(app) as client:
-        headers = _auth_headers(client)
-        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
-        _, supply_role_id = _seed_roles()
-        root_id = _root_cost_code_id(client, headers, project_id)
-
-        session_factory = get_session_factory()
-        with session_factory() as session:
-            supply_category_id = (
-                session.query(ResourceRole)
-                .filter(ResourceRole.id == supply_role_id)
-                .one()
-                .cost_category_id
-            )
-
-        sub_code_response = client.post(
-            f"/projects/{project_id}/cost-codes",
-            json={"code": "LOT-FOURN", "name": "Lot fourniture", "parent_id": root_id},
-            headers=headers,
-        )
-        assert sub_code_response.status_code == 201
-        sub_code_id = cast(int, sub_code_response.json()["id"])
-
-        estimate_response = client.post(
-            f"/projects/{project_id}/estimates",
-            json={"kind": "initial", "currency_code": "EUR"},
-            headers=headers,
-        )
-        estimate_id = cast(int, estimate_response.json()["id"])
-
-        create_response = client.post(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
-            json={
-                "cost_category_id": supply_category_id,
-                "label": "Câble réseau",
-                "quantity": "1",
-                "unit_cost": "1",
-                "cost_code_id": sub_code_id,
-            },
-            headers=headers,
-        )
-        assert create_response.status_code == 201
-        cost_line_id = cast(int, create_response.json()["id"])
-        assert create_response.json()["cost_code_id"] == sub_code_id
-
-        other_project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
-        other_root_id = _root_cost_code_id(client, headers, other_project_id)
-
-        rejected_create_response = client.post(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
-            json={
-                "cost_category_id": supply_category_id,
-                "label": "Câble refusé",
-                "quantity": "1",
-                "unit_cost": "1",
-                "cost_code_id": other_root_id,
-            },
-            headers=headers,
-        )
-        assert rejected_create_response.status_code == 400
-
-        rejected_update_response = client.patch(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines/{cost_line_id}",
-            json={"cost_code_id": other_root_id},
-            headers=headers,
-        )
-        assert rejected_update_response.status_code == 400
-
-        accepted_update_response = client.patch(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines/{cost_line_id}",
-            json={"cost_code_id": root_id},
-            headers=headers,
-        )
-        assert accepted_update_response.status_code == 200
-        assert accepted_update_response.json()["cost_code_id"] == root_id
-
-
-def test_estimate_cost_line_explicit_null_cost_code_id_resolves_to_root_not_cleared() -> None:
-    """Review finding on #63: `{"cost_code_id": null}` must resolve back to the
-    project's root, exactly like an omitted field at create time -- never leave the
-    line with no attachment at all."""
-    with TestClient(app) as client:
-        headers = _auth_headers(client)
-        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
-        _, supply_role_id = _seed_roles()
-        root_id = _root_cost_code_id(client, headers, project_id)
-
-        session_factory = get_session_factory()
-        with session_factory() as session:
-            supply_category_id = (
-                session.query(ResourceRole)
-                .filter(ResourceRole.id == supply_role_id)
-                .one()
-                .cost_category_id
-            )
-
-        sub_code_response = client.post(
-            f"/projects/{project_id}/cost-codes",
-            json={"code": "LOT-NULL", "name": "Lot", "parent_id": root_id},
-            headers=headers,
-        )
-        sub_code_id = cast(int, sub_code_response.json()["id"])
-
-        estimate_id = cast(
-            int,
-            client.post(
-                f"/projects/{project_id}/estimates",
-                json={"kind": "initial", "currency_code": "EUR"},
-                headers=headers,
-            ).json()["id"],
-        )
-
-        create_response = client.post(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
-            json={
-                "cost_category_id": supply_category_id,
-                "label": "Câble",
-                "quantity": "1",
-                "unit_cost": "1",
-                "cost_code_id": sub_code_id,
-            },
-            headers=headers,
-        )
-        cost_line_id = cast(int, create_response.json()["id"])
-        assert create_response.json()["cost_code_id"] == sub_code_id
-
-        null_update_response = client.patch(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines/{cost_line_id}",
-            json={"cost_code_id": None},
-            headers=headers,
-        )
-        assert null_update_response.status_code == 200
-        assert null_update_response.json()["cost_code_id"] == root_id
-
-
-def test_estimate_cost_line_rejects_a_deactivated_cost_code() -> None:
-    """Review finding on #63: a deactivated cost code must never accept a new
-    attachment, even though it may still be referenced by pre-existing lines."""
-    with TestClient(app) as client:
-        headers = _auth_headers(client)
-        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
-        _, supply_role_id = _seed_roles()
-        root_id = _root_cost_code_id(client, headers, project_id)
-
-        session_factory = get_session_factory()
-        with session_factory() as session:
-            supply_category_id = (
-                session.query(ResourceRole)
-                .filter(ResourceRole.id == supply_role_id)
-                .one()
-                .cost_category_id
-            )
-
-        sub_code_response = client.post(
-            f"/projects/{project_id}/cost-codes",
-            json={"code": "LOT-INACTIVE", "name": "Lot", "parent_id": root_id},
-            headers=headers,
-        )
-        sub_code_id = cast(int, sub_code_response.json()["id"])
-
-        deactivate_response = client.delete(
-            f"/projects/{project_id}/cost-codes/{sub_code_id}", headers=headers
-        )
-        assert deactivate_response.status_code == 204
-
-        estimate_id = cast(
-            int,
-            client.post(
-                f"/projects/{project_id}/estimates",
-                json={"kind": "initial", "currency_code": "EUR"},
-                headers=headers,
-            ).json()["id"],
-        )
-        rejected_create_response = client.post(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
-            json={
-                "cost_category_id": supply_category_id,
-                "label": "Câble refusé",
-                "quantity": "1",
-                "unit_cost": "1",
-                "cost_code_id": sub_code_id,
-            },
-            headers=headers,
-        )
-        assert rejected_create_response.status_code == 400
-
-
-def test_estimate_cost_line_planned_date_is_independent_from_task_id() -> None:
-    """Issue #66 (E6-05): `planned_date` and `task_id` are entirely independent --
-    either, both, or neither may be set on a given cost line."""
-    with TestClient(app) as client:
-        headers = _auth_headers(client)
-        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
-        _, supply_role_id = _seed_roles()
-
-        session_factory = get_session_factory()
-        with session_factory() as session:
-            supply_category_id = (
-                session.query(ResourceRole)
-                .filter(ResourceRole.id == supply_role_id)
-                .one()
-                .cost_category_id
-            )
-
-        estimate_id = cast(
-            int,
-            client.post(
-                f"/projects/{project_id}/estimates",
-                json={"kind": "initial", "currency_code": "EUR"},
-                headers=headers,
-            ).json()["id"],
-        )
-
-        # planned_date without task_id.
-        date_only_response = client.post(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
-            json={
-                "cost_category_id": supply_category_id,
-                "label": "Câble avec date",
-                "quantity": "1",
-                "unit_cost": "1",
-                "planned_date": "2026-10-01T00:00:00Z",
-            },
-            headers=headers,
-        )
-        assert date_only_response.status_code == 201
-        assert date_only_response.json()["task_id"] is None
-        assert date_only_response.json()["planned_date"].startswith("2026-10-01T00:00:00")
-
-        # task_id without planned_date.
-        task_only_response = client.post(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
-            json={
-                "task_id": 1,
-                "cost_category_id": supply_category_id,
-                "label": "Câble avec tâche",
-                "quantity": "1",
-                "unit_cost": "1",
-            },
-            headers=headers,
-        )
-        assert task_only_response.status_code == 201
-        assert task_only_response.json()["task_id"] == 1
-        assert task_only_response.json()["planned_date"] is None
-
-        # Neither set.
-        neither_response = client.post(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
-            json={
-                "cost_category_id": supply_category_id,
-                "label": "Câble sans date ni tâche",
-                "quantity": "1",
-                "unit_cost": "1",
-            },
-            headers=headers,
-        )
-        assert neither_response.status_code == 201
-        assert neither_response.json()["task_id"] is None
-        assert neither_response.json()["planned_date"] is None
-
-        # Both set.
-        both_response = client.post(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
-            json={
-                "task_id": 1,
-                "cost_category_id": supply_category_id,
-                "label": "Câble avec date et tâche",
-                "quantity": "1",
-                "unit_cost": "1",
-                "planned_date": "2026-11-15T08:30:00Z",
-            },
-            headers=headers,
-        )
-        assert both_response.status_code == 201
-        assert both_response.json()["task_id"] == 1
-        assert both_response.json()["planned_date"].startswith("2026-11-15T08:30:00")
-
-
-def test_estimate_cost_line_planned_date_is_editable_independently_of_task_id() -> None:
-    """Issue #66 (E6-05): `planned_date` is editable via PATCH independently of
-    `task_id`, and an explicit `null` clears it -- consistent with how `task_id`
-    already accepts an explicit `null` to detach a line from its task."""
-    with TestClient(app) as client:
-        headers = _auth_headers(client)
-        project_id, _ = _seed_projects_and_tasks(_current_user_id(client, headers))
-        _, supply_role_id = _seed_roles()
-
-        session_factory = get_session_factory()
-        with session_factory() as session:
-            supply_category_id = (
-                session.query(ResourceRole)
-                .filter(ResourceRole.id == supply_role_id)
-                .one()
-                .cost_category_id
-            )
-
-        estimate_id = cast(
-            int,
-            client.post(
-                f"/projects/{project_id}/estimates",
-                json={"kind": "initial", "currency_code": "EUR"},
-                headers=headers,
-            ).json()["id"],
-        )
-
-        create_response = client.post(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
-            json={
-                "task_id": 1,
-                "cost_category_id": supply_category_id,
-                "label": "Câble",
-                "quantity": "1",
-                "unit_cost": "1",
-            },
-            headers=headers,
-        )
-        assert create_response.status_code == 201
-        cost_line_id = cast(int, create_response.json()["id"])
-        assert create_response.json()["planned_date"] is None
-
-        # Set planned_date without touching task_id.
-        set_date_response = client.patch(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines/{cost_line_id}",
-            json={"planned_date": "2026-12-01T00:00:00Z"},
-            headers=headers,
-        )
-        assert set_date_response.status_code == 200
-        assert set_date_response.json()["task_id"] == 1
-        assert set_date_response.json()["planned_date"].startswith("2026-12-01T00:00:00")
-
-        # Clear task_id without touching planned_date.
-        clear_task_response = client.patch(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines/{cost_line_id}",
-            json={"task_id": None},
-            headers=headers,
-        )
-        assert clear_task_response.status_code == 200
-        assert clear_task_response.json()["task_id"] is None
-        assert clear_task_response.json()["planned_date"].startswith("2026-12-01T00:00:00")
-
-        # Explicit null clears planned_date.
-        clear_date_response = client.patch(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines/{cost_line_id}",
-            json={"planned_date": None},
-            headers=headers,
-        )
-        assert clear_date_response.status_code == 200
-        assert clear_date_response.json()["planned_date"] is None
-
-
 def test_estimate_line_snapshot_carries_source_cost_code_id() -> None:
     """Issue #63 (E6-02): calculate_estimate_lines copies `cost_code_id` from its
     source (EstimateRoleAssignment for labor, EstimateCostLine for non-labor) onto
@@ -3494,18 +2803,14 @@ def test_estimate_line_snapshot_carries_source_cost_code_id() -> None:
             cost_code_id=labor_sub_code_id,
         )
 
-        cost_line_response = client.post(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
-            json={
-                "cost_category_id": supply_category_id,
-                "label": "Fourniture snapshot",
-                "quantity": "1",
-                "unit_cost": "1",
-                "cost_code_id": supply_sub_code_id,
-            },
-            headers=headers,
+        _seed_estimate_cost_line(
+            estimate_id,
+            supply_category_id,
+            label="Fourniture snapshot",
+            quantity="1",
+            unit_cost="1",
+            cost_code_id=supply_sub_code_id,
         )
-        assert cost_line_response.status_code == 201
 
         validate_response = client.post(
             f"/projects/{project_id}/estimates/{estimate_id}/validate",

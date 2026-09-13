@@ -12,6 +12,7 @@ from openpyxl import load_workbook
 
 from waterfall.api.revision_errors import REVISION_IMMUTABLE
 from waterfall.api.routes import estimates
+from waterfall.db.session import get_session_factory
 from waterfall.main import app
 from waterfall.services import (
     PlanningTreeCascadeConfirmationRequiredError,
@@ -257,6 +258,12 @@ def test_static_openapi_matches_runtime_operation_ids_and_components() -> None:
         "RevisionTreeRead",
         "RevisionNodeRead",
         "RevisionPlanFacetUpdate",
+        # E14-07 (#333): the cost facet of the same node, in its place -- the devis
+        # grid's own read/write schemas were removed with the endpoints that served
+        # them.
+        "RevisionCostFacetRead",
+        "RevisionCostLineCreate",
+        "RevisionCostFacetUpdate",
     ):
         assert schema_name in runtime_components
         assert schema_name in static_components
@@ -269,7 +276,12 @@ def test_static_openapi_matches_runtime_operation_ids_and_components() -> None:
     # above are a set of *names*: an enumeration losing a member -- which is what M1
     # was, on the MSPDI `LagFormat` -- changes nothing in that set while publishing to
     # every client a narrower domain than the API accepts, or a wider one than it does.
-    for schema_name in ("RevisionPlanFacetUpdate", "RevisionPredecessorWrite"):
+    for schema_name in (
+        "RevisionPlanFacetUpdate",
+        "RevisionPredecessorWrite",
+        "RevisionCostLineCreate",
+        "RevisionCostFacetUpdate",
+    ):
         static_schema = cast(dict[str, Any], static_components[schema_name])
         runtime_schema = cast(dict[str, Any], runtime_components[schema_name])
         static_enums = _enums_by_path(static_schema)
@@ -413,8 +425,9 @@ def test_revision_endpoints_document_their_structured_error_responses() -> None:
     Every refusal of the revision API is a structured ``{"detail": {"code": ...}}``
     body, not the generic ``FastAPIErrorResponse`` (``str | object | array``) the
     endpoints it replaces documented -- a TS client could not type ``error.detail``
-    off that one. Pinned here on all six operations at once, with the INV-03 code
-    E14-07 (#333) has to reuse verbatim.
+    off that one. Pinned here on every operation at once -- six when #331 wrote this,
+    eight since #333 added the cost facet's own creation and edition, which reuse the
+    INV-03 code verbatim rather than restating one.
     """
     raw_document: object = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
     static_document = cast(dict[str, Any], raw_document)
@@ -422,7 +435,7 @@ def test_revision_endpoints_document_their_structured_error_responses() -> None:
     static_components = cast(dict[str, Any], static_document["components"])
 
     revision_paths = [path for path in static_paths if "/revisions/" in path]
-    assert len(revision_paths) == 6
+    assert len(revision_paths) == 8
     for path in revision_paths:
         for method, operation in cast(dict[str, Any], static_paths[path]).items():
             if method not in {"get", "post", "put", "patch", "delete"}:
@@ -643,7 +656,11 @@ def test_import_and_estimate_contracts_match_runtime_nullability_and_aliases() -
     static_schemas = cast(dict[str, Any], static_document["components"])["schemas"]
     runtime_schemas = cast(dict[str, Any], app.openapi()["components"])["schemas"]
 
-    for schema_name in ("ImportRunRequest", "EstimateTaskRowRead"):
+    # ``EstimateTaskRowRead`` was anchored here beside ``ImportRunRequest`` until
+    # E14-07 (#333) removed the devis-grid endpoints and their schemas; the nullability
+    # question it stood for is now asked of ``RevisionCostFacetRead``, whose four
+    # ``| None`` fields carry it on the revision model.
+    for schema_name in ("ImportRunRequest", "RevisionCostFacetRead"):
         assert set(static_schemas[schema_name]["properties"]) == set(
             runtime_schemas[schema_name]["properties"]
         )
@@ -651,72 +668,21 @@ def test_import_and_estimate_contracts_match_runtime_nullability_and_aliases() -
             runtime_schemas[schema_name].get("required", [])
         )
     assert "dryRun" in runtime_schemas["ImportRunRequest"]["properties"]
-    assert "task_id" not in runtime_schemas["EstimateTaskRowRead"].get("required", [])
-    assert runtime_schemas["EstimateTaskRowRead"]["properties"]["task_id"]["anyOf"] == [
+    assert runtime_schemas["RevisionCostFacetRead"]["properties"]["role_id"]["anyOf"] == [
         {"type": "integer"},
         {"type": "null"},
     ]
 
-    # #291 review finding Moyenne #2: EstimateCostLineRead/EstimateRoleAssignmentRead
-    # (E12-09) declare every nullable field as `X | None` with no `= None` default
-    # (see their own class docstrings in schemas/projects.py) -- unlike
-    # EstimateTaskRowRead above, FastAPI/Pydantic therefore marks *every* field
-    # required at runtime for these two (the JSON key is always present in the
-    # response, only its value may be null). The static spec keeps its own,
-    # narrower, pre-existing convention here instead, listing only the fields
-    # actually chosen as non-nullable -- so `required` is expected to diverge
-    # between static and runtime for this schema shape, while `properties` still
-    # has to match exactly, same as every other schema checked in this test.
-    for schema_name in ("EstimateCostLineRead", "EstimateRoleAssignmentRead"):
-        assert set(static_schemas[schema_name]["properties"]) == set(
-            runtime_schemas[schema_name]["properties"]
-        )
-        assert set(runtime_schemas[schema_name].get("required", [])) == set(
-            runtime_schemas[schema_name]["properties"]
-        )
-    assert set(static_schemas["EstimateCostLineRead"].get("required", [])) == {
-        "id",
-        "estimate_id",
-        "cost_type_id",
-        "cost_category_id",
-        "cost_type_code",
-        "accounting_code",
-        "label",
-        "quantity",
-        "unit_cost",
-        "purchase_cost",
-        "uid",
-        "position",
-        "row_number",
-    }
-    assert set(static_schemas["EstimateRoleAssignmentRead"].get("required", [])) == {
-        "id",
-        "estimate_id",
-        "task_id",
-        "role_id",
-        "role_code",
-        "role_name",
-        "cost_category_id",
-        "accounting_code",
-        "quantity",
-        "hours",
-        "created_at",
-        "updated_at",
-        "uid",
-        "position",
-        "row_number",
-    }
-    # `parent_uid` (E12-09/#291) is nullable and, per the narrower static
-    # convention pinned above, deliberately excluded from the static spec's
-    # `required` (it is still present in runtime `required`, like every other
-    # field of these two schemas -- checked in the loop above). Spot-check its
-    # anyOf/null shape the same way the EstimateTaskRowRead.task_id check does.
-    for schema_name in ("EstimateCostLineRead", "EstimateRoleAssignmentRead"):
-        assert "parent_uid" not in static_schemas[schema_name].get("required", [])
-        assert runtime_schemas[schema_name]["properties"]["parent_uid"]["anyOf"] == [
-            {"type": "integer"},
-            {"type": "null"},
-        ]
+    # The E12-09 (#291) half of this test -- ``EstimateCostLineRead``/
+    # ``EstimateRoleAssignmentRead`` declaring every nullable field as ``X | None``
+    # with no default, hence *every* field required at runtime -- went with the
+    # endpoints E14-07 (#333) removed. ``RevisionCostFacetRead`` above is the same
+    # shape on the revision model (twelve ``| None`` fields, all required at runtime
+    # because the JSON key is always present and only its value may be null), so the
+    # property it stood for is still asserted, on the schema that carries it now.
+    assert set(runtime_schemas["RevisionCostFacetRead"].get("required", [])) == set(
+        runtime_schemas["RevisionCostFacetRead"]["properties"]
+    )
 
 
 def _auth_headers(client: TestClient) -> dict[str, str]:
@@ -811,19 +777,38 @@ def _create_estimate(client: TestClient, headers: dict[str, str], project_id: in
     return cast(int, response.json()["id"])
 
 
-def _create_standalone_task(
-    client: TestClient, headers: dict[str, str], project_id: int, estimate_id: int, name: str
-) -> None:
-    """A root task with no children and no MO/Non-MO reference (E6-06/#67's own endpoint) --
-    a deletion candidate ``_precheck_task_deletions`` never blocks on, so a reconciliation
-    import removing it always reaches ``_apply_task_deletes``/``delete_planning_tasks``.
+def _create_standalone_task(project_id: int, estimate_id: int, name: str) -> None:
+    """A root task with no children and no MO/Non-MO reference -- a deletion candidate
+    ``_precheck_task_deletions`` never blocks on, so a reconciliation import removing it
+    always reaches ``_apply_task_deletes``/``delete_planning_tasks``.
+
+    E14-07 (#333) removed ``POST .../estimates/{id}/tasks``; the snapshot/``MsTask``
+    twin/``EstimateTaskRow`` wiring it performed is still what the reconciliation import
+    itself uses, so this seeds through that helper directly.
     """
-    response = client.post(
-        f"/projects/{project_id}/estimates/{estimate_id}/tasks",
-        json={"name": name, "is_milestone": False},
-        headers=headers,
+    from waterfall.api.routes.estimates import (
+        _create_estimate_planning_task,  # pyright: ignore[reportPrivateUsage]
     )
-    assert response.status_code == 201
+    from waterfall.models.ms_core import MsProject
+    from waterfall.models.planning import WfPlanning
+
+    with get_session_factory()() as session:
+        project = session.query(MsProject).filter(MsProject.id == project_id).one()
+        planning = (
+            session.query(WfPlanning).filter(WfPlanning.id == project.displayed_planning_id).one()
+        )
+        _create_estimate_planning_task(
+            session,
+            project_id,
+            estimate_id,
+            planning,
+            name=name,
+            is_milestone=False,
+            target_parent_uid=None,
+            insert_after_uid=None,
+        )
+        planning.revision += 1
+        session.commit()
 
 
 def _export_reconciliation_workbook(
@@ -877,7 +862,7 @@ def _seed_reconciliation_task_deletion_fixture(
     project_id = _create_project(client, headers)
     _generate_structure(client, headers, project_id)
     estimate_id = _create_estimate(client, headers, project_id)
-    _create_standalone_task(client, headers, project_id, estimate_id, "Doomed task")
+    _create_standalone_task(project_id, estimate_id, "Doomed task")
     content = _export_reconciliation_workbook(client, headers, project_id, estimate_id)
     edited = _delete_task_row_by_name(content, "Doomed task")
     return project_id, estimate_id, edited

@@ -19,7 +19,6 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from datetime import UTC, datetime
-from decimal import Decimal
 from uuid import uuid4
 
 import pytest
@@ -142,17 +141,16 @@ def _seed_project_and_draft_estimate(
     )
 
 
+#: E14-07 (#333) removed the six ``cost-lines``/``role-assignments`` operations this
+#: matrix also covered: the cost facet of a revision replaces them, and it takes the
+#: revision's own row lock rather than the project's (see
+#: ``services/revision_tree._claim_revision``). What remains here are the two estimate
+#: operations that still create task references through ``MsTask``.
 @pytest.mark.parametrize(
     "operation",
     [
         "create_project_estimate",
         "validate_project_estimate",
-        "create_estimate_cost_line",
-        "update_estimate_cost_line",
-        "delete_estimate_cost_line",
-        "create_estimate_role_assignment",
-        "update_estimate_role_assignment",
-        "delete_estimate_role_assignment",
     ],
 )
 def test_project_lock_blocks_every_task_reference_creator(
@@ -161,24 +159,12 @@ def test_project_lock_blocks_every_task_reference_creator(
 ) -> None:
     """Every reference creator must queue behind task deletion's project lock."""
     from waterfall.api.routes.estimates import (
-        create_estimate_cost_line,
-        create_estimate_role_assignment,
         create_project_estimate,
-        delete_estimate_cost_line,
-        delete_estimate_role_assignment,
-        update_estimate_cost_line,
-        update_estimate_role_assignment,
         validate_project_estimate,
     )
     from waterfall.api.routes.project_access import get_mutable_draft_planning_with_locks
     from waterfall.models.user import User
-    from waterfall.schemas.projects import (
-        EstimateCostLineCreate,
-        EstimateCostLineUpdate,
-        EstimateRoleAssignmentCreate,
-        EstimateRoleAssignmentUpdate,
-        ProjectEstimateCreate,
-    )
+    from waterfall.schemas.projects import ProjectEstimateCreate
 
     engine = create_engine(postgres_app_database_url, future=True)
     session_factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
@@ -189,8 +175,8 @@ def test_project_lock_blocks_every_task_reference_creator(
                 project_id,
                 planning_id,
                 estimate_id,
-                cost_category_id,
-                task_id,
+                _cost_category_id,
+                _task_id,
                 _task_uid,
             ) = _seed_project_and_draft_estimate(seed_session)
 
@@ -214,92 +200,13 @@ def test_project_lock_blocks_every_task_reference_creator(
                         db=session_b,
                         current_user=current_user,
                     )
-                if operation == "validate_project_estimate":
-                    return validate_project_estimate(
-                        project_id, estimate_id, db=session_b, current_user=current_user
-                    )
-                if operation == "create_estimate_cost_line":
-                    return create_estimate_cost_line(
-                        project_id,
-                        estimate_id,
-                        EstimateCostLineCreate(
-                            task_id=task_id,
-                            cost_category_id=cost_category_id,
-                            label="Concurrent material",
-                            quantity=Decimal("1"),
-                            unit_cost=Decimal("100"),
-                        ),
-                        db=session_b,
-                        current_user=current_user,
-                    )
-                if operation == "update_estimate_cost_line":
-                    return update_estimate_cost_line(
-                        project_id,
-                        estimate_id,
-                        1,
-                        EstimateCostLineUpdate(task_id=task_id),
-                        db=session_b,
-                        current_user=current_user,
-                    )
-                if operation == "delete_estimate_cost_line":
-                    # The lock must block before this row is even looked up, so a
-                    # placeholder line_id (never actually queried) is enough.
-                    return delete_estimate_cost_line(
-                        project_id,
-                        estimate_id,
-                        1,
-                        db=session_b,
-                        current_user=current_user,
-                    )
-                if operation == "create_estimate_role_assignment":
-                    return create_estimate_role_assignment(
-                        project_id,
-                        estimate_id,
-                        EstimateRoleAssignmentCreate(
-                            task_id=task_id, role_id=1, quantity=Decimal("1"), hours=Decimal("1")
-                        ),
-                        db=session_b,
-                        current_user=current_user,
-                    )
-                if operation == "update_estimate_role_assignment":
-                    # The lock must block before this row is even looked up, so a
-                    # placeholder assignment_id (never actually queried) is enough.
-                    return update_estimate_role_assignment(
-                        project_id,
-                        estimate_id,
-                        1,
-                        EstimateRoleAssignmentUpdate(quantity=Decimal("2")),
-                        db=session_b,
-                        current_user=current_user,
-                    )
-                return delete_estimate_role_assignment(
-                    project_id,
-                    estimate_id,
-                    1,
-                    db=session_b,
-                    current_user=current_user,
+                return validate_project_estimate(
+                    project_id, estimate_id, db=session_b, current_user=current_user
                 )
 
             with pytest.raises(OperationalError, match="lock timeout"):
                 run_operation()
             session_b.rollback()
-
-            if operation == "create_estimate_cost_line":
-                session_a.commit()
-                created = create_estimate_cost_line(
-                    project_id,
-                    estimate_id,
-                    EstimateCostLineCreate(
-                        task_id=task_id,
-                        cost_category_id=cost_category_id,
-                        label="Material after deletion lock",
-                        quantity=Decimal("1"),
-                        unit_cost=Decimal("100"),
-                    ),
-                    db=session_b,
-                    current_user=current_user,
-                )
-                assert created.task_id == task_id
         finally:
             session_a.close()
             session_b.close()

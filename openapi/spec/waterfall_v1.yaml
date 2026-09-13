@@ -92,6 +92,10 @@ paths:
     $ref: ./paths/revisions.yaml#/~1projects~1{projectId}~1revisions~1{revisionId}~1nodes~1{nodeId}~1planning
   /projects/{projectId}/revisions/{revisionId}/nodes/{nodeId}/predecessors:
     $ref: ./paths/revisions.yaml#/~1projects~1{projectId}~1revisions~1{revisionId}~1nodes~1{nodeId}~1predecessors
+  /projects/{projectId}/revisions/{revisionId}/cost-lines:
+    $ref: ./paths/revisions.yaml#/~1projects~1{projectId}~1revisions~1{revisionId}~1cost-lines
+  /projects/{projectId}/revisions/{revisionId}/nodes/{nodeId}/cost:
+    $ref: ./paths/revisions.yaml#/~1projects~1{projectId}~1revisions~1{revisionId}~1nodes~1{nodeId}~1cost
   /projects/{projectId}/plannings/{planningId}/validate:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1plannings~1{planningId}~1validate
   /projects/{projectId}/plannings/{planningId}/reference:
@@ -114,22 +118,6 @@ paths:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates
   /projects/{projectId}/estimates/{estimateId}:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}
-  /projects/{projectId}/estimates/{estimateId}/task-rows:
-    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1task-rows
-  /projects/{projectId}/estimates/{estimateId}/tasks:
-    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1tasks
-  /projects/{projectId}/estimates/{estimateId}/cost-lines:
-    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1cost-lines
-  /projects/{projectId}/estimates/{estimateId}/cost-lines/{costLineId}:
-    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1cost-lines~1{costLineId}
-  /projects/{projectId}/estimates/{estimateId}/cost-lines/{costLineId}/milestones:
-    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1cost-lines~1{costLineId}~1milestones
-  /projects/{projectId}/estimates/{estimateId}/role-assignments:
-    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1role-assignments
-  /projects/{projectId}/estimates/{estimateId}/role-assignments/{assignmentId}:
-    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1role-assignments~1{assignmentId}
-  /projects/{projectId}/estimates/{estimateId}/grid-nodes/move:
-    $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1grid-nodes~1move
   /projects/{projectId}/estimates/{estimateId}/validate:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1estimates~1{estimateId}~1validate
   /projects/{projectId}/estimates/{estimateId}/aggregates:
@@ -299,6 +287,10 @@ components:
       $ref: ./components/schemas/RevisionNodeDelete.yaml
     RevisionPlanFacetUpdate:
       $ref: ./components/schemas/RevisionPlanFacetUpdate.yaml
+    RevisionCostLineCreate:
+      $ref: ./components/schemas/RevisionCostLineCreate.yaml
+    RevisionCostFacetUpdate:
+      $ref: ./components/schemas/RevisionCostFacetUpdate.yaml
     RevisionPredecessorWrite:
       $ref: ./components/schemas/RevisionPredecessorWrite.yaml
     RevisionPredecessorsReplace:
@@ -309,26 +301,12 @@ components:
       $ref: ./components/schemas/RevisionLockConflict.yaml
     RevisionValidationError:
       $ref: ./components/schemas/RevisionValidationError.yaml
-    EstimateRoleAssignmentCreate:
-      $ref: ./components/schemas/EstimateRoleAssignmentCreate.yaml
-    EstimateRoleAssignmentUpdate:
-      $ref: ./components/schemas/EstimateRoleAssignmentUpdate.yaml
-    EstimateRoleAssignmentRead:
-      $ref: ./components/schemas/EstimateRoleAssignmentRead.yaml
     ProjectEstimateCreate:
       $ref: ./components/schemas/ProjectEstimateCreate.yaml
     ProjectEstimateRead:
       $ref: ./components/schemas/ProjectEstimateRead.yaml
-    EstimateTaskRowRead:
-      $ref: ./components/schemas/EstimateTaskRowRead.yaml
     SupplyStatus:
       $ref: ./components/schemas/SupplyStatus.yaml
-    EstimateCostLineCreate:
-      $ref: ./components/schemas/EstimateCostLineCreate.yaml
-    EstimateCostLineUpdate:
-      $ref: ./components/schemas/EstimateCostLineUpdate.yaml
-    EstimateCostLineRead:
-      $ref: ./components/schemas/EstimateCostLineRead.yaml
     EstimateAggregatesRead:
       $ref: ./components/schemas/EstimateAggregatesRead.yaml
     CalendarWeekdayCreate:
@@ -409,12 +387,6 @@ components:
       $ref: ./components/schemas/PlanningListRead.yaml
     ProjectEstimateListRead:
       $ref: ./components/schemas/ProjectEstimateListRead.yaml
-    EstimateTaskRowListRead:
-      $ref: ./components/schemas/EstimateTaskRowListRead.yaml
-    EstimateCostLineListRead:
-      $ref: ./components/schemas/EstimateCostLineListRead.yaml
-    EstimateRoleAssignmentListRead:
-      $ref: ./components/schemas/EstimateRoleAssignmentListRead.yaml
     UserAdminListRead:
       $ref: ./components/schemas/UserAdminListRead.yaml
   parameters:
@@ -424,8 +396,6 @@ components:
       $ref: ./components/parameters/ProjectId.yaml
     TaskUid:
       $ref: ./components/parameters/TaskUid.yaml
-    AssignmentId:
-      $ref: ./components/parameters/AssignmentId.yaml
     EstimateId:
       $ref: ./components/parameters/EstimateId.yaml
     PlanningId:
@@ -434,8 +404,6 @@ components:
       $ref: ./components/parameters/RevisionId.yaml
     RevisionNodeId:
       $ref: ./components/parameters/RevisionNodeId.yaml
-    CostLineId:
-      $ref: ./components/parameters/CostLineId.yaml
     NodeId:
       $ref: ./components/parameters/NodeId.yaml
     CalendarId:

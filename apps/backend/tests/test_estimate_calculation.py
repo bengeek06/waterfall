@@ -11,7 +11,7 @@ from httpx import Response
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from _estimate_grid_support import seed_root_grid_node
+from _estimate_grid_support import seed_cost_line, seed_root_grid_node
 from waterfall.db.session import get_session_factory
 from waterfall.main import app
 from waterfall.models.ms_core import MsProject, MsTask
@@ -22,7 +22,6 @@ from waterfall.models.resources import (
     CostRate,
     CostType,
     Estimate,
-    EstimateGridNode,
     EstimateLine,
     EstimateRoleAssignment,
     InflationRate,
@@ -187,7 +186,7 @@ def _seed_task_role_assignment(
 def _seed_estimate_role_assignment(
     project_id: int,
     estimate_id: int,
-    task_uid: int,
+    task_uid: int | None,
     role_id: int,
     quantity: str,
     hours: str,
@@ -199,18 +198,26 @@ def _seed_estimate_role_assignment(
 
     Mirrors `_seed_task_role_assignment` above, but on the devis-scoped table
     `calculate_estimate_lines` reads from since E12-02/#274.
+
+    ``task_uid=None`` seeds the row at the devis root, with no bearing task at all --
+    the state a line unindented all the way out used to reach through
+    ``POST .../grid-nodes/move``, an endpoint E14-07 (#333) removed in favour of
+    ``POST .../revisions/{id}/nodes/move``. The state is what this module is about,
+    so it is seeded rather than produced.
     """
     session_factory = get_session_factory()
     with session_factory() as session:
         task = (
-            session.query(MsTask)
+            None
+            if task_uid is None
+            else session.query(MsTask)
             .filter(MsTask.project_id == project_id, MsTask.uid == task_uid)
             .one()
         )
         node_id = seed_root_grid_node(session, estimate_id, "labor")
         assignment = EstimateRoleAssignment(
             estimate_id=estimate_id,
-            task_id=task.id,
+            task_id=None if task is None else task.id,
             role_id=role_id,
             quantity=Decimal(quantity),
             hours=Decimal(hours),
@@ -495,11 +502,16 @@ def test_calculate_labor_lines_across_two_years() -> None:
 
 
 def test_root_labor_line_unindented_to_devis_root_stays_counted_after_validate() -> None:
-    """Issue #289 (E12-07) review finding (Finding Critique): a labor (MO) line
-    unindented all the way to the devis root (its `task_id` set back to `NULL` by
-    `POST .../grid-nodes/move`) must stay counted by `calculate_estimate_lines`/
+    """Issue #289 (E12-07) review finding (Finding Critique): a labor (MO) line at the
+    devis root (`task_id` NULL) must stay counted by `calculate_estimate_lines`/
     `calculate_estimate_aggregates` and `POST .../validate` -- never silently
-    vanish from `total_labor_cost` because of an `INNER JOIN` on `MsTask`."""
+    vanish from `total_labor_cost` because of an `INNER JOIN` on `MsTask`.
+
+    The state used to be reached here by unindenting the line through
+    `POST .../grid-nodes/move`; E14-07 (#333) removed that endpoint (moving a node is
+    `POST .../revisions/{id}/nodes/move`, agnostic of the facet), so the row is seeded
+    at the root directly. What is under test is the *calculation* on that state, and
+    that is unchanged."""
     with TestClient(app) as client:
         headers = _auth_headers(client)
         owner_id = _current_user_id(client, headers)
@@ -542,7 +554,6 @@ def test_root_labor_line_unindented_to_devis_root_stays_counted_after_validate()
             session.add(task)
             session.commit()
             project_id = project.id
-            task_id = task.id
             project_name = project.name
 
         _seed_root_cost_code(session_factory, project_id, project_name)
@@ -555,48 +566,9 @@ def test_root_labor_line_unindented_to_devis_root_stays_counted_after_validate()
         assert create_response.status_code == 201
         estimate_id = cast(int, create_response.json()["id"])
 
-        assignment_response = client.post(
-            f"/projects/{project_id}/estimates/{estimate_id}/role-assignments",
-            json={
-                "task_id": task_id,
-                "role_id": labor_role_id,
-                "quantity": "1",
-                "hours": "100",
-                "target_parent_uid": task_id,
-            },
-            headers=headers,
+        assignment_id = _seed_estimate_role_assignment(
+            project_id, estimate_id, None, labor_role_id, "1", "100"
         )
-        assert assignment_response.status_code == 201, assignment_response.text
-        assignment_id = cast(int, assignment_response.json()["id"])
-
-        with session_factory() as session:
-            assignment = (
-                session.query(EstimateRoleAssignment)
-                .filter(EstimateRoleAssignment.id == assignment_id)
-                .one()
-            )
-            node_uid = (
-                session.query(EstimateGridNode.uid)
-                .filter(EstimateGridNode.id == assignment.node_id)
-                .scalar()
-            )
-            revision_before_move = (
-                session.query(Estimate.revision).filter(Estimate.id == estimate_id).scalar()
-            )
-
-        # Unindent the line all the way to the devis root, exactly like the
-        # frontend's own "outdent" action -- this clears task_id back to NULL.
-        move_response = client.post(
-            f"/projects/{project_id}/estimates/{estimate_id}/grid-nodes/move",
-            json={
-                "node_uids": [node_uid],
-                "target_parent_uid": None,
-                "position": 1,
-                "expected_revision": revision_before_move,
-            },
-            headers=headers,
-        )
-        assert move_response.status_code == 200, move_response.text
 
         with session_factory() as session:
             assignment = (
@@ -688,18 +660,16 @@ def test_non_labor_cost_lines_create_single_snapshot() -> None:
         estimate = cast(dict[str, Any], create_response.json())
         estimate_id = cast(int, estimate["id"])
 
-        # Add cost line
-        cost_response = client.post(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
-            json={
-                "cost_category_id": supply_category_id,
-                "label": "Câbles réseau",
-                "quantity": "5",
-                "unit_cost": "25.00",
-            },
-            headers=headers,
-        )
-        assert cost_response.status_code == 201
+        with session_factory() as session:
+            seed_cost_line(
+                session,
+                estimate_id=estimate_id,
+                cost_category_id=supply_category_id,
+                label="Câbles réseau",
+                quantity="5",
+                unit_cost="25.00",
+            )
+            session.commit()
 
         # Validate
         validate_response = client.post(
@@ -1120,17 +1090,16 @@ def test_non_labor_lines_validate_without_any_rate_coverage() -> None:
         assert create_response.status_code == 201
         estimate_id = cast(int, create_response.json()["id"])
 
-        cost_response = client.post(
-            f"/projects/{project_id}/estimates/{estimate_id}/cost-lines",
-            json={
-                "cost_category_id": supply_category_id,
-                "label": "Câbles réseau",
-                "quantity": "5",
-                "unit_cost": "25.00",
-            },
-            headers=headers,
-        )
-        assert cost_response.status_code == 201
+        with session_factory() as session:
+            seed_cost_line(
+                session,
+                estimate_id=estimate_id,
+                cost_category_id=supply_category_id,
+                label="Câbles réseau",
+                quantity="5",
+                unit_cost="25.00",
+            )
+            session.commit()
 
         validate_response = client.post(
             f"/projects/{project_id}/estimates/{estimate_id}/validate",

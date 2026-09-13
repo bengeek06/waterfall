@@ -12,6 +12,8 @@ required:
 - planned_date
 - cost_code_id
 - comment
+- bearing_task_node_id
+- bearing_task_name
 properties:
   nature:
     type: string
@@ -67,4 +69,18 @@ properties:
     anyOf:
     - type: string
     - type: 'null'
-description: 'Facette cout d''un noeud, en lecture seule ici : son edition releve de E14-07 (#333).'
+  bearing_task_node_id:
+    anyOf:
+    - type: integer
+    - type: 'null'
+  bearing_task_name:
+    anyOf:
+    - type: string
+    - type: 'null'
+description: >-
+  Facette cout d'un noeud, en lecture seule ici : son edition passe par
+  `PATCH .../nodes/{nodeId}/cost`. `bearing_task_node_id`/`bearing_task_name`
+  designent la tache porteuse (INV-01), resolue a la lecture et stockee dans aucune
+  colonne -- deplacer le noeud, ou deplacer la tache au-dessus de lui, les change
+  sans rien d'autre a mettre a jour. Les deux sont `null` pour une ligne placee a la
+  racine, qui est un cout global de projet.

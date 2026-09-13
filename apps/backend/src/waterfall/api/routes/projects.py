@@ -138,13 +138,16 @@ def to_estimate_task_row_read(
     lookup for that case.
 
     ``row_number_by_uid`` (E12-09/#291) is the devis's whole merged tasks+grid
-    -node rank map (``api.routes.estimates._load_estimate_grid_context``),
-    keyed by the same ``task_uid``/grid-node-``uid`` space
-    ``order_estimate_grid_depth_first`` produces -- absent (``None``) only for
-    the handful of pre-existing call sites that never had this field to begin
-    with, or when this row's own ``task_uid`` could not be resolved at all
-    (the pre-existing degenerate case above), in which case ``row_number`` is
-    ``None`` too rather than a misleading, arbitrarily-picked rank.
+    -node rank map, keyed by the same ``task_uid``/grid-node-``uid`` space
+    ``order_estimate_grid_depth_first`` (``api.routes.planning_support``)
+    produces -- absent (``None``) only for the handful of pre-existing call
+    sites that never had this field to begin with, or when this row's own
+    ``task_uid`` could not be resolved at all (the pre-existing degenerate
+    case above), in which case ``row_number`` is ``None`` too rather than a
+    misleading, arbitrarily-picked rank. E14-07 (#333) removed the builder of
+    that map (``api.routes.estimates._load_estimate_grid_context``) along with
+    the devis-grid routes, so no caller passes one any more; both it and this
+    converter go out with the legacy devis grid at E14-12 (#339).
     """
     task_uid = resolve_effective_task_uid(row, resolved, task_uid_by_task_id)
     row_number = (

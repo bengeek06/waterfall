@@ -111,6 +111,7 @@ from waterfall.domain.revision.facets import (
     set_task_calendar_manually,
     set_task_dates,
     set_task_duration,
+    update_cost_facet,
     update_plan_facet,
 )
 from waterfall.domain.revision.invariants import (
@@ -290,6 +291,12 @@ def _write_attempts(bench: Bench) -> list[tuple[str, Callable[[], object]]]:
         (
             "assign_role",
             lambda: assign_role(project, revision, bench.labor, role_id=2, hours=Decimal("99")),
+        ),
+        (
+            "update_cost_facet",
+            lambda: update_cost_facet(
+                project, revision, bench.supply, quantity=Decimal("99"), unit_cost=Decimal("5")
+            ),
         ),
         (
             "set_cost_quantity",

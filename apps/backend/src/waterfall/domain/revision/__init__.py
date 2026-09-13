@@ -72,6 +72,7 @@ from waterfall.domain.revision.facets import (
     set_task_calendar_manually,
     set_task_dates,
     set_task_duration,
+    update_cost_facet,
     update_plan_facet,
 )
 from waterfall.domain.revision.invariants import (
@@ -246,6 +247,7 @@ __all__ = [
     "skeleton_fingerprint_of",
     "subtree_ids",
     "unreachable_node_ids",
+    "update_cost_facet",
     "update_plan_facet",
     "validate_revision",
     "violated_invariant_ids",

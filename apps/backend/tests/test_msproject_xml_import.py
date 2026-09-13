@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
@@ -7,11 +8,19 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from _estimate_grid_support import seed_root_grid_node
 from waterfall.db.session import get_session_factory
 from waterfall.main import app
 from waterfall.models.ms_core import MsProject, MsTask
 from waterfall.models.planning import WfPlanning, WfPlanningLinkSnapshot, WfPlanningTaskSnapshot
-from waterfall.models.resources import CostCategory, CostType, ResourceNode, ResourceRole
+from waterfall.models.resources import (
+    CostCategory,
+    CostType,
+    EstimateRoleAssignment,
+    EstimateTaskRow,
+    ResourceNode,
+    ResourceRole,
+)
 from waterfall.services.msproject_xml import MsProjectValidationError
 from waterfall.services.msproject_xml_import import import_tasks_and_links
 
@@ -554,30 +563,64 @@ def test_imported_project_estimate_is_priceable_per_task() -> None:
         assert create_estimate.status_code == 201
         estimate_id = cast(int, create_estimate.json()["id"])
 
-        rows_response = client.get(
-            f"/projects/{project_id}/estimates/{estimate_id}/task-rows", headers=headers
-        )
-        assert rows_response.status_code == 200
-        rows = cast(list[dict[str, Any]], rows_response.json()["items"])
-        assert len(rows) == 3
-        assert all(row["task_id"] is not None for row in rows)
-        # E12-09/#291 ranks, depth-first over the imported tree (1, then its two
-        # children) -- not merely "not null", which is what used to degrade.
-        assert [(row["task_uid"], row["row_number"]) for row in rows] == [(1, 1), (2, 2), (3, 3)]
+        # E14-07 (#333) removed ``GET .../estimates/{id}/task-rows``; the rows themselves
+        # are what #313 is about, so they are read where they live. Ordered by their own
+        # ``position``, which is the depth-first order of the imported tree (1, then its
+        # two children) -- not merely "not null", which is what used to degrade.
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            rows = (
+                session.query(EstimateTaskRow)
+                .filter(EstimateTaskRow.estimate_id == estimate_id)
+                .order_by(EstimateTaskRow.position)
+                .all()
+            )
+            assert len(rows) == 3
+            assert all(row.task_id is not None for row in rows)
+            uid_of = {
+                task.id: task.uid
+                for task in session.query(MsTask).filter(MsTask.project_id == project_id).all()
+            }
+            assert [(uid_of[cast(int, row.task_id)], row.position) for row in rows] == [
+                (1, 1),
+                (2, 2),
+                (3, 3),
+            ]
+            leaf_task_id = next(
+                cast(int, row.task_id) for row in rows if uid_of[cast(int, row.task_id)] == 2
+            )
 
-        leaf = next(row for row in rows if row["task_uid"] == 2)
-        assignment = client.post(
-            f"/projects/{project_id}/estimates/{estimate_id}/role-assignments",
-            json={
-                "task_id": leaf["task_id"],
-                "role_id": _seed_labor_role(),
-                "quantity": "1",
-                "hours": "8",
-            },
-            headers=headers,
-        )
-        assert assignment.status_code == 201
-        assert assignment.json()["task_id"] == leaf["task_id"]
+        # An MO row on an imported task: the FK is what #313 is about, and it only holds
+        # because the import resolved ``task_id``. Seeded through the ORM since E14-07
+        # (#333) removed ``POST .../estimates/{id}/role-assignments``.
+        role_id = _seed_labor_role()
+        with session_factory() as session:
+            node_id = seed_root_grid_node(session, estimate_id, "labor")
+            assignment = EstimateRoleAssignment(
+                estimate_id=estimate_id,
+                task_id=leaf_task_id,
+                role_id=role_id,
+                quantity=Decimal("1"),
+                hours=Decimal("8"),
+                node_id=node_id,
+            )
+            session.add(assignment)
+            # The first proof is the commit itself: the row is only accepted because
+            # `task_id` resolves to a real `ms_task` -- the FK the import used to leave
+            # null (#313) -- and an unresolved task would raise `IntegrityError` here.
+            session.commit()
+            assignment_id = assignment.id
+
+        # The second proof, read back from a *fresh* session: the persisted row hangs
+        # off the imported task whose MSPDI `UID` is 2. Asserting `assignment.task_id`
+        # on the instance this test just built would only echo the value it assigned.
+        with session_factory() as session:
+            persisted = session.get(EstimateRoleAssignment, assignment_id)
+            assert persisted is not None
+            task = session.get(MsTask, persisted.task_id)
+            assert task is not None
+            assert task.uid == 2
+            assert task.project_id == project_id
 
 
 def test_import_service_rejects_link_to_omitted_project_summary_before_persisting() -> None:

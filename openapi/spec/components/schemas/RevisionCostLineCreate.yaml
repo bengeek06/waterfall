@@ -1,0 +1,109 @@
+type: object
+required:
+- expected_lock_version
+- nature
+- label
+properties:
+  expected_lock_version:
+    type: integer
+    maximum: 2147483647
+    minimum: 0
+  nature:
+    type: string
+    enum:
+    - labor
+    - non_labor
+  label:
+    type: string
+    maxLength: 512
+    minLength: 1
+  parent_id:
+    anyOf:
+    - type: integer
+      maximum: 2147483647
+      exclusiveMinimum: 0
+    - type: 'null'
+  position:
+    anyOf:
+    - type: integer
+      maximum: 2147483647
+      minimum: 1
+    - type: 'null'
+  quantity:
+    anyOf:
+    - type: number
+      exclusiveMinimum: 0
+    - type: string
+      pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,12}|(?=[\d.]{1,15}0*$)\d{0,12}\.\d{0,2}0*$)
+    default: '1'
+  role_id:
+    anyOf:
+    - type: integer
+      maximum: 2147483647
+      exclusiveMinimum: 0
+    - type: 'null'
+  hours:
+    anyOf:
+    - type: number
+      minimum: 0
+    - type: string
+      pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,12}|(?=[\d.]{1,15}0*$)\d{0,12}\.\d{0,2}0*$)
+    - type: 'null'
+  cost_type_id:
+    anyOf:
+    - type: integer
+      maximum: 2147483647
+      exclusiveMinimum: 0
+    - type: 'null'
+  cost_category_id:
+    anyOf:
+    - type: integer
+      maximum: 2147483647
+      exclusiveMinimum: 0
+    - type: 'null'
+  unit_cost:
+    anyOf:
+    - type: number
+      minimum: 0
+    - type: string
+      pattern: ^(?!^[-+.]*$)[+-]?0*(?:\d{0,14}|(?=[\d.]{1,17}0*$)\d{0,14}\.\d{0,2}0*$)
+    - type: 'null'
+  supply_status:
+    anyOf:
+    - type: string
+      enum:
+      - planned
+      - ordered
+      - received
+      - cancelled
+    - type: 'null'
+  planned_date:
+    anyOf:
+    - type: string
+      format: date
+    - type: 'null'
+  cost_code_id:
+    anyOf:
+    - type: integer
+      maximum: 2147483647
+      exclusiveMinimum: 0
+    - type: 'null'
+  comment:
+    anyOf:
+    - type: string
+      maxLength: 10000
+    - type: 'null'
+  description:
+    anyOf:
+    - type: string
+      maxLength: 10000
+    - type: 'null'
+description: >-
+  Creation d'un noeud ligne de cout : un nouveau `work_item` de nature `cost` et sa
+  facette cout. `parent_id` absent = a la racine (cout global de projet, sans tache
+  porteuse, INV-01) ; `position` absente = dernier enfant. Le jeu d'attributs depend
+  de `nature` : MO porte `role_id`/`hours`, non-MO porte `cost_type_id`,
+  `cost_category_id` et `unit_cost` (INV-19, INV-20). Cette regle n'est volontairement
+  pas redite ici : elle appartient au domaine, donc une forme invalide revient en 400
+  (`detail.code` = REVISION_FACET_CONTRACT) et non en 422. Les bornes numeriques, elles,
+  sont celles des colonnes `Numeric(14, 2)` / `Numeric(16, 2)`.

@@ -143,9 +143,12 @@ def resolve_effective_task_uid(
     Factored out so `to_estimate_task_row_read` (`api/routes/projects.py`) and
     the devis grid's merged ``row_number`` computation
     (`api/routes/estimates.py`'s `_load_estimate_grid_context`, E12-09/#291)
-    compute a task row's `task_uid` the exact same way, rather than two
+    computed a task row's `task_uid` the exact same way, rather than two
     independent implementations drifting apart -- the same rationale
     `_index_task_uids` above already documents (E12-08 Finding Moyenne #4).
+    E14-07 (#333) removed that second computation along with the devis-grid
+    routes, leaving `to_estimate_task_row_read` -- itself without a route to
+    serve -- as the only production caller; both go out at E14-12 (#339).
     """
     return (
         resolved.task_uid

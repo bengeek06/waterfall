@@ -773,6 +773,16 @@ def _write_attempts(
             ),
         ),
         (
+            "update_cost_facet",
+            lambda: revision_tree.update_cost_facet(
+                session,
+                tree.revision_id,
+                tree.study,
+                expected_lock_version=expected_lock_version,
+                quantity=Decimal("7"),
+            ),
+        ),
+        (
             "replace_predecessors",
             lambda: revision_tree.replace_predecessors(
                 session,
