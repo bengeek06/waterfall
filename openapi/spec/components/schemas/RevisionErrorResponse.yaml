@@ -14,6 +14,17 @@ properties:
           ou de service (voir `waterfall.api.revision_errors`). REVISION_IMMUTABLE
           est le code d'INV-03 : il est identique sur la facette planification et
           sur la facette cout.
+      issues:
+        type: array
+        description: >-
+          Presente sur le seul refus qui ne parle pas de la revision mais du
+          fichier soumis : RECONCILIATION_FORMAT_ERROR (E14-07c). Porte tous les
+          problemes de format trouves dans le classeur d'un coup -- jamais le
+          premier seulement -- chacun avec son `code`, son `message`, et la
+          `sheet`/`row` d'ou il vient quand il est attribuable a une ligne.
+        items:
+          type: object
+          additionalProperties: true
 description: >-
   Corps d'erreur structure des endpoints de revision. Toujours un objet portant un
   `code` exploitable par le frontend, jamais un message libre :

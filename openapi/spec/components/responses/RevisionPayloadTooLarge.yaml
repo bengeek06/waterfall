@@ -1,0 +1,10 @@
+description: >-
+  Classeur de reconciliation trop volumineux : la taille depasse la limite
+  configuree (`import_max_upload_bytes`, la meme que celle de l'import MS
+  Project). `detail.code` vaut RECONCILIATION_TOO_LARGE. Rien n'a ete lu ni
+  ecrit -- le refus tombe des que la limite est franchie, pas apres avoir mis
+  tout le fichier en memoire.
+content:
+  application/json:
+    schema:
+      $ref: ../schemas/RevisionErrorResponse.yaml

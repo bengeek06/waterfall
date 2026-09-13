@@ -256,6 +256,19 @@ class RevisionCostLossRead(BaseModel):
     """One cost facet a cascade delete took away, named rather than dropped silently.
 
     Rule 3's safeguard: a deletion never removes chiffrage without saying which.
+
+    ``amount`` is in **euros at the cent** (#368), and gets there the way every
+    other published figure of this API does: the engine rounds each priced line on
+    its own and sums the rounded amounts
+    (:meth:`~waterfall.services.estimate_calculation.RevisionPricing.published_amount_of`).
+    Four callers quote a loss through that one method and therefore quote the same
+    figure: ``POST .../nodes/delete``, the MS Project import diff, the MS Project
+    import run, and -- since #365 -- the reconciliation round trip, which reuses this
+    very model inside its plan.
+    Unbounded here all the same, like every read model of this module -- a bound on
+    a response field turns a stored state into a 500, see the module docstring --
+    so the rounding is a decision about what to publish and not a constraint on
+    what may be read.
     """
 
     node_id: int
@@ -324,6 +337,63 @@ class RevisionAggregatesRead(BaseModel):
     by_cost_code: dict[str, Decimal]
     missing_cost_rates: list[RevisionMissingRateRead]
     missing_inflation_years: list[int]
+
+
+class RevisionReconciliationIssueRead(BaseModel):
+    """One problem or ignored change found in a reconciliation workbook (E14-07c, #365).
+
+    ``sheet``/``row`` point at the exact Excel cell it came from -- ``row`` is the
+    1-based Excel row number, header row included -- and are both ``null`` for a
+    problem no single row can be attributed to, a deletion having by definition no
+    row left in the file to point at.
+    """
+
+    code: str
+    message: str
+    sheet: str | None
+    row: int | None
+
+
+class RevisionReconciliationPlanRead(BaseModel):
+    """What a reconciliation workbook would do -- or did -- to a revision (E14-07c, #365).
+
+    Answered by both ``POST .../import-reconciliation/preview`` (always
+    ``applied=false``, nothing written) and ``.../confirm``: the two run the *same*
+    analysis on the same file, so a preview predicts a confirm exactly.
+
+    ``blocking_issues`` non-empty means nothing was written and nothing will be. The
+    counts and id lists still describe the diff the file states, because they are
+    what the user has to act on; shrinking them would hide the rows that need
+    attention.
+
+    The identifiers are **node ids** throughout, where the legacy plan carried three
+    families of them (devis task rows, role assignments, cost lines). One tree, one
+    kind of identifier.
+
+    ``cost_losses`` is Règle 3's safeguard, in the very shape
+    ``POST .../nodes/delete`` already publishes it: a line the file no longer
+    mentions is a deletion, and a deletion that takes chiffrage away names it rather
+    than letting it go quietly. Amounts are in euros at the cent (#368).
+
+    ``lock_version`` is the revision's counter -- unchanged on a preview, the new one
+    after an applied confirm -- so a client can chain a write onto the result without
+    re-reading the tree.
+    """
+
+    revision_id: int
+    lock_version: int
+    blocking_issues: list[RevisionReconciliationIssueRead]
+    warnings: list[RevisionReconciliationIssueRead]
+    tasks_to_create: int
+    tasks_to_delete: list[int]
+    labor_to_create: int
+    labor_to_update: list[int]
+    labor_to_delete: list[int]
+    non_labor_to_create: int
+    non_labor_to_update: list[int]
+    non_labor_to_delete: list[int]
+    cost_losses: list[RevisionCostLossRead]
+    applied: bool
 
 
 class RevisionWrite(BaseModel):

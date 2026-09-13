@@ -268,6 +268,11 @@ def test_static_openapi_matches_runtime_operation_ids_and_components() -> None:
         # in place of the frozen `wf_estimate_line` rows the devis aggregate summed.
         "RevisionAggregatesRead",
         "RevisionMissingRateRead",
+        # E14-07c (#365): the reconciliation round trip, on the same revision -- the
+        # devis-scoped `ReconciliationPlanRead` above stays anchored beside it until
+        # E14-12 (#339) removes the routes that still answer it.
+        "RevisionReconciliationPlanRead",
+        "RevisionReconciliationIssueRead",
     ):
         assert schema_name in runtime_components
         assert schema_name in static_components
@@ -431,8 +436,18 @@ def test_revision_endpoints_document_their_structured_error_responses() -> None:
     endpoints it replaces documented -- a TS client could not type ``error.detail``
     off that one. Pinned here on every operation at once -- six when #331 wrote this,
     eight since #333 added the cost facet's own creation and edition, which reuse the
-    INV-03 code verbatim rather than restating one, and nine since #364 rebranched the
-    aggregates onto the revision.
+    INV-03 code verbatim rather than restating one, nine since #364 rebranched the
+    aggregates onto the revision, and thirteen since #365 rebranched the two devis
+    exports and the reconciliation round trip.
+
+    One documented exception, and exactly one: the reconciliation **confirm** answers
+    its 409 with ``RevisionReconciliationConfirmConflict`` rather than the shared
+    ``RevisionConflict``. It is the only revision operation whose business refusal is
+    a full diagnostic rather than a code -- "these rows block the import, nothing was
+    written" -- so its 409 is a ``oneOf`` of the plan and of the very
+    ``RevisionLockConflict`` envelope every other operation answers, which is how
+    ``REVISION_IMMUTABLE`` still reaches a client from it. Named here rather than
+    left to be discovered, so that a *second* such exception fails this test.
     """
     raw_document: object = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
     static_document = cast(dict[str, Any], raw_document)
@@ -440,7 +455,7 @@ def test_revision_endpoints_document_their_structured_error_responses() -> None:
     static_components = cast(dict[str, Any], static_document["components"])
 
     revision_paths = [path for path in static_paths if "/revisions/" in path]
-    assert len(revision_paths) == 9
+    assert len(revision_paths) == 13
     for path in revision_paths:
         for method, operation in cast(dict[str, Any], static_paths[path]).items():
             if method not in {"get", "post", "put", "patch", "delete"}:
@@ -448,9 +463,22 @@ def test_revision_endpoints_document_their_structured_error_responses() -> None:
             assert operation["responses"]["404"]["$ref"] == (
                 "#/components/responses/RevisionNotFound"
             ), (path, method)
+            expected_conflict = (
+                "RevisionReconciliationConfirmConflict"
+                if path.endswith("/import-reconciliation/confirm")
+                else "RevisionConflict"
+            )
             assert operation["responses"]["409"]["$ref"] == (
-                "#/components/responses/RevisionConflict"
+                f"#/components/responses/{expected_conflict}"
             ), (path, method)
+
+    # The one exception is itself a structured pair, not a free-form body: either the
+    # plan, or the same envelope every other revision refusal answers with.
+    confirm_conflict = static_components["responses"]["RevisionReconciliationConfirmConflict"]
+    assert confirm_conflict["content"]["application/json"]["schema"]["oneOf"] == [
+        {"$ref": "#/components/schemas/RevisionReconciliationPlanRead"},
+        {"$ref": "#/components/schemas/RevisionLockConflict"},
+    ]
 
     for response_name, schema_name in (
         ("RevisionNotFound", "RevisionErrorResponse"),

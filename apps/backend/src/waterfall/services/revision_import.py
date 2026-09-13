@@ -284,6 +284,9 @@ def plan_import(db: Session, project_id: int, parsed: ParsedProject) -> domain.I
     chiffrage Rule 3 announces as lost is priced at annual rate and inflation, like
     everywhere else, instead of ``default_amount``'s naive fallback -- which priced
     every MO line at ``0``, the store leaving ``Role.hourly_rate`` unset on purpose.
+    Its **published** amount, in euros at the cent and rounded per priced line
+    (#368): the figure lands in a confirmation dialog, and the node deletion route
+    quoting the same ``CostLoss`` must not answer a different number.
     """
     revision_id = latest_revision_id(db, project_id)
     if revision_id is None:
@@ -293,7 +296,7 @@ def plan_import(db: Session, project_id: int, parsed: ParsedProject) -> domain.I
         loaded.project,
         loaded.revision,
         imported_tasks(parsed),
-        amount_of=price_loaded_revision(db, loaded).amount_of,
+        amount_of=price_loaded_revision(db, loaded).published_amount_of,
     )
 
 
@@ -361,7 +364,9 @@ def apply_import(db: Session, project_id: int, parsed: ParsedProject) -> Revisio
     # Priced *before* the first mutation, and from the very revision that is about
     # to be mutated: the amounts Rule 3's safeguard reports are the ones the nodes
     # carried when the user was shown the diff, not what is left of them afterwards.
-    amount_of = price_loaded_revision(db, target.loaded).amount_of
+    # The published amount, at the cent (#368), so the run reports the very figures
+    # `plan_import` showed the user before they confirmed.
+    amount_of = price_loaded_revision(db, target.loaded).published_amount_of
 
     diff = domain.apply_reimport(
         project, revision, imported_tasks(parsed), now=_now(), amount_of=amount_of

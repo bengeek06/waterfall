@@ -259,6 +259,7 @@ def insert_labor_line(
     hours: Decimal = Decimal("10"),
     quantity: Decimal = Decimal("1"),
     cost_code_id: int | None = None,
+    comment: str | None = None,
 ) -> RevisionNode:
     work_item = insert_work_item(session, reference, kind="cost")
     node = insert_node(session, revision, work_item, parent_id=parent_id, position=position)
@@ -272,6 +273,7 @@ def insert_labor_line(
             role_id=reference.role_id,
             hours=hours,
             cost_code_id=cost_code_id,
+            comment=comment,
         )
     )
     session.flush()
@@ -290,6 +292,7 @@ def insert_purchase_line(
     unit_cost: Decimal = Decimal("150"),
     cost_code_id: int | None = None,
     planned_date: date | None = None,
+    supply_status: str | None = None,
 ) -> RevisionNode:
     """A non-labour cost line: ``quantity x unit_cost``, both stored on the facet.
 
@@ -314,6 +317,7 @@ def insert_purchase_line(
             unit_cost=unit_cost,
             cost_code_id=cost_code_id,
             planned_date=planned_date,
+            supply_status=supply_status,
         )
     )
     session.flush()

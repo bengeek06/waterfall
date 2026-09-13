@@ -1,0 +1,76 @@
+type: object
+required:
+- revision_id
+- lock_version
+- blocking_issues
+- warnings
+- tasks_to_create
+- tasks_to_delete
+- labor_to_create
+- labor_to_update
+- labor_to_delete
+- non_labor_to_create
+- non_labor_to_update
+- non_labor_to_delete
+- cost_losses
+- applied
+properties:
+  revision_id:
+    type: integer
+  lock_version:
+    type: integer
+  blocking_issues:
+    type: array
+    items:
+      $ref: RevisionReconciliationIssueRead.yaml
+  warnings:
+    type: array
+    items:
+      $ref: RevisionReconciliationIssueRead.yaml
+  tasks_to_create:
+    type: integer
+  tasks_to_delete:
+    type: array
+    items:
+      type: integer
+  labor_to_create:
+    type: integer
+  labor_to_update:
+    type: array
+    items:
+      type: integer
+  labor_to_delete:
+    type: array
+    items:
+      type: integer
+  non_labor_to_create:
+    type: integer
+  non_labor_to_update:
+    type: array
+    items:
+      type: integer
+  non_labor_to_delete:
+    type: array
+    items:
+      type: integer
+  cost_losses:
+    type: array
+    items:
+      $ref: RevisionCostLossRead.yaml
+  applied:
+    type: boolean
+description: >-
+  Ce qu'un classeur de reconciliation ferait -- ou a fait -- a une revision.
+  Retourne par /preview (toujours `applied=false`, rien n'est ecrit) et par
+  /confirm, qui rejoue exactement la meme analyse sur le meme fichier : un
+  apercu predit donc exactement ce qu'une confirmation fera.
+  `blocking_issues` non vide signifie que rien n'a ete ecrit et que rien ne le
+  sera ; les compteurs et listes d'identifiants decrivent quand meme le diff
+  que le fichier enonce, puisque c'est ce sur quoi l'utilisateur doit agir.
+  Tous les identifiants sont des identifiants de noeud, la ou le plan historique
+  en portait trois familles : un arbre, une sorte d'identifiant.
+  `cost_losses` est le garde-fou de la Regle 3 : une ligne que le fichier ne
+  mentionne plus est une suppression, et une suppression qui emporte du
+  chiffrage le nomme. Les montants sont en euros au centime.
+  `lock_version` est le compteur de la revision -- inchange sur un apercu, le
+  nouveau apres une confirmation appliquee.

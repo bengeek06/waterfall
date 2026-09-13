@@ -649,8 +649,16 @@ def delete_nodes(
     its ``pricing.default_amount`` fallback, an MO facet would be reported at
     ``quantity x hours x role.hourly_rate``, and ``Role.hourly_rate`` is deliberately
     never loaded -- a rate is per year and per bearing task -- so every MO line of
-    every deletion would be announced as costing ``0``. Two routes serving the same
-    rule must not answer two different figures.
+    every deletion would be announced as costing ``0``. The four callers serving the
+    same rule -- this one, the MS Project import diff, the MS Project import run and
+    the reconciliation round trip -- must not answer four different figures.
+
+    It is the engine's **published** amount that is injected, in euros at the cent
+    (#368): a ``CostLoss`` is money shown in a confirmation dialog, and the raw
+    product of a multi-year MO facet carries 28 significant digits. See
+    :meth:`~waterfall.services.estimate_calculation.RevisionPricing.published_amount_of`
+    for why that rounding is per priced line and cannot be a ``quantize`` at the
+    response boundary.
     """
 
     def delete(loaded: LoadedRevision) -> domain.DeletionReport:
@@ -658,7 +666,7 @@ def delete_nodes(
         # to be mutated: what the user is told they are losing is what the nodes were
         # worth while they were still there. Spelled as a statement rather than as an
         # argument so that it does not rest on evaluation order.
-        amount_of = price_loaded_revision(db, loaded).amount_of
+        amount_of = price_loaded_revision(db, loaded).published_amount_of
         return domain.delete_nodes(
             loaded.project, loaded.revision, list(node_ids), amount_of=amount_of
         )

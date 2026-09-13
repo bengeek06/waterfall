@@ -50,11 +50,17 @@ carries its own code: the revision may well be a perfectly editable draft.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+import unicodedata
+from urllib.parse import quote
+
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse, Response
 from sqlalchemy.orm import Session
 
 from waterfall.api.dependencies import get_current_active_user
 from waterfall.api.revision_errors import revision_operation
+from waterfall.core.config import get_settings
 from waterfall.db.session import get_db
 from waterfall.domain import revision as domain
 from waterfall.models.ms_core import MsProject
@@ -76,12 +82,25 @@ from waterfall.schemas.revisions import (
     RevisionPlanFacetUpdate,
     RevisionPredecessorRead,
     RevisionPredecessorsReplace,
+    RevisionReconciliationIssueRead,
+    RevisionReconciliationPlanRead,
     RevisionTaskCreate,
     RevisionTreeRead,
     RevisionWriteRead,
 )
 from waterfall.services import revision_tree
 from waterfall.services.estimate_calculation import calculate_revision_aggregates
+from waterfall.services.estimate_export import build_revision_workbook
+from waterfall.services.estimate_reconciliation_export import (
+    build_revision_reconciliation_workbook,
+)
+from waterfall.services.estimate_reconciliation_import import (
+    EstimateReconciliationFormatError,
+    ParsedRevisionWorkbook,
+    RevisionReconciliationPlan,
+    parse_revision_reconciliation_workbook,
+    reconcile_revision,
+)
 from waterfall.services.project_lifecycle import READ_ONLY_PROJECT_STATUSES
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -689,3 +708,317 @@ def update_revision_cost_facet(
         )
         db.commit()
     return _to_write_read(updated)
+
+
+# --------------------------------------------------------------------------------------
+# The devis exports and the reconciliation round trip (E14-07c, #365)
+# --------------------------------------------------------------------------------------
+
+
+#: The name given to a download whose project name transliterates to nothing at
+#: all -- a project named only in Greek or in Cyrillic, say. A ``filename``
+#: parameter has to carry *something*, and an empty one is not a filename.
+_FALLBACK_XLSX_FILENAME = "devis.xlsx"
+
+
+def _content_disposition(filename: str) -> str:
+    """``attachment`` with a filename a project name cannot break (RFC 6266).
+
+    The filename is built from ``MsProject.name``, which is trimmed and bounded and
+    otherwise unrestricted: ``Extension réseau — 250 k€`` is a perfectly legal
+    project name. Interpolating it raw into the header was a **500** on a read-only
+    route, and on three counts at once -- Starlette encodes response headers as
+    latin-1, so ``€``/``—``/``œ`` raised ``UnicodeEncodeError``; a ``"`` in the name
+    closed the quoted string early and silently truncated what the browser saved;
+    a carriage return would have been refused by h11 as a header injection.
+
+    So the header carries both forms RFC 6266 defines, which is also what every
+    browser released this decade reads: a transliterated, ASCII-only, quote-free
+    ``filename`` for the fallback, and the real name percent-encoded in
+    ``filename*=UTF-8''...``. NFKD + ``encode("ascii", "ignore")`` is the
+    transliteration -- ``é`` keeps its ``e``, ``€`` and ``—`` drop out -- and the
+    remaining ``"`` and ``\\`` are dropped rather than escaped, because a
+    fallback name is a convenience and not an identifier.
+    """
+    ascii_name = (
+        unicodedata.normalize("NFKD", filename)
+        .encode("ascii", "ignore")
+        .decode("ascii")
+        .replace('"', "")
+        .replace("\\", "")
+        .strip()
+    ) or _FALLBACK_XLSX_FILENAME
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename, safe='')}"
+
+
+def _xlsx_response(content: bytes, filename: str) -> Response:
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": _content_disposition(filename)},
+    )
+
+
+@router.get("/{project_id}/revisions/{revision_id}/export.xlsx")
+def export_revision_excel(
+    project_id: int,
+    revision_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> Response:
+    """The devis of a revision as a human-readable Excel workbook.
+
+    Replaces ``GET .../estimates/{id}/export.xlsx``. Same classeur, cell for cell --
+    the criterion #365 is held to -- built from the cost facets of the revision and
+    priced live, so a **draft** exports its labour lines too, where the legacy grid
+    could only show them once a validation had written ``wf_estimate_line``.
+
+    A read: allowed whatever the status of the revision, and refused on nothing but
+    the project. A missing ``CostRate`` prices its line at zero rather than raising,
+    for the reason ``GET .../aggregates`` gives -- answering 500 would make an
+    editable draft unprintable.
+    """
+    project = _readable_project(db, project_id, current_user.id)
+    revision = _get_revision_or_404(db, project_id, revision_id)
+    with revision_operation(db):
+        content = build_revision_workbook(db, project, revision)
+    filename = f"devis-{project.name}-v{revision.version_number}.xlsx".replace(" ", "-")
+    return _xlsx_response(content, filename)
+
+
+@router.get("/{project_id}/revisions/{revision_id}/export-reconciliation.xlsx")
+def export_revision_reconciliation_excel(
+    project_id: int,
+    revision_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> Response:
+    """The revision as a machine-reconcilable Excel workbook, for re-import.
+
+    Replaces ``GET .../estimates/{id}/export-reconciliation.xlsx``. Three sheets --
+    ``Tâches`` / ``MO`` / ``Non-MO`` -- but all three are now views of the *one*
+    tree, each row carrying its ``node_id``, its ``parent_node_id`` and its
+    ``position``: one identifier where the legacy file carried two per row, and the
+    placement that makes the bearing task of every cost line reconstructible.
+
+    A read, refused on nothing. What a validated revision refuses is the *reimport*
+    of this file (``REVISION_IMMUTABLE``), which is where the refusal belongs.
+    """
+    project = _readable_project(db, project_id, current_user.id)
+    revision = _get_revision_or_404(db, project_id, revision_id)
+    with revision_operation(db):
+        content = build_revision_reconciliation_workbook(db, revision_id)
+    filename = f"devis-{project.name}-v{revision.version_number}-reconciliation.xlsx".replace(
+        " ", "-"
+    )
+    return _xlsx_response(content, filename)
+
+
+#: Chunk size of the reconciliation upload reader below.
+_RECONCILIATION_UPLOAD_CHUNK_SIZE = 1024 * 1024
+
+
+async def _read_reconciliation_upload(file: UploadFile) -> bytes:
+    """Read an uploaded workbook, rejecting it past the configured size limit.
+
+    Reuses ``settings.import_max_upload_bytes`` -- already enforced on the MS
+    Project XML pipeline and on the legacy reconciliation route -- rather than
+    introducing a third setting: all three accept an arbitrary user-supplied file
+    over the same kind of HTTP upload, so one limit is enough. Read in fixed-size
+    chunks, so an oversized upload is refused as soon as the limit is crossed
+    instead of after being fully buffered.
+    """
+    settings = get_settings()
+    chunks: list[bytes] = []
+    byte_count = 0
+    while chunk := await file.read(_RECONCILIATION_UPLOAD_CHUNK_SIZE):
+        byte_count += len(chunk)
+        if byte_count > settings.import_max_upload_bytes:
+            raise HTTPException(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                detail={"code": "RECONCILIATION_TOO_LARGE"},
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _parse_reconciliation_upload(content: bytes) -> ParsedRevisionWorkbook:
+    """Parse the workbook, or refuse the whole file with every format problem at once.
+
+    A format problem is about the *file* and not about the revision, so it is the
+    one refusal of these two endpoints that does not come from
+    :mod:`waterfall.api.revision_errors`: there is no revision failure to translate.
+    It carries a code all the same, like every other refusal of this module.
+    """
+    try:
+        return parse_revision_reconciliation_workbook(content)
+    except EstimateReconciliationFormatError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "RECONCILIATION_FORMAT_ERROR", "issues": exc.issues},
+        ) from exc
+
+
+def _to_reconciliation_plan_read(
+    plan: RevisionReconciliationPlan,
+) -> RevisionReconciliationPlanRead:
+    return RevisionReconciliationPlanRead(
+        revision_id=plan.revision_id,
+        lock_version=plan.lock_version,
+        blocking_issues=[
+            RevisionReconciliationIssueRead(
+                code=issue.code, message=issue.message, sheet=issue.sheet, row=issue.row
+            )
+            for issue in plan.blocking_issues
+        ],
+        warnings=[
+            RevisionReconciliationIssueRead(
+                code=issue.code, message=issue.message, sheet=issue.sheet, row=issue.row
+            )
+            for issue in plan.warnings
+        ],
+        tasks_to_create=plan.tasks_to_create,
+        tasks_to_delete=list(plan.tasks_to_delete),
+        labor_to_create=plan.labor_to_create,
+        labor_to_update=list(plan.labor_to_update),
+        labor_to_delete=list(plan.labor_to_delete),
+        non_labor_to_create=plan.non_labor_to_create,
+        non_labor_to_update=list(plan.non_labor_to_update),
+        non_labor_to_delete=list(plan.non_labor_to_delete),
+        cost_losses=[
+            RevisionCostLossRead(
+                node_id=loss.node_id,
+                work_item_id=loss.work_item_id,
+                label=loss.label,
+                nature=loss.nature.value,
+                amount=loss.amount,
+                bearing_task_name=loss.bearing_task_name,
+            )
+            for loss in plan.cost_losses
+        ],
+        applied=plan.applied,
+    )
+
+
+@router.post(
+    "/{project_id}/revisions/{revision_id}/import-reconciliation/preview",
+    response_model=RevisionReconciliationPlanRead,
+)
+async def preview_revision_reconciliation_import(
+    project_id: int,
+    revision_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> RevisionReconciliationPlanRead:
+    """Parse and diff a reconciliation workbook against a revision, writing nothing.
+
+    Runs exactly the analysis ``.../confirm`` runs, on the same file, so it predicts
+    what a confirm would do rather than approximating it.
+
+    Takes **no** lock and is refused on no revision status, for the reason
+    :func:`~waterfall.services.revision_import.plan_import` already gives about the
+    MS Project preview: showing what a file *would* change is harmless, and refusing
+    the preview would hide the very reason the run is about to be refused. The
+    refusal is the confirm's, and it is ``REVISION_IMMUTABLE``.
+    """
+    _readable_project(db, project_id, current_user.id)
+    _get_revision_or_404(db, project_id, revision_id)
+    parsed = _parse_reconciliation_upload(await _read_reconciliation_upload(file))
+    with revision_operation(db):
+        plan = reconcile_revision(db, revision_id, parsed, apply=False)
+    db.rollback()
+    return _to_reconciliation_plan_read(plan)
+
+
+@router.post(
+    "/{project_id}/revisions/{revision_id}/import-reconciliation/confirm",
+    response_model=RevisionReconciliationPlanRead,
+    responses={
+        status.HTTP_409_CONFLICT: {
+            "model": RevisionReconciliationPlanRead,
+            "description": (
+                "Des problèmes bloquants ont été trouvés et rien n'a été appliqué "
+                "(RevisionReconciliationPlanRead complet, applied=false) ; ou la "
+                "révision refuse toute écriture (detail.code=REVISION_IMMUTABLE), ou "
+                "le projet est en lecture seule (detail.code=PROJECT_READ_ONLY), ou "
+                "la révision a été écrite entre le pré-contrôle et l'application "
+                "(detail.code=REVISION_LOCK_CONFLICT)"
+            ),
+        },
+    },
+)
+async def confirm_revision_reconciliation_import(
+    project_id: int,
+    revision_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> RevisionReconciliationPlanRead | JSONResponse:
+    """Re-run the preview's analysis on the resubmitted file, and apply it.
+
+    The client resubmits the file rather than referencing a previous preview: there
+    is no server-side staging for this synchronous round trip, which is what makes
+    "the preview is the confirm" true by construction rather than by bookkeeping.
+
+    Lock ordering, as on the legacy route it replaces: the upload, the size check
+    and the (CPU-bound) openpyxl parse all happen **before** any lock is taken, then
+    an unlocked precheck reports blocking issues, and only a clean precheck takes
+    ``_writable_project``'s row lock and re-runs the staging -- this time with
+    ``apply=True``, on the already-parsed workbook.
+
+    Two different things close the precheck/apply window, and neither one closes it
+    alone. Redoing the staging under the lock catches whatever the *file* is now
+    inconsistent with: a node another writer removed, a cost code deactivated, a
+    role that is no longer a labour role -- each comes back as the same blocking
+    issue it would have been in the first pass, 409, nothing applied. What it does
+    **not** catch is a node another writer *created*: the file simply does not
+    mention it, and "a node no row claims is a deletion" is the reconciliation
+    contract, so both passes agree to destroy it and neither reports anything.
+    That is what ``expected_lock_version`` is for -- the ``lock_version`` the
+    precheck read is handed back to the locked pass, and any write at all in between
+    is ``REVISION_LOCK_CONFLICT``.
+
+    The much wider **preview to confirm** window -- minutes, while the user edits the
+    spreadsheet -- is not closed by either, and cannot be from here: the file carries
+    no version, so the client would have to send one. That is #334's, with the rest
+    of the revision lifecycle.
+
+    INV-03 is refused by the *second* pass and by it alone, which is why the
+    precheck is allowed to run on a validated revision: it writes nothing, and
+    letting it report the file's own problems first is more useful than refusing to
+    look. The refusal is the shared ``REVISION_IMMUTABLE``, from the same
+    :mod:`waterfall.api.revision_errors` table every other write of either facet
+    goes through.
+    """
+    _readable_project(db, project_id, current_user.id)
+    _get_revision_or_404(db, project_id, revision_id)
+    parsed = _parse_reconciliation_upload(await _read_reconciliation_upload(file))
+
+    with revision_operation(db):
+        precheck = reconcile_revision(db, revision_id, parsed, apply=False)
+    db.rollback()
+    if precheck.blocking_issues:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content=jsonable_encoder(_to_reconciliation_plan_read(precheck)),
+        )
+
+    _writable_project(db, project_id, current_user.id)
+    _get_revision_or_404(db, project_id, revision_id)
+    with revision_operation(db):
+        plan = reconcile_revision(
+            db,
+            revision_id,
+            parsed,
+            apply=True,
+            expected_lock_version=precheck.lock_version,
+        )
+        if not plan.applied:
+            db.rollback()
+            return JSONResponse(
+                status_code=status.HTTP_409_CONFLICT,
+                content=jsonable_encoder(_to_reconciliation_plan_read(plan)),
+            )
+        db.commit()
+    return _to_reconciliation_plan_read(plan)

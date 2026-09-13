@@ -1602,11 +1602,15 @@ def test_creating_a_task_with_a_named_calendar_pins_it_as_manual() -> None:
 # The error table and the published contract say the same thing (M2)
 # --------------------------------------------------------------------------------------
 
-#: Codes the routes decide themselves, because they are about the project rather
-#: than about the revision -- see the docstring of ``api.routes.revisions``.
+#: Codes the routes decide themselves, because they are **not** about the state of
+#: the revision -- see the docstring of ``api.routes.revisions``. The first two are
+#: about the project; the last two, added by #365, are about the *file* a
+#: reconciliation endpoint was handed, which no revision failure can describe.
 _PROJECT_CODES = {
+    400: {"RECONCILIATION_FORMAT_ERROR"},
     404: {"PROJECT_NOT_FOUND"},
     409: {"PROJECT_READ_ONLY"},
+    413: {"RECONCILIATION_TOO_LARGE"},
 }
 
 #: Which shared response component each status comes back on.
@@ -1614,6 +1618,7 @@ _RESPONSE_COMPONENT = {
     400: "RevisionBadRequest",
     404: "RevisionNotFound",
     409: "RevisionConflict",
+    413: "RevisionPayloadTooLarge",
 }
 
 
@@ -1625,6 +1630,14 @@ def test_every_emitted_error_code_is_documented_in_the_contract() -> None:
     ``_generic_http_exception_handler`` exists to prevent -- and a code documented
     but never emitted is a dead branch in that table. #333 doubles the size of this
     table, which is why the check is here rather than in a review comment.
+
+    #365 adds a fourth status to it: the two reconciliation endpoints refuse a file
+    that is not a readable workbook (400) and one past the upload limit (413), and
+    neither refusal has -- or could have -- an entry in ``_TRANSLATIONS``, there
+    being no revision failure to translate. They are declared in
+    :data:`_PROJECT_CODES` beside ``PROJECT_NOT_FOUND`` for that reason, and they
+    are documented on the same shared components as everything else rather than on
+    inline responses of their own, so this parity check keeps covering them.
     """
     raw_document: object = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
     responses = cast(dict[str, Any], cast(dict[str, Any], raw_document)["components"])["responses"]
@@ -1672,14 +1685,17 @@ def test_every_revision_operation_documents_the_422_it_can_answer() -> None:
     Six operations when #331 wrote this, eight since #333 added the cost facet's own
     creation and edition, nine since #364 rebranched the aggregates onto the revision --
     the count is asserted so that an operation added without a documented 422 fails here
-    rather than silently widening the exception.
+    rather than silently widening the exception. Thirteen since #365 rebranched the two
+    devis exports and the reconciliation round trip onto the revision -- both exports
+    answer 422 on a non-integer path parameter, and both reconciliation endpoints on a
+    multipart body with no ``file`` part.
     """
     raw_document: object = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
     document = cast(dict[str, Any], raw_document)
     paths = cast(dict[str, Any], document["paths"])
 
     revision_paths = [path for path in paths if "/revisions/" in path]
-    assert len(revision_paths) == 9
+    assert len(revision_paths) == 13
     for path in revision_paths:
         for method, operation in cast(dict[str, Any], paths[path]).items():
             if method not in {"get", "post", "put", "patch", "delete"}:

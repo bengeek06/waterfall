@@ -18,6 +18,11 @@ description: >-
   notres » : il couvre aussi bien un noeud d'une autre revision qu'un
   identifiant qui ne designe aucun noeud, distinction que cette revision ne peut
   pas faire et ne pretend pas faire.
+  RECONCILIATION_FORMAT_ERROR est le seul code de cette liste qui ne parle pas de
+  la revision mais du fichier : le classeur de reconciliation soumis n'est pas
+  lisible comme donnee structuree (feuille absente, ligne d'en-tete qui ne
+  correspond pas a l'export, cellule d'un type impossible), et `detail.issues`
+  porte tous les problemes trouves d'un coup, jamais le premier seulement.
 content:
   application/json:
     schema:

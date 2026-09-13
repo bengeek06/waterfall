@@ -1416,3 +1416,83 @@ def test_the_service_reports_what_it_did() -> None:
         assert third.changed is True
         assert [item.external_uid for item in third.diff.removed] == [2]
         assert third.diff.added == ()
+
+
+def test_the_diff_publishes_a_chiffrage_loss_in_euros_at_the_cent() -> None:
+    """#368, folded into #365: the third route that quotes a ``CostLoss``.
+
+    #364 plugged the real engine into this diff -- before it, every MO line was
+    announced at ``0`` -- but bounded the cent rounding to the aggregates endpoint,
+    so the amount here came back as the raw product: ten hours borne by a task
+    spanning three years at a flat 100 €/h is ``999.9999999999999999999999999``, a
+    figure with 28 significant digits in a dialog that is about money.
+
+    It is now ``999.99``, and it is that rather than ``1000.00`` for the reason the
+    whole EPIC has settled on: the rounding is applied **per priced line** and the
+    rounded amounts are summed -- three residues of a third of a cent, dropped one
+    by one exactly as the ``Numeric(16, 2)`` column of the legacy socle dropped them
+    -- never to the node's full-precision total. ``POST .../nodes/delete`` and
+    ``GET .../aggregates`` answer the same ``999.99`` on the same shape
+    (``test_revision_export.py``), which is the point: three routes serving Règle 3's
+    safeguard, one figure.
+    """
+    year = datetime.now(UTC).year
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        project_id = _create_project(client, headers)
+        reference = _reference(project_id)
+        assert _import(client, headers, project_id, _tasks_xml(1, 2)).status_code == 202
+
+        revision_id = _revision_id(project_id)
+        with get_session_factory()() as session:
+            revision = (
+                session.query(ProjectRevision).filter(ProjectRevision.id == revision_id).one()
+            )
+            doomed = (
+                session.query(RevisionNode)
+                .join(WorkItem, WorkItem.id == RevisionNode.work_item_id)
+                .filter(RevisionNode.revision_id == revision_id, WorkItem.external_uid == 2)
+                .one()
+            )
+            facet = (
+                session.query(RevisionPlanFacet)
+                .filter(RevisionPlanFacet.node_id == doomed.id)
+                .one()
+            )
+            facet.start_at = datetime(year, 10, 1, tzinfo=UTC)
+            facet.finish_at = datetime(year + 2, 2, 28, tzinfo=UTC)
+            for offset in range(3):
+                seed_annual_rate(
+                    session, reference, year=year + offset, hourly_rate=Decimal("100.00")
+                )
+            insert_labor_line(
+                session,
+                reference,
+                revision,
+                label="Heures d'etude",
+                parent_id=doomed.id,
+                quantity=Decimal("1"),
+                hours=Decimal("10"),
+            )
+            session.commit()
+
+        batch_id = _upload(client, headers, project_id, _tasks_xml(1))
+        diff = client.get(f"/imports/v1/batches/{batch_id}/diff", headers=headers)
+
+    assert diff.status_code == 200
+    payload = cast(dict[str, object], diff.json())
+    total = cast(list[dict[str, object]], payload["costLosses"])
+    assert [cast(str, loss["label"]) for loss in total] == ["Heures d'etude"]
+    assert Decimal(cast(str, total[0]["amount"])) == Decimal("999.99")
+
+    removed = [
+        item
+        for item in cast(list[dict[str, object]], payload["items"])
+        if item["kind"] == "removed"
+    ]
+    attributed = [
+        loss for item in removed for loss in cast(list[dict[str, object]], item["costLosses"])
+    ]
+    # The per-item copy is the same figure: one rounding rule, applied in the engine
+    # rather than at each response boundary.
+    assert [Decimal(cast(str, loss["amount"])) for loss in attributed] == [Decimal("999.99")]

@@ -1,0 +1,25 @@
+type: object
+required:
+- code
+- message
+- sheet
+- row
+properties:
+  code:
+    type: string
+  message:
+    type: string
+  sheet:
+    anyOf:
+    - type: string
+    - type: 'null'
+  row:
+    anyOf:
+    - type: integer
+    - type: 'null'
+description: >-
+  Un probleme ou une modification ignoree trouve dans un classeur de
+  reconciliation. `sheet`/`row` designent la cellule Excel exacte (`row` est le
+  numero de ligne Excel, ligne d'en-tete comprise) ; les deux valent `null` pour
+  un probleme qu'aucune ligne du fichier ne porte -- une suppression n'a par
+  definition plus de ligne dans le fichier.

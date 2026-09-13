@@ -340,3 +340,193 @@
         $ref: ../components/responses/RevisionConflict.yaml
       '422':
         $ref: ../components/responses/RevisionUnprocessable.yaml
+/projects/{projectId}/revisions/{revisionId}/export.xlsx:
+  get:
+    tags:
+    - projects
+    summary: Exporter le devis d'une revision au format Excel
+    description: >-
+      Remplace /projects/{projectId}/estimates/{estimateId}/export.xlsx. Meme
+      classeur -- feuilles `Devis` et `Agregats`, memes colonnes, memes
+      sous-totaux -- mais construit a partir des facettes cout de la revision et
+      chiffre en direct : un brouillon exporte donc aussi ses lignes MO, ce que
+      la grille historique ne savait faire qu'une fois la validation passee.
+      Chaque montant est publie en euros au centime, arrondi ligne a ligne avant
+      toute addition, exactement ce que faisaient les colonnes Numeric(16,2) du
+      socle remplace. Lecture pure : autorisee quel que soit le statut de la
+      revision, et un taux horaire manquant chiffre sa ligne a zero plutot que
+      de rendre illisible un brouillon parfaitement editable.
+    operationId: exportRevisionExcel
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/RevisionId.yaml
+    responses:
+      '200':
+        description: Classeur Excel du devis de la revision
+        content:
+          application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+            schema:
+              type: string
+              format: binary
+      '400':
+        $ref: ../components/responses/RevisionBadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/RevisionNotFound.yaml
+      '409':
+        $ref: ../components/responses/RevisionConflict.yaml
+      '422':
+        $ref: ../components/responses/RevisionUnprocessable.yaml
+/projects/{projectId}/revisions/{revisionId}/export-reconciliation.xlsx:
+  get:
+    tags:
+    - projects
+    summary: Exporter une revision au format Excel reconciliable
+    description: >-
+      Remplace
+      /projects/{projectId}/estimates/{estimateId}/export-reconciliation.xlsx.
+      Trois feuilles (Taches / MO / Non-MO), mais toutes les trois sont des vues
+      du meme arbre : chaque ligne porte son `node_id`, son `parent_node_id` et
+      sa `position` -- un identifiant la ou le fichier historique en portait deux
+      par ligne, et le placement qui rend reconstructible la tache porteuse de
+      chaque ligne de cout (INV-01). Les colonnes `bearing_task_node_id` /
+      `bearing_task_name` sont informatives : la tache porteuse est une
+      consequence du placement, jamais une donnee que la reimportation lit.
+      Lecture pure, refusee sur rien : ce qu'une revision validee refuse, c'est
+      la reimportation de ce fichier (REVISION_IMMUTABLE).
+    operationId: exportRevisionReconciliationExcel
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/RevisionId.yaml
+    responses:
+      '200':
+        description: Classeur Excel reconciliable (feuilles Taches / MO / Non-MO)
+        content:
+          application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+            schema:
+              type: string
+              format: binary
+      '400':
+        $ref: ../components/responses/RevisionBadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/RevisionNotFound.yaml
+      '409':
+        $ref: ../components/responses/RevisionConflict.yaml
+      '422':
+        $ref: ../components/responses/RevisionUnprocessable.yaml
+/projects/{projectId}/revisions/{revisionId}/import-reconciliation/preview:
+  post:
+    tags:
+    - projects
+    summary: Previsualiser la reconciliation d'un classeur Excel dans une revision
+    description: >-
+      Analyse le fichier reexporte par /export-reconciliation.xlsx, eventuellement
+      edite, et calcule le diff (creations / mises a jour / suppressions) sans rien
+      ecrire. Execute exactement l'analyse que /confirm execute sur le meme fichier,
+      donc l'apercu predit la confirmation au lieu de l'approcher.
+      Ne prend aucun verrou et n'est refuse sur aucun statut de revision : montrer
+      ce qu'un fichier changerait est sans effet, et refuser l'apercu masquerait la
+      raison meme pour laquelle la confirmation va etre refusee. Le refus est celui
+      de /confirm, et c'est REVISION_IMMUTABLE.
+    operationId: previewRevisionReconciliationImport
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/RevisionId.yaml
+    requestBody:
+      required: true
+      content:
+        multipart/form-data:
+          schema:
+            type: object
+            required:
+            - file
+            properties:
+              file:
+                type: string
+                format: binary
+                description: Classeur Excel reconciliable (voir /export-reconciliation.xlsx)
+    responses:
+      '200':
+        description: Diagnostic de reconciliation (apercu, rien n'est applique)
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/RevisionReconciliationPlanRead.yaml
+      '400':
+        $ref: ../components/responses/RevisionBadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/RevisionNotFound.yaml
+      '409':
+        $ref: ../components/responses/RevisionConflict.yaml
+      '413':
+        $ref: ../components/responses/RevisionPayloadTooLarge.yaml
+      '422':
+        $ref: ../components/responses/RevisionUnprocessable.yaml
+/projects/{projectId}/revisions/{revisionId}/import-reconciliation/confirm:
+  post:
+    tags:
+    - projects
+    summary: Confirmer la reconciliation d'un classeur Excel dans une revision
+    description: >-
+      Rejoue exactement l'analyse de /preview sur le fichier resoumis (aucune
+      session d'import stockee cote serveur) et l'applique en une seule
+      transaction si `blocking_issues` est vide. Ordre d'application :
+      suppressions, mises a jour, puis creations -- une creation doit trouver son
+      parent vivant, ce que le fichier est refuse s'il ne le garantit pas.
+      L'upload, le controle de taille et l'analyse openpyxl ont tous lieu avant
+      toute prise de verrou ; seul un precheck sans probleme prend le verrou du
+      projet et rejoue la mise en scene sous ce verrou, ce qui ferme la fenetre
+      TOCTOU. Si des problemes bloquants sont trouves, rien n'est ecrit et la
+      reponse est un 409 portant le `RevisionReconciliationPlanRead` complet
+      (`applied=false`), jamais un 2xx trompeur. Une revision `validated` ou
+      `superseded` refuse l'ecriture avec REVISION_IMMUTABLE (INV-03), le meme
+      code que toute autre ecriture sur l'une ou l'autre facette.
+    operationId: confirmRevisionReconciliationImport
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/RevisionId.yaml
+    requestBody:
+      required: true
+      content:
+        multipart/form-data:
+          schema:
+            type: object
+            required:
+            - file
+            properties:
+              file:
+                type: string
+                format: binary
+                description: Le meme classeur Excel que celui soumis a /preview
+    responses:
+      '200':
+        description: Reconciliation appliquee
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/RevisionReconciliationPlanRead.yaml
+      '400':
+        $ref: ../components/responses/RevisionBadRequest.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/RevisionNotFound.yaml
+      '409':
+        $ref: ../components/responses/RevisionReconciliationConfirmConflict.yaml
+      '413':
+        $ref: ../components/responses/RevisionPayloadTooLarge.yaml
+      '422':
+        $ref: ../components/responses/RevisionUnprocessable.yaml
