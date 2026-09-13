@@ -281,7 +281,23 @@ def _validate_insert_slot(
     return _resolve_position(revision, parent_id, position)
 
 
-def _reject_milestone_parent(revision: ProjectRevision, parent_id: int | None) -> None:
+#: Closing remedy of the INV-27 message when the user did designate a parent --
+#: a creation, a move, an indentation.
+_PICK_ANOTHER_PARENT = "or pick another parent"
+#: Closing remedy when the parent is the *selected* node itself, which Règle 5
+#: turns into the parent of the siblings that followed it.
+_OUTDENT_WITHOUT_FOLLOWING_SIBLINGS = (
+    "or outdent it only when nothing follows it among its siblings, since an "
+    "outdent makes the following siblings its children"
+)
+
+
+def _reject_milestone_parent(
+    revision: ProjectRevision,
+    parent_id: int | None,
+    *,
+    remedy: str = _PICK_ANOTHER_PARENT,
+) -> None:
     """Refuse to hang anything under a task marked as a milestone (INV-27).
 
     The single statement of the rule for the whole module, called by both
@@ -289,11 +305,17 @@ def _reject_milestone_parent(revision: ProjectRevision, parent_id: int | None) -
     :func:`_validate_move_target` for a move, an indentation or an outdent. A
     jalon is a dated point, not a container: it carries neither a sub-task nor a
     cost line, which is why the refusal does not look at the facet of the child.
+
+    ``remedy`` closes the message with the way out that fits the command. The
+    default names the parent the user designated, which is wrong on the outdent
+    path: there ``parent_id`` is the node the user *selected*, and no parent was
+    designated at all (see :func:`outdent_nodes`). The API only returns the code,
+    but the message reaches the logs and will seed the front-end wording.
     """
     if parent_id is not None and is_milestone_node(revision, parent_id):
         raise MilestoneChildError(
             f"Node {parent_id} is a milestone and cannot contain children (INV-27); "
-            "clear its milestone flag first, or pick another parent"
+            f"clear its milestone flag first, {remedy}"
         )
 
 
@@ -577,7 +599,11 @@ def selection_roots(revision: ProjectRevision, node_ids: list[int]) -> list[Revi
 
 
 def _validate_move_target(
-    revision: ProjectRevision, roots: list[RevisionNode], target_parent_id: int | None
+    revision: ProjectRevision,
+    roots: list[RevisionNode],
+    target_parent_id: int | None,
+    *,
+    milestone_remedy: str = _PICK_ANOTHER_PARENT,
 ) -> None:
     if target_parent_id is None:
         return
@@ -597,7 +623,7 @@ def _validate_move_target(
         raise FacetPlacementError(
             f"Node {target_parent_id} carries a cost facet and cannot hold a task (INV-14)"
         )
-    _reject_milestone_parent(revision, target_parent_id)
+    _reject_milestone_parent(revision, target_parent_id, remedy=milestone_remedy)
 
 
 def carries_labor(revision: ProjectRevision, roots: list[RevisionNode]) -> bool:
@@ -625,8 +651,38 @@ def move_nodes(
     therefore on the other facet, because there is only one tree.
     """
     require_draft(revision)
+    _relocate(project, revision, node_ids, target_parent_id=target_parent_id, position=position)
+    touch(revision)
+
+
+def _relocate(
+    project: Project,
+    revision: ProjectRevision,
+    node_ids: list[int],
+    *,
+    target_parent_id: int | None,
+    position: int | None,
+    milestone_remedy: str = _PICK_ANOTHER_PARENT,
+) -> None:
+    """The body of :func:`move_nodes`, without the ``require_draft`` and the ``touch``.
+
+    Extracted for the single compound operation of this module:
+    :func:`outdent_nodes` relocates two selections -- the outdented block and the
+    following siblings that become its children -- and a service call has to
+    consume exactly **one** version of the optimistic lock (see
+    ``waterfall.services.revision_tree._write``). Every guard stays here, so the
+    two relocations of an outdent are checked exactly as a plain move is.
+
+    **Private on purpose**, for the reason :func:`_renumber_children` is: it
+    writes, and it carries no ``require_draft`` because each of its two callers
+    has already run one. Promoted to ``relocate`` on the package surface it would
+    be a way to move a node in a *validated* revision without INV-03 ever being
+    consulted -- and the meta-guard
+    ``test_inv_03_the_write_matrix_covers_every_tree_write`` would not notice,
+    since it only inspects the public names. It stays underscored.
+    """
     roots = selection_roots(revision, node_ids)
-    _validate_move_target(revision, roots, target_parent_id)
+    _validate_move_target(revision, roots, target_parent_id, milestone_remedy=milestone_remedy)
 
     root_ids = {root.id for root in roots}
     former_parents = {root.parent_id for root in roots}
@@ -655,7 +711,6 @@ def move_nodes(
         for parent_id in former_parents | {target_parent_id}:
             if parent_id is not None and parent_id in revision.nodes:
                 resynchronize_from_node(project, revision, parent_id)
-    touch(revision)
 
 
 def _common_parent(roots: list[RevisionNode]) -> int | None:
@@ -697,7 +752,27 @@ def indent_nodes(project: Project, revision: ProjectRevision, node_ids: list[int
 
 
 def outdent_nodes(project: Project, revision: ProjectRevision, node_ids: list[int]) -> None:
-    """Outdent a contiguous block of siblings to its grandparent, after its former parent.
+    """Outdent a contiguous block of siblings, **preserving the display order** (Règle 5).
+
+    The property the operation guarantees is that the sequence of displayed rows
+    is exactly the one the user was looking at: only the *level* of the selection
+    changes, never the order of the lines. MS Project semantics, and the reason
+    the decision of #344 went that way -- the users of this product come from MS
+    Project, where the converse would read as a bug.
+
+    The rattachement of the following siblings is the **consequence** of that
+    property, not a rule of its own. The outdented block lands right after its
+    former parent, so the siblings that used to follow it can only keep their
+    rank by hanging under the last outdented node::
+
+        before: P > [X, Y, Z]        rows: P, X, Y, Z
+        outdent(Y)
+        after:  P > [X] , Y > [Z]    rows: P, X, Y, Z
+
+    Under the propagation rule of the EPIC -- one tree, two facets -- those
+    following siblings take their **whole cost facet** with them: it is the very
+    same node that moves. An outdent therefore moves chiffrage the user did not
+    select, and changes its bearing task (INV-01, which never memorises it).
 
     Outdenting a child of a root node moves it up to the root itself.
     """
@@ -706,15 +781,52 @@ def outdent_nodes(project: Project, revision: ProjectRevision, node_ids: list[in
     parent_id = _common_parent(roots)
     if parent_id is None:
         raise SelectionError("A root node cannot be outdented further")
-    _contiguous_indexes(children_of(revision, parent_id), {root.id for root in roots})
+    siblings = children_of(revision, parent_id)
+    last_selected = max(_contiguous_indexes(siblings, {root.id for root in roots}))
+    # The block is contiguous, so everything past its last node is what has to
+    # follow it -- and it follows it by hanging under that last node.
+    last_outdented = siblings[last_selected]
+    following = siblings[last_selected + 1 :]
     parent = revision.nodes[parent_id]
-    move_nodes(
+
+    # The placement of the outdent itself is checked **here**, before anything is
+    # written, and checked a second time by the relocation that performs it. The
+    # duplication is what keeps the promise of this module's header
+    # unconditional: an outdent is the one compound command, and without this
+    # pre-validation a grandparent that is itself invalid -- a hole in its
+    # positions (INV-05), a milestone flag it should not carry (INV-27), both
+    # reachable by the routes :func:`compact_positions` enumerates -- would be
+    # discovered only after the tail had already been re-parented. The verdict is
+    # the same before and after that re-parenting: the tail lands under the last
+    # outdented node, so it changes neither the grandparent's sibling set, nor
+    # ``parent.position``, nor any facet the two guards read.
+    _validate_move_target(revision, roots, parent.parent_id)
+    _resolve_position(revision, parent.parent_id, parent.position + 1)
+
+    # The following siblings are re-parented **first**, and through ``_relocate``
+    # rather than by writing ``parent_id`` in place: the new semantics makes the
+    # outdented node a *parent*, so it may be a jalon, and INV-27 has to refuse
+    # the whole command. Writing the link directly -- as ``reimport`` legitimately
+    # does elsewhere -- would bypass ``_validate_move_target`` and with it the
+    # guard #343 erected. Running this relocation before the outdent itself is
+    # what keeps the refusal it may raise free of any mutation.
+    if following:
+        _relocate(
+            project,
+            revision,
+            [node.id for node in following],
+            target_parent_id=last_outdented.id,
+            position=None,
+            milestone_remedy=_OUTDENT_WITHOUT_FOLLOWING_SIBLINGS,
+        )
+    _relocate(
         project,
         revision,
         [root.id for root in roots],
         target_parent_id=parent.parent_id,
         position=parent.position + 1,
     )
+    touch(revision)
 
 
 def _shift_within_siblings(

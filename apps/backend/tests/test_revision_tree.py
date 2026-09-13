@@ -357,15 +357,31 @@ def test_indent_outdent_and_the_sibling_shifts_reach_the_database() -> None:
 
 
 def test_outdenting_up_to_the_root_lands_right_after_the_former_parent() -> None:
+    """Règle 5 reaches the database, tail included, in a single version of the lock.
+
+    ``alpha`` > [``design`` > [``study``, ``sub``], ``build``]: outdenting
+    ``design`` moves it right after ``alpha`` at the root, and ``build`` -- the
+    sibling that followed it, which the caller never named -- is written back as
+    its **last child**, so the stored rows keep the displayed order. One service
+    call, one lock version consumed, however many relocations the domain needed.
+    """
     with get_session_factory()() as session:
         tree = _seed_tree(session)
 
-        revision_tree.outdent_nodes(
+        write = revision_tree.outdent_nodes(
             session, tree.revision_id, [tree.design], expected_lock_version=0
         )
         session.commit()
 
         assert _children_of(session, tree.revision_id, None) == [tree.alpha, tree.design, tree.beta]
+        assert _children_of(session, tree.revision_id, tree.alpha) == []
+        assert _children_of(session, tree.revision_id, tree.design) == [
+            tree.study,
+            tree.sub,
+            tree.build,
+        ]
+        assert write.lock_version == 1
+        assert _lock_version(session, tree.revision_id) == 1
 
 
 def test_moving_a_selection_to_the_root_is_accepted() -> None:
@@ -720,10 +736,14 @@ def _write_attempts(
         ),
         (
             "outdent_nodes",
+            # ``sub`` and not ``study``: an outdent hands the *following* siblings
+            # over to the outdented node (Règle 5), and outdenting the cost line
+            # ``study`` would hand the task ``sub`` to it -- refused by INV-14
+            # before the guard under test here is ever reached.
             lambda: revision_tree.outdent_nodes(
                 session,
                 tree.revision_id,
-                [tree.study],
+                [tree.sub],
                 expected_lock_version=expected_lock_version,
             ),
         ),

@@ -788,6 +788,22 @@ def test_creating_a_task_under_an_unknown_parent_is_not_found() -> None:
     assert _detail(response) == {"code": "REVISION_NODE_NOT_FOUND"}
 
 
+def _nodes_by_id(response: Any) -> dict[int, dict[str, Any]]:
+    payload = cast(dict[str, Any], response.json())
+    return {
+        cast(int, node["node_id"]): node for node in cast(list[dict[str, Any]], payload["nodes"])
+    }
+
+
+def _node_rows(response: Any) -> list[tuple[str, int]]:
+    """The rows a client displays: name and level, in the depth-first order read."""
+    payload = cast(dict[str, Any], response.json())
+    return [
+        (cast(str, cast(dict[str, Any], node["planning"])["name"]), cast(int, node["level"]))
+        for node in cast(list[dict[str, Any]], payload["nodes"])
+    ]
+
+
 def test_indenting_and_outdenting_a_selection() -> None:
     with TestClient(app) as client:
         headers = _auth_headers(client)
@@ -831,6 +847,96 @@ def test_moving_a_node_under_its_own_descendant_is_refused_as_a_cycle() -> None:
 
     assert response.status_code == 400
     assert _detail(response) == {"code": "REVISION_TREE_CYCLE"}
+
+
+def test_outdenting_hands_the_following_siblings_over_and_keeps_the_rows_in_order() -> None:
+    """Règle 5 over HTTP (#344), on the fixture tree ``Alpha > [Design > Sub, Build], Beta``.
+
+    Outdenting ``Design`` lifts it next to ``Alpha`` and hands ``Build`` -- which
+    the client never selected -- over to it, because that is the only way ``Build``
+    keeps its rank. The rows the client reads back are in the very same order as
+    before; only the level of ``Design`` changed.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        fixture = _seed(client, headers)
+        before = client.get(fixture.url("/nodes"), headers=headers)
+
+        moved = client.post(
+            fixture.url("/nodes/move"),
+            json={
+                "node_ids": [fixture.nodes["design"]],
+                "mode": "outdent",
+                "expected_lock_version": 0,
+            },
+            headers=headers,
+        )
+        assert moved.status_code == 200
+        after = client.get(fixture.url("/nodes"), headers=headers)
+
+    assert _node_rows(before) == [
+        ("Alpha", 1),
+        ("Design", 2),
+        ("Sub", 3),
+        ("Build", 2),
+        ("Beta", 1),
+    ]
+    assert _node_rows(after) == [
+        ("Alpha", 1),
+        ("Design", 1),
+        ("Sub", 2),
+        ("Build", 2),
+        ("Beta", 1),
+    ]
+    nodes = _nodes_by_id(after)
+    assert nodes[fixture.nodes["design"]]["parent_id"] is None
+    assert nodes[fixture.nodes["build"]]["parent_id"] == fixture.nodes["design"]
+
+
+def test_outdenting_a_milestone_that_has_following_siblings_is_refused() -> None:
+    """INV-27 through the outdent path, with the code the error table promises.
+
+    ``Build`` is made a milestone while it is still a leaf -- which is allowed --
+    and a sibling is appended behind it. Outdenting it would make that sibling its
+    child, so the command is refused as a whole: ``400`` and
+    ``REVISION_MILESTONE_HAS_CHILDREN``, the same code a direct move under a
+    milestone returns.
+    """
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        fixture = _seed(client, headers)
+
+        appended = client.post(
+            fixture.url("/tasks"),
+            json={
+                "name": "Suite",
+                "parent_id": fixture.nodes["alpha"],
+                "expected_lock_version": 0,
+            },
+            headers=headers,
+        )
+        assert appended.status_code == 201
+        flagged = client.patch(
+            fixture.url(f"/nodes/{fixture.nodes['build']}/planning"),
+            json={"is_milestone": True, "expected_lock_version": appended.json()["lock_version"]},
+            headers=headers,
+        )
+        assert flagged.status_code == 200
+
+        response = client.post(
+            fixture.url("/nodes/move"),
+            json={
+                "node_ids": [fixture.nodes["build"]],
+                "mode": "outdent",
+                "expected_lock_version": flagged.json()["lock_version"],
+            },
+            headers=headers,
+        )
+        unchanged = client.get(fixture.url("/nodes"), headers=headers)
+
+    assert response.status_code == 400
+    assert _detail(response) == {"code": "REVISION_MILESTONE_HAS_CHILDREN"}
+    assert _nodes_by_id(unchanged)[fixture.nodes["build"]]["parent_id"] == fixture.nodes["alpha"]
 
 
 def test_outdenting_a_root_node_is_refused_as_an_invalid_selection() -> None:
