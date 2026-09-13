@@ -1,0 +1,50 @@
+type: object
+required:
+- revision_id
+- total_labor_cost
+- total_purchase_cost
+- total_unburdened_cost
+- by_category
+- by_cost_code
+- missing_cost_rates
+- missing_inflation_years
+properties:
+  revision_id:
+    type: integer
+  total_labor_cost:
+    type: string
+    pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+  total_purchase_cost:
+    type: string
+    pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+  total_unburdened_cost:
+    type: string
+    pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+  by_category:
+    type: object
+    additionalProperties:
+      type: string
+      pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+  by_cost_code:
+    type: object
+    additionalProperties:
+      type: string
+      pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+  missing_cost_rates:
+    type: array
+    items:
+      $ref: ./RevisionMissingRateRead.yaml
+  missing_inflation_years:
+    type: array
+    items:
+      type: integer
+description: >-
+  Totaux d'une revision, calcules a partir de ses facettes cout. Remplace
+  `GET .../estimates/{estimateId}/aggregates`, qui ne savait sommer que les lignes
+  figees ecrites par une validation : un devis en cours n'avait aucun total. Ceux-ci
+  sont calcules a la lecture, donc un brouillon en a un, et une facette cout placee
+  a la racine de l'arbre (sans tache porteuse, INV-01) y compte comme les autres.
+  `by_category` est indexe par code comptable, `by_cost_code` par code d'imputation.
+  Tous les montants sont publies au centime : le moteur somme les produits en pleine
+  precision, et l'arrondi a deux decimales -- que portait jusqu'ici la colonne
+  `Numeric(16, 2)` du devis -- est applique a la frontiere de reponse.

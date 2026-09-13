@@ -273,6 +273,59 @@ class RevisionNodeDeleteRead(RevisionWriteRead):
     cost_losses: list[RevisionCostLossRead]
 
 
+class RevisionMissingRateRead(BaseModel):
+    """One ``(cost category, year)`` combination the rate table does not cover.
+
+    Same four fields as ``schemas.projects.MissingRateCoverageEntry``, which the
+    legacy devis returns inside a 400 ``detail``. Here it is part of a **200**:
+    reading the totals of a draft whose 2031 rate has not been entered yet has to
+    answer, so the line is priced at a zero rate and the gap is named beside it.
+    Refusing a *validation* on the same gap stays the right answer, and stays
+    E14-08's (#334).
+    """
+
+    category_id: int
+    category_name: str
+    accounting_code: str
+    year: int
+
+
+class RevisionAggregatesRead(BaseModel):
+    """The totals of one revision, computed from its cost facets (E14-07b, #364).
+
+    Replaces ``GET .../estimates/{id}/aggregates``, which could only ever sum the
+    ``wf_estimate_line`` rows a validation had already written -- a devis in
+    progress had no total at all. These are computed live, so a draft has one, and
+    a cost facet sitting at the **root** of the tree (no bearing task, INV-01's
+    project-wide global cost) counts towards it like any other.
+
+    ``by_category`` is keyed by accounting code and ``by_cost_code`` by the
+    project cost code's ``code``, a line carrying none falling under the shared
+    ``UNASSIGNED_COST_CODE_LABEL``. Deliberately unbounded, like every read model
+    here: a bound on a response field turns a stored value into a 500 (see the
+    module docstring) -- ``decimal_places=2`` here would be exactly that, a stored
+    state turned into a crash, where the engine's cent-rounding below is a decision
+    about what to publish.
+
+    Every amount is an amount in **euros, at the cent**:
+    :func:`waterfall.services.estimate_calculation.calculate_revision_aggregates`
+    rounds each priced line before summing it, restating the rule the
+    ``wf_estimate_line.budget_cost`` column used to carry for the endpoint this one
+    replaces -- per line, which is also what keeps these five figures additive
+    (``total_labor_cost + total_purchase_cost == total_unburdened_cost``, and the
+    same for either breakdown).
+    """
+
+    revision_id: int
+    total_labor_cost: Decimal
+    total_purchase_cost: Decimal
+    total_unburdened_cost: Decimal
+    by_category: dict[str, Decimal]
+    by_cost_code: dict[str, Decimal]
+    missing_cost_rates: list[RevisionMissingRateRead]
+    missing_inflation_years: list[int]
+
+
 class RevisionWrite(BaseModel):
     """Base of every write payload: the optimistic lock, and nothing else."""
 

@@ -16,6 +16,7 @@ import logging
 import xml.etree.ElementTree as ET
 from collections.abc import Generator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import cast
@@ -33,7 +34,12 @@ from _mspdi_fixture_support import (
     mspdi_bytes,
     read_mspdi,
 )
-from _revision_db_support import ReferenceData, insert_labor_line, insert_purchase_line
+from _revision_db_support import (
+    ReferenceData,
+    insert_labor_line,
+    insert_purchase_line,
+    seed_annual_rate,
+)
 from waterfall.db.session import get_session_factory
 from waterfall.domain import revision as domain
 from waterfall.main import app
@@ -623,16 +629,26 @@ def test_importing_into_a_validated_revision_is_refused_as_immutable() -> None:
 
 
 def test_the_import_diff_names_every_cost_bearing_node_a_removal_would_destroy() -> None:
-    """Both natures, and the amount asserted against a figure the test did not read back.
+    """Both natures, and both amounts asserted against figures the test did not read back.
 
-    The #332 review (B6) was right that the previous version copied the served
-    ``amount`` into its own expectation, so any value at all passed -- and the MO
-    fixture served ``0`` anyway, the store deliberately leaving ``Role.hourly_rate``
-    unset until E14-07 plugs the real pricing engine in. A non-labour line is priced
-    from ``quantity x unit_cost``, both stored on the facet, so it is the one shape
-    whose money is real end to end today; it is seeded here and pinned to a literal.
-    The MO line stays, pinned to ``0`` *with* the reason, so that E14-07 landing the
-    resolver breaks this test instead of quietly changing a confirmation dialog.
+    The #332 review (B6) was right that the version before it copied the served
+    ``amount`` into its own expectation, so any value at all passed. The non-labour
+    line has been pinned to a literal ever since -- it is priced from
+    ``quantity x unit_cost``, both stored on the facet.
+
+    The MO line used to be pinned to ``0``, *with* its reason written out: the store
+    leaves ``Role.hourly_rate`` unset on purpose, a rate being annual, so
+    ``default_amount`` had nothing to price it with. E14-07b (#364) landed the real
+    engine as the injected
+    :data:`~waterfall.domain.revision.pricing.AmountResolver`, and this is where that
+    shows: what the confirmation dialog quotes as "chiffrage you are about to lose"
+    is now an annual rate times an inflation coefficient, spread over the years of
+    the **bearing task** -- so the fixture seeds all three (dates on T2, a rate, a
+    coefficient) and the expectation is the arithmetic, not a re-read.
+
+    Pinning it back to ``0`` would have been the quiet outcome to avoid: the line
+    would still have served ``0``, for the entirely different reason that nothing
+    covered it.
     """
     with TestClient(app) as client:
         headers = _auth_headers(client)
@@ -650,6 +666,23 @@ def test_the_import_diff_names_every_cost_bearing_node_a_removal_would_destroy()
                 .join(WorkItem, WorkItem.id == RevisionNode.work_item_id)
                 .filter(RevisionNode.revision_id == revision_id, WorkItem.external_uid == 2)
                 .one()
+            )
+            # The file carries no dates, and a bearing task without dates prices
+            # nothing -- the legacy engine's own behaviour, kept. So T2 gets a span,
+            # within a single year, and that year gets a rate and a coefficient.
+            plan = (
+                session.query(RevisionPlanFacet)
+                .filter(RevisionPlanFacet.node_id == doomed.id)
+                .one()
+            )
+            plan.start_at = datetime(2026, 3, 2, tzinfo=UTC)
+            plan.finish_at = datetime(2026, 6, 30, tzinfo=UTC)
+            seed_annual_rate(
+                session,
+                reference,
+                year=2026,
+                hourly_rate=Decimal("100.00"),
+                inflation=Decimal("1.05"),
             )
             insert_labor_line(
                 session,
@@ -684,10 +717,9 @@ def test_the_import_diff_names_every_cost_bearing_node_a_removal_would_destroy()
         ]
         # 2 x 150, read off the facet and not off the response.
         assert Decimal(cast(str, losses[1]["amount"])) == Decimal("300")
-        # 0 until E14-07 injects the real amount resolver: ``default_amount`` prices
-        # MO as ``quantity x hours x hourly_rate`` and the store leaves the rate
-        # unset on purpose, a rate being per year and belonging to the engine.
-        assert Decimal(cast(str, losses[0]["amount"])) == Decimal("0")
+        # 1 x 12 h x 100.00 EUR/h x 1.05, one single year because T2 spans one --
+        # the engine, injected as the resolver, and not ``default_amount``.
+        assert Decimal(cast(str, losses[0]["amount"])) == Decimal("1260.00")
 
         # And confirming really does take it away, exactly as announced.
         assert _run(client, headers, batch_id).status_code == 202

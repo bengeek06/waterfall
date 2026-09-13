@@ -474,6 +474,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{projectId}/revisions/{revisionId}/aggregates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Lire les totaux d'une revision
+         * @description Totaux calcules a partir des facettes cout de la revision, pas de lignes figees : un brouillon a donc un total, ce que le devis historique ne savait pas produire. La tache porteuse de chaque ligne est resolue dans l'arbre (INV-01), jamais lue dans une colonne, et une facette cout placee a la racine -- sans tache porteuse -- compte dans le total comme les autres. Un taux horaire ou un coefficient d'inflation manquant est signale dans le corps de la reponse et jamais leve : ceci est une lecture, et un 500 rendrait illisible un brouillon parfaitement editable.
+         */
+        get: operations["readRevisionAggregates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/projects/{projectId}/revisions/{revisionId}/tasks": {
         parameters: {
             query?: never;
@@ -2138,6 +2158,28 @@ export interface components {
         ProjectSetupWarningsRead: {
             warnings: components["schemas"]["ProjectSetupWarning"][];
         };
+        /** @description Une combinaison (categorie de cout, annee) que la table des taux ne couvre pas. Memes quatre champs que `MissingRateCoverageEntry`, que le devis historique renvoie dans un `detail` 400 ; ici elle fait partie d'une reponse 200 : lire les totaux d'un brouillon dont le taux 2031 n'a pas encore ete saisi doit repondre, donc la ligne est valorisee a taux nul et le manque est nomme a cote. */
+        RevisionMissingRateRead: {
+            category_id: number;
+            category_name: string;
+            accounting_code: string;
+            year: number;
+        };
+        /** @description Totaux d'une revision, calcules a partir de ses facettes cout. Remplace `GET .../estimates/{estimateId}/aggregates`, qui ne savait sommer que les lignes figees ecrites par une validation : un devis en cours n'avait aucun total. Ceux-ci sont calcules a la lecture, donc un brouillon en a un, et une facette cout placee a la racine de l'arbre (sans tache porteuse, INV-01) y compte comme les autres. `by_category` est indexe par code comptable, `by_cost_code` par code d'imputation. Tous les montants sont publies au centime : le moteur somme les produits en pleine precision, et l'arrondi a deux decimales -- que portait jusqu'ici la colonne `Numeric(16, 2)` du devis -- est applique a la frontiere de reponse. */
+        RevisionAggregatesRead: {
+            revision_id: number;
+            total_labor_cost: string;
+            total_purchase_cost: string;
+            total_unburdened_cost: string;
+            by_category: {
+                [key: string]: string;
+            };
+            by_cost_code: {
+                [key: string]: string;
+            };
+            missing_cost_rates: components["schemas"]["RevisionMissingRateRead"][];
+            missing_inflation_years: number[];
+        };
         /**
          * @description Issue #65 (E6-04) : une tache "reelle" du planning (ni recapitulative ni
          *     jalon) qui n'a ni affectation de role de ce devis (`EstimateRoleAssignment`,
@@ -3397,6 +3439,35 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RevisionTreeRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["RevisionNotFound"];
+            409: components["responses"]["RevisionConflict"];
+            422: components["responses"]["RevisionUnprocessable"];
+        };
+    };
+    readRevisionAggregates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Identifiant technique ms_project.id */
+                projectId: components["parameters"]["ProjectId"];
+                /** @description Identifiant technique de la revision (arbre + facettes planification et cout) */
+                revisionId: components["parameters"]["RevisionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Totaux de la revision, avec les couvertures de taux manquantes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionAggregatesRead"];
                 };
             };
             401: components["responses"]["Unauthorized"];

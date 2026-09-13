@@ -16,7 +16,7 @@ from __future__ import annotations
 from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from sqlalchemy import create_engine
@@ -26,7 +26,9 @@ from waterfall.models.ms_core import MsProject
 from waterfall.models.resources import (
     Calendar,
     CostCategory,
+    CostRate,
     CostType,
+    InflationRate,
     ResourceNode,
     ResourceRole,
 )
@@ -186,8 +188,17 @@ def insert_task(
     parent_id: int | None = None,
     position: int = 1,
     external_uid: int | None = None,
+    start_at: datetime | None = None,
+    finish_at: datetime | None = None,
 ) -> RevisionNode:
-    """A task work item, its node and its planning facet, in one call."""
+    """A task work item, its node and its planning facet, in one call.
+
+    ``start_at``/``finish_at`` are what the calculation engine spreads a borne MO
+    line's hours over (E14-07b, #364): a bearing task with no dates prices nothing
+    at all, exactly as the legacy engine's ``_generate_labor_lines`` returned an
+    empty list for a dateless ``MsTask``. Left unset by default, since the tests
+    that came before #364 are about the tree and not about money.
+    """
     work_item = insert_work_item(session, reference, kind="task", external_uid=external_uid)
     node = insert_node(session, revision, work_item, parent_id=parent_id, position=position)
     session.add(
@@ -197,10 +208,44 @@ def insert_task(
             name=name,
             calendar_id=reference.calendar_id,
             calendar_source="project",
+            start_at=start_at,
+            finish_at=finish_at,
         )
     )
     session.flush()
     return node
+
+
+def seed_annual_rate(
+    session: Session,
+    reference: ReferenceData,
+    *,
+    year: int,
+    hourly_rate: Decimal = Decimal("100.00"),
+    inflation: Decimal | None = Decimal("1.00000000"),
+) -> None:
+    """The ``(category, year)`` hourly rate and the year's inflation coefficient.
+
+    A rate is **annual** -- that is the whole reason ``revision_store._load_roles``
+    leaves ``Role.hourly_rate`` unset and the engine is injected as an
+    :data:`~waterfall.domain.revision.pricing.AmountResolver` instead. Seeding it is
+    therefore what turns an MO line from "priced at 0 because nothing covers it"
+    into a real figure.
+
+    ``inflation=None`` leaves the year uncovered on purpose, for the tests that
+    check a gap is *reported* rather than raised on a read.
+    """
+    session.add(
+        CostRate(
+            cost_category_id=reference.cost_category_id,
+            year=year,
+            hourly_rate=hourly_rate,
+            currency_code="EUR",
+        )
+    )
+    if inflation is not None:
+        session.add(InflationRate(year=year, coefficient=inflation))
+    session.flush()
 
 
 def insert_labor_line(
@@ -212,6 +257,8 @@ def insert_labor_line(
     parent_id: int | None = None,
     position: int = 1,
     hours: Decimal = Decimal("10"),
+    quantity: Decimal = Decimal("1"),
+    cost_code_id: int | None = None,
 ) -> RevisionNode:
     work_item = insert_work_item(session, reference, kind="cost")
     node = insert_node(session, revision, work_item, parent_id=parent_id, position=position)
@@ -221,9 +268,10 @@ def insert_labor_line(
             node_kind="cost",
             nature="labor",
             label=label,
-            quantity=Decimal("1"),
+            quantity=quantity,
             role_id=reference.role_id,
             hours=hours,
+            cost_code_id=cost_code_id,
         )
     )
     session.flush()
@@ -240,15 +288,17 @@ def insert_purchase_line(
     position: int = 1,
     quantity: Decimal = Decimal("2"),
     unit_cost: Decimal = Decimal("150"),
+    cost_code_id: int | None = None,
+    planned_date: date | None = None,
 ) -> RevisionNode:
-    """A non-labour cost line, the one shape that carries a **non-zero** amount.
+    """A non-labour cost line: ``quantity x unit_cost``, both stored on the facet.
 
-    ``default_amount`` prices a non-labour line as ``quantity x unit_cost``, both
-    stored on the facet itself, so the figure Règle 3's safeguard reports is real
-    end to end. Its labour counterpart cannot be, yet: the store deliberately
-    leaves ``Role.hourly_rate`` unset (a rate is per year and belongs to the
-    pricing engine), so an MO line is priced at 0 until E14-07 plugs the real
-    resolver in. Tests that need to pin money use this one.
+    The one shape whose amount needs nothing but the facet itself, which is why it
+    was the only one carrying a real figure before E14-07b (#364). Since then an MO
+    line carries one too, but it takes three more things to say so: a bearing task
+    with dates (:func:`insert_task`), an annual rate and an inflation coefficient
+    (:func:`seed_annual_rate`). A labour line with none of them is still priced at
+    ``0`` -- and the gap is *reported* alongside, never silent.
     """
     work_item = insert_work_item(session, reference, kind="cost")
     node = insert_node(session, revision, work_item, parent_id=parent_id, position=position)
@@ -262,6 +312,8 @@ def insert_purchase_line(
             cost_type_id=reference.cost_type_id,
             cost_category_id=reference.cost_category_id,
             unit_cost=unit_cost,
+            cost_code_id=cost_code_id,
+            planned_date=planned_date,
         )
     )
     session.flush()

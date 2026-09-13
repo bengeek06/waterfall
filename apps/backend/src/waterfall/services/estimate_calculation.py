@@ -1,12 +1,49 @@
-"""Deterministic cost calculation engine for estimate versioning."""
+"""The deterministic cost calculation engine, on the cost facet of the revision node.
 
+Two engines live here, and the module is read in that order.
+
+**The engine** (E14-07b, #364) prices the ``wf_revision_cost_facet`` rows of a
+revision. It resolves each line's bearing task through the pure domain -- INV-01,
+the first *strict* ancestor carrying a planning facet, ``None`` at the root -- and
+never reads a stored ``task_id``, which is what makes moving a cost node under
+another task enough to change what bears it. It is also the
+:data:`~waterfall.domain.revision.pricing.AmountResolver` the domain has been
+taking since E14-02 (#328): :meth:`RevisionPricing.amount_of` is injected into
+``plan_reimport``/``apply_reimport`` *and* into ``revision_tree.delete_nodes`` --
+**every** entry point serving Rule 3's "you are about to lose this much chiffrage"
+warning, so that the two routes that quote it quote the same figure -- and
+``waterfall.domain.revision.pricing.default_amount`` goes back to being what it
+always claimed to be -- a naive fallback, not the engine. Leaving one of them on
+that fallback is not a smaller warning, it is a wrong one: it prices an MO facet
+at ``quantity x hours x role.hourly_rate``, and ``Role.hourly_rate`` is never
+loaded, so the answer would be ``0``.
+
+**The legacy engine** below it prices ``EstimateRoleAssignment``/
+``EstimateCostLine`` against ``ms_task``, and freezes the result into
+``wf_estimate_line``. It is kept, untouched and still wired to
+``POST .../estimates/{id}/validate``, for the reason the EPIC states -- "additif
+d'abord, destruction en dernier" (#326) -- and for one more: it is the only thing
+the new engine can be *compared* against, which is the central acceptance criterion
+of #364 (``tests/test_revision_pricing.py`` runs both on the same figures and
+asserts the amounts equal). E14-12 (#339) removes it, together with the tables it
+reads.
+
+What is deliberately **not** here: writing a priced line anywhere. Freezing the
+lines of a validated revision is E14-08 (#334), and the exports and the
+reconciliation are the exports' own issue (#365) -- an engine that returned
+half-built ORM rows would have decided both.
+"""
+
+from collections.abc import Container, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import TypedDict
 
 from sqlalchemy.orm import Session
 
 from waterfall.core.observability import ESTIMATE_CALCULATION_DURATION, track_duration
+from waterfall.domain import revision as domain
 from waterfall.models.ms_core import MsTask
 from waterfall.models.planning import WfPlanningTaskSnapshot
 from waterfall.models.resources import (
@@ -23,6 +60,7 @@ from waterfall.models.resources import (
 )
 from waterfall.schemas.projects import EstimateValidationWarning
 from waterfall.schemas.resources import CostTypeKind
+from waterfall.services.revision_store import LoadedRevision, load_revision
 
 
 def collect_missing_rate_coverage(
@@ -43,6 +81,13 @@ def collect_missing_rate_coverage(
     deduplicated, sorted set of years (from `category_years`) with no `InflationRate`,
     independently of category. Empty lists mean full coverage -- caller behavior is
     unchanged in that case.
+
+    The rule itself is `_missing_coverage`; this function is the variant that goes
+    and *fetches* the coverage. ``price_loaded_revision`` does not call it: it needs
+    the rates themselves anyway, so it loads them once (`_load_rate_table`) and reads
+    the same rule off the tables it is already holding -- one query pair per pricing
+    instead of two, which matters because it now also runs under the revision lock,
+    on every node deletion.
     """
     if not category_years:
         return [], []
@@ -60,16 +105,32 @@ def collect_missing_rate_coverage(
     existing_inflation_years = {
         year for (year,) in db.query(InflationRate.year).filter(InflationRate.year.in_(years)).all()
     }
+    return _missing_coverage(category_years, existing_rate_pairs, existing_inflation_years)
 
+
+def _missing_coverage(
+    category_years: list[tuple[CostCategory, int]],
+    covered_rate_pairs: Container[tuple[int, int]],
+    covered_inflation_years: Container[int],
+) -> tuple[list[tuple[CostCategory, int]], list[int]]:
+    """Which of `category_years` the given coverage does not cover.
+
+    The whole of `collect_missing_rate_coverage`'s rule, and none of its queries, so
+    that a caller which has already loaded ``(category, year) -> rate`` and ``year ->
+    inflation`` answers it from those keys rather than from two more `SELECT`s
+    (`price_loaded_revision`). Both sources key on exactly the same columns -- the
+    two tables are unique on them -- so "the pair is absent from the dict" and "the
+    pair is absent from the table" are the same statement.
+    """
     seen_missing_pairs: set[tuple[int, int]] = set()
     missing_cost_rates: list[tuple[CostCategory, int]] = []
     missing_inflation_years: set[int] = set()
     for category, year in category_years:
         pair_key = (category.id, year)
-        if pair_key not in existing_rate_pairs and pair_key not in seen_missing_pairs:
+        if pair_key not in covered_rate_pairs and pair_key not in seen_missing_pairs:
             seen_missing_pairs.add(pair_key)
             missing_cost_rates.append((category, year))
-        if year not in existing_inflation_years:
+        if year not in covered_inflation_years:
             missing_inflation_years.add(year)
 
     missing_cost_rates.sort(key=lambda pair: (pair[0].accounting_code, pair[1]))
@@ -156,6 +217,535 @@ class MissingRateCoverageError(ValueError):
         self.missing_cost_rates = missing_cost_rates
         self.missing_inflation_years = missing_inflation_years
         super().__init__(format_missing_rate_message(missing_cost_rates, missing_inflation_years))
+
+
+# --------------------------------------------------------------------------------------
+# The engine, on the cost facet of the node (E14-07b, #364)
+# --------------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PricedLine:
+    """One ``(cost facet, year)`` pair, priced.
+
+    The same grain as the legacy engine's ``EstimateLine``: a labour facet borne by
+    a task spanning two years produces two of these, a non-labour one produces
+    exactly one. Deliberately a plain, immutable dataclass and **not** an ORM row:
+    freezing a priced line into the immutable document of a validated revision is
+    E14-08's (#334) business, not this module's, and an engine that returned
+    half-built rows would decide that for it.
+
+    ``bearing_*`` is INV-01's answer for this line -- the first *strict* ancestor
+    carrying a planning facet -- resolved on read and stored in no column, which is
+    exactly what makes moving the cost node under another task change the line's
+    bearing task without touching a single one of its own attributes.
+
+    ``hours``/``hourly_rate``/``inflation_coefficient`` carry the legacy engine's
+    own neutral values on a non-labour line (``0``/``0``/``1``) rather than
+    ``None``, so that the two engines can be compared field by field.
+    """
+
+    node_id: int
+    work_item_id: int
+    label: str
+    nature: domain.CostNature
+    bearing_node_id: int | None
+    bearing_work_item_id: int | None
+    bearing_task_name: str | None
+    role_id: int | None
+    role_name: str | None
+    accounting_code: str
+    category_code: str | None
+    cost_code_id: int | None
+    year: int
+    quantity: Decimal
+    hours: Decimal
+    hourly_rate: Decimal
+    inflation_coefficient: Decimal
+    amount: Decimal
+
+
+@dataclass(frozen=True)
+class RevisionPricing:
+    """Everything the engine made of one revision: its priced lines and its gaps.
+
+    ``missing_cost_rates``/``missing_inflation_years`` are **reported, not raised**,
+    which is the one deliberate difference with ``calculate_estimate_lines``'s
+    ``MissingRateCoverageError``. This object backs reads -- the aggregates
+    endpoint, the import diff's "you are about to lose this much chiffrage"
+    warning -- and a read that answers 500 because a 2031 rate has not been
+    entered yet would make a perfectly editable draft unreadable. The line is
+    still priced, at a zero rate and a neutral inflation, *and* the gap is named
+    in the same breath, so nothing is silent about it. Refusing a **validation**
+    outright on the same gap stays the right answer and stays E14-08's (#334) to
+    make, from these very two lists.
+    """
+
+    revision_id: int
+    lines: tuple[PricedLine, ...]
+    #: Total amount of each cost node, summed over its years. Keyed by node id, so
+    #: it is also the lookup :meth:`amount_of` answers from.
+    amount_by_node: Mapping[int, Decimal]
+    missing_cost_rates: tuple[tuple[CostCategory, int], ...]
+    missing_inflation_years: tuple[int, ...]
+
+    def amount_of(self, project: domain.Project, facet: domain.CostFacet) -> Decimal:
+        """This engine, as the :data:`~waterfall.domain.revision.pricing.AmountResolver`
+        the pure domain has been taking since E14-02 (#328).
+
+        The single way the engine reaches the domain: ``pricing.default_amount``
+        describes itself as *not* being the engine, and the entry points that need
+        an amount -- the frozen lines of a validated revision, Rule 3's chiffrage
+        -loss warning -- all take a resolver rather than hardcoding one. Injecting
+        this method is therefore the whole hookup, and the reason
+        ``revision_store._load_roles`` still leaves ``Role.hourly_rate`` unset: a
+        rate is per year, an amount is per year *and* per bearing task, and filling
+        a single scalar on the role would be a second, weaker path to the same
+        number.
+
+        ``project`` is unread -- the amounts were resolved against the revision this
+        pricing was computed from, whose project is that one -- and is part of the
+        signature the protocol fixes.
+        """
+        return self.amount_by_node.get(facet.node_id, Decimal("0"))
+
+
+def _bearing_years(bearing_plan: domain.PlanFacet | None) -> list[int] | None:
+    """The years a labour facet's hours are spread over, or ``None`` when it prices
+    nothing at all.
+
+    Reproduces ``_generate_labor_lines``/``_single_year_labor_line`` case for case,
+    which is what the "same amounts as before the migration" criterion of #364 is
+    about:
+
+    * no bearing task (INV-01's project-wide global cost, the node model's answer to
+      the legacy ``EstimateRoleAssignment.task_id IS NULL`` of #289) -> the current
+      calendar year, one line, never dropped from a total;
+    * a bearing task with no ``start_at``/``finish_at`` -> ``None``: the legacy
+      engine returns an empty list for it, so the facet produces no line and
+      contributes nothing. Preserved rather than improved on purpose -- turning it
+      into a current-year line would change a total at the exact moment the engine
+      moves, which is what this issue must not do;
+    * a bearing task whose ``finish_at`` precedes its ``start_at`` -> ``None`` as
+      well, for the same reason a dateless one does: the range is empty, so there
+      is no year to spread the hours over. Nothing forbids that state today --
+      neither a ``CheckConstraint`` on ``wf_revision_plan_facet``, nor a validator
+      on the planning payloads, nor the MSPDI parser -- and **the engine is a
+      read: it must refuse no stored state**. Answering ``None`` is what keeps it
+      from dividing by ``len(years) == 0``, which would surface as a
+      :class:`decimal.DivisionByZero` (a 500, and no rollback) on every caller
+      that prices unconditionally, the import diff included. Forbidding the state
+      on the *write* side is a separate question, and not this issue's;
+    * a dated bearing task -> every year it touches, ends included.
+    """
+    if bearing_plan is None:
+        return [datetime.now(UTC).year]
+    if bearing_plan.start_at is None or bearing_plan.finish_at is None:
+        return None
+    years = list(range(bearing_plan.start_at.year, bearing_plan.finish_at.year + 1))
+    return years or None
+
+
+def _load_rate_table(
+    db: Session, category_years: list[tuple[CostCategory, int]]
+) -> tuple[dict[tuple[int, int], Decimal], dict[int, Decimal]]:
+    """The ``(category, year) -> hourly rate`` and ``year -> inflation`` tables, in
+    one query pair for the whole revision.
+
+    Both source tables are unique on exactly these keys
+    (``uq_wf_cost_rate_category_year``, ``InflationRate.year``), so reading them
+    into a dict selects the same row the legacy engine's per-line ``.first()``
+    picked -- there is only one.
+    """
+    if not category_years:
+        return {}, {}
+    category_ids = {category.id for category, _year in category_years}
+    years = {year for _category, year in category_years}
+    hourly_rates = {
+        (row.cost_category_id, row.year): row.hourly_rate
+        for row in db.query(CostRate)
+        .filter(CostRate.cost_category_id.in_(category_ids))
+        .filter(CostRate.year.in_(years))
+        .all()
+    }
+    inflation = {
+        row.year: row.coefficient
+        for row in db.query(InflationRate).filter(InflationRate.year.in_(years)).all()
+    }
+    return hourly_rates, inflation
+
+
+@dataclass(frozen=True)
+class _CostNode:
+    """A cost facet of the revision, with everything resolved that pricing needs."""
+
+    node: domain.RevisionNode
+    facet: domain.CostFacet
+    bearing: domain.RevisionNode | None
+    bearing_plan: domain.PlanFacet | None
+    role: ResourceRole | None
+    category: CostCategory | None
+    years: list[int] | None
+
+
+def _resolve_cost_nodes(db: Session, revision: domain.ProjectRevision) -> list[_CostNode]:
+    """Every cost node of ``revision``, in depth-first display order, with its bearing
+    task, its role, its cost category and the years it prices over.
+
+    Depth-first because that is the order the tree is read in everywhere else
+    (``revision_tree.read_revision_tree``); a set iteration order would make the
+    priced lines -- and therefore an export built off them -- shuffle between two
+    identical runs.
+    """
+    ordered = [node for node in domain.depth_first(revision) if node.id in revision.cost_facets]
+    facets = [revision.cost_facets[node.id] for node in ordered]
+
+    role_ids = {facet.role_id for facet in facets if facet.role_id is not None}
+    roles: dict[int, ResourceRole] = (
+        {row.id: row for row in db.query(ResourceRole).filter(ResourceRole.id.in_(role_ids)).all()}
+        if role_ids
+        else {}
+    )
+    category_ids = {role.cost_category_id for role in roles.values()}
+    category_ids.update(
+        facet.cost_category_id for facet in facets if facet.cost_category_id is not None
+    )
+    categories: dict[int, CostCategory] = (
+        {
+            row.id: row
+            for row in db.query(CostCategory).filter(CostCategory.id.in_(category_ids)).all()
+        }
+        if category_ids
+        else {}
+    )
+
+    resolved: list[_CostNode] = []
+    for node, facet in zip(ordered, facets, strict=True):
+        bearing = domain.resolve_bearing_task(revision, node.id)
+        bearing_plan = None if bearing is None else revision.plan_facets.get(bearing.id)
+        role = None if facet.role_id is None else roles.get(facet.role_id)
+        is_labor = facet.nature is domain.CostNature.LABOR
+        # INV-19: a labour line carries no cost category of its own, it inherits its
+        # role's -- the single source of truth the legacy engine already used for
+        # `accounting_code`, and the one the rate is looked up against.
+        category_id = (
+            role.cost_category_id if is_labor and role is not None else (facet.cost_category_id)
+        )
+        resolved.append(
+            _CostNode(
+                node=node,
+                facet=facet,
+                bearing=bearing,
+                bearing_plan=bearing_plan,
+                role=role,
+                category=None if category_id is None else categories.get(category_id),
+                years=_bearing_years(bearing_plan) if is_labor else None,
+            )
+        )
+    return resolved
+
+
+def _priced_lines_of(
+    cost_node: _CostNode,
+    hourly_rates: Mapping[tuple[int, int], Decimal],
+    inflation: Mapping[int, Decimal],
+) -> list[PricedLine]:
+    """The lines one cost facet produces, priced.
+
+    Arithmetic is the legacy engine's, digit for digit and in the same order:
+    ``quantity x (hours / number of years) x hourly_rate x inflation`` for labour,
+    ``quantity x unit_cost`` for the rest, every operand a :class:`Decimal` and no
+    rounding step anywhere -- the division is the only inexact operation and it
+    keeps the 28 significant digits of the default decimal context, exactly as
+    ``assignment.hours / Decimal(len(years))`` did.
+
+    On a **labour** line that makes the two engines equal digit for digit: they run
+    the same division, in the same order, and neither rounds it. On a
+    **disbursement** they cannot be, and the reason is not arithmetic at all -- the
+    legacy engine did not compute one, it read it back from a ``Numeric(16, 2)``
+    column, since ``EstimateCostLine.purchase_cost`` stores the product and not its
+    two operands. ``1.33 x 1.33`` is therefore ``1.77`` there and ``1.7689`` here,
+    which is the one place the two engines answer different *amounts*
+    (``tests/test_revision_pricing.py`` pins it, and pins that the two agree again
+    as soon as either is expressed in euros).
+
+    What no line of this function does is round, and that is deliberate twice over.
+    This is the object the pure domain takes as its
+    :data:`~waterfall.domain.revision.pricing.AmountResolver`, and
+    ``pricing.default_amount`` carries no rounding rule either; and a caller that
+    wants the product back could not recover it from an amount already rounded,
+    where the reverse is free. Turning an amount into a figure **in euros** is a
+    publication rule, it applies per line, and it is applied by
+    :func:`calculate_revision_aggregates` -- see there for why per line and not per
+    total.
+    """
+    facet = cost_node.facet
+    node = cost_node.node
+    category = cost_node.category
+    role = cost_node.role
+
+    def priced(
+        *,
+        year: int,
+        role_id: int | None,
+        role_name: str | None,
+        hours: Decimal,
+        hourly_rate: Decimal,
+        inflation_coefficient: Decimal,
+        amount: Decimal,
+    ) -> PricedLine:
+        return PricedLine(
+            node_id=node.id,
+            work_item_id=node.work_item_id,
+            label=facet.label,
+            nature=facet.nature,
+            bearing_node_id=None if cost_node.bearing is None else cost_node.bearing.id,
+            bearing_work_item_id=(
+                None if cost_node.bearing is None else cost_node.bearing.work_item_id
+            ),
+            bearing_task_name=(
+                None if cost_node.bearing_plan is None else cost_node.bearing_plan.name
+            ),
+            role_id=role_id,
+            role_name=role_name,
+            accounting_code="" if category is None else category.accounting_code,
+            category_code=None if category is None else category.category_code,
+            cost_code_id=facet.cost_code_id,
+            year=year,
+            quantity=facet.quantity,
+            hours=hours,
+            hourly_rate=hourly_rate,
+            inflation_coefficient=inflation_coefficient,
+            amount=amount,
+        )
+
+    if facet.nature is not domain.CostNature.LABOR:
+        unit_cost = facet.unit_cost if facet.unit_cost is not None else Decimal("0")
+        return [
+            priced(
+                # A disbursement is not spread over a bearing task's years -- the legacy
+                # engine snapshots it at the current year, and the facet's own forecast
+                # cash-out date is the better answer the node model makes available.
+                # Neither feeds the amount, which is year-independent.
+                year=(
+                    facet.planned_date.year
+                    if facet.planned_date is not None
+                    else datetime.now(UTC).year
+                ),
+                role_id=None,
+                role_name=None,
+                hours=Decimal("0"),
+                hourly_rate=Decimal("0"),
+                inflation_coefficient=Decimal("1"),
+                amount=facet.quantity * unit_cost,
+            )
+        ]
+
+    years = cost_node.years
+    if years is None:
+        return []
+    hours = facet.hours if facet.hours is not None else Decimal("0")
+    hours_per_year = hours / Decimal(len(years))
+    lines: list[PricedLine] = []
+    for year in years:
+        # Both fallbacks are the gap `RevisionPricing` reports rather than raises on:
+        # a zero rate and a neutral inflation are the legacy engine's own
+        # defensive-in-depth values, reached here on a read instead of being
+        # unreachable behind an upstream refusal.
+        hourly_rate = (
+            Decimal("0")
+            if category is None
+            else hourly_rates.get((category.id, year), Decimal("0"))
+        )
+        inflation_coefficient = inflation.get(year, Decimal("1"))
+        lines.append(
+            priced(
+                year=year,
+                role_id=facet.role_id,
+                role_name=None if role is None else role.name,
+                hours=hours_per_year,
+                hourly_rate=hourly_rate,
+                inflation_coefficient=inflation_coefficient,
+                amount=facet.quantity * hours_per_year * hourly_rate * inflation_coefficient,
+            )
+        )
+    return lines
+
+
+@track_duration(ESTIMATE_CALCULATION_DURATION)
+def price_loaded_revision(db: Session, loaded: LoadedRevision) -> RevisionPricing:
+    """Price every cost facet of an already-loaded revision.
+
+    The entry point for a caller that has just loaded the revision for another
+    reason -- the MS Project import, which needs the amounts to tell the user what a
+    removal would destroy -- so that one load serves both. :func:`price_revision`
+    is the same thing for a caller holding only an id.
+    """
+    revision = loaded.revision
+    cost_nodes = _resolve_cost_nodes(db, revision)
+
+    category_years = [
+        (cost_node.category, year)
+        for cost_node in cost_nodes
+        if cost_node.category is not None and cost_node.years is not None
+        for year in cost_node.years
+    ]
+    hourly_rates, inflation = _load_rate_table(db, category_years)
+    missing_cost_rates, missing_inflation_years = _missing_coverage(
+        category_years, hourly_rates.keys(), inflation.keys()
+    )
+
+    lines: list[PricedLine] = []
+    amount_by_node: dict[int, Decimal] = {}
+    for cost_node in cost_nodes:
+        node_lines = _priced_lines_of(cost_node, hourly_rates, inflation)
+        lines.extend(node_lines)
+        amount_by_node[cost_node.node.id] = sum((line.amount for line in node_lines), Decimal("0"))
+
+    return RevisionPricing(
+        revision_id=revision.id,
+        lines=tuple(lines),
+        amount_by_node=amount_by_node,
+        missing_cost_rates=tuple(missing_cost_rates),
+        missing_inflation_years=tuple(missing_inflation_years),
+    )
+
+
+def price_revision(db: Session, revision_id: int) -> RevisionPricing:
+    """Price every cost facet of ``revision_id``.
+
+    Raises :class:`~waterfall.services.revision_store.RevisionNotFoundError` for an
+    unknown revision, like every other revision service: the load is what decides,
+    and a caller behind :func:`waterfall.api.revision_errors.revision_operation`
+    gets the same ``REVISION_NOT_FOUND`` as anywhere else.
+    """
+    return price_loaded_revision(db, load_revision(db, revision_id))
+
+
+#: A euro amount, at the cent: the unit of every figure this module *publishes*,
+#: and the precision the ``Numeric(16, 2)`` columns of the legacy socle carried
+#: before #364 took them off the read path. See
+#: :func:`calculate_revision_aggregates` for why the rounding happens per priced
+#: line rather than per total.
+CENTS = Decimal("0.01")
+
+
+def amount_at_the_cent(amount: Decimal) -> Decimal:
+    """One amount in euros, at the cent, ``ROUND_HALF_UP`` -- the rounding the
+    ``Numeric(16, 2)`` column applied. See :data:`CENTS`.
+
+    Public because it is *the* publication rule and there must be one: the two
+    routes that quote a ``CostLoss`` (the import diff, and the node deletion) still
+    publish :attr:`RevisionPricing.amount_by_node` raw, and #368 is where they are
+    put on this same rule -- per line, then summed, so that a loss and a total of
+    losses stay additive exactly as the five figures below do.
+    """
+    return amount.quantize(CENTS, rounding=ROUND_HALF_UP)
+
+
+class RevisionAggregates(TypedDict):
+    """Totals of a revision, the node-model counterpart of :class:`EstimateAggregates`.
+
+    Same five figures, computed from the cost facets of a **draft** as readily as
+    from a validated revision, where the legacy ones could only ever be summed from
+    the ``EstimateLine`` rows a validation had already written -- a devis in
+    progress had no total at all. Every amount is in euros at the cent
+    (:data:`CENTS`), unlike :class:`PricedLine`'s.
+    """
+
+    total_labor_cost: Decimal
+    total_purchase_cost: Decimal
+    total_unburdened_cost: Decimal
+    by_category: dict[str, Decimal]
+    by_cost_code: dict[str, Decimal]
+    missing_cost_rates: list[tuple[CostCategory, int]]
+    missing_inflation_years: list[int]
+
+
+@track_duration(ESTIMATE_CALCULATION_DURATION)
+def calculate_revision_aggregates(db: Session, revision_id: int) -> RevisionAggregates:
+    """Aggregate the priced lines of a revision by nature, accounting code and cost code.
+
+    Splits labour from the rest on :class:`~waterfall.domain.revision.CostNature`
+    rather than on "does the line carry a role", which is what the legacy aggregate
+    had to infer it from: the node model states the nature on the facet, and INV-19
+    /INV-20 make it exclusive.
+
+    A cost facet sitting at the **root** of the tree -- no bearing task, INV-01's
+    project-wide global cost -- is counted like any other: it has a node, so it has
+    a facet, so it has an amount. Nothing here filters on a bearing task.
+
+    Every figure returned is in **euros at the cent**, and gets there the way the
+    socle this replaces got there: each priced line is rounded on its own
+    (:func:`amount_at_the_cent`), and the rounded amounts are what is added up. A
+    legacy total was never a rounded sum -- it was a sum of amounts that had each
+    been through a ``Numeric(16, 2)`` column (``EstimateLine.budget_cost``,
+    ``EstimateCostLine.purchase_cost``) before ``calculate_estimate_aggregates``
+    added anything. Summing the products at full precision and rounding the total
+    instead would answer ``1000.00`` where the endpoint this replaces answers
+    ``999.99`` -- ten hours split over three years at a flat rate, three residues of
+    a third of a cent the column dropped one by one -- and "les mêmes montants
+    qu'avant la migration" is the acceptance criterion of #364.
+
+    Rounding per line is also the only one of the two rules that is **additive**,
+    which matters because these five figures are five partitions of the same set of
+    lines and a client reads three of them side by side: with an hourly rate at four
+    decimals -- ``CostRate.hourly_rate`` is a ``Numeric(14, 4)`` precisely to allow
+    it -- rounding each total on its own publishes ``MO 100.00`` and ``Achats 0.00``
+    under a ``Total 100.01``. A sum of amounts already at the cent is additive over
+    any partition, by construction, so ``total_labor_cost + total_purchase_cost``,
+    ``sum(by_category.values())`` and ``sum(by_cost_code.values())`` all equal
+    ``total_unburdened_cost``.
+
+    The engine itself keeps every digit -- :attr:`PricedLine.amount` and
+    :attr:`RevisionPricing.amount_by_node` are the raw products, because that object
+    is also the resolver the pure domain calls (see :func:`_priced_lines_of`).
+    Publication starts here and not before.
+    """
+    pricing = price_revision(db, revision_id)
+    cost_code_ids = {line.cost_code_id for line in pricing.lines if line.cost_code_id is not None}
+    cost_code_labels = _resolve_cost_code_labels(db, cost_code_ids)
+
+    aggregates: RevisionAggregates = {
+        "total_labor_cost": Decimal("0"),
+        "total_purchase_cost": Decimal("0"),
+        "total_unburdened_cost": Decimal("0"),
+        "by_category": {},
+        "by_cost_code": {},
+        "missing_cost_rates": list(pricing.missing_cost_rates),
+        "missing_inflation_years": list(pricing.missing_inflation_years),
+    }
+    for line in pricing.lines:
+        # The publication rule, applied once per line and before anything is added
+        # up: every partition below therefore sums the same rounded amounts, and
+        # stays additive against the total. See this function's docstring.
+        amount = amount_at_the_cent(line.amount)
+        if line.nature is domain.CostNature.LABOR:
+            aggregates["total_labor_cost"] += amount
+        else:
+            aggregates["total_purchase_cost"] += amount
+        aggregates["total_unburdened_cost"] += amount
+        by_category = aggregates["by_category"]
+        by_category[line.accounting_code] = (
+            by_category.get(line.accounting_code, Decimal("0")) + amount
+        )
+        label = (
+            cost_code_labels.get(line.cost_code_id, UNASSIGNED_COST_CODE_LABEL)
+            if line.cost_code_id is not None
+            else UNASSIGNED_COST_CODE_LABEL
+        )
+        by_cost_code = aggregates["by_cost_code"]
+        by_cost_code[label] = by_cost_code.get(label, Decimal("0")) + amount
+    return aggregates
+
+
+# --------------------------------------------------------------------------------------
+# The legacy engine, on `ms_task`/`EstimateCostLine`/`EstimateRoleAssignment`
+#
+# Alive until E14-12 (#339) removes it with the tables it reads. Still wired to
+# `POST .../estimates/{id}/validate`, and the reference the engine above is compared
+# against -- see this module's docstring.
+# --------------------------------------------------------------------------------------
 
 
 @track_duration(ESTIMATE_CALCULATION_DURATION)

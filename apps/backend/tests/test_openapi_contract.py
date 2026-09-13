@@ -264,6 +264,10 @@ def test_static_openapi_matches_runtime_operation_ids_and_components() -> None:
         "RevisionCostFacetRead",
         "RevisionCostLineCreate",
         "RevisionCostFacetUpdate",
+        # E14-07b (#364): the totals of the same revision, computed from those facets
+        # in place of the frozen `wf_estimate_line` rows the devis aggregate summed.
+        "RevisionAggregatesRead",
+        "RevisionMissingRateRead",
     ):
         assert schema_name in runtime_components
         assert schema_name in static_components
@@ -427,7 +431,8 @@ def test_revision_endpoints_document_their_structured_error_responses() -> None:
     endpoints it replaces documented -- a TS client could not type ``error.detail``
     off that one. Pinned here on every operation at once -- six when #331 wrote this,
     eight since #333 added the cost facet's own creation and edition, which reuse the
-    INV-03 code verbatim rather than restating one.
+    INV-03 code verbatim rather than restating one, and nine since #364 rebranched the
+    aggregates onto the revision.
     """
     raw_document: object = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
     static_document = cast(dict[str, Any], raw_document)
@@ -435,7 +440,7 @@ def test_revision_endpoints_document_their_structured_error_responses() -> None:
     static_components = cast(dict[str, Any], static_document["components"])
 
     revision_paths = [path for path in static_paths if "/revisions/" in path]
-    assert len(revision_paths) == 8
+    assert len(revision_paths) == 9
     for path in revision_paths:
         for method, operation in cast(dict[str, Any], static_paths[path]).items():
             if method not in {"get", "post", "put", "patch", "delete"}:

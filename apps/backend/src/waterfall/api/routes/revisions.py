@@ -61,10 +61,12 @@ from waterfall.models.ms_core import MsProject
 from waterfall.models.revision import ProjectRevision
 from waterfall.models.user import User
 from waterfall.schemas.revisions import (
+    RevisionAggregatesRead,
     RevisionCostFacetRead,
     RevisionCostFacetUpdate,
     RevisionCostLineCreate,
     RevisionCostLossRead,
+    RevisionMissingRateRead,
     RevisionNodeDelete,
     RevisionNodeDeleteRead,
     RevisionNodeMove,
@@ -79,6 +81,7 @@ from waterfall.schemas.revisions import (
     RevisionWriteRead,
 )
 from waterfall.services import revision_tree
+from waterfall.services.estimate_calculation import calculate_revision_aggregates
 from waterfall.services.project_lifecycle import READ_ONLY_PROJECT_STATUSES
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -258,6 +261,60 @@ def read_revision_nodes(
     with revision_operation(db):
         tree = revision_tree.read_revision_tree(db, revision_id)
     return _to_tree_read(tree)
+
+
+@router.get(
+    "/{project_id}/revisions/{revision_id}/aggregates",
+    response_model=RevisionAggregatesRead,
+)
+def read_revision_aggregates(
+    project_id: int,
+    revision_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> RevisionAggregatesRead:
+    """The totals of a revision, computed from its cost facets (E14-07b, #364).
+
+    Replaces ``GET .../estimates/{estimate_id}/aggregates``, which summed the frozen
+    ``wf_estimate_line`` rows a validation had written and therefore reported
+    nothing at all for a devis still being built. The engine prices the facets
+    themselves, so a **draft** has totals -- which is the state the figure is
+    actually consulted in.
+
+    A missing ``CostRate``/``InflationRate`` is reported in the body and never
+    raised: this is a read, and a 500 would make an editable draft unreadable. See
+    :class:`~waterfall.schemas.revisions.RevisionMissingRateRead`.
+
+    Every amount is already in euros at the cent when it gets here: the rounding is
+    :func:`~waterfall.services.estimate_calculation.calculate_revision_aggregates`'s,
+    applied per priced line before anything is summed, because that -- and not a
+    rounding of the five totals at this boundary -- is what the ``Numeric(16, 2)``
+    columns of the endpoint this replaces did, and what keeps
+    ``total_labor_cost + total_purchase_cost`` equal to ``total_unburdened_cost``.
+    So this handler re-publishes the five figures and rounds nothing.
+    """
+    _readable_project(db, project_id, current_user.id)
+    _get_revision_or_404(db, project_id, revision_id)
+    with revision_operation(db):
+        aggregates = calculate_revision_aggregates(db, revision_id)
+    return RevisionAggregatesRead(
+        revision_id=revision_id,
+        total_labor_cost=aggregates["total_labor_cost"],
+        total_purchase_cost=aggregates["total_purchase_cost"],
+        total_unburdened_cost=aggregates["total_unburdened_cost"],
+        by_category=dict(aggregates["by_category"]),
+        by_cost_code=dict(aggregates["by_cost_code"]),
+        missing_cost_rates=[
+            RevisionMissingRateRead(
+                category_id=category.id,
+                category_name=category.name,
+                accounting_code=category.accounting_code,
+                year=year,
+            )
+            for category, year in aggregates["missing_cost_rates"]
+        ],
+        missing_inflation_years=list(aggregates["missing_inflation_years"]),
+    )
 
 
 @router.post(

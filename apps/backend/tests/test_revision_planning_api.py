@@ -1670,15 +1670,16 @@ def test_every_revision_operation_documents_the_422_it_can_answer() -> None:
     """M6: 422 was reachable on all of them and named nowhere in the contract.
 
     Six operations when #331 wrote this, eight since #333 added the cost facet's own
-    creation and edition -- the count is asserted so that an operation added without a
-    documented 422 fails here rather than silently widening the exception.
+    creation and edition, nine since #364 rebranched the aggregates onto the revision --
+    the count is asserted so that an operation added without a documented 422 fails here
+    rather than silently widening the exception.
     """
     raw_document: object = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
     document = cast(dict[str, Any], raw_document)
     paths = cast(dict[str, Any], document["paths"])
 
     revision_paths = [path for path in paths if "/revisions/" in path]
-    assert len(revision_paths) == 8
+    assert len(revision_paths) == 9
     for path in revision_paths:
         for method, operation in cast(dict[str, Any], paths[path]).items():
             if method not in {"get", "post", "put", "patch", "delete"}:

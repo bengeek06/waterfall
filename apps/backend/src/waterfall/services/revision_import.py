@@ -77,6 +77,7 @@ from sqlalchemy.orm import Session
 
 from waterfall.domain import revision as domain
 from waterfall.models import revision as tables
+from waterfall.services.estimate_calculation import price_loaded_revision
 from waterfall.services.msproject_xml import ParsedProject, outline_parent_uids
 from waterfall.services.revision_store import (
     LoadedRevision,
@@ -276,12 +277,24 @@ def plan_import(db: Session, project_id: int, parsed: ParsedProject) -> domain.I
     the run is about to be refused. The structural refusals of Rule 3 c do fire
     here, which is the point -- an inapplicable file is named before the user
     confirms it rather than after.
+
+    The calculation engine is injected as the diff's
+    :data:`~waterfall.domain.revision.pricing.AmountResolver` (E14-07b, #364), off
+    the revision this call already loaded rather than a second load of it: the
+    chiffrage Rule 3 announces as lost is priced at annual rate and inflation, like
+    everywhere else, instead of ``default_amount``'s naive fallback -- which priced
+    every MO line at ``0``, the store leaving ``Role.hourly_rate`` unset on purpose.
     """
     revision_id = latest_revision_id(db, project_id)
     if revision_id is None:
         return None
     loaded = load_revision(db, revision_id)
-    return domain.plan_reimport(loaded.project, loaded.revision, imported_tasks(parsed))
+    return domain.plan_reimport(
+        loaded.project,
+        loaded.revision,
+        imported_tasks(parsed),
+        amount_of=price_loaded_revision(db, loaded).amount_of,
+    )
 
 
 def _fingerprint(project: domain.Project, revision: domain.ProjectRevision) -> str:
@@ -345,7 +358,14 @@ def apply_import(db: Session, project_id: int, parsed: ParsedProject) -> Revisio
     before = None if target.created else _fingerprint(project, revision)
     lock_version = revision.lock_version
 
-    diff = domain.apply_reimport(project, revision, imported_tasks(parsed), now=_now())
+    # Priced *before* the first mutation, and from the very revision that is about
+    # to be mutated: the amounts Rule 3's safeguard reports are the ones the nodes
+    # carried when the user was shown the diff, not what is left of them afterwards.
+    amount_of = price_loaded_revision(db, target.loaded).amount_of
+
+    diff = domain.apply_reimport(
+        project, revision, imported_tasks(parsed), now=_now(), amount_of=amount_of
+    )
     domain.replace_links(revision, _imported_links(project, revision, parsed))
 
     task_count = len(revision.plan_facets)

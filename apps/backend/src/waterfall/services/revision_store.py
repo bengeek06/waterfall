@@ -263,9 +263,14 @@ def _load_work_items(db: Session, project: domain.Project) -> None:
 def _load_roles(db: Session, project: domain.Project) -> None:
     """Roles and cost categories, reduced to what the tree domain reads of them.
 
-    ``hourly_rate`` is left unset on purpose: a rate is per year (`wf_cost_rate`)
-    and belongs to the pricing engine, not to the tree. The domain only reads a
-    role's calendar (Règle 1) and its labels.
+    ``hourly_rate`` is left unset on purpose, and **still is after E14-07b (#364)
+    plugged the engine in**: a rate is per year (`wf_cost_rate`) and an amount is
+    per year *and* per bearing task, so no single scalar on the role can hold it.
+    The engine reaches the domain the way the domain asked to be reached -- as the
+    injected :data:`~waterfall.domain.revision.pricing.AmountResolver`, see
+    :meth:`waterfall.services.estimate_calculation.RevisionPricing.amount_of` --
+    rather than through a second, weaker path filled in here. The domain itself
+    only reads a role's calendar (Règle 1) and its labels.
     """
     categories = {row.id: row for row in db.query(CostCategory).all()}
     for row in db.query(ResourceRole).order_by(ResourceRole.id).all():

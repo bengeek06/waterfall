@@ -1,0 +1,21 @@
+type: object
+required:
+- category_id
+- category_name
+- accounting_code
+- year
+properties:
+  category_id:
+    type: integer
+  category_name:
+    type: string
+  accounting_code:
+    type: string
+  year:
+    type: integer
+description: >-
+  Une combinaison (categorie de cout, annee) que la table des taux ne couvre pas.
+  Memes quatre champs que `MissingRateCoverageEntry`, que le devis historique
+  renvoie dans un `detail` 400 ; ici elle fait partie d'une reponse 200 : lire les
+  totaux d'un brouillon dont le taux 2031 n'a pas encore ete saisi doit repondre,
+  donc la ligne est valorisee a taux nul et le manque est nomme a cote.

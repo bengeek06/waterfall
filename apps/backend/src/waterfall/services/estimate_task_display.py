@@ -1,5 +1,26 @@
 """Live resolution of an `EstimateTaskRow`'s task-derived display fields (E12-08, #290).
 
+**Superseded in substance by the revision model, and kept for its live callers.**
+E12-08 existed because the devis held a *second* description of the planning tree
+and had to catch up with the first one on every read. On the node model there is
+one tree: a cost facet and a planning facet hang off the same
+``wf_revision_node``, the bearing task is resolved by walking that tree (INV-01)
+and ``row_number``/``level`` are computed on read and stored nowhere, so renaming
+or moving a task is visible to the chiffrage with nothing to re-resolve. E14-07b
+(#364) therefore did **not** rewrite this module onto the revision: there is
+nothing left here to port.
+
+What it still serves, until #365 and E14-12 (#339) take them away, is the legacy
+devis readers -- ``services/estimate_reconciliation_export.py`` (the
+reconciliation export, whose issue is #365), ``to_estimate_task_row_read``
+(``api/routes/projects.py``) and the test helpers #333 deliberately moved onto
+these functions so that #365's proof would not be lost with the routes it removed.
+Nothing below is dead, and that was checked symbol by symbol rather than assumed:
+``resolve_live_task_display`` and ``resolve_effective_task_uid`` are called from
+``src/``, ``resolve_task_uid_by_id`` only from ``tests/`` -- which is *not* an
+argument for removing it, that test being the proof #333 deliberately moved here
+so it would survive the routes it deleted.
+
 Historically, `EstimateTaskRow.task_name`/`outline_number`/`outline_level`/
 `parent_task_id`/`position` were written once, at estimate-creation time
 (`create_project_estimate`, `api/routes/estimates.py`), and never touched
