@@ -10,6 +10,14 @@ export type BulkCostCodeAssignmentBarProps = {
   bulkCostCodeId: string;
   onBulkCostCodeIdChange: (value: string) => void;
   bulkAssignBusy: boolean;
+  /**
+   * Any other write in flight on the same revision (E14-11/#337).
+   *
+   * The assignment goes through the revision's single optimistic-lock counter, and the hook that
+   * owns it refuses to start a second write while one is running: left out, the button stayed
+   * clickable and the click was a no-op with nothing said. A command that cannot act says so.
+   */
+  mutationBusy: boolean;
   onAssign: () => void;
 };
 
@@ -24,6 +32,7 @@ export function BulkCostCodeAssignmentBar({
   bulkCostCodeId,
   onBulkCostCodeIdChange,
   bulkAssignBusy,
+  mutationBusy,
   onAssign,
 }: BulkCostCodeAssignmentBarProps) {
   if (selectedCount === 0) {
@@ -51,7 +60,12 @@ export function BulkCostCodeAssignmentBar({
           ))}
         </select>
       </div>
-      <Button type="button" disabled={bulkAssignBusy || !bulkCostCodeId} onClick={onAssign}>
+      <Button
+        type="button"
+        disabled={bulkAssignBusy || mutationBusy || !bulkCostCodeId}
+        title={mutationBusy && !bulkAssignBusy ? "Une autre écriture est en cours sur cette révision." : undefined}
+        onClick={onAssign}
+      >
         Affecter
       </Button>
     </div>

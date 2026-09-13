@@ -6,10 +6,7 @@ import type { ChangeEvent } from "react";
 
 import { AnalyticsTab } from "@/components/analytics-tab";
 import { CommitmentsTabPlaceholder } from "@/components/commitments-tab-placeholder";
-import { CostLineDeleteDialog } from "@/components/cost-line-delete-dialog";
-import { EstimateRoleAssignmentDeleteDialog } from "@/components/estimate-role-assignment-delete-dialog";
 import { EstimateTab } from "@/components/estimate-tab";
-import { EstimateValidationDialog } from "@/components/estimate-validation-dialog";
 import { PlanningTab } from "@/components/planning-tab";
 import type { PlanningImportTarget } from "@/components/planning-import-panel";
 import { ProjectHeaderCard } from "@/components/project-header-card";
@@ -22,29 +19,28 @@ import {
   CostRate,
   createImportBatch,
   EstimateAggregates,
-  EstimateCostLine,
-  EstimateRoleAssignment,
-  EstimateTaskRow,
   exportProjectXml,
+  exportRevisionExcel,
   getCostCategories,
   getCostRates,
   getCostTypes,
   getEstimateAggregates,
   getImportBatchDiff,
   getProject,
+  getProjectCostCodes,
   getResourceNodes,
   getResourceRoles,
+  getRevisionAggregates,
   listPlannings,
-  listEstimateCostLines,
-  listEstimateRoleAssignments,
-  listEstimateTaskRows,
   listProjectEstimates,
   Project,
   Planning,
   PlanningDetail,
+  ProjectCostCode,
   ProjectEstimate,
   ResourceNode,
   ResourceRole,
+  RevisionAggregates,
   runImportBatch,
   SessionExpiredError,
   type ImportDiff,
@@ -57,7 +53,6 @@ import { usePlanningDetailEffect } from "@/hooks/use-planning-detail";
 import { usePlanningImport } from "@/hooks/use-planning-import";
 import { usePlanningStructureEditor } from "@/hooks/use-planning-structure-editor";
 import { useRevisionPlanning } from "@/hooks/use-revision-planning";
-import { useEstimateCostLines } from "@/hooks/use-estimate-cost-lines";
 import { useProjectInfoEditor } from "@/hooks/use-project-info-editor";
 
 function describeInitialProjectLoadError(cause: unknown): string {
@@ -74,10 +69,6 @@ function describeInitialProjectLoadError(cause: unknown): string {
 // guard duplicated across every mutation handler previously inlined in this component.
 function isProjectReadOnly(project: Project | null): boolean {
   return project?.status === "perdu" || project?.status === "termine" || project?.status === "abandonne";
-}
-
-function canEditSelectedEstimate(estimate: ProjectEstimate | null, isReadOnlyProject: boolean): boolean {
-  return estimate?.status === "draft" && !isReadOnlyProject;
 }
 
 function didInitialLoadFail(busy: boolean, project: Project | null, error: string | null): boolean {
@@ -101,10 +92,11 @@ export default function ProjectDetailsPage() {
     selectedPlanningIdRef.current = next;
     setSelectedPlanningId(next);
   }
-  const [planningDetail, setPlanningDetail] = useState<PlanningDetail | null>(null);
-  // Write-only: nothing renders a busy state for the legacy planning detail any more. The detail
-  // itself is still loaded, for the Devis tab's parent-task selector and its post-create refresh,
-  // until E14-11 (#337) moves that side onto the revision too.
+  // Write-only, both of them: since E14-11 (#337) no screen reads the legacy planning detail any
+  // more -- the Devis tab took its parent-task selector onto the revision, which was its last
+  // reader. The read itself survives because the structure editor and the import still feed it;
+  // E14-12 (#339) is what removes the old socle, this file only stopped displaying it.
+  const [, setPlanningDetail] = useState<PlanningDetail | null>(null);
   const [, setPlanningDetailBusy] = useState(false);
   const [structureOpen, setStructureOpen] = useState(false);
   const [planningExportBusy, setPlanningExportBusy] = useState(false);
@@ -120,10 +112,11 @@ export default function ProjectDetailsPage() {
   // import always writes into the latest one by version number -- so the screen has to say which
   // one it was, and whether it had to be created (#332).
   const [importTarget, setImportTarget] = useState<PlanningImportTarget | null>(null);
-  const [estimates, setEstimates] = useState<ProjectEstimate[]>([]);
+  // Write-only as well, and for the same reason: the Devis tab is the revision's since #337, so
+  // the only thing left reading anything about an "estimate" is the Analytique tab, through
+  // `selectedEstimateId` below. The list itself is still read to know which one that is.
+  const [, setEstimates] = useState<ProjectEstimate[]>([]);
   const [selectedEstimateId, setSelectedEstimateId] = useState<number | null>(null);
-  const [estimateTaskRows, setEstimateTaskRows] = useState<EstimateTaskRow[]>([]);
-  const [costLines, setCostLines] = useState<EstimateCostLine[]>([]);
   const [costCategories, setCostCategories] = useState<CostCategory[]>([]);
   // E12-05/#277: the full (including inactive) cost-category referential -- distinct from
   // `costCategories` above (active-only, feeds CostLineForm's create-line `<select>`) -- used to
@@ -138,8 +131,14 @@ export default function ProjectDetailsPage() {
   const [resourceNodes, setResourceNodes] = useState<ResourceNode[]>([]);
   const [resourceRoles, setResourceRoles] = useState<ResourceRole[]>([]);
   const [costRates, setCostRates] = useState<CostRate[]>([]);
-  const [estimateRoleAssignments, setEstimateRoleAssignments] = useState<EstimateRoleAssignment[]>([]);
   const [aggregates, setAggregates] = useState<EstimateAggregates | null>(null);
+  // E14-11 (#337): the Devis tab's own referential and figures, on the revision model.
+  const [projectCostCodes, setProjectCostCodes] = useState<ProjectCostCode[]>([]);
+  const [bulkCostCodeId, setBulkCostCodeId] = useState("");
+  const [bulkAssignBusy, setBulkAssignBusy] = useState(false);
+  const [revisionAggregates, setRevisionAggregates] = useState<RevisionAggregates | null>(null);
+  const [revisionAggregatesBusy, setRevisionAggregatesBusy] = useState(false);
+  const [estimateExportBusy, setEstimateExportBusy] = useState(false);
   const [activeTab, setActiveTab] = useState<ProjectTab>("planning");
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -245,48 +244,6 @@ export default function ProjectDetailsPage() {
   });
 
   useEffect(() => {
-    let cancelled = false;
-
-    async function loadEstimateDetails() {
-      if (!session || selectedEstimateId === null) {
-        setEstimateTaskRows([]);
-        setCostLines([]);
-        setEstimateRoleAssignments([]);
-        return;
-      }
-      try {
-        // E12-06/#278: role assignments are refetched here alongside task rows/cost lines, on
-        // the exact same "reload whenever the selected estimate version changes" model.
-        const [taskRows, lines, roleAssignments] = await Promise.all([
-          listEstimateTaskRows(projectId, selectedEstimateId, session, onSessionRefresh),
-          listEstimateCostLines(projectId, selectedEstimateId, session, onSessionRefresh),
-          listEstimateRoleAssignments(projectId, selectedEstimateId, session, onSessionRefresh),
-        ]);
-        if (!cancelled) {
-          setEstimateTaskRows(taskRows);
-          setCostLines(lines);
-          setEstimateRoleAssignments(roleAssignments);
-        }
-      } catch (cause) {
-        if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
-          clearSession();
-          router.push("/login");
-          return;
-        }
-        if (cancelled) {
-          return;
-        }
-        setError(cause instanceof ApiError ? cause.message : "Impossible de charger le devis.");
-      }
-    }
-
-    void loadEstimateDetails();
-    return () => {
-      cancelled = true;
-    };
-  }, [onSessionRefresh, projectId, router, selectedEstimateId, session]);
-
-  useEffect(() => {
     async function loadCostCategories() {
       if (!session) {
         return;
@@ -347,6 +304,30 @@ export default function ProjectDetailsPage() {
     void loadRoleAssignmentReferentials();
   }, [onSessionRefresh, session]);
 
+  // The project's cost codes (E6-01/E6-02), for the Devis grid's bulk assignment bar. Loaded once
+  // per project, alongside the other referentials and on the same non-blocking convention: without
+  // them the bar simply offers nothing to assign.
+  useEffect(() => {
+    let cancelled = false;
+    async function loadProjectCostCodes() {
+      if (!session || Number.isNaN(projectId)) {
+        return;
+      }
+      try {
+        const codes = await getProjectCostCodes(projectId, session, onSessionRefresh);
+        if (!cancelled) {
+          setProjectCostCodes(codes);
+        }
+      } catch {
+        // Non-blocking, like the referentials above.
+      }
+    }
+    void loadProjectCostCodes();
+    return () => {
+      cancelled = true;
+    };
+  }, [onSessionRefresh, projectId, session]);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -378,9 +359,7 @@ export default function ProjectDetailsPage() {
     };
   }, [activeTab, onSessionRefresh, projectId, router, selectedEstimateId, session]);
 
-  const selectedEstimate = estimates.find((estimate) => estimate.id === selectedEstimateId) ?? null;
   const isReadOnlyProject = isProjectReadOnly(project);
-  const canEditEstimate = canEditSelectedEstimate(selectedEstimate, isReadOnlyProject);
   const initialLoadFailed = didInitialLoadFail(busy, project, error);
 
   const projectInfoEditor = useProjectInfoEditor({
@@ -401,26 +380,105 @@ export default function ProjectDetailsPage() {
     setError,
   });
 
-  const estimateCostLines = useEstimateCostLines({
-    session,
-    project,
-    projectId,
-    selectedEstimateId,
-    estimates,
-    setEstimates,
-    setSelectedEstimateId,
-    setActiveTab,
-    setCostLines,
-    setEstimateTaskRows,
-    selectedPlanningId,
-    selectedPlanningIdRef,
-    setPlanningDetail,
-    setEstimateRoleAssignments,
-    resourceNodes,
-    onSessionRefresh,
-    router,
-    setError,
-  });
+  // The displayed revision's totals, re-read whenever the revision changes **or** its optimistic
+  // lock counter advances -- that is, after every write. It is what makes the effect of an edit on
+  // the total visible without a reload, including the one criterion 5 of #337 asks for: a cost line
+  // outdented all the way to the root bears no task and is counted all the same.
+  //
+  // Only while the Devis tab is the one on screen: no other tab shows these figures, and a request
+  // per write from the Planning tab would be paid for nothing.
+  const revisionLockVersion = revisionPlanning.tree?.lock_version ?? null;
+  const displayedRevisionId = revisionPlanning.selectedRevisionId;
+  // Which revision the figures currently on screen belong to, so a *change of revision* can be
+  // told apart from a counter that merely advanced on the one already displayed.
+  const aggregatesRevisionIdRef = useRef<number | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    async function loadRevisionAggregates() {
+      if (!session || displayedRevisionId === null || activeTab !== "estimate") {
+        return;
+      }
+      if (aggregatesRevisionIdRef.current !== displayedRevisionId) {
+        // Another revision's totals are on screen: dropped before the read rather than after it,
+        // because the tree can come back first and would then be shown under the previous
+        // revision's figures. On a mere `lock_version` bump the old value is deliberately kept --
+        // it is the same revision, a cent out of date for the length of one request, and blanking
+        // the cards after every edit would be a flicker rather than a correction.
+        aggregatesRevisionIdRef.current = displayedRevisionId;
+        setRevisionAggregates(null);
+      }
+      setRevisionAggregatesBusy(true);
+      try {
+        const data = await getRevisionAggregates(projectId, displayedRevisionId, session, onSessionRefresh);
+        if (!cancelled) {
+          setRevisionAggregates(data);
+        }
+      } catch (cause) {
+        if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
+          clearSession();
+          router.push("/login");
+          return;
+        }
+        if (!cancelled) {
+          // The totals are a *reading* over an editable tree: a failure here must not take the
+          // grid down with it, so it clears the figures (which then show "—") instead of raising
+          // a blocking banner over a devis that is perfectly editable.
+          setRevisionAggregates(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setRevisionAggregatesBusy(false);
+        }
+      }
+    }
+    void loadRevisionAggregates();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, displayedRevisionId, onSessionRefresh, projectId, revisionLockVersion, router, session]);
+
+  async function exportEstimateWorkbook() {
+    if (!session || !project || displayedRevisionId === null) {
+      return;
+    }
+    setEstimateExportBusy(true);
+    setError(null);
+    try {
+      const blob = await exportRevisionExcel(projectId, displayedRevisionId, session, onSessionRefresh);
+      const objectUrl = window.URL.createObjectURL(blob);
+      const anchorElement = document.createElement("a");
+      anchorElement.href = objectUrl;
+      anchorElement.download = `${project.name || `project-${projectId}`}-devis.xlsx`;
+      document.body.appendChild(anchorElement);
+      anchorElement.click();
+      anchorElement.remove();
+      window.URL.revokeObjectURL(objectUrl);
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError || (cause instanceof ApiError && cause.status === 401)) {
+        clearSession();
+        router.push("/login");
+        return;
+      }
+      setError(cause instanceof ApiError ? cause.message : "Impossible d'exporter le devis.");
+    } finally {
+      setEstimateExportBusy(false);
+    }
+  }
+
+  async function assignBulkCostCode(nodeIds: number[]) {
+    const costCodeId = Number(bulkCostCodeId);
+    if (!nodeIds.length || !costCodeId) {
+      return;
+    }
+    setBulkAssignBusy(true);
+    try {
+      if (await revisionPlanning.assignCostCode(nodeIds, costCodeId)) {
+        setBulkCostCodeId("");
+      }
+    } finally {
+      setBulkAssignBusy(false);
+    }
+  }
 
   async function exportPlanningXml() {
     if (!session || !project) {
@@ -691,111 +749,50 @@ export default function ProjectDetailsPage() {
 
         <EstimateTab
           active={activeTab === "estimate"}
-          estimates={estimates}
-          selectedEstimateId={selectedEstimateId}
-          onSelectEstimate={setSelectedEstimateId}
+          revisions={revisionPlanning.revisions}
+          selectedRevision={revisionPlanning.selectedRevision}
+          selectedRevisionId={revisionPlanning.selectedRevisionId}
+          referenceRevisionId={revisionPlanning.referenceRevisionId}
+          revisionsBusy={revisionPlanning.revisionsBusy}
+          treeBusy={revisionPlanning.treeBusy}
+          tree={revisionPlanning.tree}
+          mutationBusy={revisionPlanning.mutationBusy}
+          conflict={revisionPlanning.conflict}
+          feedback={revisionPlanning.feedback}
+          hasError={error !== null}
           isReadOnlyProject={isReadOnlyProject}
-          onNewDraft={() => void estimateCostLines.createDraftEstimate()}
-          exportBusy={estimateCostLines.exportBusy}
-          onExport={() => void estimateCostLines.exportExcel()}
-          canEditEstimate={canEditEstimate}
-          estimateBusy={estimateCostLines.estimateBusy}
-          onOpenValidation={estimateCostLines.openEstimateValidation}
-          validationWarnings={estimateCostLines.validationWarnings}
-          onDismissValidationWarnings={estimateCostLines.dismissValidationWarnings}
-          estimateTaskRows={estimateTaskRows}
-          costLines={costLines}
+          onSelectRevision={(revisionId) => revisionPlanning.selectRevision(revisionId)}
+          onCreateDraft={() => void revisionPlanning.createDraftFromSelected()}
+          onValidateRevision={() => void revisionPlanning.validateSelected()}
+          onReloadConflict={() => void revisionPlanning.reload()}
+          exportBusy={estimateExportBusy}
+          onExport={() => void exportEstimateWorkbook()}
+          aggregates={revisionAggregates}
+          aggregatesBusy={revisionAggregatesBusy}
           costCategories={costCategories}
           allCostCategories={allCostCategories}
-          costLineDraft={estimateCostLines.costLineDraft}
-          onCategoryChange={estimateCostLines.updateCostLineDraftCategory}
-          onLabelChange={estimateCostLines.updateCostLineDraftLabel}
-          onQuantityChange={estimateCostLines.updateCostLineDraftQuantity}
-          onUnitCostChange={estimateCostLines.updateCostLineDraftUnitCost}
-          onPlannedDateChange={estimateCostLines.updateCostLineDraftPlannedDate}
-          onTaskIdChange={estimateCostLines.updateCostLineDraftTaskId}
-          onAddCostLine={() => void estimateCostLines.addCostLine()}
-          mutationBusy={estimateCostLines.estimateBusy}
-          onMoveGridSelection={(command) => void estimateCostLines.moveGridSelection(command)}
-          onRenameTask={(taskUid, name) => estimateCostLines.renameGridTask(taskUid, name)}
-          onUpdateCostLine={(lineId, payload) => estimateCostLines.updateCostLineField(lineId, payload)}
-          onUpdateRoleAssignment={(id, payload) => estimateCostLines.updateRoleAssignmentField(id, payload)}
-          onRequestDeleteCostLine={estimateCostLines.requestDeleteCostLine}
-          selectedCostLineIds={estimateCostLines.selectedCostLineIds}
-          onSelectedCostLineIdsChange={estimateCostLines.setSelectedCostLineIds}
-          projectCostCodes={estimateCostLines.projectCostCodes}
-          bulkCostCodeId={estimateCostLines.bulkCostCodeId}
-          onBulkCostCodeIdChange={estimateCostLines.updateBulkCostCodeId}
-          bulkAssignBusy={estimateCostLines.bulkAssignBusy}
-          onBulkAssignCostCode={() => void estimateCostLines.bulkAssignCostCode()}
-          taskDialogOpen={estimateCostLines.taskDialogOpen}
-          taskDraftName={estimateCostLines.taskDraftName}
-          taskDraftIsMilestone={estimateCostLines.taskDraftIsMilestone}
-          taskDraftParentUid={estimateCostLines.taskDraftParentUid}
-          parentTaskOptions={planningDetail?.tasks ?? []}
-          taskCreateBusy={estimateCostLines.estimateBusy}
-          taskCreateError={estimateCostLines.taskCreateError}
-          taskCreateRequiresPlanningDraft={estimateCostLines.taskCreateRequiresPlanningDraft}
-          onOpenCreateTaskDialog={estimateCostLines.openCreateTaskDialog}
-          onCloseCreateTaskDialog={estimateCostLines.closeCreateTaskDialog}
-          onTaskDraftNameChange={estimateCostLines.updateTaskDraftName}
-          onTaskDraftIsMilestoneChange={estimateCostLines.updateTaskDraftIsMilestone}
-          onTaskDraftParentUidChange={estimateCostLines.updateTaskDraftParentUid}
-          onSubmitCreateTask={() => void estimateCostLines.submitCreateTask()}
-          onReopenStructure={() => {
-            estimateCostLines.closeCreateTaskDialog();
-            setActiveTab("planning");
-            void structureEditor.reopenStructure();
-          }}
-          milestoneDialogOpen={estimateCostLines.milestoneDialogOpen}
-          milestoneLineId={estimateCostLines.milestoneLineId}
-          milestoneTemplate={estimateCostLines.milestoneTemplate}
-          milestoneIntermediateCount={estimateCostLines.milestoneIntermediateCount}
-          milestoneLagMinutes={estimateCostLines.milestoneLagMinutes}
-          milestoneBusy={estimateCostLines.estimateBusy}
-          milestoneError={estimateCostLines.milestoneError}
-          milestoneRequiresPlanningDraft={estimateCostLines.milestoneRequiresPlanningDraft}
-          onOpenMilestoneDialog={estimateCostLines.openMilestoneDialog}
-          onCloseMilestoneDialog={estimateCostLines.closeMilestoneDialog}
-          onMilestoneTemplateChange={estimateCostLines.updateMilestoneTemplate}
-          onMilestoneIntermediateCountChange={estimateCostLines.updateMilestoneIntermediateCount}
-          onMilestoneLagMinutesChange={estimateCostLines.updateMilestoneLagMinutes}
-          onSubmitMilestoneTemplate={() => void estimateCostLines.submitMilestoneTemplate()}
-          onReopenStructureForMilestone={() => {
-            estimateCostLines.closeMilestoneDialog();
-            setActiveTab("planning");
-            void structureEditor.reopenStructure();
-          }}
-          estimateRoleAssignments={estimateRoleAssignments}
           resourceNodes={resourceNodes}
           resourceRoles={resourceRoles}
           costRates={costRates}
-          onRequestDeleteRoleAssignment={estimateCostLines.requestDeleteRoleAssignment}
-          roleAssignmentDialogOpen={estimateCostLines.roleAssignmentDialogOpen}
-          roleAssignmentDept1Id={estimateCostLines.roleAssignmentDept1Id}
-          onRoleAssignmentDept1IdChange={estimateCostLines.updateRoleAssignmentDept1Id}
-          roleAssignmentDept2Id={estimateCostLines.roleAssignmentDept2Id}
-          onRoleAssignmentDept2IdChange={estimateCostLines.updateRoleAssignmentDept2Id}
-          roleAssignmentRoles={estimateCostLines.roleAssignmentRoles}
-          roleAssignmentRolesLoading={estimateCostLines.roleAssignmentRolesLoading}
-          roleAssignmentRoleId={estimateCostLines.roleAssignmentRoleId}
-          onRoleAssignmentRoleIdChange={(value) => void estimateCostLines.updateRoleAssignmentRoleId(value)}
-          roleAssignmentTaskId={estimateCostLines.roleAssignmentTaskId}
-          onRoleAssignmentTaskIdChange={estimateCostLines.updateRoleAssignmentTaskId}
-          roleAssignmentQuantity={estimateCostLines.roleAssignmentQuantity}
-          onRoleAssignmentQuantityChange={estimateCostLines.updateRoleAssignmentQuantity}
-          roleAssignmentHours={estimateCostLines.roleAssignmentHours}
-          onRoleAssignmentHoursChange={estimateCostLines.updateRoleAssignmentHours}
-          roleAssignmentCostCodeId={estimateCostLines.roleAssignmentCostCodeId}
-          onRoleAssignmentCostCodeIdChange={estimateCostLines.updateRoleAssignmentCostCodeId}
-          roleAssignmentComment={estimateCostLines.roleAssignmentComment}
-          onRoleAssignmentCommentChange={estimateCostLines.updateRoleAssignmentComment}
-          roleAssignmentBusy={estimateCostLines.estimateBusy}
-          roleAssignmentError={estimateCostLines.roleAssignmentError}
-          onOpenRoleAssignmentDialog={estimateCostLines.openRoleAssignmentDialog}
-          onOpenRoleAssignmentDialogForRow={estimateCostLines.openRoleAssignmentDialogForRow}
-          onCloseRoleAssignmentDialog={estimateCostLines.closeRoleAssignmentDialog}
-          onSubmitRoleAssignment={() => void estimateCostLines.submitCreateRoleAssignment()}
+          projectCostCodes={projectCostCodes}
+          bulkCostCodeId={bulkCostCodeId}
+          onBulkCostCodeIdChange={setBulkCostCodeId}
+          bulkAssignBusy={bulkAssignBusy}
+          onAssignCostCode={(nodeIds) => void assignBulkCostCode(nodeIds)}
+          onMove={(mode, nodeIds) => void revisionPlanning.moveNodes(mode, nodeIds)}
+          onUpdatePlanning={(nodeId, payload) => revisionPlanning.updatePlanning(nodeId, payload)}
+          onUpdateCost={(nodeId, payload) => revisionPlanning.updateCost(nodeId, payload)}
+          onSwitchNature={(row, payload) => revisionPlanning.switchCostLineNature(row, payload)}
+          onCreateCostLine={(payload) => void revisionPlanning.createCostLine(payload)}
+          onCreateTask={(command) =>
+            void revisionPlanning.createTask({
+              name: command.name,
+              is_milestone: command.isMilestone,
+              parent_id: command.parentId,
+              position: command.position,
+            })
+          }
+          onDeleteNodes={(nodeIds) => void revisionPlanning.deleteNodes(nodeIds)}
         />
 
         <CommitmentsTabPlaceholder active={activeTab === "commitments"} />
@@ -803,23 +800,6 @@ export default function ProjectDetailsPage() {
         <AnalyticsTab active={activeTab === "analytics"} selectedEstimateId={selectedEstimateId} aggregates={aggregates} />
       </div>
 
-      <CostLineDeleteDialog
-        pendingDelete={estimateCostLines.costLinePendingDelete}
-        onCancel={estimateCostLines.cancelDeleteCostLine}
-        onConfirm={(line) => void estimateCostLines.removeCostLine(line)}
-      />
-
-      <EstimateRoleAssignmentDeleteDialog
-        pendingDelete={estimateCostLines.roleAssignmentPendingDelete}
-        onCancel={estimateCostLines.cancelDeleteRoleAssignment}
-        onConfirm={(assignment) => void estimateCostLines.removeRoleAssignment(assignment)}
-      />
-
-      <EstimateValidationDialog
-        open={estimateCostLines.estimateValidationOpen}
-        onOpenChange={estimateCostLines.setEstimateValidationOpen}
-        onConfirm={() => void estimateCostLines.validateEstimate()}
-      />
     </>
   );
 }

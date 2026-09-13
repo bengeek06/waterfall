@@ -3,12 +3,17 @@ import type { ResourceNode } from "@/lib/backend";
 export type OrganizationNodeOption = { id: number; code: string; name: string; depth: number };
 
 // Simplified, non-collapsible sibling-sorted depth-first flattening of the organization tree,
-// shared by the "Nœud organisationnel" <select> in estimate-role-assignment-dialog.tsx (E12-06/
-// #278). Modeled after resources/page.tsx's own `flattenOrganization`, which additionally tracks
-// per-node collapse/expand state for OrganizationTree's interactive table -- this dialog only
-// ever needs a flat, fully-expanded, indented list of every node once, so that richer version is
-// deliberately not reused here rather than threading a `collapsedIds` concept this caller has no
+// written for the "Nœud organisationnel" <select> of estimate-role-assignment-dialog.tsx
+// (E12-06/#278). Modeled after resources/page.tsx's own `flattenOrganization`, which additionally
+// tracks per-node collapse/expand state for OrganizationTree's interactive table -- that caller
+// only ever needed a flat, fully-expanded, indented list of every node once, so that richer
+// version was deliberately not reused rather than threading a `collapsedIds` concept it had no
 // use for.
+//
+// E14-11 (#337): that dialog is gone -- the devis grid now edits the Dpt/Rôle cascade inline, with
+// two single-level <select>s (lib/revision-cost-grid.ts) rather than one flattened whole-tree list
+// -- so this function has no caller left outside its own test. Left in place rather than removed
+// with it: sorting out what the old socle leaves behind is E14-12 (#339)'s, in one pass.
 export function buildOrganizationNodeOptions(nodes: ResourceNode[]): OrganizationNodeOption[] {
   const childrenByParent = new Map<number | null, ResourceNode[]>();
   for (const node of nodes) {

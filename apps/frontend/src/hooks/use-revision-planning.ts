@@ -5,6 +5,7 @@ import {
   ApiError,
   SessionExpiredError,
   copyRevision,
+  createRevisionCostLine,
   createRevisionTask,
   deleteRevisionNodes,
   getRevisionErrorCode,
@@ -13,12 +14,16 @@ import {
   listRevisions,
   moveRevisionNodes,
   replaceRevisionPredecessors,
+  updateRevisionCostFacet,
   updateRevisionPlanFacet,
   validateRevision,
   type Revision,
+  type RevisionCostFacetUpdateInput,
+  type RevisionCostLineCreateInput,
   type RevisionCostLoss,
   type RevisionList,
   type RevisionMoveMode,
+  type RevisionNode,
   type RevisionPlanFacetUpdateInput,
   type RevisionPredecessorWrite,
   type RevisionTaskCreateInput,
@@ -68,8 +73,30 @@ export function pickRevisionToDisplay(
   return revisions.at(-1)?.revision_id ?? null;
 }
 
-// E14-10 (#336): every read and every write the planning screen makes against a revision, in one
-// place -- the container the page hands to the Planning tab.
+/**
+ * Whether a write that just failed leaves the tree on screen -- or the counter it was read with --
+ * stale enough that it has to be re-read.
+ *
+ * Two ways in:
+ *
+ * * REVISION_IMMUTABLE: the revision was validated under the user, by another tab or by this one
+ *   before the list came back. Re-reading is what actually turns the screen read-only, instead of
+ *   leaving an editable table over a revision that refuses every write (INV-03);
+ * * a composite write (`rereadOnFailure`): a failure half-way through happens *after* a request
+ *   has succeeded, so the server's `lock_version` has moved while the local one has not. Without
+ *   the re-read the counter is **guaranteed** stale -- every later write 409s -- over a grid that
+ *   does not even show what the first half wrote.
+ */
+function mustRereadAfterFailure(cause: unknown, rereadOnFailure: boolean): boolean {
+  return rereadOnFailure || getRevisionErrorCode(cause) === "REVISION_IMMUTABLE";
+}
+
+// E14-10 (#336): every read and every write a screen makes against a revision, in one place --
+// the container the page hands to the Planning tab and, since E14-11 (#337), to the Devis tab.
+//
+// One hook instance for both, deliberately: a revision is one tree, two facets and **one**
+// optimistic-lock counter. Giving each tab its own hook would give each its own copy of that
+// counter, and the tab that did not write last would send a stale one on its next edit.
 //
 // Two things shape it, and both come straight from the contract:
 //
@@ -290,6 +317,23 @@ export function useRevisionPlanning({
   async function runWrite<T>(
     write: (tokens: SessionTokens, revisionId: number, lockVersion: number) => Promise<T>,
     fallbackMessage: string,
+    // E14-11 (#337): the two knobs a **composite** write needs, and a single request never does.
+    //
+    // `retryable: false` withholds the retry affordance: switching a cost line's nature creates
+    // the replacement *then* deletes the original, so a failure can leave the first half applied
+    // -- and replaying the pair from its original `expected_lock_version` would either 409 or
+    // create a second replacement. Better no button than one that makes things worse.
+    //
+    // `rereadOnFailure: true` re-reads the tree even though the write failed. A mid-sequence
+    // failure happens *after* a request has succeeded, so the server's `lock_version` has moved
+    // while `tree.lock_version` has not: without the re-read the local counter is **guaranteed**
+    // stale and every subsequent write 409s, over a grid that does not even show what the first
+    // half wrote. The message that names the half-applied state ("supprime la ligne en double")
+    // is only true once the duplicate is on screen.
+    {
+      retryable = true,
+      rereadOnFailure = false,
+    }: { retryable?: boolean; rereadOnFailure?: boolean } = {},
   ): Promise<T | null> {
     if (!session || !tree || selectedRevisionId === null || mutationBusy) {
       return null;
@@ -312,15 +356,14 @@ export function useRevisionPlanning({
         // that is no longer on screen, so none of it is posted.
         return null;
       }
-      if (getRevisionErrorCode(cause) === "REVISION_IMMUTABLE") {
-        // The revision was validated under the user -- by another tab, or by this one before the
-        // list came back. Re-read it so the screen actually becomes read-only, instead of keeping
-        // an editable table over a revision that refuses every write (INV-03).
+      if (mustRereadAfterFailure(cause, rereadOnFailure)) {
+        // Failure of the re-read itself is swallowed on purpose: the write's own failure is the
+        // one the user must read, and stacking a second message over it says nothing more.
         await readTree(session, revisionId).catch(() => undefined);
       }
       // A refusal the server decided (a 4xx carrying a code) is not worth replaying as-is; an
       // unclassified failure -- a dropped connection, a 5xx -- is exactly what a retry is for.
-      if (!(cause instanceof ApiError) || cause.status >= 500) {
+      if (retryable && (!(cause instanceof ApiError) || cause.status >= 500)) {
         setRetryableAction({
           revisionId,
           message: cause instanceof ApiError ? cause.message : fallbackMessage,
@@ -404,6 +447,165 @@ export function useRevisionPlanning({
           onSessionRefresh,
         ),
       "Impossible de mettre à jour la planification.",
+    );
+    return result !== null;
+  }
+
+  // --------------------------------------------------------------------------------------------
+  // E14-11 (#337): the cost facet's own writes, on the very same tree and the very same counter.
+  //
+  // They live here rather than in a second hook precisely because there is one tree: a devis write
+  // and a planning write share `tree.lock_version`, and two hooks each holding their own copy of it
+  // would hand the second screen a counter the first one has already advanced -- a 409 on every
+  // other edit, for no reason the user could ever act on.
+  // --------------------------------------------------------------------------------------------
+
+  /** Adds a cost line to the revision. `parent_id` absent = at the root, bearing no task. */
+  async function createCostLine(
+    payload: Omit<RevisionCostLineCreateInput, "expected_lock_version">,
+  ): Promise<boolean> {
+    const result = await runWrite(
+      (tokens, revisionId, lockVersion) =>
+        createRevisionCostLine(
+          projectId,
+          revisionId,
+          { ...payload, expected_lock_version: lockVersion },
+          tokens,
+          onSessionRefresh,
+        ),
+      "Impossible de créer la ligne de chiffrage.",
+    );
+    return result !== null;
+  }
+
+  /** Partial edit of one node's cost facet; false on any refusal, already reported. */
+  async function updateCost(
+    nodeId: number,
+    payload: Omit<RevisionCostFacetUpdateInput, "expected_lock_version">,
+  ): Promise<boolean> {
+    const result = await runWrite(
+      (tokens, revisionId, lockVersion) =>
+        updateRevisionCostFacet(
+          projectId,
+          revisionId,
+          nodeId,
+          { ...payload, expected_lock_version: lockVersion },
+          tokens,
+          onSessionRefresh,
+        ),
+      "Impossible de mettre à jour la ligne de chiffrage.",
+    );
+    return result !== null;
+  }
+
+  /**
+   * Turns an MO line into a non-MO one, or the other way round, by **replacing** it.
+   *
+   * There is no `nature` to PATCH, and that absence is a contract rather than an oversight: the
+   * two natures have disjoint attribute sets (INV-19 ↔ INV-20), so flipping one would have to
+   * clear `role_id`/`hours` and fill `cost_type_id`/`cost_category_id`/`unit_cost` (or the
+   * reverse) in the same write -- which is another line. So this creates the replacement at the
+   * former line's own parent and rank, then deletes the original, both under the same lock.
+   *
+   * Two consequences the caller has to live with, and which are surfaced rather than hidden:
+   *
+   * * the node identity changes. A cost node carries no predecessors (INV-17) and the grid holds
+   *   nothing else keyed by node id, so nothing else has to follow -- but a node **carrying
+   *   children** is refused here rather than silently taking its subtree with it into the
+   *   delete's INV-02 cascade;
+   * * if the delete half fails, the replacement is already there. That is reported as such, with
+   *   what to do about it, instead of a generic failure that leaves two identical lines on screen
+   *   with no explanation.
+   */
+  async function switchCostLineNature(
+    node: RevisionNode,
+    payload: Omit<RevisionCostLineCreateInput, "expected_lock_version" | "parent_id" | "position">,
+  ): Promise<boolean> {
+    if (tree?.nodes.some((candidate) => candidate.parent_id === node.node_id)) {
+      setError(
+        "Cette ligne porte des sous-lignes : changer sa nature la remplace, ce qui supprimerait son sous-arbre. Déplace ou supprime ses sous-lignes d'abord.",
+      );
+      return false;
+    }
+    const result = await runWrite(
+      async (tokens, revisionId, lockVersion) => {
+        const created = await createRevisionCostLine(
+          projectId,
+          revisionId,
+          {
+            ...payload,
+            // Same parent and same rank: created *at* the original's position, which pushes the
+            // original one rank down, and the delete that follows closes the gap back up (INV-05
+            // renumbers the siblings). The row therefore stays where the user left it.
+            parent_id: node.parent_id,
+            position: node.position,
+            expected_lock_version: lockVersion,
+          },
+          tokens,
+          onSessionRefresh,
+        );
+        try {
+          return await deleteRevisionNodes(
+            projectId,
+            revisionId,
+            { expected_lock_version: created.lock_version, node_ids: [node.node_id] },
+            tokens,
+            onSessionRefresh,
+          );
+        } catch (cause) {
+          if (cause instanceof SessionExpiredError) {
+            throw cause;
+          }
+          throw new ApiError(
+            cause instanceof ApiError ? cause.status : 500,
+            "La ligne a bien été recréée dans l'autre nature, mais l'ancienne n'a pas pu être supprimée : recharge la révision et supprime la ligne en double.",
+            // The structured `detail` travels with it, and that is not decoration: dropping it
+            // turns a 409 REVISION_LOCK_CONFLICT into an unclassified failure, `getRevisionLockConflict`
+            // stops recognising it, and the "Recharger la révision" banner -- the only way out of
+            // a desynchronised grid -- never appears.
+            cause instanceof ApiError ? cause.detail : undefined,
+          );
+        }
+      },
+      "Impossible de changer la nature de la ligne.",
+      { retryable: false, rereadOnFailure: true },
+    );
+    return result !== null;
+  }
+
+  /**
+   * Assigns one cost code to a selection of cost nodes, in a single locked sequence.
+   *
+   * The counter is threaded from one request to the next rather than re-read from `tree`: React
+   * state does not update between two awaits, so a loop of independent `updateCost` calls would
+   * send the same stale `expected_lock_version` every time and 409 from the second line on.
+   */
+  async function assignCostCode(nodeIds: readonly number[], costCodeId: number | null): Promise<boolean> {
+    if (!nodeIds.length) {
+      return false;
+    }
+    const result = await runWrite(
+      async (tokens, revisionId, lockVersion) => {
+        let currentLockVersion = lockVersion;
+        for (const nodeId of nodeIds) {
+          const written = await updateRevisionCostFacet(
+            projectId,
+            revisionId,
+            nodeId,
+            { expected_lock_version: currentLockVersion, cost_code_id: costCodeId },
+            tokens,
+            onSessionRefresh,
+          );
+          currentLockVersion = written.lock_version;
+        }
+        return currentLockVersion;
+      },
+      "Impossible d'affecter le code d'imputation à la sélection.",
+      // Same reason as switchCostLineNature, on both counts: a failure half-way through has
+      // already written the lines before it, so replaying the whole sequence from the original
+      // counter would 409 -- and the counter the tree still holds is the one the first line of
+      // the sequence already spent, so the tree is re-read before the next write can use it.
+      { retryable: false, rereadOnFailure: true },
     );
     return result !== null;
   }
@@ -540,6 +742,10 @@ export function useRevisionPlanning({
     createTask,
     deleteNodes,
     updatePlanning,
+    createCostLine,
+    updateCost,
+    switchCostLineNature,
+    assignCostCode,
     replacePredecessors,
     createDraftFromSelected,
     validateSelected,

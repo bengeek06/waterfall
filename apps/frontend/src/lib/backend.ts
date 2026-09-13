@@ -272,6 +272,17 @@ export type RevisionNodeMoveInput = components["schemas"]["RevisionNodeMove"];
 /** `to_parent` names its destination; `up`/`down`/`indent`/`outdent` compute theirs server-side. */
 export type RevisionMoveMode = NonNullable<RevisionNodeMoveInput["mode"]>;
 export type RevisionPlanFacetUpdateInput = components["schemas"]["RevisionPlanFacetUpdate"];
+export type RevisionCostFacetUpdateInput = components["schemas"]["RevisionCostFacetUpdate"];
+export type RevisionCostLineCreateInput = components["schemas"]["RevisionCostLineCreate"];
+/**
+ * MO or non-MO, as the cost facet carries it (INV-19/INV-20).
+ *
+ * First-class on the read *and* on the creation payload, and deliberately absent from the update
+ * one: switching it swaps the whole attribute set of the line, so it is a different line -- see
+ * `RevisionCostFacetUpdate`'s own contract and `switchCostLineNature` in use-revision-planning.ts.
+ */
+export type RevisionCostNature = RevisionCostFacet["nature"];
+export type RevisionAggregates = components["schemas"]["RevisionAggregatesRead"];
 export type RevisionPredecessorsReplaceInput = components["schemas"]["RevisionPredecessorsReplace"];
 export type RevisionCopyInput = components["schemas"]["RevisionCopy"];
 export type RevisionCreated = components["schemas"]["RevisionCreatedRead"];
@@ -2033,6 +2044,98 @@ export function deleteRevisionNodes(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     },
+    onSessionRefresh,
+  );
+}
+
+/**
+ * Creates a cost node: a new `work_item` of kind `cost` and its cost facet, in one call.
+ *
+ * `parent_id` absent puts the line at the root, where it is a project-wide cost bearing no task
+ * (INV-01, explicitly allowed) -- which is what the devis grid's "désindenter jusqu'à la racine"
+ * produces, and why the amount stays counted in the revision's totals.
+ *
+ * The payload is shaped by the nature it declares and the backend refuses anything else: a
+ * `labor` line carries `role_id` and `hours` and *no* accounting category (INV-19, the category
+ * of an MO line being that of its role), a `non_labor` one carries `cost_type_id`,
+ * `cost_category_id` and `unit_cost` and no role (INV-20).
+ */
+export function createRevisionCostLine(
+  projectId: number,
+  revisionId: number,
+  payload: RevisionCostLineCreateInput,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<RevisionNodeWriteResult>(
+    `/projects/${projectId}/revisions/${revisionId}/cost-lines`,
+    tokens,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    onSessionRefresh,
+  );
+}
+
+/**
+ * Partial edit of one node's cost facet: an absent field is left alone, `null` is a value.
+ *
+ * `nature` is not among the fields it accepts, by design: see `RevisionCostNature` above.
+ */
+export function updateRevisionCostFacet(
+  projectId: number,
+  revisionId: number,
+  nodeId: number,
+  payload: RevisionCostFacetUpdateInput,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<RevisionWriteResult>(
+    `/projects/${projectId}/revisions/${revisionId}/nodes/${nodeId}/cost`,
+    tokens,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    onSessionRefresh,
+  );
+}
+
+/**
+ * The totals of a revision, priced from its cost facets.
+ *
+ * Unlike `getEstimateAggregates`, which summed the frozen lines a validation had written and
+ * therefore reported nothing at all for a devis being built, this one prices the facets
+ * themselves: a **draft** has totals, which is the state the figure is actually consulted in.
+ */
+export function getRevisionAggregates(
+  projectId: number,
+  revisionId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authRequest<RevisionAggregates>(
+    `/projects/${projectId}/revisions/${revisionId}/aggregates`,
+    tokens,
+    { method: "GET" },
+    onSessionRefresh,
+  );
+}
+
+/** The revision's devis as a workbook -- the revision-model twin of `exportEstimateExcel`. */
+export function exportRevisionExcel(
+  projectId: number,
+  revisionId: number,
+  tokens: SessionTokens,
+  onSessionRefresh: (next: SessionTokens) => void,
+) {
+  return authDownload(
+    `/projects/${projectId}/revisions/${revisionId}/export.xlsx`,
+    tokens,
+    { method: "GET" },
     onSessionRefresh,
   );
 }

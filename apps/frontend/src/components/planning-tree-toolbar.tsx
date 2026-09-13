@@ -1,5 +1,7 @@
 "use client";
 
+import type { ReactNode } from "react";
+
 import { Button } from "@/components/ui/button";
 
 export type PlanningTreeToolbarProps = Readonly<{
@@ -26,6 +28,16 @@ export type PlanningTreeToolbarProps = Readonly<{
   showDeleteAction: boolean;
   deleteDisabled: boolean;
   onDeleteSelection: () => void;
+  /**
+   * Extra commands, rendered in the same button row after the shared ones.
+   *
+   * E14-11 (#337): the devis grid needs one command the planning table has no use for ("Ajouter
+   * une ligne de coût"), and putting it in its own bar would have given the grid two stacked
+   * toolbars whose buttons look alike. Children count as a command for the "render nothing when
+   * there is nothing to offer" rule: a caller passing them and no shared command still gets its
+   * bar, or the one command it does offer would silently disappear.
+   */
+  children?: ReactNode;
 }>;
 
 // Extracted from PlanningTreeTable (E4-12 / #152): the Indenter/Désindenter/Monter/Descendre,
@@ -49,8 +61,9 @@ export function PlanningTreeToolbar({
   showDeleteAction,
   deleteDisabled,
   onDeleteSelection,
+  children = null,
 }: PlanningTreeToolbarProps) {
-  if (!visible || !(showMoveActions || showCreateAction || showDeleteAction)) {
+  if (!visible || !(showMoveActions || showCreateAction || showDeleteAction || children)) {
     return null;
   }
   return (
@@ -82,6 +95,7 @@ export function PlanningTreeToolbar({
             Supprimer la sélection
           </Button>
         ) : null}
+        {children}
       </div>
       {notice ? (
         <p role="status" className="text-xs text-muted-foreground">

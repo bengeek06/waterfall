@@ -8,6 +8,7 @@ import {
   type PlanningDetail,
   type Project,
   type Revision,
+  type RevisionAggregates,
   type RevisionList,
   type RevisionNode,
   type RevisionTree,
@@ -19,10 +20,17 @@ const mocks = vi.hoisted(() => ({
   listPlannings: vi.fn(),
   getPlanning: vi.fn(),
   exportProjectXml: vi.fn(),
-  listEstimateTaskRows: vi.fn(),
-  listEstimateCostLines: vi.fn(),
   getEstimateAggregates: vi.fn(),
-  createEstimateTask: vi.fn(),
+  getProjectCostCodes: vi.fn(),
+  getCostCategories: vi.fn(),
+  getCostTypes: vi.fn(),
+  getResourceNodes: vi.fn(),
+  getResourceRoles: vi.fn(),
+  getCostRates: vi.fn(),
+  getRevisionAggregates: vi.fn(),
+  exportRevisionExcel: vi.fn(),
+  createRevisionCostLine: vi.fn(),
+  updateRevisionCostFacet: vi.fn(),
   createImportBatch: vi.fn(),
   uploadImportSourceXml: vi.fn(),
   runImportBatch: vi.fn(),
@@ -65,10 +73,17 @@ vi.mock("@/lib/backend", async () => {
     listPlannings: mocks.listPlannings,
     getPlanning: mocks.getPlanning,
     exportProjectXml: mocks.exportProjectXml,
-    listEstimateTaskRows: mocks.listEstimateTaskRows,
-    listEstimateCostLines: mocks.listEstimateCostLines,
     getEstimateAggregates: mocks.getEstimateAggregates,
-    createEstimateTask: mocks.createEstimateTask,
+    getProjectCostCodes: mocks.getProjectCostCodes,
+    getCostCategories: mocks.getCostCategories,
+    getCostTypes: mocks.getCostTypes,
+    getResourceNodes: mocks.getResourceNodes,
+    getResourceRoles: mocks.getResourceRoles,
+    getCostRates: mocks.getCostRates,
+    getRevisionAggregates: mocks.getRevisionAggregates,
+    exportRevisionExcel: mocks.exportRevisionExcel,
+    createRevisionCostLine: mocks.createRevisionCostLine,
+    updateRevisionCostFacet: mocks.updateRevisionCostFacet,
     createImportBatch: mocks.createImportBatch,
     uploadImportSourceXml: mocks.uploadImportSourceXml,
     runImportBatch: mocks.runImportBatch,
@@ -88,8 +103,6 @@ vi.mock("@/lib/backend", async () => {
     createPlanningStructure: mocks.createPlanningStructure,
     reopenPlanningStructure: mocks.reopenPlanningStructure,
     skipPlanningStructure: mocks.skipPlanningStructure,
-    getCostCategories: vi.fn().mockResolvedValue({ items: [], total: 0 }),
-    getCostTypes: vi.fn().mockResolvedValue({ items: [], total: 0 }),
   };
 });
 
@@ -212,6 +225,57 @@ function taskNode(
   };
 }
 
+// E14-11 (#337): a cost node of that same tree -- a cost line is a node, not a parallel list.
+function costNode(
+  nodeId: number,
+  options: { label?: string; parentId?: number | null; position?: number; level?: number; rowNumber?: number } = {},
+): RevisionNode {
+  return {
+    node_id: nodeId,
+    work_item_id: nodeId * 10,
+    kind: "cost",
+    parent_id: options.parentId ?? null,
+    position: options.position ?? 1,
+    row_number: options.rowNumber ?? nodeId,
+    level: options.level ?? 1,
+    external_uid: null,
+    description: null,
+    planning: null,
+    cost: {
+      nature: "non_labor",
+      label: options.label ?? `Ligne ${nodeId}`,
+      quantity: "2.00",
+      role_id: null,
+      hours: null,
+      cost_type_id: 1,
+      cost_category_id: 4,
+      unit_cost: "50.00",
+      supply_status: null,
+      planned_date: null,
+      cost_code_id: null,
+      comment: null,
+      bearing_task_node_id: options.parentId ?? null,
+      bearing_task_name: null,
+    },
+    predecessors: [],
+  };
+}
+
+function revisionAggregates(overrides: Partial<RevisionAggregates> = {}): RevisionAggregates {
+  return {
+    revision_id: 7,
+    total_labor_cost: "0.00",
+    total_purchase_cost: "100.00",
+    total_unburdened_cost: "100.00",
+    by_category: {},
+    by_cost_code: {},
+    unpriceable_facets: [],
+    missing_cost_rates: [],
+    missing_inflation_years: [],
+    ...overrides,
+  };
+}
+
 function revisionTree(overrides: Partial<RevisionTree> = {}): RevisionTree {
   return {
     revision_id: 7,
@@ -226,21 +290,6 @@ function revisionTree(overrides: Partial<RevisionTree> = {}): RevisionTree {
   };
 }
 
-// E6-06/#67: a single draft estimate, used by the "add a task from the Devis tab" tests below
-// to make canEditEstimate true.
-function draftEstimate() {
-  return {
-    id: 1,
-    project_id: 1,
-    planning_id: null,
-    version_number: 1,
-    kind: "initial",
-    status: "draft",
-    currency_code: "EUR",
-    created_at: "2026-01-01T00:00:00Z",
-  };
-}
-
 describe("ProjectDetailsPage planning lifecycle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -249,10 +298,17 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     mocks.listPlannings.mockReset();
     mocks.getPlanning.mockReset();
     mocks.exportProjectXml.mockReset();
-    mocks.listEstimateTaskRows.mockReset();
-    mocks.listEstimateCostLines.mockReset();
     mocks.getEstimateAggregates.mockReset();
-    mocks.createEstimateTask.mockReset();
+    mocks.getProjectCostCodes.mockReset();
+    mocks.getCostCategories.mockReset();
+    mocks.getCostTypes.mockReset();
+    mocks.getResourceNodes.mockReset();
+    mocks.getResourceRoles.mockReset();
+    mocks.getCostRates.mockReset();
+    mocks.getRevisionAggregates.mockReset();
+    mocks.exportRevisionExcel.mockReset();
+    mocks.createRevisionCostLine.mockReset();
+    mocks.updateRevisionCostFacet.mockReset();
     mocks.createImportBatch.mockReset();
     mocks.uploadImportSourceXml.mockReset();
     mocks.runImportBatch.mockReset();
@@ -274,6 +330,22 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     mocks.skipPlanningStructure.mockReset();
     mocks.listProjectEstimates.mockResolvedValue([]);
     mocks.listPlannings.mockResolvedValue([]);
+    mocks.getProjectCostCodes.mockResolvedValue([]);
+    // One non-MO category and its cost type: the least a devis needs to be able to add a line.
+    mocks.getCostCategories.mockResolvedValue({
+      items: [{ id: 4, cost_type_id: 2, accounting_code: "604", category_code: null, name: "Fournitures", is_active: true, created_at: "", updated_at: "" }],
+      total: 1,
+    });
+    mocks.getCostTypes.mockResolvedValue({
+      items: [{ id: 2, code: "FOU", name: "Fournitures", kind: "supply", is_active: true, created_at: "", updated_at: "" }],
+      total: 1,
+    });
+    mocks.getResourceNodes.mockResolvedValue([]);
+    mocks.getResourceRoles.mockResolvedValue({ items: [], total: 0 });
+    mocks.getCostRates.mockResolvedValue([]);
+    mocks.getRevisionAggregates.mockResolvedValue(revisionAggregates());
+    mocks.createRevisionCostLine.mockResolvedValue({ revision_id: 7, lock_version: 1, node_id: 99, work_item_id: 99 });
+    mocks.updateRevisionCostFacet.mockResolvedValue({ revision_id: 7, lock_version: 1 });
     mocks.listRevisions.mockResolvedValue(emptyRevisionList());
     mocks.getRevisionNodes.mockImplementation(async (_projectId: number, revisionId: number) =>
       revisionTree({ revision_id: revisionId }),
@@ -383,32 +455,22 @@ describe("ProjectDetailsPage planning lifecycle", () => {
     expect(screen.queryByText("Unauthorized")).not.toBeInTheDocument();
   });
 
-  // Regression test for the Haute finding on #230's own review: two sibling effects in this
-  // file (loadEstimateDetails, loadAggregates) had the exact same missing-ApiError-401 defect
-  // as exportPlanningXml/preparePlanningImport, discovered only in review because the initial
-  // scoping of #230 didn't audit every catch block in this file.
-  it("logs out when loading the estimate details fails with a post-refresh 401", async () => {
+  // Regression test for the Haute finding on #230's own review: every catch block of this file
+  // must treat a post-refresh 401 as a session expiry. E14-11 (#337) replaced the Devis tab's own
+  // reads by the revision's: this is the same guard, on the read that took their place.
+  it("logs out when loading the revision's totals fails with a post-refresh 401", async () => {
     mocks.getProject.mockResolvedValue(project({ status: "initialise" }));
     mocks.listPlannings.mockResolvedValue([]);
-    mocks.listProjectEstimates.mockResolvedValue([
-      {
-        id: 1,
-        project_id: 1,
-        planning_id: null,
-        version_number: 1,
-        kind: "initial",
-        status: "draft",
-        currency_code: "EUR",
-        created_at: "2026-01-01T00:00:00Z",
-      },
-    ]);
-    mocks.listEstimateTaskRows.mockRejectedValue(new ApiError(401, "Unauthorized"));
-    mocks.listEstimateCostLines.mockResolvedValue([]);
+    mocks.listRevisions.mockResolvedValue(revisionList([revisionSummary()]));
+    mocks.getRevisionAggregates.mockRejectedValue(new ApiError(401, "Unauthorized"));
 
     render(<ProjectDetailsPage />);
+    // The totals are only read while the Devis tab is the one on screen, so the guard is only
+    // reachable from there -- this click is what actually crosses it.
+    fireEvent.click(await screen.findByRole("tab", { name: "Devis" }));
 
+    await waitFor(() => expect(mocks.getRevisionAggregates).toHaveBeenCalled());
     await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith("/login"));
-    expect(screen.queryByText("Impossible de charger le devis.")).not.toBeInTheDocument();
   });
 
   it("logs out when loading the estimate aggregates fails with a post-refresh 401", async () => {
@@ -426,8 +488,6 @@ describe("ProjectDetailsPage planning lifecycle", () => {
         created_at: "2026-01-01T00:00:00Z",
       },
     ]);
-    mocks.listEstimateTaskRows.mockResolvedValue([]);
-    mocks.listEstimateCostLines.mockResolvedValue([]);
     mocks.getEstimateAggregates.mockRejectedValue(new ApiError(401, "Unauthorized"));
 
     render(<ProjectDetailsPage />);
@@ -1089,95 +1149,146 @@ describe("ProjectDetailsPage planning lifecycle", () => {
   // E6-06/#67 (Haute + Moyenne review findings): creating a task from the Devis tab must
   // refresh `planningDetail` -- without a page reload -- so the "Tâche parente" selector in a
   // second, consecutive "Ajouter une tâche au planning" can offer the task just created.
-  describe("adding a task to the planning from the Devis tab", () => {
-    it("creates the task and refreshes the parent-task selector without a page reload", async () => {
-      const draft = planning({ id: 3, status: "draft" });
-      const initialDetail = detail(draft);
-      const updatedDetail: PlanningDetail = {
-        ...initialDetail,
-        tasks: [
-          ...initialDetail.tasks,
-          { ...initialDetail.tasks[0], uid: 11, name: "Terrassement", outline_number: "2" },
-        ],
-      };
-      mocks.getProject.mockResolvedValue(project({ status: "initialise", displayed_planning_id: draft.id }));
-      mocks.listPlannings.mockResolvedValue([draft]);
-      mocks.getPlanning.mockResolvedValueOnce(initialDetail).mockResolvedValue(updatedDetail);
-      mocks.listProjectEstimates.mockResolvedValue([draftEstimate()]);
-      mocks.listEstimateTaskRows.mockResolvedValue([]);
-      mocks.listEstimateCostLines.mockResolvedValue([]);
-      mocks.createEstimateTask.mockResolvedValue({
-        id: 1,
-        estimate_id: 1,
-        task_id: 42,
-        parent_task_id: null,
-        position: 2,
-        task_name: "Terrassement",
-        outline_number: "2",
-        outline_level: 1,
-        is_milestone: false,
-      });
+  // ------------------------------------------------------------------------------------------
+  // E14-11 (#337): the Devis tab and the Planning tab are two views of **one** tree. Nothing
+  // below mocks a synchronisation: there is none to mock.
+  // ------------------------------------------------------------------------------------------
+
+  describe("the Devis tab, on the same revision as the Planning tab", () => {
+    function openDevisTab() {
+      mocks.getProject.mockResolvedValue(project({ status: "initialise" }));
+      mocks.listPlannings.mockResolvedValue([]);
+      mocks.listRevisions.mockResolvedValue(revisionList([revisionSummary()]));
+    }
+
+    it("shows the very tree the Planning tab shows, cost lines included", async () => {
+      openDevisTab();
+      mocks.getRevisionNodes.mockResolvedValue(
+        revisionTree({
+          nodes: [taskNode(1, { name: "Poste", rowNumber: 1 }), costNode(2, { parentId: 1, level: 2, rowNumber: 2, label: "Béton" })],
+        }),
+      );
 
       render(<ProjectDetailsPage />);
+      // The Planning tab renders the task and not the cost line...
+      expect(await screen.findByRole("treegrid", { name: "Planning de la révision" })).toBeInTheDocument();
+      expect(screen.queryByText("Béton")).not.toBeInTheDocument();
 
-      fireEvent.click(await screen.findByRole("tab", { name: "Devis" }));
-      fireEvent.click(await screen.findByRole("button", { name: "Ajouter une tâche au planning" }));
+      fireEvent.click(screen.getByRole("tab", { name: "Devis" }));
 
-      const dialog = await screen.findByRole("dialog");
-      fireEvent.change(within(dialog).getByLabelText("Nom de la nouvelle tâche"), {
-        target: { value: "Terrassement" },
-      });
-      fireEvent.click(within(dialog).getByRole("button", { name: "Ajouter" }));
-
-      await waitFor(() =>
-        expect(mocks.createEstimateTask).toHaveBeenCalledWith(
-          1,
-          1,
-          { name: "Terrassement", is_milestone: false, target_parent_uid: undefined },
-          expect.anything(),
-          expect.anything(),
-        ),
-      );
-      await waitFor(() =>
-        expect(mocks.getPlanning).toHaveBeenCalledWith(1, draft.id, expect.anything(), expect.anything()),
-      );
-      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-
-      // Re-open the dialog: the parent-task selector must now list the task just created,
-      // proving `planningDetail` was actually refreshed rather than left stale.
-      fireEvent.click(screen.getByRole("button", { name: "Ajouter une tâche au planning" }));
-      const reopenedDialog = await screen.findByRole("dialog");
-      expect(within(reopenedDialog).getByRole("option", { name: /Terrassement/ })).toBeInTheDocument();
+      // ...the Devis grid renders both, out of the same single read.
+      const grid = await screen.findByRole("treegrid", { name: "Devis de la révision" });
+      expect(within(grid).getByLabelText("Libellé de Poste")).toBeInTheDocument();
+      expect(within(grid).getByLabelText("Libellé de Béton")).toBeInTheDocument();
+      expect(mocks.getRevisionNodes).toHaveBeenCalledTimes(1);
     });
 
-    it("closes the dialog, switches to the Planning tab, and reopens the structure on the draft-required 409", async () => {
-      const validated = planning({ id: 4, status: "validated" });
-      const reopened = planning({ id: 5, status: "draft" });
-      mocks.getProject.mockResolvedValue(
-        project({ status: "initialise", displayed_planning_id: validated.id, planning_reference_id: validated.id }),
-      );
-      mocks.listPlannings.mockResolvedValueOnce([validated]).mockResolvedValue([validated, reopened]);
-      mocks.getPlanning.mockImplementation(async (_projectId, planningId) =>
-        planningId === reopened.id ? detail(reopened) : detail(validated),
-      );
-      mocks.listProjectEstimates.mockResolvedValue([draftEstimate()]);
-      mocks.listEstimateTaskRows.mockResolvedValue([]);
-      mocks.listEstimateCostLines.mockResolvedValue([]);
-      mocks.createEstimateTask.mockRejectedValue(
-        new ApiError(
-          409,
-          "Le planning affiché n'est plus un brouillon : rouvre sa structure depuis l'onglet Planning avant d'ajouter une tâche depuis le devis.",
-          { code: "ESTIMATE_TASK_CREATE_REQUIRES_PLANNING_DRAFT" },
+    // Criterion 3 of #337: moving a task from the devis grid moves it in the planning table, with
+    // no action in between -- because it is the same move on the same tree.
+    it("moves a task from the devis grid and the planning table follows, with no synchronisation", async () => {
+      openDevisTab();
+      mocks.getRevisionNodes
+        .mockResolvedValueOnce(
+          revisionTree({
+            nodes: [
+              taskNode(1, { name: "Poste A", position: 1, rowNumber: 1 }),
+              taskNode(2, { name: "Poste B", position: 2, rowNumber: 2 }),
+            ],
+          }),
+        )
+        .mockResolvedValue(
+          revisionTree({
+            lock_version: 1,
+            nodes: [
+              taskNode(2, { name: "Poste B", position: 1, rowNumber: 1 }),
+              taskNode(1, { name: "Poste A", position: 2, rowNumber: 2 }),
+            ],
+          }),
+        );
+
+      render(<ProjectDetailsPage />);
+      fireEvent.click(await screen.findByRole("tab", { name: "Devis" }));
+
+      const grid = await screen.findByRole("treegrid", { name: "Devis de la révision" });
+      fireEvent.click(within(grid).getByLabelText("Libellé de Poste B").closest("tr") as HTMLElement);
+      fireEvent.click(screen.getByRole("button", { name: "Monter" }));
+
+      await waitFor(() =>
+        expect(mocks.moveRevisionNodes).toHaveBeenCalledWith(
+          1,
+          7,
+          { expected_lock_version: 0, node_ids: [2], mode: "up" },
+          expect.anything(),
+          expect.anything(),
         ),
       );
-      mocks.reopenPlanningStructure.mockResolvedValue(
-        project({ status: "initialise", displayed_planning_id: reopened.id }),
+
+      fireEvent.click(screen.getByRole("tab", { name: "Planning" }));
+      const planning = await screen.findByRole("treegrid", { name: "Planning de la révision" });
+      const rows = within(planning).getAllByRole("row").slice(1);
+      expect(within(rows[0]).getByText("Poste B")).toBeInTheDocument();
+      expect(within(rows[0]).getByText("1")).toBeInTheDocument();
+    });
+
+    // Criterion 2: a cost line's move is not visible *as a row* in the planning table (which only
+    // renders tasks) but the tree it renumbers is the same one -- so the planning's own positional
+    // identifiers follow, again with nothing to synchronise.
+    it("moves a cost line from the devis grid and the planning's numbering follows", async () => {
+      openDevisTab();
+      mocks.getRevisionNodes
+        .mockResolvedValueOnce(
+          revisionTree({
+            nodes: [
+              taskNode(1, { name: "Poste A", position: 1, rowNumber: 1 }),
+              costNode(2, { label: "Béton", position: 2, rowNumber: 2 }),
+              taskNode(3, { name: "Poste C", position: 3, rowNumber: 3 }),
+            ],
+          }),
+        )
+        .mockResolvedValue(
+          revisionTree({
+            lock_version: 1,
+            nodes: [
+              taskNode(1, { name: "Poste A", position: 1, rowNumber: 1 }),
+              taskNode(3, { name: "Poste C", position: 2, rowNumber: 2 }),
+              costNode(2, { label: "Béton", position: 3, rowNumber: 3 }),
+            ],
+          }),
+        );
+
+      render(<ProjectDetailsPage />);
+      fireEvent.click(await screen.findByRole("tab", { name: "Devis" }));
+
+      const grid = await screen.findByRole("treegrid", { name: "Devis de la révision" });
+      fireEvent.click(within(grid).getByLabelText("Libellé de Béton").closest("tr") as HTMLElement);
+      fireEvent.click(screen.getByRole("button", { name: "Descendre" }));
+
+      await waitFor(() =>
+        expect(mocks.moveRevisionNodes).toHaveBeenCalledWith(
+          1,
+          7,
+          { expected_lock_version: 0, node_ids: [2], mode: "down" },
+          expect.anything(),
+          expect.anything(),
+        ),
+      );
+
+      fireEvent.click(screen.getByRole("tab", { name: "Planning" }));
+      const planning = await screen.findByRole("treegrid", { name: "Planning de la révision" });
+      const rows = within(planning).getAllByRole("row").slice(1);
+      expect(within(rows[1]).getByText("Poste C")).toBeInTheDocument();
+      expect(within(rows[1]).getByText("2")).toBeInTheDocument();
+    });
+
+    it("adds a task to the planning from the Devis tab, on the revision's own endpoint", async () => {
+      openDevisTab();
+      mocks.getRevisionNodes.mockResolvedValue(
+        revisionTree({ nodes: [taskNode(1, { name: "Poste", rowNumber: 1 })] }),
       );
 
       render(<ProjectDetailsPage />);
-
       fireEvent.click(await screen.findByRole("tab", { name: "Devis" }));
-      fireEvent.click(await screen.findByRole("button", { name: "Ajouter une tâche au planning" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Ajouter une tâche" }));
 
       const dialog = await screen.findByRole("dialog");
       fireEvent.change(within(dialog).getByLabelText("Nom de la nouvelle tâche"), {
@@ -1185,11 +1296,533 @@ describe("ProjectDetailsPage planning lifecycle", () => {
       });
       fireEvent.click(within(dialog).getByRole("button", { name: "Ajouter" }));
 
-      fireEvent.click(await within(dialog).findByRole("button", { name: "Rouvrir la structure" }));
+      await waitFor(() =>
+        expect(mocks.createRevisionTask).toHaveBeenCalledWith(
+          1,
+          7,
+          { name: "Terrassement", is_milestone: false, parent_id: null, position: null, expected_lock_version: 0 },
+          expect.anything(),
+          expect.anything(),
+        ),
+      );
+    });
 
-      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-      expect(await screen.findByRole("heading", { name: "Lotissement du projet" })).toBeInTheDocument();
-      expect(mocks.reopenPlanningStructure).toHaveBeenCalledTimes(1);
+    it("creates a cost line carrying its whole non-MO shape, and re-reads the tree it wrote into", async () => {
+      openDevisTab();
+      mocks.getRevisionNodes.mockResolvedValue(
+        revisionTree({ nodes: [taskNode(1, { name: "Poste", rowNumber: 1 })] }),
+      );
+
+      render(<ProjectDetailsPage />);
+      fireEvent.click(await screen.findByRole("tab", { name: "Devis" }));
+      await screen.findByRole("treegrid", { name: "Devis de la révision" });
+      fireEvent.click(screen.getByRole("button", { name: "Ajouter une ligne de coût" }));
+
+      await waitFor(() =>
+        expect(mocks.createRevisionCostLine).toHaveBeenCalledWith(
+          1,
+          7,
+          expect.objectContaining({ nature: "non_labor", expected_lock_version: 0, parent_id: null }),
+          expect.anything(),
+          expect.anything(),
+        ),
+      );
+      // A write answers the counter and not the tree, so the screen re-reads it (row_number, level
+      // and the bearing task are all computed on read).
+      await waitFor(() => expect(mocks.getRevisionNodes).toHaveBeenCalledTimes(2));
+    });
+
+    // Criterion 5 of #337 is only observable if the figure follows the tree: the revision's totals
+    // are re-read whenever its lock counter advances, that is after every write.
+    it("re-reads the revision's totals after a write, so the figure follows the tree", async () => {
+      openDevisTab();
+      mocks.getRevisionNodes
+        .mockResolvedValueOnce(
+          revisionTree({
+            nodes: [
+              taskNode(1, { name: "Poste", rowNumber: 1 }),
+              costNode(2, { parentId: 1, position: 1, level: 2, rowNumber: 2, label: "Béton" }),
+            ],
+          }),
+        )
+        .mockResolvedValue(
+          revisionTree({
+            lock_version: 1,
+            nodes: [
+              taskNode(1, { name: "Poste", rowNumber: 1 }),
+              costNode(2, { position: 2, rowNumber: 2, label: "Béton" }),
+            ],
+          }),
+        );
+      // Amounts no cell of the grid itself computes, so the assertion can only be reading the
+      // published total and not a row's own PRU.
+      mocks.getRevisionAggregates
+        .mockResolvedValueOnce(revisionAggregates({ total_purchase_cost: "1234.00" }))
+        .mockResolvedValue(revisionAggregates({ total_purchase_cost: "2345.00" }));
+
+      render(<ProjectDetailsPage />);
+      fireEvent.click(await screen.findByRole("tab", { name: "Devis" }));
+      const grid = await screen.findByRole("treegrid", { name: "Devis de la révision" });
+      await screen.findByText("1 234,00 €");
+
+      // Outdented to the root: it bears no task any more, and is counted all the same.
+      fireEvent.click(within(grid).getByLabelText("Libellé de Béton").closest("tr") as HTMLElement);
+      fireEvent.click(screen.getByRole("button", { name: "Désindenter" }));
+
+      expect(await screen.findByText("2 345,00 €")).toBeInTheDocument();
+    });
+
+    it("keeps the displayed revision's totals while a write's new ones are being read", async () => {
+      // The counterpart of the test above, and the reason the clearing is bound to a *change of
+      // revision*: blanking the three cards on every `lock_version` bump would be a flicker after
+      // every edit, not a correction -- the figures still describe the revision on screen, a cent
+      // out of date for the length of one request.
+      openDevisTab();
+      mocks.getRevisionNodes
+        .mockResolvedValueOnce(
+          revisionTree({
+            nodes: [
+              taskNode(1, { name: "Poste", rowNumber: 1 }),
+              costNode(2, { parentId: 1, position: 1, level: 2, rowNumber: 2, label: "Béton" }),
+            ],
+          }),
+        )
+        .mockResolvedValue(
+          revisionTree({
+            lock_version: 1,
+            nodes: [
+              taskNode(1, { name: "Poste", rowNumber: 1 }),
+              costNode(2, { position: 2, rowNumber: 2, label: "Béton" }),
+            ],
+          }),
+        );
+      mocks.getRevisionAggregates
+        .mockResolvedValueOnce(revisionAggregates({ total_purchase_cost: "1234.00" }))
+        .mockReturnValue(new Promise<RevisionAggregates>(() => undefined));
+
+      render(<ProjectDetailsPage />);
+      fireEvent.click(await screen.findByRole("tab", { name: "Devis" }));
+      const grid = await screen.findByRole("treegrid", { name: "Devis de la révision" });
+      await screen.findByText("1 234,00 €");
+
+      fireEvent.click(within(grid).getByLabelText("Libellé de Béton").closest("tr") as HTMLElement);
+      fireEvent.click(screen.getByRole("button", { name: "Désindenter" }));
+
+      await waitFor(() => expect(mocks.getRevisionAggregates).toHaveBeenCalledTimes(2));
+      expect(screen.getByText("1 234,00 €")).toBeInTheDocument();
+    });
+
+    it("exports the displayed revision's devis, and not some other document", async () => {
+      openDevisTab();
+      mocks.getRevisionNodes.mockResolvedValue(
+        revisionTree({ nodes: [taskNode(1, { name: "Poste", rowNumber: 1 })] }),
+      );
+      mocks.exportRevisionExcel.mockResolvedValue(new Blob(["x"]));
+      const createObjectURL = vi.fn(() => "blob:devis");
+      const revokeObjectURL = vi.fn();
+      Object.defineProperty(window.URL, "createObjectURL", { value: createObjectURL, configurable: true });
+      Object.defineProperty(window.URL, "revokeObjectURL", { value: revokeObjectURL, configurable: true });
+
+      render(<ProjectDetailsPage />);
+      fireEvent.click(await screen.findByRole("tab", { name: "Devis" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Exporter le devis" }));
+
+      await waitFor(() =>
+        expect(mocks.exportRevisionExcel).toHaveBeenCalledWith(1, 7, expect.anything(), expect.anything()),
+      );
+      await waitFor(() => expect(createObjectURL).toHaveBeenCalled());
+    });
+
+    // E6-03's bulk assignment, carried over to the revision: several writes, one lock counter.
+    it("assigns a cost code to a selection, threading the counter from one write to the next", async () => {
+      openDevisTab();
+      mocks.getProjectCostCodes.mockResolvedValue([{ id: 3, code: "C1", name: "Chantier" }]);
+      mocks.getRevisionNodes.mockResolvedValue(
+        revisionTree({
+          nodes: [
+            costNode(1, { label: "Béton", position: 1, rowNumber: 1 }),
+            costNode(2, { label: "Acier", position: 2, rowNumber: 2 }),
+          ],
+        }),
+      );
+      mocks.updateRevisionCostFacet
+        .mockResolvedValueOnce({ revision_id: 7, lock_version: 1 })
+        .mockResolvedValue({ revision_id: 7, lock_version: 2 });
+
+      render(<ProjectDetailsPage />);
+      fireEvent.click(await screen.findByRole("tab", { name: "Devis" }));
+      const grid = await screen.findByRole("treegrid", { name: "Devis de la révision" });
+
+      fireEvent.click(within(grid).getByLabelText("Libellé de Béton").closest("tr") as HTMLElement);
+      fireEvent.click(within(grid).getByLabelText("Libellé de Acier").closest("tr") as HTMLElement, {
+        ctrlKey: true,
+      });
+      fireEvent.change(screen.getByLabelText("Code d'imputation"), { target: { value: "3" } });
+      fireEvent.click(screen.getByRole("button", { name: "Affecter" }));
+
+      await waitFor(() => expect(mocks.updateRevisionCostFacet).toHaveBeenCalledTimes(2));
+      // React state does not update between two awaits, so a loop of independent writes would send
+      // `0` twice and 409 on the second line. The second call must carry what the first answered.
+      expect(mocks.updateRevisionCostFacet.mock.calls[0][3]).toEqual({
+        expected_lock_version: 0,
+        cost_code_id: 3,
+      });
+      expect(mocks.updateRevisionCostFacet.mock.calls[1][3]).toEqual({
+        expected_lock_version: 1,
+        cost_code_id: 3,
+      });
+    });
+
+    // The amendment's second point, end to end: there is no `nature` to PATCH, so the switch is a
+    // create followed by a delete, both under the same lock and in that order.
+    it("switches a cost line to MO by replacing it, threading the lock counter through", async () => {
+      openDevisTab();
+      mocks.getResourceNodes.mockResolvedValue([
+        { id: 1, parent_id: null, code: "DIR", name: "Direction", is_active: true, created_at: "", updated_at: "" },
+        { id: 2, parent_id: 1, code: "ETU", name: "Études", is_active: true, created_at: "", updated_at: "" },
+      ]);
+      mocks.getResourceRoles.mockResolvedValue({
+        items: [{ id: 7, node_id: 2, cost_category_id: 40, name: "Ingénieur", calendar_id: null, is_active: true, created_at: "", updated_at: "" }],
+        total: 1,
+      });
+      mocks.getRevisionNodes.mockResolvedValue(
+        revisionTree({
+          nodes: [
+            taskNode(1, { name: "Poste", rowNumber: 1 }),
+            costNode(2, { parentId: 1, position: 1, level: 2, rowNumber: 2, label: "Béton" }),
+          ],
+        }),
+      );
+      mocks.createRevisionCostLine.mockResolvedValue({ revision_id: 7, lock_version: 5, node_id: 99, work_item_id: 99 });
+
+      render(<ProjectDetailsPage />);
+      fireEvent.click(await screen.findByRole("tab", { name: "Devis" }));
+      await screen.findByRole("treegrid", { name: "Devis de la révision" });
+      await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalled());
+
+      fireEvent.change(screen.getByLabelText("Type de Béton"), { target: { value: "labor" } });
+      fireEvent.change(await screen.findByLabelText("Dpt 1er niveau de Béton"), { target: { value: "1" } });
+      fireEvent.change(screen.getByLabelText("Dpt 2eme niveau de Béton"), { target: { value: "2" } });
+      fireEvent.change(screen.getByLabelText("Rôle de Béton"), { target: { value: "7" } });
+
+      await waitFor(() =>
+        expect(mocks.createRevisionCostLine).toHaveBeenCalledWith(
+          1,
+          7,
+          {
+            nature: "labor",
+            label: "Béton",
+            quantity: 2,
+            role_id: 7,
+            hours: 0,
+            // Nature-agnostic attributes, carried over so the replacement does not silently drop
+            // them (empty on this fixture; estimate-grid-tree-table.test.tsx carries real ones).
+            cost_code_id: null,
+            comment: null,
+            description: null,
+            planned_date: null,
+            // Same parent and same rank, so the row stays where the user left it.
+            parent_id: 1,
+            position: 1,
+            expected_lock_version: 0,
+          },
+          expect.anything(),
+          expect.anything(),
+        ),
+      );
+      // The delete carries the counter the *create* answered, not the one read from the tree: the
+      // two are one composite write, and re-reading React state between two awaits would send a
+      // counter already spent.
+      await waitFor(() =>
+        expect(mocks.deleteRevisionNodes).toHaveBeenCalledWith(
+          1,
+          7,
+          { expected_lock_version: 5, node_ids: [2] },
+          expect.anything(),
+          expect.anything(),
+        ),
+      );
+    });
+
+    // ----------------------------------------------------------------------------------------
+    // The failure branches of the composite write, which is the most delicate path of #337: the
+    // nominal case above is one request followed by another, and everything below is what
+    // happens when the second one does not answer.
+    // ----------------------------------------------------------------------------------------
+
+    /** A revision whose only cost line can be switched, with the referential the cascade needs. */
+    function switchableCostLine(nodes: RevisionNode[]) {
+      openDevisTab();
+      mocks.getResourceNodes.mockResolvedValue([
+        { id: 1, parent_id: null, code: "DIR", name: "Direction", is_active: true, created_at: "", updated_at: "" },
+        { id: 2, parent_id: 1, code: "ETU", name: "Études", is_active: true, created_at: "", updated_at: "" },
+      ]);
+      mocks.getResourceRoles.mockResolvedValue({
+        items: [{ id: 7, node_id: 2, cost_category_id: 40, name: "Ingénieur", calendar_id: null, is_active: true, created_at: "", updated_at: "" }],
+        total: 1,
+      });
+      mocks.getRevisionNodes.mockResolvedValue(revisionTree({ nodes }));
+    }
+
+    /** Walks the whole Dpt -> Dpt -> Rôle cascade on `label`, which is what asks for the switch. */
+    async function switchToLabor(label: string) {
+      fireEvent.change(screen.getByLabelText(`Type de ${label}`), { target: { value: "labor" } });
+      fireEvent.change(await screen.findByLabelText(`Dpt 1er niveau de ${label}`), { target: { value: "1" } });
+      fireEvent.change(screen.getByLabelText(`Dpt 2eme niveau de ${label}`), { target: { value: "2" } });
+      fireEvent.change(screen.getByLabelText(`Rôle de ${label}`), { target: { value: "7" } });
+    }
+
+    it("never sends a nature switch for a line carrying sub-lines, and says why", async () => {
+      // Two layers, both asserted. The command itself is withheld -- the rule is decided on the
+      // row, before any request -- and the hook refuses the write anyway if the change ever
+      // reaches it: this test forces exactly that by driving a control the user cannot operate,
+      // which is the only thing defence in depth is ever for.
+      switchableCostLine([
+        taskNode(1, { name: "Poste", rowNumber: 1 }),
+        costNode(2, { parentId: 1, position: 1, level: 2, rowNumber: 2, label: "Béton" }),
+        costNode(3, { parentId: 2, position: 1, level: 3, rowNumber: 3, label: "Coffrage" }),
+      ]);
+
+      render(<ProjectDetailsPage />);
+      fireEvent.click(await screen.findByRole("tab", { name: "Devis" }));
+      await screen.findByRole("treegrid", { name: "Devis de la révision" });
+      await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalled());
+
+      expect(screen.getByLabelText("Type de Béton")).toBeDisabled();
+      await switchToLabor("Béton");
+
+      // The hook's message in full, not a prefix: the cell now *shows* its own refusal motif next
+      // to the disabled select (a `title` would only have reached a mouse), and the two copies
+      // share an opening. Matching loosely would let this assertion pass on the static cell text
+      // alone, i.e. without the second layer it exists to observe.
+      expect(
+        await screen.findByText(
+          "Cette ligne porte des sous-lignes : changer sa nature la remplace, ce qui supprimerait son sous-arbre. Déplace ou supprime ses sous-lignes d'abord.",
+        ),
+      ).toBeInTheDocument();
+      // Nothing was created: a replacement would have taken the sub-line with it into the
+      // delete's INV-02 cascade.
+      expect(mocks.createRevisionCostLine).not.toHaveBeenCalled();
+      expect(mocks.deleteRevisionNodes).not.toHaveBeenCalled();
+    });
+
+    it("names the half-applied state when the delete fails, offers no replay, and re-reads the tree", async () => {
+      // The create landed and the delete did not, so the revision now holds *two* lines and its
+      // counter has moved. Three things follow, and all three are the point:
+      //   * the message names what happened rather than "impossible de changer la nature";
+      //   * no "Réessayer": replaying the pair would create a second replacement;
+      //   * the tree is re-read, so the duplicate the message tells the user to delete is on
+      //     screen -- and the local lock counter is not left one write behind the server's.
+      switchableCostLine([
+        taskNode(1, { name: "Poste", rowNumber: 1 }),
+        costNode(2, { parentId: 1, position: 1, level: 2, rowNumber: 2, label: "Béton" }),
+      ]);
+      mocks.createRevisionCostLine.mockResolvedValue({ revision_id: 7, lock_version: 5, node_id: 99, work_item_id: 99 });
+      mocks.deleteRevisionNodes.mockRejectedValue(new ApiError(502, "Passerelle indisponible"));
+
+      render(<ProjectDetailsPage />);
+      fireEvent.click(await screen.findByRole("tab", { name: "Devis" }));
+      await screen.findByRole("treegrid", { name: "Devis de la révision" });
+      await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalled());
+      expect(mocks.getRevisionNodes).toHaveBeenCalledTimes(1);
+
+      await switchToLabor("Béton");
+
+      expect(
+        await screen.findByText(/l'ancienne n'a pas pu être supprimée : recharge la révision/),
+      ).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Réessayer" })).not.toBeInTheDocument();
+      // The re-read the failure branch owes: without it the grid never shows the duplicate, and
+      // every later write leaves with a counter the create has already spent.
+      await waitFor(() => expect(mocks.getRevisionNodes).toHaveBeenCalledTimes(2));
+    });
+
+    it("shows the reload banner when the delete half comes back on a stale counter", async () => {
+      // The re-wrapping the composite write does must not cost the failure its classification: a
+      // 409 REVISION_LOCK_CONFLICT stripped of its `detail.code` is no longer recognised as one,
+      // and the banner -- the only way to resynchronise this screen -- never appears. The user is
+      // then left on an editable grid where every write fails with a generic message and no exit.
+      switchableCostLine([
+        taskNode(1, { name: "Poste", rowNumber: 1 }),
+        costNode(2, { parentId: 1, position: 1, level: 2, rowNumber: 2, label: "Béton" }),
+      ]);
+      mocks.createRevisionCostLine.mockResolvedValue({ revision_id: 7, lock_version: 5, node_id: 99, work_item_id: 99 });
+      mocks.deleteRevisionNodes.mockRejectedValue(
+        new ApiError(409, "Conflit de version", {
+          code: "REVISION_LOCK_CONFLICT",
+          revision_id: 7,
+          expected_lock_version: 5,
+          current_lock_version: 6,
+        }),
+      );
+
+      render(<ProjectDetailsPage />);
+      fireEvent.click(await screen.findByRole("tab", { name: "Devis" }));
+      await screen.findByRole("treegrid", { name: "Devis de la révision" });
+      await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalled());
+
+      await switchToLabor("Béton");
+
+      expect(await screen.findByRole("button", { name: "Recharger la révision" })).toBeInTheDocument();
+    });
+
+    it("re-reads the tree when a bulk cost-code assignment fails half-way through", async () => {
+      // Same half-applied shape as the nature switch, one write later in the sequence: the first
+      // line is written, the second is not, and the counter the tree still holds is the one the
+      // first line already spent. Without the re-read every later write leaves with it.
+      openDevisTab();
+      mocks.getProjectCostCodes.mockResolvedValue([{ id: 3, code: "C1", name: "Chantier" }]);
+      mocks.getRevisionNodes.mockResolvedValue(
+        revisionTree({
+          nodes: [
+            costNode(1, { label: "Béton", position: 1, rowNumber: 1 }),
+            costNode(2, { label: "Acier", position: 2, rowNumber: 2 }),
+          ],
+        }),
+      );
+      mocks.updateRevisionCostFacet
+        .mockResolvedValueOnce({ revision_id: 7, lock_version: 1 })
+        .mockRejectedValue(new ApiError(502, "Passerelle indisponible"));
+
+      render(<ProjectDetailsPage />);
+      fireEvent.click(await screen.findByRole("tab", { name: "Devis" }));
+      const grid = await screen.findByRole("treegrid", { name: "Devis de la révision" });
+      expect(mocks.getRevisionNodes).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(within(grid).getByLabelText("Libellé de Béton").closest("tr") as HTMLElement);
+      fireEvent.click(within(grid).getByLabelText("Libellé de Acier").closest("tr") as HTMLElement, {
+        ctrlKey: true,
+      });
+      fireEvent.change(screen.getByLabelText("Code d'imputation"), { target: { value: "3" } });
+      fireEvent.click(screen.getByRole("button", { name: "Affecter" }));
+
+      expect(await screen.findByText("Passerelle indisponible")).toBeInTheDocument();
+      // No replay either: the sequence would restart from a counter its own first write spent.
+      expect(screen.queryByRole("button", { name: "Réessayer" })).not.toBeInTheDocument();
+      await waitFor(() => expect(mocks.getRevisionNodes).toHaveBeenCalledTimes(2));
+    });
+
+    /** V3 (id 8, the displayed draft) and V2 (id 7), each with its own single cost line. */
+    async function renderTwoRevisionsInDevis() {
+      mocks.getProject.mockResolvedValue(project({ status: "initialise" }));
+      mocks.listPlannings.mockResolvedValue([]);
+      mocks.listRevisions.mockResolvedValue(
+        revisionList(
+          [
+            revisionSummary({ revision_id: 7, version_number: 2, lock_version: 2 }),
+            revisionSummary({ revision_id: 8, version_number: 3, lock_version: 4 }),
+          ],
+          { displayed_revision_id: 8 },
+        ),
+      );
+      mocks.getResourceNodes.mockResolvedValue([
+        { id: 1, parent_id: null, code: "DIR", name: "Direction", is_active: true, created_at: "", updated_at: "" },
+        { id: 2, parent_id: 1, code: "ETU", name: "Études", is_active: true, created_at: "", updated_at: "" },
+      ]);
+      mocks.getResourceRoles.mockResolvedValue({
+        items: [{ id: 7, node_id: 2, cost_category_id: 40, name: "Ingénieur", calendar_id: null, is_active: true, created_at: "", updated_at: "" }],
+        total: 1,
+      });
+      mocks.getRevisionNodes.mockImplementation(async (_projectId: number, revisionId: number) =>
+        revisionId === 8
+          ? revisionTree({
+              revision_id: 8,
+              version_number: 3,
+              lock_version: 4,
+              nodes: [costNode(2, { rowNumber: 92, label: "Béton V3" })],
+            })
+          : revisionTree({
+              revision_id: 7,
+              version_number: 2,
+              lock_version: 2,
+              nodes: [costNode(3, { rowNumber: 81, label: "Béton V2" })],
+            }),
+      );
+      render(<ProjectDetailsPage />);
+      fireEvent.click(await screen.findByRole("tab", { name: "Devis" }));
+      await screen.findByLabelText("Libellé de Béton V3");
+      await waitFor(() => expect(mocks.getResourceRoles).toHaveBeenCalled());
+    }
+
+    /** Starts a nature switch on V3 whose delete half never settles, then displays V2. */
+    async function leaveRevisionMidSwitch(): Promise<(cause: unknown) => void> {
+      let rejectDelete: (cause: unknown) => void = () => undefined;
+      mocks.createRevisionCostLine.mockResolvedValue({ revision_id: 8, lock_version: 5, node_id: 99, work_item_id: 99 });
+      mocks.deleteRevisionNodes.mockReturnValue(
+        new Promise((_resolve, reject) => {
+          rejectDelete = reject;
+        }),
+      );
+
+      await switchToLabor("Béton V3");
+      await waitFor(() => expect(mocks.deleteRevisionNodes).toHaveBeenCalled());
+
+      fireEvent.change(screen.getByRole("combobox", { name: "Révision affichée" }), {
+        target: { value: "7" },
+      });
+      expect(await screen.findByLabelText("Libellé de Béton V2")).toBeInTheDocument();
+      return rejectDelete;
+    }
+
+    it("says nothing about a nature switch whose delete fails once another revision is displayed", async () => {
+      // A 409 deliberately, and not a generic failure: it is the one the re-wrapped error has to
+      // keep classifiable, so if the guard let it through it would not merely print a message --
+      // it would raise the conflict banner over V2 and turn a perfectly editable revision
+      // read-only over a write that never touched it.
+      await renderTwoRevisionsInDevis();
+      const rejectDelete = await leaveRevisionMidSwitch();
+
+      rejectDelete(
+        new ApiError(409, "Conflit de version", {
+          code: "REVISION_LOCK_CONFLICT",
+          revision_id: 8,
+          expected_lock_version: 5,
+          current_lock_version: 6,
+        }),
+      );
+
+      await waitFor(() => expect(screen.getByLabelText("Libellé de Béton V2")).toBeInTheDocument());
+      expect(screen.queryByText(/l'ancienne n'a pas pu être supprimée/)).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Recharger la révision" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Réessayer" })).not.toBeInTheDocument();
+    });
+
+    it("still logs out when that same late failure is a 401", async () => {
+      // The expiry is not a statement about a revision: it must log the user out whatever is on
+      // screen -- including through the re-wrapping the composite write does, which is why the
+      // status has to survive it.
+      await renderTwoRevisionsInDevis();
+      const rejectDelete = await leaveRevisionMidSwitch();
+
+      rejectDelete(new ApiError(401, "Session expirée"));
+
+      await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith("/login"));
+    });
+
+    it("drops the previous revision's totals as soon as another revision is displayed", async () => {
+      // The tree and the totals are two reads: the tree can come back first, and the panel would
+      // then be mounted with the figures of the revision the user just left -- a total in euros
+      // over somebody else's lines.
+      let resolveAggregates: (value: RevisionAggregates) => void = () => undefined;
+      mocks.getRevisionAggregates.mockImplementation(async (_projectId: number, revisionId: number) =>
+        revisionId === 8
+          ? revisionAggregates({ revision_id: 8, total_purchase_cost: "1234.00" })
+          : new Promise<RevisionAggregates>((resolve) => {
+              resolveAggregates = resolve;
+            }),
+      );
+      await renderTwoRevisionsInDevis();
+      expect(await screen.findByText(/1\s*234,00/)).toBeInTheDocument();
+
+      fireEvent.change(screen.getByRole("combobox", { name: "Révision affichée" }), {
+        target: { value: "7" },
+      });
+
+      expect(await screen.findByLabelText("Libellé de Béton V2")).toBeInTheDocument();
+      expect(screen.queryByText(/1\s*234,00/)).not.toBeInTheDocument();
+
+      resolveAggregates(revisionAggregates({ revision_id: 7, total_purchase_cost: "77.00" }));
+      expect(await screen.findByText(/77,00/)).toBeInTheDocument();
     });
   });
 

@@ -1,463 +1,311 @@
 "use client";
 
-import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { BulkCostCodeAssignmentBar } from "@/components/bulk-cost-code-assignment-bar";
-import { CostLineForm, type CostLineDraft } from "@/components/cost-line-form";
-import { EstimateCreateTaskDialog } from "@/components/estimate-create-task-dialog";
 import { EstimateGridTreeTable } from "@/components/estimate-grid-tree-table";
-import {
-  EstimateMilestoneTemplateDialog,
-  type MilestoneTemplateValue,
-} from "@/components/estimate-milestone-template-dialog";
-import { EstimateRoleAssignmentDialog } from "@/components/estimate-role-assignment-dialog";
-import { EstimateVersionControls } from "@/components/estimate-version-controls";
+import { PlanningConflictBanner } from "@/components/planning-conflict-banner";
+import { PlanningVersionControls } from "@/components/planning-version-controls";
+import { isPlanningTreeReadOnly } from "@/components/planning-tree-panel";
+import type { CreateTaskCommand } from "@/hooks/use-planning-create-task-dialog";
+import type { RevisionLockConflict } from "@/hooks/use-revision-planning";
 import type {
   CostCategory,
   CostRate,
-  EstimateCostLine,
-  EstimateRoleAssignment,
-  EstimateTaskRow,
-  EstimateValidationWarning,
   ProjectCostCode,
-  ProjectEstimate,
   ResourceNode,
   ResourceRole,
-  Task,
+  Revision,
+  RevisionAggregates,
+  RevisionCostLineCreateInput,
+  RevisionTree,
 } from "@/lib/backend";
-import type { EstimateGridMoveCommand } from "@/lib/estimate-grid-move";
+import type { PlanningMoveMode } from "@/lib/planning-tree";
+import { formatEuros, type RevisionCostRow } from "@/lib/revision-cost-grid";
 
-export type EstimateTabProps = {
+export type EstimateTabProps = Readonly<{
   active: boolean;
-  estimates: ProjectEstimate[];
-  selectedEstimateId: number | null;
-  onSelectEstimate: (estimateId: number) => void;
+  // The revision, read and written through the very same hook instance the Planning tab uses --
+  // one tree, one optimistic-lock counter. That is what makes "l'onglet Planning reflète
+  // l'opération sans action de synchronisation" true by construction rather than by a refresh.
+  revisions: Revision[];
+  selectedRevision: Revision | null;
+  selectedRevisionId: number | null;
+  referenceRevisionId: number | null;
+  revisionsBusy: boolean;
+  treeBusy: boolean;
+  tree: RevisionTree | null;
+  mutationBusy: boolean;
+  conflict: RevisionLockConflict | null;
+  feedback: string | null;
+  /** True when the page already shows an error banner, so this tab keeps quiet about it. */
+  hasError: boolean;
   isReadOnlyProject: boolean;
-  onNewDraft: () => void;
+  onSelectRevision: (revisionId: number) => void;
+  onCreateDraft: () => void;
+  onValidateRevision: () => void;
+  onReloadConflict: () => void;
   exportBusy: boolean;
   onExport: () => void;
-  canEditEstimate: boolean;
-  estimateBusy: boolean;
-  onOpenValidation: () => void;
-  validationWarnings: EstimateValidationWarning[];
-  onDismissValidationWarnings: () => void;
-  // E12-04/#276: the full task-row list backs both the "tâches snapshotées" count (derived below
-  // via `.length`, kept as a small computation rather than a separate `estimateTaskRowCount`
-  // prop, so callers can't let the two drift out of sync) and the Devis grid's task hierarchy.
-  estimateTaskRows: EstimateTaskRow[];
-  costLines: EstimateCostLine[];
+  /** The revision's totals, priced from its cost facets -- null while unread or unavailable. */
+  aggregates: RevisionAggregates | null;
+  aggregatesBusy: boolean;
+  // Referentials, loaded once per project.
   costCategories: CostCategory[];
-  // E12-05/#277: the full (including inactive) cost-category referential, threaded straight
-  // through to EstimateGridTreeTable for its "Type" column's category-name resolution -- see
-  // that prop's own doc comment on why it's a separate list from `costCategories` above (that one
-  // stays active-only, since it feeds CostLineForm's create-line `<select>` and the grid's own
-  // "Type" `<select>` for an existing non-MO row).
   allCostCategories: CostCategory[];
-  costLineDraft: CostLineDraft;
-  onCategoryChange: (value: string) => void;
-  onLabelChange: (value: string) => void;
-  onQuantityChange: (value: string) => void;
-  onUnitCostChange: (value: string) => void;
-  onPlannedDateChange: (value: string) => void;
-  onTaskIdChange: (value: string) => void;
-  onAddCostLine: () => void;
-  mutationBusy: boolean;
-  onMoveGridSelection: (command: EstimateGridMoveCommand) => void;
-  onRenameTask: (taskUid: number, name: string) => Promise<boolean>;
-  onUpdateCostLine: (
-    lineId: number,
-    payload: { label?: string; quantity?: number; unit_cost?: number; cost_category_id?: number },
-  ) => Promise<boolean>;
-  onUpdateRoleAssignment: (id: number, payload: { quantity?: number; hours?: number }) => Promise<boolean>;
-  onRequestDeleteCostLine: (line: EstimateCostLine) => void;
-  selectedCostLineIds: Set<number>;
-  onSelectedCostLineIdsChange: (next: Set<number>) => void;
+  resourceNodes: ResourceNode[];
+  resourceRoles: ResourceRole[];
+  costRates: CostRate[];
   projectCostCodes: ProjectCostCode[];
   bulkCostCodeId: string;
   onBulkCostCodeIdChange: (value: string) => void;
   bulkAssignBusy: boolean;
-  onBulkAssignCostCode: () => void;
-  // E6-06/#67: "add a task to the planning" dialog, launched from this tab.
-  taskDialogOpen: boolean;
-  taskDraftName: string;
-  taskDraftIsMilestone: boolean;
-  taskDraftParentUid: string;
-  parentTaskOptions: Task[];
-  taskCreateBusy: boolean;
-  taskCreateError: string | null;
-  taskCreateRequiresPlanningDraft: boolean;
-  onOpenCreateTaskDialog: () => void;
-  onCloseCreateTaskDialog: () => void;
-  onTaskDraftNameChange: (value: string) => void;
-  onTaskDraftIsMilestoneChange: (value: boolean) => void;
-  onTaskDraftParentUidChange: (value: string) => void;
-  onSubmitCreateTask: () => void;
-  onReopenStructure: () => void;
-  // E6-07/#68: "apply a milestone template" dialog, launched from a single cost line row.
-  milestoneDialogOpen: boolean;
-  milestoneLineId: number | null;
-  milestoneTemplate: MilestoneTemplateValue;
-  milestoneIntermediateCount: string;
-  milestoneLagMinutes: string;
-  milestoneBusy: boolean;
-  milestoneError: string | null;
-  milestoneRequiresPlanningDraft: boolean;
-  onOpenMilestoneDialog: (line: EstimateCostLine) => void;
-  onCloseMilestoneDialog: () => void;
-  onMilestoneTemplateChange: (value: MilestoneTemplateValue) => void;
-  onMilestoneIntermediateCountChange: (value: string) => void;
-  onMilestoneLagMinutesChange: (value: string) => void;
-  onSubmitMilestoneTemplate: () => void;
-  onReopenStructureForMilestone: () => void;
-  // E12-06/#278: role-assignment ("MO") referentials, threaded straight through to
-  // EstimateGridTreeTable's own Dept/Rôle/Taux horaire/PRU column resolution -- see that
-  // component's own prop doc comments.
-  estimateRoleAssignments: EstimateRoleAssignment[];
-  resourceNodes: ResourceNode[];
-  resourceRoles: ResourceRole[];
-  costRates: CostRate[];
-  onRequestDeleteRoleAssignment: (assignment: EstimateRoleAssignment) => void;
-  // "Ajouter une ligne MO" dialog (create-only -- editing an existing row's Qté/Heures happens
-  // inline in the grid instead, see EstimateGridTreeTable's onUpdateRoleAssignment).
-  roleAssignmentDialogOpen: boolean;
-  roleAssignmentDept1Id: string;
-  onRoleAssignmentDept1IdChange: (value: string) => void;
-  roleAssignmentDept2Id: string;
-  onRoleAssignmentDept2IdChange: (value: string) => void;
-  roleAssignmentRoles: ResourceRole[];
-  roleAssignmentRolesLoading: boolean;
-  roleAssignmentRoleId: string;
-  onRoleAssignmentRoleIdChange: (value: string) => void;
-  roleAssignmentTaskId: string;
-  onRoleAssignmentTaskIdChange: (value: string) => void;
-  roleAssignmentQuantity: string;
-  onRoleAssignmentQuantityChange: (value: string) => void;
-  roleAssignmentHours: string;
-  onRoleAssignmentHoursChange: (value: string) => void;
-  roleAssignmentCostCodeId: string;
-  onRoleAssignmentCostCodeIdChange: (value: string) => void;
-  roleAssignmentComment: string;
-  onRoleAssignmentCommentChange: (value: string) => void;
-  roleAssignmentBusy: boolean;
-  roleAssignmentError: string | null;
-  onOpenRoleAssignmentDialog: () => void;
-  // E12-11/#293: same dialog, launched from a labor row's right-click context menu instead of
-  // the toolbar button above -- see EstimateGridTreeTable's own onAddRoleAssignmentForRow prop
-  // doc comment.
-  onOpenRoleAssignmentDialogForRow: (assignment: EstimateRoleAssignment) => void;
-  onCloseRoleAssignmentDialog: () => void;
-  onSubmitRoleAssignment: () => void;
-};
+  onAssignCostCode: (nodeIds: number[]) => void;
+  onMove: (mode: PlanningMoveMode, nodeIds: number[]) => void;
+  onUpdatePlanning: (nodeId: number, payload: { name: string }) => Promise<boolean>;
+  onUpdateCost: (
+    nodeId: number,
+    payload: {
+      label?: string;
+      quantity?: number;
+      hours?: number;
+      unit_cost?: number;
+      role_id?: number;
+      cost_type_id?: number;
+      cost_category_id?: number;
+    },
+  ) => Promise<boolean>;
+  onSwitchNature: (
+    row: RevisionCostRow,
+    payload: Omit<RevisionCostLineCreateInput, "expected_lock_version" | "parent_id" | "position">,
+  ) => Promise<boolean>;
+  onCreateCostLine: (payload: Omit<RevisionCostLineCreateInput, "expected_lock_version">) => void;
+  onCreateTask: (command: CreateTaskCommand) => void;
+  onDeleteNodes: (nodeIds: number[]) => void;
+}>;
 
-// Extracted from ProjectDetailsPage (E4-11 / #151): composes the whole "Devis" tab (version
-// controls, cost-line form, cost lines table). Gates its own visibility via the `active` prop
-// instead of a ternary at the call site, matching PlanningTab. Verbatim JSX move -- see page.tsx
-// call site for wiring.
+// E14-11 (#337): the Devis tab, rebuilt on the revision.
+//
+// A "version de devis" is no longer a document of its own: it is a **revision**, the same one the
+// Planning tab shows, and it carries both facets. So the version controls, the read-only rule and
+// the lock-conflict banner are literally the planning ones (PlanningVersionControls,
+// isPlanningTreeReadOnly, PlanningConflictBanner) rather than a second set that would have to be
+// kept in step with them.
 export function EstimateTab({
   active,
-  estimates,
-  selectedEstimateId,
-  onSelectEstimate,
+  revisions,
+  selectedRevision,
+  selectedRevisionId,
+  referenceRevisionId,
+  revisionsBusy,
+  treeBusy,
+  tree,
+  mutationBusy,
+  conflict,
+  feedback,
+  hasError,
   isReadOnlyProject,
-  onNewDraft,
+  onSelectRevision,
+  onCreateDraft,
+  onValidateRevision,
+  onReloadConflict,
   exportBusy,
   onExport,
-  canEditEstimate,
-  estimateBusy,
-  onOpenValidation,
-  validationWarnings,
-  onDismissValidationWarnings,
-  estimateTaskRows,
-  costLines,
+  aggregates,
+  aggregatesBusy,
   costCategories,
   allCostCategories,
-  costLineDraft,
-  onCategoryChange,
-  onLabelChange,
-  onQuantityChange,
-  onUnitCostChange,
-  onPlannedDateChange,
-  onTaskIdChange,
-  onAddCostLine,
-  mutationBusy,
-  onMoveGridSelection,
-  onRenameTask,
-  onUpdateCostLine,
-  onUpdateRoleAssignment,
-  onRequestDeleteCostLine,
-  selectedCostLineIds,
-  onSelectedCostLineIdsChange,
+  resourceNodes,
+  resourceRoles,
+  costRates,
   projectCostCodes,
   bulkCostCodeId,
   onBulkCostCodeIdChange,
   bulkAssignBusy,
-  onBulkAssignCostCode,
-  taskDialogOpen,
-  taskDraftName,
-  taskDraftIsMilestone,
-  taskDraftParentUid,
-  parentTaskOptions,
-  taskCreateBusy,
-  taskCreateError,
-  taskCreateRequiresPlanningDraft,
-  onOpenCreateTaskDialog,
-  onCloseCreateTaskDialog,
-  onTaskDraftNameChange,
-  onTaskDraftIsMilestoneChange,
-  onTaskDraftParentUidChange,
-  onSubmitCreateTask,
-  onReopenStructure,
-  milestoneDialogOpen,
-  milestoneLineId,
-  milestoneTemplate,
-  milestoneIntermediateCount,
-  milestoneLagMinutes,
-  milestoneBusy,
-  milestoneError,
-  milestoneRequiresPlanningDraft,
-  onOpenMilestoneDialog,
-  onCloseMilestoneDialog,
-  onMilestoneTemplateChange,
-  onMilestoneIntermediateCountChange,
-  onMilestoneLagMinutesChange,
-  onSubmitMilestoneTemplate,
-  onReopenStructureForMilestone,
-  estimateRoleAssignments,
-  resourceNodes,
-  resourceRoles,
-  costRates,
-  onRequestDeleteRoleAssignment,
-  roleAssignmentDialogOpen,
-  roleAssignmentDept1Id,
-  onRoleAssignmentDept1IdChange,
-  roleAssignmentDept2Id,
-  onRoleAssignmentDept2IdChange,
-  roleAssignmentRoles,
-  roleAssignmentRolesLoading,
-  roleAssignmentRoleId,
-  onRoleAssignmentRoleIdChange,
-  roleAssignmentTaskId,
-  onRoleAssignmentTaskIdChange,
-  roleAssignmentQuantity,
-  onRoleAssignmentQuantityChange,
-  roleAssignmentHours,
-  onRoleAssignmentHoursChange,
-  roleAssignmentCostCodeId,
-  onRoleAssignmentCostCodeIdChange,
-  roleAssignmentComment,
-  onRoleAssignmentCommentChange,
-  roleAssignmentBusy,
-  roleAssignmentError,
-  onOpenRoleAssignmentDialog,
-  onOpenRoleAssignmentDialogForRow,
-  onCloseRoleAssignmentDialog,
-  onSubmitRoleAssignment,
+  onAssignCostCode,
+  onMove,
+  onUpdatePlanning,
+  onUpdateCost,
+  onSwitchNature,
+  onCreateCostLine,
+  onCreateTask,
+  onDeleteNodes,
 }: EstimateTabProps) {
   if (!active) {
     return null;
   }
 
-  // Resolved here (rather than threaded as its own prop) since costLines is already available
-  // and is the single source of truth for a cost line's current label -- avoids the dialog ever
-  // showing a stale label if the line was edited after the dialog was opened.
-  const milestoneCostLine = costLines.find((line) => line.id === milestoneLineId) ?? null;
-
-  // Haute review finding on #68: a cost line whose `task_id` points at a milestone task can never
-  // accept the milestone-template action -- `create_planning_task` unconditionally rejects
-  // attaching children to a milestone with a 409 (see EstimateGridTreeTable's milestoneTaskIds
-  // prop doc comment) -- so it's resolved here from the same `parentTaskOptions` (`Task[]`,
-  // `planningDetail.tasks`) this tab already threads to EstimateCreateTaskDialog, mirroring that
-  // dialog's own `.filter((task) => !task.is_milestone)` parent-task guard.
-  const milestoneTaskIds = new Set(
-    parentTaskOptions.filter((task) => task.is_milestone).map((task) => task.id),
-  );
+  const readOnly = isPlanningTreeReadOnly(isReadOnlyProject, conflict !== null, tree);
+  const showEmptyState = !revisionsBusy && !treeBusy && !hasError && !revisions.length;
+  // Every write handler, withheld in one place instead of nine `readOnly ? undefined :` at the
+  // call site. The grid decides what to render from the *absence* of a handler as much as from
+  // `readOnly` itself, so a read-only revision offers no command to press and none to reach.
+  //
+  // Defence in depth, and inert as things stand: the grid's own `readOnly` already hides its
+  // toolbar, its context menus and every editable cell, so no test can tell this apart from
+  // passing the handlers through. Kept because each layer stands on its own -- and read as
+  // *coverage* by nobody.
+  const writeHandlers = readOnly
+    ? {}
+    : {
+        onAssignCostCode,
+        onMove,
+        onUpdatePlanning,
+        onUpdateCost,
+        onSwitchNature,
+        onCreateCostLine,
+        onCreateTask,
+        onDeleteNodes,
+      };
 
   return (
     <div className="grid gap-4">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h2>Versions de devis</h2>
+          <h2>Devis de la révision</h2>
           <p className="text-sm text-muted-foreground">
-            {canEditEstimate ? "Le brouillon sélectionné est éditable." : "Cette version n'est plus modifiable."}
+            {readOnly
+              ? "Cette révision n'est plus modifiable : crée un brouillon pour la chiffrer."
+              : "Le brouillon affiché est éditable. Le planning et le devis sont le même arbre."}
           </p>
         </div>
-        <EstimateVersionControls
-          estimates={estimates}
-          selectedEstimateId={selectedEstimateId}
-          onSelectEstimate={onSelectEstimate}
-          isReadOnlyProject={isReadOnlyProject}
-          onNewDraft={onNewDraft}
-          exportBusy={exportBusy}
-          onExport={onExport}
-          canEditEstimate={canEditEstimate}
-          estimateBusy={estimateBusy}
-          onOpenValidation={onOpenValidation}
-        />
+        <div className="flex flex-wrap items-center gap-2">
+          <PlanningVersionControls
+            revisions={revisions}
+            selectedRevisionId={selectedRevisionId}
+            selectedRevision={selectedRevision}
+            referenceRevisionId={referenceRevisionId}
+            revisionsBusy={revisionsBusy}
+            mutationBusy={mutationBusy}
+            isReadOnlyProject={isReadOnlyProject}
+            hasConflict={conflict !== null}
+            onSelectRevision={onSelectRevision}
+            onCreateDraft={onCreateDraft}
+            onValidate={onValidateRevision}
+            // The lotissement is a planning-side screen: offering it from the devis would send the
+            // user to another tab to answer a question this one never asked.
+            showReopenStructure={false}
+            onReopenStructure={() => {}}
+          />
+          <Button
+            type="button"
+            variant="outline"
+            disabled={exportBusy || selectedRevisionId === null}
+            onClick={onExport}
+          >
+            {exportBusy ? "Export..." : "Exporter le devis"}
+          </Button>
+        </div>
       </div>
 
-      {validationWarnings.length ? (
+      <PlanningConflictBanner conflict={conflict} onReload={onReloadConflict} />
+
+      {feedback ? (
         <Alert>
-          <AlertAction>
-            <Button size="sm" variant="outline" onClick={onDismissValidationWarnings}>
-              Fermer
-            </Button>
-          </AlertAction>
-          <AlertDescription>
-            <p>
-              Devis validé -- {validationWarnings.length} tâche
-              {validationWarnings.length > 1 ? "s" : ""} sans affectation de rôle ni ligne de coût :
-            </p>
-            <ul className="mt-1 list-disc pl-4">
-              {validationWarnings.map((warning) => (
-                <li key={warning.task_uid}>{warning.task_name}</li>
-              ))}
-            </ul>
-          </AlertDescription>
+          <AlertDescription>{feedback}</AlertDescription>
         </Alert>
       ) : null}
 
-      {!estimates.length ? <p className="py-6 text-sm text-muted-foreground">Aucune version de devis.</p> : null}
+      {revisionsBusy || treeBusy ? (
+        <p className="text-sm text-muted-foreground" role="status">
+          Chargement de la révision...
+        </p>
+      ) : null}
 
-      {estimates.length ? (
-        <div className="grid gap-4">
-          <div className="grid min-w-37.5 w-fit gap-0.5 rounded-lg border bg-muted/40 px-4 py-3">
-            <strong>{estimateTaskRows.length}</strong>
-            <span>tâches snapshotées</span>
-          </div>
-          <div className="grid min-w-37.5 w-fit gap-0.5 rounded-lg border bg-muted/40 px-4 py-3">
-            <strong>{costLines.length}</strong>
-            <span>lignes de coût</span>
-          </div>
+      {showEmptyState ? (
+        <p className="py-6 text-sm text-muted-foreground">
+          Aucune révision à chiffrer. Importe un planning MS Project ou génère le lotissement depuis
+          l&apos;onglet Planning.
+        </p>
+      ) : null}
 
-          {canEditEstimate ? (
-            <div className="flex flex-wrap gap-2">
-              <Button type="button" variant="outline" disabled={estimateBusy} onClick={onOpenCreateTaskDialog}>
-                Ajouter une tâche au planning
-              </Button>
-              <Button type="button" variant="outline" disabled={estimateBusy} onClick={onOpenRoleAssignmentDialog}>
-                Ajouter une ligne MO
-              </Button>
-            </div>
-          ) : null}
-
-          {canEditEstimate ? (
-            <CostLineForm
-              costCategories={costCategories}
-              estimateTaskRows={estimateTaskRows}
-              costLineDraft={costLineDraft}
-              onCategoryChange={onCategoryChange}
-              onLabelChange={onLabelChange}
-              onQuantityChange={onQuantityChange}
-              onUnitCostChange={onUnitCostChange}
-              onPlannedDateChange={onPlannedDateChange}
-              onTaskIdChange={onTaskIdChange}
-              estimateBusy={estimateBusy}
-              onAdd={onAddCostLine}
-            />
-          ) : null}
-
-          {canEditEstimate ? (
-            <BulkCostCodeAssignmentBar
-              selectedCount={selectedCostLineIds.size}
-              projectCostCodes={projectCostCodes}
-              bulkCostCodeId={bulkCostCodeId}
-              onBulkCostCodeIdChange={onBulkCostCodeIdChange}
-              bulkAssignBusy={bulkAssignBusy}
-              onAssign={onBulkAssignCostCode}
-            />
-          ) : null}
+      {tree ? (
+        <>
+          <RevisionTotalsPanel aggregates={aggregates} busy={aggregatesBusy} />
 
           <EstimateGridTreeTable
-            taskRows={estimateTaskRows}
-            costLines={costLines}
-            roleAssignments={estimateRoleAssignments}
-            versionKey={selectedEstimateId}
-            canEditEstimate={canEditEstimate}
+            nodes={tree.nodes}
+            revisionKey={tree.revision_id}
+            readOnly={readOnly}
             mutationBusy={mutationBusy}
             costCategories={costCategories}
             allCostCategories={allCostCategories}
             resourceNodes={resourceNodes}
             resourceRoles={resourceRoles}
             costRates={costRates}
-            planningTasks={parentTaskOptions}
-            onMove={onMoveGridSelection}
-            onRenameTask={onRenameTask}
-            onUpdateCostLine={onUpdateCostLine}
-            onUpdateRoleAssignment={onUpdateRoleAssignment}
-            selectedCostLineIds={selectedCostLineIds}
-            onSelectedCostLineIdsChange={onSelectedCostLineIdsChange}
+            projectCostCodes={projectCostCodes}
+            bulkCostCodeId={bulkCostCodeId}
+            onBulkCostCodeIdChange={onBulkCostCodeIdChange}
             bulkAssignBusy={bulkAssignBusy}
-            onOpenMilestoneDialog={onOpenMilestoneDialog}
-            milestoneTaskIds={milestoneTaskIds}
-            onRequestDeleteCostLine={onRequestDeleteCostLine}
-            onRequestDeleteRoleAssignment={onRequestDeleteRoleAssignment}
-            onAddRoleAssignmentForRow={onOpenRoleAssignmentDialogForRow}
+            {...writeHandlers}
           />
-        </div>
+        </>
       ) : null}
+    </div>
+  );
+}
 
-      <EstimateCreateTaskDialog
-        open={taskDialogOpen}
-        name={taskDraftName}
-        isMilestone={taskDraftIsMilestone}
-        parentTaskUid={taskDraftParentUid}
-        parentTaskOptions={parentTaskOptions}
-        busy={taskCreateBusy}
-        error={taskCreateError}
-        requiresPlanningDraft={taskCreateRequiresPlanningDraft}
-        onNameChange={onTaskDraftNameChange}
-        onMilestoneChange={onTaskDraftIsMilestoneChange}
-        onParentTaskUidChange={onTaskDraftParentUidChange}
-        onClose={onCloseCreateTaskDialog}
-        onSubmit={onSubmitCreateTask}
-        onReopenStructure={onReopenStructure}
-      />
+/**
+ * The revision's published figures, and the lines no figure could count.
+ *
+ * The totals are priced from the cost facets themselves, so a **brouillon** has them -- which is
+ * the state a devis is consulted in while it is being built. It is also where "une ligne
+ * désindentée jusqu'à la racine reste comptabilisée" is actually visible: a project-wide cost
+ * bears no task, and is counted all the same.
+ */
+function RevisionTotalsPanel({
+  aggregates,
+  busy,
+}: Readonly<{ aggregates: RevisionAggregates | null; busy: boolean }>) {
+  const unpriceable = aggregates?.unpriceable_facets ?? [];
+  return (
+    <>
+      <div className="flex flex-wrap gap-4">
+        <TotalCard label="Total MO" value={aggregates?.total_labor_cost ?? null} busy={busy} />
+        <TotalCard label="Total achats" value={aggregates?.total_purchase_cost ?? null} busy={busy} />
+        <TotalCard label="Total déboursé sec" value={aggregates?.total_unburdened_cost ?? null} busy={busy} />
+      </div>
+      {unpriceable.length ? (
+        <Alert>
+          <AlertTitle>Lignes non valorisables</AlertTitle>
+          <AlertDescription>
+            <p>
+              {unpriceable.length} ligne(s) de chiffrage ne sont comptées dans aucun total, faute de
+              dates sur la tâche qui les porte :
+            </p>
+            <ul className="mt-1 list-disc pl-4">
+              {unpriceable.map((facet) => (
+                <li key={facet.node_id}>
+                  {facet.label}
+                  {facet.bearing_task_name ? ` (${facet.bearing_task_name})` : ""}
+                </li>
+              ))}
+            </ul>
+          </AlertDescription>
+        </Alert>
+      ) : null}
+    </>
+  );
+}
 
-      <EstimateMilestoneTemplateDialog
-        open={milestoneDialogOpen}
-        costLineLabel={milestoneCostLine?.label ?? ""}
-        template={milestoneTemplate}
-        intermediateMilestonesCount={milestoneIntermediateCount}
-        lagMinutes={milestoneLagMinutes}
-        busy={milestoneBusy}
-        error={milestoneError}
-        requiresPlanningDraft={milestoneRequiresPlanningDraft}
-        onTemplateChange={onMilestoneTemplateChange}
-        onIntermediateMilestonesCountChange={onMilestoneIntermediateCountChange}
-        onLagMinutesChange={onMilestoneLagMinutesChange}
-        onClose={onCloseMilestoneDialog}
-        onSubmit={onSubmitMilestoneTemplate}
-        onReopenStructure={onReopenStructureForMilestone}
-      />
+/**
+ * One published figure of the revision, in euros at the cent as the backend rounded it.
+ *
+ * A total that could not be read is "—" and never 0: a revision with no chiffrage at all really
+ * does total zero euros, and the two must not look alike.
+ */
+function totalCardText(value: string | null, busy: boolean): string {
+  if (value === null) {
+    return busy ? "..." : "—";
+  }
+  const amount = Number(value);
+  return Number.isFinite(amount) ? formatEuros(amount) : "—";
+}
 
-      <EstimateRoleAssignmentDialog
-        open={roleAssignmentDialogOpen}
-        resourceNodes={resourceNodes}
-        dept1Id={roleAssignmentDept1Id}
-        onDept1IdChange={onRoleAssignmentDept1IdChange}
-        dept2Id={roleAssignmentDept2Id}
-        onDept2IdChange={onRoleAssignmentDept2IdChange}
-        roles={roleAssignmentRoles}
-        rolesLoading={roleAssignmentRolesLoading}
-        roleId={roleAssignmentRoleId}
-        onRoleIdChange={onRoleAssignmentRoleIdChange}
-        estimateTaskRows={estimateTaskRows}
-        taskId={roleAssignmentTaskId}
-        onTaskIdChange={onRoleAssignmentTaskIdChange}
-        quantity={roleAssignmentQuantity}
-        onQuantityChange={onRoleAssignmentQuantityChange}
-        hours={roleAssignmentHours}
-        onHoursChange={onRoleAssignmentHoursChange}
-        projectCostCodes={projectCostCodes}
-        costCodeId={roleAssignmentCostCodeId}
-        onCostCodeIdChange={onRoleAssignmentCostCodeIdChange}
-        comment={roleAssignmentComment}
-        onCommentChange={onRoleAssignmentCommentChange}
-        busy={roleAssignmentBusy}
-        error={roleAssignmentError}
-        onClose={onCloseRoleAssignmentDialog}
-        onSubmit={onSubmitRoleAssignment}
-      />
+function TotalCard({ label, value, busy }: Readonly<{ label: string; value: string | null; busy: boolean }>) {
+  return (
+    <div className="grid min-w-37.5 w-fit gap-0.5 rounded-lg border bg-muted/40 px-4 py-3">
+      <strong>{totalCardText(value, busy)}</strong>
+      <span>{label}</span>
     </div>
   );
 }
