@@ -30,6 +30,40 @@
         $ref: ../components/responses/RevisionConflict.yaml
       '422':
         $ref: ../components/responses/RevisionUnprocessable.yaml
+/projects/{projectId}/revisions/{revisionId}/aggregates:
+  get:
+    tags:
+    - projects
+    summary: Lire les totaux d'une revision
+    description: >-
+      Totaux calcules a partir des facettes cout de la revision, pas de lignes figees :
+      un brouillon a donc un total, ce que le devis historique ne savait pas produire.
+      La tache porteuse de chaque ligne est resolue dans l'arbre (INV-01), jamais lue
+      dans une colonne, et une facette cout placee a la racine -- sans tache porteuse --
+      compte dans le total comme les autres. Un taux horaire ou un coefficient
+      d'inflation manquant est signale dans le corps de la reponse et jamais leve : ceci
+      est une lecture, et un 500 rendrait illisible un brouillon parfaitement editable.
+    operationId: readRevisionAggregates
+    security:
+    - bearerAuth: []
+    parameters:
+    - $ref: ../components/parameters/ProjectId.yaml
+    - $ref: ../components/parameters/RevisionId.yaml
+    responses:
+      '200':
+        description: Totaux de la revision, avec les couvertures de taux manquantes
+        content:
+          application/json:
+            schema:
+              $ref: ../components/schemas/RevisionAggregatesRead.yaml
+      '401':
+        $ref: ../components/responses/Unauthorized.yaml
+      '404':
+        $ref: ../components/responses/RevisionNotFound.yaml
+      '409':
+        $ref: ../components/responses/RevisionConflict.yaml
+      '422':
+        $ref: ../components/responses/RevisionUnprocessable.yaml
 /projects/{projectId}/revisions/{revisionId}/tasks:
   post:
     tags:

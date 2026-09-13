@@ -70,6 +70,7 @@ from sqlalchemy.orm import Session
 
 from waterfall.domain import revision as domain
 from waterfall.models import revision as tables
+from waterfall.services.estimate_calculation import price_loaded_revision
 from waterfall.services.revision_store import (
     LoadedRevision,
     RevisionNotFoundError,
@@ -357,15 +358,39 @@ def _write(
 ) -> tuple[_T, LoadedRevision, SaveOutcome]:
     """Claim the revision, run one domain operation on it, write the result back.
 
-    The three steps of this module, in one place. ``operation`` is expected to be
+    The three steps of this module, for the operations whose domain call needs only
+    the project and the revision -- :func:`_write_loaded` is the same thing for the
+    one that needs the loaded revision itself. ``operation`` is expected to be
     a single domain call: each of them bumps the lock counter exactly once
     (:func:`~waterfall.domain.revision.guards.touch`), so composing two here would
     make one service call consume two versions and leave the caller's next
     ``expected_lock_version`` off by one.
     """
+    return _write_loaded(
+        db,
+        revision_id,
+        expected_lock_version,
+        lambda loaded: operation(loaded.project, loaded.revision),
+    )
+
+
+def _write_loaded(
+    db: Session,
+    revision_id: int,
+    expected_lock_version: int,
+    operation: Callable[[LoadedRevision], _T],
+) -> tuple[_T, LoadedRevision, SaveOutcome]:
+    """:func:`_write`, for the one operation that needs the *loaded* revision.
+
+    Deleting has to price the cost facets it is about to destroy, and pricing takes
+    a :class:`~waterfall.services.revision_store.LoadedRevision`, not the two halves
+    :func:`_write` unpacks. Everything else -- the claim, the single domain call, the
+    write back -- is unchanged, and :func:`_write` is now this function with the
+    unpacking put back, so there is still exactly one place that does the three steps.
+    """
     _claim_revision(db, revision_id, expected_lock_version)
     loaded = load_revision(db, revision_id)
-    produced = operation(loaded.project, loaded.revision)
+    produced = operation(loaded)
     outcome = save_revision(db, loaded)
     return produced, loaded, outcome
 
@@ -616,13 +641,29 @@ def delete_nodes(
     precedence link of a removed node survives, and the siblings of each removed
     node are renumbered contiguously. The removed ids are database ids -- a node
     being deleted is a node that was loaded, so its domain id *is* its row id.
+
+    Règle 3's safeguard -- "you are about to lose this much chiffrage" -- is quoted
+    from the **calculation engine**, injected as the domain's
+    :data:`~waterfall.domain.revision.pricing.AmountResolver`, exactly as the
+    MS Project re-import does it (``services.revision_import.apply_import``). Left to
+    its ``pricing.default_amount`` fallback, an MO facet would be reported at
+    ``quantity x hours x role.hourly_rate``, and ``Role.hourly_rate`` is deliberately
+    never loaded -- a rate is per year and per bearing task -- so every MO line of
+    every deletion would be announced as costing ``0``. Two routes serving the same
+    rule must not answer two different figures.
     """
-    report, loaded, outcome = _write(
-        db,
-        revision_id,
-        expected_lock_version,
-        lambda project, revision: domain.delete_nodes(project, revision, list(node_ids)),
-    )
+
+    def delete(loaded: LoadedRevision) -> domain.DeletionReport:
+        # Priced *before* the first mutation, and from the very revision that is about
+        # to be mutated: what the user is told they are losing is what the nodes were
+        # worth while they were still there. Spelled as a statement rather than as an
+        # argument so that it does not rest on evaluation order.
+        amount_of = price_loaded_revision(db, loaded).amount_of
+        return domain.delete_nodes(
+            loaded.project, loaded.revision, list(node_ids), amount_of=amount_of
+        )
+
+    report, loaded, outcome = _write_loaded(db, revision_id, expected_lock_version, delete)
     return DeletedNodes(
         revision_id=outcome.revision_id,
         lock_version=loaded.revision.lock_version,

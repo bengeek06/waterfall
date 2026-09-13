@@ -213,6 +213,11 @@ def test_estimate_calculation_labels_stay_a_closed_set() -> None:
     assert {sample.labels["function"] for sample in samples} == {
         "calculate_estimate_lines",
         "calculate_estimate_aggregates",
+        # The same engine on the revision model (E14-07b/#364). Both are created at
+        # decoration time by the very same import, so they belong to this equality for
+        # the reason the docstring above gives.
+        "price_loaded_revision",
+        "calculate_revision_aggregates",
     }
 
 

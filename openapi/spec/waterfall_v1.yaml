@@ -82,6 +82,8 @@ paths:
     $ref: ./paths/projects.yaml#/~1projects~1{projectId}~1plannings~1{planningId}
   /projects/{projectId}/revisions/{revisionId}/nodes:
     $ref: ./paths/revisions.yaml#/~1projects~1{projectId}~1revisions~1{revisionId}~1nodes
+  /projects/{projectId}/revisions/{revisionId}/aggregates:
+    $ref: ./paths/revisions.yaml#/~1projects~1{projectId}~1revisions~1{revisionId}~1aggregates
   /projects/{projectId}/revisions/{revisionId}/tasks:
     $ref: ./paths/revisions.yaml#/~1projects~1{projectId}~1revisions~1{revisionId}~1tasks
   /projects/{projectId}/revisions/{revisionId}/nodes/move:

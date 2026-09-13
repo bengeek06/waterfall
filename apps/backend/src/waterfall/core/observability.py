@@ -25,10 +25,11 @@ REQUEST_DURATION = Histogram(
 # whether the time went somewhere else in the request.
 #
 # The `function` label is filled from `__name__` by `track_duration`, so its value set is
-# closed by construction -- today the two functions E13-04 names,
-# `calculate_estimate_lines` and `calculate_estimate_aggregates`. It must never carry
-# anything derived from a request (an estimate or project id), which would make the series
-# count grow with the data.
+# closed by construction -- the two functions E13-04 names,
+# `calculate_estimate_lines` and `calculate_estimate_aggregates`, plus the two E14-07b
+# (#364) adds for the same engine on the revision model, `price_loaded_revision` and
+# `calculate_revision_aggregates`. It must never carry anything derived from a request (an
+# estimate or project id), which would make the series count grow with the data.
 #
 # Call sites, because they set what the numbers mean:
 #   - `calculate_estimate_lines` runs once per devis validation, from
@@ -39,8 +40,26 @@ REQUEST_DURATION = Histogram(
 #     thing this histogram makes visible, and the reason it is worth a metric of its own.
 #   - `calculate_estimate_aggregates` runs on `GET .../estimates/{estimate_id}/aggregates`
 #     (interactive) and inside the Excel export (`services/estimate_export.py`).
-# Neither is on the devis *grid* render path: that grid is built by `services/estimate_grid`,
-# which does not go through this engine at all.
+#   - `price_loaded_revision` is the engine on the revision model, and it runs on three
+#     paths. On every MS Project import diff and import run
+#     (`services/revision_import.py`), to price the chiffrage Rule 3 announces as lost.
+#     On every `POST .../revisions/{revision_id}/nodes/delete`
+#     (`services/revision_tree.py::delete_nodes`, the same warning and the same amounts)
+#     -- the only *interactive write* of the three, and it runs *while the caller holds
+#     the `wf_revision` row lock* taken just above it by `_claim_revision`
+#     (`SELECT ... FOR UPDATE`), so its duration is exactly the window during which every
+#     other writer on that revision is blocked, the same property that makes
+#     `calculate_estimate_lines` above worth measuring. And underneath the next entry.
+#     `price_revision` is deliberately *not* instrumented separately -- it is a one-line
+#     `load_revision` in front of this one, and a third label for the same work would say
+#     nothing the two already do not.
+#   - `calculate_revision_aggregates` runs on
+#     `GET .../revisions/{revision_id}/aggregates` (interactive), the replacement of the
+#     estimate-scoped one above. Its observation *contains* the `price_loaded_revision`
+#     one it delegates to -- the two are nested, exactly as both are nested inside
+#     `http_request_duration_seconds`, so they are read as a hierarchy and never summed.
+# None of the four is on the devis *grid* render path: that grid is built by
+# `services/estimate_grid`, which does not go through this engine at all.
 #
 # Buckets: the prometheus_client defaults with their top end extended
 # (5ms -> 10s, then 30s/60s/120s). The low end is kept boundary-for-boundary identical to
