@@ -216,7 +216,7 @@ par quelqu'un qui n'en voit plus l'utilité.
 | 10 | Planning | PLN | Partiel | code existant, maquette |
 | 11 | Devis | DEV | Partiel | devis v0.1, E12 |
 | 12 | Reste à engager et revue mensuelle | RAE | Partiel | E10 (#250) |
-| 13 | Coûts réels | CRE | Partiel | E11 (#255) |
+| 13 | Coûts réels | CRE | Décidé | E11 (#255) |
 | 14 | Avancement et valeur acquise | AVA | Partiel | avancement v0.1, E10 |
 | 15 | Analyse et restitution | ANA | Décidé | maquette |
 | 16 | Management et portefeuille | CHA | Décidé | maquette |
@@ -278,14 +278,13 @@ provisions pour risques (question 2), sous-traitance et fournitures
 reprise après rejet, le rattachement par le sous-code d'imputation analytique, le
 rejet individuel plutôt que le blocage, les montants repris tels quels sans
 recalcul, l'exclusion de périmètre et les deux consommés, et la granularité à
-laquelle consommé et reste à engager se comparent. *Point ouvert : portée et
-reconductibilité de l'exclusion (question 15).*
+laquelle consommé et reste à engager se comparent.
 
 **14. Avancement et valeur acquise.** L'avancement déduit et jamais estimé, la
 méthode 0/100 pondérée par le budget de référence, le 50/50 des tâches longues,
 les bornes et l'indisponibilité des indices avant le pilotage, les projections
-multiples et les tendances. *Points ouverts : provisions pour risques
-(question 2) et valeur acquise d'une ligne sans tâche porteuse (question 19).*
+multiples et les tendances. *Point ouvert : provisions pour risques
+(question 2).*
 
 **15. Analyse et restitution.** Le tableau de bord comme enchaînement de
 questions, sa disposition fixe en v1.0, les tuiles avant les graphiques, le
@@ -520,8 +519,13 @@ pour l'autre.
 
 - **Tâche** : unité de travail portant une durée et des dates.
 - **Jalon** : événement daté, de durée nulle, sans coût.
-- **Tâche récapitulative** : regroupement. Sa valeur est portée par ses enfants
-  et n'est jamais comptée pour elle-même.
+- **Tâche récapitulative** : tâche qui porte au moins une **sous-tâche**. Sa
+  valeur est portée par ses enfants et n'est jamais comptée pour elle-même.
+- **Tâche feuille** : tâche qui ne porte aucune sous-tâche. Les deux qualités se
+  jugent sur les seules **tâches** enfants : une tâche feuille peut porter des
+  lignes de coût, qui sont pourtant des nœuds enfants elles aussi
+  (`EXG-MOD-012`). Sans cette précision, toute tâche chiffrée serait une
+  récapitulative et plus aucune ligne ne pourrait acquérir (`EXG-AVA-015`).
 - **Prédécesseur** : lien d'antériorité, typé — fin-début, fin-fin, début-début,
   début-fin — dont dépend la date à laquelle il s'ancre.
 - **Mode manuel** : les dates sont saisies telles quelles.
@@ -1855,8 +1859,10 @@ montants. Chaque nœud créé reçoit une identité nouvelle (`EXG-PLN-018`).
                Emporter le sous-arbre les emporte.
   Vérification Copier une tâche portant deux sous-tâches et trois lignes de coût,
                puis coller, ajoute six nœuds aux identités distinctes de leurs
-               sources, et augmente le montant du projet de celui du sous-arbre
-               copié.
+               sources, et augmente le montant **hors inflation** du projet de
+               celui du sous-arbre copié. Le montant corrigé, lui, dépend des
+               dates de la tâche d'accueil (`EXG-DEV-019`) et ne se conserve pas
+               par un collage ailleurs dans le temps.
   Source       arbitrage 2026-09-15
 ```
 
@@ -2194,9 +2200,9 @@ prend l'année courante.
                valoriser, et elle est facultative — la valorisation d'un budget ne
                peut pas dépendre d'un champ qu'on a le droit de laisser vide.
   Vérification Déplacer une ligne de fourniture sous une tâche commençant une
-               année plus tard change son montant corrigé du coefficient de cette
-               année ; renseigner ou vider sa date de décaissement ne le change
-               pas.
+               année plus tard change son montant corrigé d'une application
+               supplémentaire du coefficient ; renseigner ou vider sa date de
+               décaissement ne le change pas.
   Source       arbitrage 2026-09-14, issue #390
 ```
 
@@ -2222,7 +2228,8 @@ de main-d'œuvre tire ses années de sa tâche porteuse, c'est-à-dire du premie
 ancêtre portant une facette de planification (`EXG-DEV-002`). Accrochée à une
 tâche de trois mois, elle est valorisée sur une seule année ; accrochée à une
 récapitulative courant sur sept ans, ses heures s'étalent sur sept années et
-subissent sept coefficients. **Plus on accroche haut dans l'arbre, plus le coût
+subissent jusqu'à sept applications du coefficient. **Plus on accroche haut dans
+l'arbre, plus le coût
 se dilue dans le temps** — et plus il augmente, l'inflation étant cumulative.
 
 Ce n'est pas un défaut : c'est la conséquence exacte de la règle de la tâche
@@ -2250,8 +2257,10 @@ des lignes sélectionnées — heures et montants — et le total suit la sélec
                pas propre : c'est l'outil qu'on emploie dans un tableur pour
                n'importe quelle vérification, et il sert partout ailleurs dans la
                grille. Il ne coûte presque rien — la sélection multiple existe
-               (`EXG-PLN-015`), les récapitulatives totalisent déjà, et la table
-               est le composant partagé avec le planning (`EXG-NAV-010`).
+               (`EXG-PLN-015`), les récapitulatives totalisent déjà, et le socle
+               d'arbre est partagé avec le planning (`EXG-NAV-010`) — le total de
+               sélection est un comportement de ce socle, donc offert des deux
+               côtés sans être écrit deux fois.
   Vérification Sélectionner plusieurs lignes affiche la somme de leurs heures et
                de leurs montants ; modifier la sélection met le total à jour.
   Source       arbitrage 2026-09-13
@@ -2638,8 +2647,7 @@ comptable ne donne aujourd'hui que la dernière.
 
 ## 13. Coûts réels
 
-**Statut : partiel.** Un point reste ouvert : la portée et la reconductibilité de
-l'exclusion d'une ligne (question 15).
+**Statut : décidé.**
 
 Le coût réel ne se produit pas dans Waterfall : il vient de la comptabilité, par
 import. Cette extériorité commande tout le chapitre — Waterfall n'a pas à
@@ -2887,20 +2895,12 @@ La date retenue pour une pièce est sa **date de pièce**, c'est-à-dire celle d
 règlement. L'export comptable ne porte aucune date de commande, ce qui interdit
 de dater un engagement de façon fiable — voir les questions 3 et 11.
 
-### 13.6 Ce qui reste ouvert
-
-**La reconductibilité de l'exclusion** (question 15). Frais généraux et charges
-externes reviennent à chaque import mensuel ; les exclure ligne à ligne chaque
-mois est un geste qu'on finit par oublier, et l'oubli dégrade silencieusement
-les indicateurs.
-
 ---
 
 ## 14. Avancement et valeur acquise
 
-**Statut : partiel.** Deux points restent ouverts : le traitement des provisions
-pour risques (question 2) et la valeur acquise d'une ligne de coût sans tâche
-porteuse (question 19).
+**Statut : partiel.** Un point reste ouvert : le traitement des provisions pour
+risques (question 2).
 
 C'est le chapitre où le produit tient sa promesse : dire où en est réellement
 l'affaire. Tout le reste l'alimente. Sa règle fondatrice tient en une phrase —
@@ -3157,10 +3157,6 @@ jamais adjacent sans que sa base soit nommée.
 **Les provisions pour risques** (question 2). Une provision consommée n'est pas
 du travail produit : la compter comme telle gonflerait l'avancement physique.
 Reste à décider si elle entre au dénominateur, et ce que sa survenue déplace.
-
-**La valeur acquise d'une ligne sans tâche porteuse** (question 19). Une ligne
-placée à la racine — assurance, déplacement, frais global — entre dans le budget
-de référence mais n'appartient à aucune tâche : rien ne la fait jamais acquérir.
 
 ---
 
@@ -3810,8 +3806,8 @@ avait été exporté.
 
 ## 18. Droits, partage et organisation
 
-**Statut : partiel.** Un point reste ouvert, la granularité du catalogue de
-permissions (question 22), outre deux précisions signalées en 18.6.
+**Statut : partiel.** Deux précisions du tableau des rôles restent à confirmer
+(18.6).
 
 Ce chapitre relève de la v1.0 (1.3) : un produit multi-utilisateurs sans
 habilitations n'est pas exploitable. Le report décidé le 2026-09-06 portait sur
@@ -4109,9 +4105,30 @@ fait perdre.
   Source       arbitrage 2026-09-15
 ```
 
-L'inventaire des domaines se construit **chapitre par chapitre**, chacun sachant
-quels gestes il expose. Il n'est pas dressé ici : une liste posée d'avance serait
-fausse dès le chapitre suivant.
+**Les domaines sont ceux de l'architecture d'information** (chapitre 7), et le
+catalogue n'en invente aucun : trois pour les sections qui ne sont pas un projet,
+cinq pour les onglets d'un projet.
+
+| Domaine | Ce qu'il couvre | Chapitre |
+|---|---|---|
+| **Administration** | Comptes, sauvegarde et restauration, trace, santé du système | 20 |
+| **Paramètres** | Le référentiel métier | 19 |
+| **Management** | Portefeuille et plan de charge agrégé | 16 |
+| **Structure du projet** | Identité, statut, sous-projets, lotissement, déclaration des nœuds d'organisation | 6, 8, 9 |
+| **Planning** | L'arbre et ses facettes de planification | 10 |
+| **Chiffrage** | Le devis et le reste à engager | 11, 12 |
+| **Coûts réels** | L'import, les pièces et le périmètre | 13 |
+| **Analyse** | Les restitutions du projet | 15 |
+
+Deux domaines ne portent qu'un sens d'accès : **Analyse** ne se lit que — une
+restitution ne se modifie pas —, et son écriture n'existe pas dans le catalogue.
+
+**La portée est une dimension distincte de la permission.** Un domaine dit *quoi*,
+la portée dit *sur quels objets* : plateforme, nœud d'organisation, appartenance
+explicite, déclaration de besoin (`EXG-DRO-009`). Le bornage demandé en 18.6 —
+l'écriture d'un manager sur le chiffrage limitée à sa part — relève de la portée
+et non d'une permission plus fine ; il ne contredit donc pas la maille
+ci-dessus.
 
 ### 18.9 Ce qui reste ouvert
 
@@ -4539,9 +4556,9 @@ de ce qui relève d'une version ultérieure (1.3).
 
 ## 21. Modèle de données cible
 
-**Statut : partiel.** Le cœur est arrêté et en cours de livraison par E14 ; ce
-chapitre l'absorbe. Ce que le modèle doit encore recevoir est recensé à
-l'annexe C, avec le reste des écarts.
+**Statut : partiel.** Le cœur est arrêté et ce chapitre l'absorbe. Ce que le
+modèle doit encore recevoir est recensé à l'annexe C, avec le reste des écarts —
+l'attribut d'inflation du projet en fait partie.
 
 Ce chapitre absorbe les décisions de `revision-v0.1-specification.md`, sans en
 reprendre le schéma : les tables et leurs colonnes relèvent de l'implémentation,
