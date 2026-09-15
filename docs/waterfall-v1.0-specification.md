@@ -1,6 +1,6 @@
 # Waterfall — Spécification v1.0
 
-**Statut : tous les chapitres rédigés. Cinq questions ouvertes (annexe B).**
+**Statut : tous les chapitres rédigés. Quatre questions ouvertes (annexe B).**
 
 Ce document est la spécification unique de Waterfall. Il a absorbé les
 spécifications partielles produites pendant le cadrage ; aucune d'elles ne fait
@@ -144,8 +144,9 @@ constitue la finalité de toutes les précédentes.
 EXG-AVA-012 — DOIT — La valeur acquise d'une tâche récapitulative est nulle.
   Motif        Sa valeur est portée par ses enfants ; la compter la doublerait.
   Vérification Sur un projet dont toutes les tâches feuilles sont terminées, la
-               somme des valeurs acquises est égale au budget de référence porté
-               par les tâches.
+               somme des valeurs acquises est égale au budget de référence — les
+               lignes qu'aucune feuille ne porte ayant acquis la totalité du leur
+               (`EXG-AVA-015`).
   Source       avancement v0.1, E10 (#250)
 ```
 
@@ -3054,13 +3055,71 @@ arrière est tracé, pas absorbé silencieusement.
 EXG-AVA-012 — DOIT — La valeur acquise d'une tâche récapitulative est nulle.
   Motif        Sa valeur est portée par ses enfants ; la compter la doublerait.
   Vérification Sur un projet dont toutes les tâches feuilles sont terminées, la
-               somme des valeurs acquises est égale au budget de référence porté
-               par les tâches.
+               somme des valeurs acquises est égale au budget de référence — les
+               lignes qu'aucune feuille ne porte ayant acquis la totalité du leur
+               (`EXG-AVA-015`).
   Source       avancement v0.1, E10 (#250)
 ```
 
 Un jalon ne porte aucun coût : sa valeur acquise est nulle par construction, et
 le terminer n'acquiert rien. Une tâche sans coût se comporte de même.
+
+```
+EXG-AVA-015 — DOIT — Une ligne de coût dont la tâche porteuse **ne peut pas
+acquérir** — parce qu'elle n'en a aucune, ou parce que sa porteuse est une
+récapitulative — acquiert au **taux d'ensemble** du projet : la part déjà acquise
+du périmètre qui, lui, acquiert.
+  Motif        Sans règle, ces lignes entrent au dénominateur de l'avancement
+               physique sans que rien ne les fasse jamais entrer au numérateur :
+               le taux plafonne sous cent pour cent, d'autant plus bas qu'elles
+               pèsent. Elles sont plus nombreuses qu'il n'y paraît — une ligne de
+               support accrochée à la récapitulative « Management » que porte
+               tout planning réel est dans ce cas, au même titre qu'une ligne de
+               racine.
+
+               Les **exclure des deux termes** aurait paru plus propre et ne
+               l'est pas. Le §5.1 pose que l'avancement physique et la
+               consommation du budget partagent le même dénominateur, et que leur
+               rapport est exactement l'indice de performance des coûts : les
+               retirer d'un seul des deux rompt cette identité. Les retirer des
+               deux la préserve, mais fait alors disparaître des indicateurs une
+               dépense qui croît justement avec l'allongement du planning — c'est
+               l'encadrement d'un projet qui dérive, et le sortir de la mesure
+               reviendrait à ne plus voir ce qu'on cherche.
+
+               **Exiger une tâche porteuse** ne fermerait pas la question non
+               plus : il faudrait exiger une tâche **feuille**, une récapitulative
+               n'acquérant rien. Accrocher le support à la récapitulative qui
+               porte son nom resterait sans effet, et une feuille créée pour la
+               circonstance n'aurait ni durée sensée ni achèvement observable.
+
+               Le taux d'ensemble est enfin défendable métier : une assurance
+               couvre le projet, une équipe d'encadrement encadre le projet.
+               Quand la moitié du travail est produite, la moitié de ce qu'elles
+               servent à couvrir l'a été.
+  Vérification Sur un projet dont les tâches feuilles terminées représentent la
+               moitié du budget qu'elles portent, ces lignes créditent la moitié
+               du leur ; lorsque toutes sont terminées, l'avancement physique
+               atteint cent pour cent. Une ligne portée par une récapitulative est
+               traitée comme une ligne de racine.
+  Source       arbitrage 2026-09-15
+```
+
+Le calcul se fait en **deux temps**, et l'ordre lève toute circularité : le taux
+d'ensemble s'établit d'abord sur le seul périmètre acquérant — les lignes portées
+par une tâche feuille —, puis s'applique aux autres. Ces dernières n'entrent
+jamais dans le taux qui les détermine.
+
+Tant qu'aucune ligne n'est portée par une tâche feuille, le taux d'ensemble est
+nul et la valeur acquise de ces lignes l'est aussi. Le cas n'appelle pas de
+traitement particulier : un projet dont aucun travail n'est mesurable n'a pas
+d'avancement physique à montrer.
+
+**Ce que cette règle ne donne pas.** Ces lignes ne montrent jamais d'écart qui
+leur soit propre : elles héritent de celui du projet. On ne lit donc pas « le
+management dérape » isolément, mais que le projet dérape et que le management
+pèse dedans — ce qui est la bonne lecture, l'enjeu d'une dérive d'encadrement
+n'étant jamais le coût de la ligne d'encadrement.
 
 ### 14.4 Projections
 
@@ -5572,23 +5631,18 @@ Recensées ici pour ne pas être perdues ; chacune sera reprise dans son chapitr
     recomposer à chaque revue mensuelle — est levé par le report d'une révision à
     la suivante (`EXG-PLN-024`), qui conserve le travail sans décorréler la
     composition de l'arbre qu'elle désigne.
-19. **Valeur acquise d'une ligne de coût sans tâche porteuse.** Une ligne placée
-    à la racine est un coût global du projet (`EXG-DEV-002`) : assurance,
-    déplacement, frais divers, et éventuellement une part du support. Elle entre
-    dans le budget de référence, donc au dénominateur de l'avancement physique,
-    mais n'appartient à aucune tâche — or la valeur acquise se calcule par tâche
-    (`EXG-AVA-002`). Rien ne la fait donc jamais acquérir, et l'avancement
-    physique plafonne sous cent pour cent, d'autant plus bas que ces lignes
-    pèsent.
-
-    Trois issues au moins. Les faire acquérir **au rythme d'ensemble** du projet,
-    ce qui est cohérent avec leur nature — un frais global suit le projet. Les
-    **exclure des deux termes**, numérateur et dénominateur, ce qui les sort de
-    l'avancement physique sans les sortir du budget. Ou exiger qu'elles soient
-    **rattachées à une tâche**, quitte à créer un jalon pour les porter, ce qui
-    ferme la question au prix d'une contrainte de saisie.
-
-    À trancher avant d'implémenter le chapitre 14.
+19. *Tranchée le 2026-09-15 : elles acquièrent au taux d'ensemble du projet.*
+    La question visait les lignes de racine ; le cas est plus large, une ligne
+    portée par une **récapitulative** ne pouvant pas davantage acquérir
+    (`EXG-AVA-012`) — et c'est là que vit le support de tout planning réel. Les
+    exclure des deux termes aurait rompu l'identité du §5.1, où le rapport de
+    l'avancement physique à la consommation du budget est exactement l'indice de
+    coût ; les exclure aussi du côté coût l'aurait préservée, mais aurait fait
+    disparaître des indicateurs une dépense qui croît justement quand le planning
+    s'allonge. Exiger un rattachement aurait supposé une tâche **feuille**, donc
+    une feuille artificielle sans durée sensée ni achèvement observable. Le taux
+    d'ensemble laisse la dérive se lire là où elle compte, dans l'indice de coût
+    du projet (`EXG-AVA-015`).
 20. *Tranchée le 2026-09-13.* Une tâche est « en jeu » quand elle appartient au
     **plan de travail** d'une revue, et l'y faire entrer déclare son démarrage
     (`EXG-RAE-012`, `EXG-RAE-013`). Il n'y a donc pas de statut supplémentaire à
