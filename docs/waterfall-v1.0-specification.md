@@ -1,6 +1,6 @@
 # Waterfall — Spécification v1.0
 
-**Statut : tous les chapitres rédigés. Huit questions ouvertes (annexe B).**
+**Statut : tous les chapitres rédigés. Sept questions ouvertes (annexe B).**
 
 Ce document est la spécification unique de Waterfall. Il a absorbé les
 spécifications partielles produites pendant le cadrage ; aucune d'elles ne fait
@@ -314,8 +314,9 @@ MVP, pas sur le périmètre de la première version utilisable.
 
 **19. Paramètres.** Le référentiel métier commun à tous les projets :
 l'organisation, les rôles de ressource et leur capacité, les natures et
-catégories de coût, les taux horaires, l'inflation et les calendriers. Ce qu'un
-projet choisit sans jamais le redéfinir.
+catégories de coût, les taux horaires et les calendriers. Ce qu'un projet
+choisit sans jamais le redéfinir — l'inflation en est exclue, étant une
+hypothèse d'affaire.
 
 **20. Administration.** Les comptes et leur désactivation, la sauvegarde
 couvrant la base et les fichiers conservés, la restauration éprouvée plutôt que
@@ -622,8 +623,9 @@ qualificatif partout où les deux peuvent être présentes.
   porter les habilitations.
 - **Année de référence** : l'année dont les taux horaires servent de base à un
   chiffrage. C'est la seule année dont les taux doivent être connus.
-- **Coefficient d'inflation** : facteur qui reporte un taux de l'année de
-  référence sur une année de consommation ultérieure.
+- **Coefficient d'inflation** : facteur unique, porté par le projet, qui
+  reporte un montant de l'année de référence sur une année ultérieure. Il se
+  compose autant de fois qu'il y a d'années écoulées (`EXG-DEV-020`).
 - **Charge** : quantité de travail, exprimée en heures.
 - **Coût** : valorisation de cette charge, en euros.
 - **Capacité** : charge qu'un périmètre peut absorber sur une période.
@@ -689,9 +691,10 @@ libellé « Chiffrage ».
 
 Un projet ne se pilote pas dans le vide : le planning a besoin d'un calendrier
 pour convertir une durée en dates, et le devis a besoin de rôles, de taux et
-d'une inflation pour convertir une charge en euros. Ces prérequis ne sont pas
-portés par le projet mais par le référentiel commun, et un projet créé sans eux
-est un projet qui échouera plus tard, loin de la cause.
+d'une inflation pour convertir une charge en euros. Le calendrier, les rôles et
+les taux sont portés par le référentiel commun, l'inflation par le projet
+lui-même (`EXG-DEV-020`) ; dans les deux cas, un projet créé sans eux est un
+projet qui échouera plus tard, loin de la cause.
 
 Ils se vérifient en **deux temps** : ce qui ne dépend que de l'existence du
 référentiel se vérifie dès la création ; ce qui dépend des catégories que le
@@ -716,15 +719,19 @@ ressource actif.
 ```
 EXG-CYC-016 — DOIT — Le calcul d'un devis ou d'un reste à engager est refusé
 tant qu'une catégorie de coût employée n'a pas de taux horaire pour l'**année de
-référence** du chiffrage, ou qu'une année de consommation prévue n'a pas de
-coefficient d'inflation. Les manques sont nommés un à un.
+référence** du chiffrage, ou que le projet ne porte pas de coefficient
+d'inflation. Les manques sont nommés un à un.
   Motif        Un taux manquant substitué par zéro produit un budget faux sans
                rien signaler. La couverture exigée s'arrête à l'année de
                référence : exiger un taux pour chaque année future demanderait
                une donnée qui n'existe pas — c'est précisément le rôle de
                l'inflation que de projeter le taux connu sur les années à venir.
+               Le contrôle sur l'inflation est binaire, le projet portant un
+               coefficient unique (`EXG-DEV-020`) : il est saisi ou il ne l'est
+               pas, et il n'y a pas d'année à couvrir.
   Vérification Le refus énumère les catégories sans taux pour l'année de
-               référence, et les années de consommation sans coefficient.
+               référence, et signale l'absence de coefficient d'inflation sur le
+               projet.
   Source       arbitrage 2026-09-12 ; services/estimate_calculation.py (#175)
 ```
 
@@ -2065,18 +2072,25 @@ voit pas : un budget faux reste un nombre plausible.
 ```
 EXG-DEV-005 — DOIT — L'**année de référence** d'un chiffrage est son année de
 création. Il emploie les taux horaires de cette année, et le coefficient
-d'inflation appliqué à une charge est l'inflation **cumulée** de l'année de
-référence jusqu'à l'année où cette charge sera consommée.
+d'inflation appliqué à un montant est l'inflation **cumulée** de l'année de
+référence jusqu'à l'année où ce montant sera consommé. La règle vaut pour
+**toute nature de ligne** : une fourniture, un frais ou une prestation
+sous-traitée subissent l'inflation au même titre qu'une charge de main-d'œuvre.
   Motif        Les taux des années futures ne sont pas connus, et ne le seront
                pas : personne ne les saisira. C'est le rôle de l'inflation que de
-               projeter un taux connu. Le cumul n'est pas un détail : une charge
-               consommée deux ans après le chiffrage subit l'inflation des deux
+               projeter un taux connu. Le cumul n'est pas un détail : un montant
+               consommé deux ans après le chiffrage subit l'inflation des deux
                années, et n'appliquer que celle de l'année d'arrivée sous-évalue
                le budget d'autant plus que le projet est long.
+
+               L'extension aux débours n'est pas une symétrie de principe : un
+               prix d'achat monte comme un salaire, et exonérer les fournitures
+               sous-évaluerait d'autant les projets où elles pèsent le plus —
+               ceux dont l'essentiel du budget n'est pas de la main-d'œuvre.
   Vérification Un devis créé en 2026 chiffre une charge de 2027 au taux 2026
-               majoré de l'inflation 2027, et une charge de 2028 au taux 2026
-               majoré du cumul 2027 et 2028. Aucun taux d'année future n'est
-               réclamé.
+               majoré d'une année d'inflation, et une charge de 2028 au même taux
+               majoré de deux années. Aucun taux d'année future n'est réclamé. Un
+               débours consommé en 2028 est majoré des deux mêmes années.
   Source       arbitrage 2026-09-12, issue #323
 ```
 
@@ -2091,17 +2105,72 @@ cette fois connus. C'est exactement la **réconciliation annuelle** du chapitre
 12 : la même règle, vue depuis l'autre bout.
 
 ```
+EXG-DEV-020 — DOIT — L'inflation est un **coefficient unique porté par le
+projet**. Il s'applique à chaque année postérieure à l'année de référence du
+chiffrage, composé autant de fois qu'il y a d'années écoulées.
+  Motif        Le porter au projet est la seule façon d'avoir des hypothèses par
+               affaire : deux projets chiffrés à deux ans d'écart n'ont ni la
+               même année de référence ni les mêmes perspectives, et certains
+               marchés portent leur propre clause d'indexation. Un paramètre
+               commun à l'installation interdirait de les distinguer, et sa
+               modification déplacerait le budget de tous les projets en cours.
+
+               Un coefficient et non une série : une prévision d'inflation année
+               par année sur dix ans serait une donnée que personne ne tient à
+               jour, et dont la précision apparente masquerait qu'elle est une
+               hypothèse unique. Un seul nombre se saisit, se discute et se
+               défend.
+  Vérification Le projet porte un coefficient et un seul ; une charge consommée
+               deux ans après l'année de référence est majorée de ce coefficient
+               appliqué deux fois. Modifier le coefficient d'un projet ne change
+               aucun montant d'un autre projet.
+  Source       arbitrage 2026-09-14
+```
+
+```
 EXG-DEV-014 — DOIT — La grille affiche pour chaque ligne le montant **hors
-inflation** et le montant **corrigé**.
+inflation** et le montant **corrigé**. Le montant hors inflation est calculé au
+taux de l'année de référence, sans inflation et **sans répartition** sur les
+années de la tâche porteuse. Les deux sont produits par le moteur de calcul et
+jamais recalculés par la grille.
   Motif        L'inflation est appliquée sans que rien ne le montre, sur des
                années que l'utilisateur n'a pas saisies. Un seul montant à
                l'écran rend l'écart invisible : personne ne peut vérifier ni
                contester une majoration qu'il ne voit pas. Les deux côte à côte
                font de l'inflation une information plutôt qu'un effet de bord.
+
+               La définition du montant hors inflation n'est pas un détail de
+               présentation : sans répartition, il ne dépend que de la ligne,
+               tandis que le montant corrigé dépend aussi de la tâche qui la
+               porte. C'est leur écart qui rend visible l'effet décrit plus bas.
+               Et les deux viennent du moteur parce qu'une grille qui
+               réimplémenterait le calcul en produirait une approximation
+               divergente, sans que rien ne le signale.
   Vérification Une ligne consommée l'année de référence affiche deux montants
                égaux ; une ligne consommée deux ans plus tard affiche l'écart
-               correspondant au cumul.
-  Source       arbitrage 2026-09-12
+               correspondant au cumul. Aucun des deux montants n'est calculé par
+               l'interface.
+  Source       arbitrage 2026-09-12, précisé le 2026-09-14 (#390)
+```
+
+```
+EXG-DEV-019 — DOIT — Un débours est consommé en **une seule** année : celle du
+début de sa tâche porteuse. Une ligne de coût globale, sans tâche porteuse,
+prend l'année courante.
+  Motif        Un débours est un montant ponctuel, non un effort étalé : il n'y a
+               rien à répartir. L'année de début de la tâche porteuse est retenue
+               parce qu'elle est toujours définie dès qu'une tâche porte la ligne,
+               et parce qu'elle rend le traitement homogène avec la main-d'œuvre,
+               qui tire ses années de la même tâche. La **date prévisionnelle de
+               décaissement** (`EXG-MOD-021`) n'est délibérément **pas** lue : elle
+               existe pour situer une dépense dans le temps, non pour la
+               valoriser, et elle est facultative — la valorisation d'un budget ne
+               peut pas dépendre d'un champ qu'on a le droit de laisser vide.
+  Vérification Déplacer une ligne de fourniture sous une tâche commençant une
+               année plus tard change son montant corrigé du coefficient de cette
+               année ; renseigner ou vider sa date de décaissement ne le change
+               pas.
+  Source       arbitrage 2026-09-14, issue #390
 ```
 
 ```
@@ -2120,6 +2189,20 @@ est énoncée dans le résultat du calcul.
                de chaque année et nomme la règle employée.
   Source       devis v0.1, arbitrage 2026-09-12
 ```
+
+**Ce que la position d'une ligne dans l'arbre change à son montant.** Une ligne
+de main-d'œuvre tire ses années de sa tâche porteuse, c'est-à-dire du premier
+ancêtre portant une facette de planification (`EXG-DEV-002`). Accrochée à une
+tâche de trois mois, elle est valorisée sur une seule année ; accrochée à une
+récapitulative courant sur sept ans, ses heures s'étalent sur sept années et
+subissent sept coefficients. **Plus on accroche haut dans l'arbre, plus le coût
+se dilue dans le temps** — et plus il augmente, l'inflation étant cumulative.
+
+Ce n'est pas un défaut : c'est la conséquence exacte de la règle de la tâche
+porteuse, et déplacer une ligne est un geste délibéré. Mais l'effet est invisible
+à la saisie, et c'est ce que les deux montants d'`EXG-DEV-014` rendent lisibles :
+le montant hors inflation ne bouge pas quand la ligne change de porteuse, le
+montant corrigé si.
 
 ### 11.4 Les lignes de coût de support
 
@@ -2258,7 +2341,7 @@ autres : la couleur n'y porte jamais seule l'identité d'un type (`EXG-ANA-011`)
 
 Les colonnes en vigueur pour une ligne de coût sont : la nature, la catégorie de
 coût, le libellé, le sous-projet d'imputation, la quantité, les heures ou le
-débours unitaire, le taux applicable, le montant hors inflation et le montant
+débours unitaire, le **taux de référence**, le montant hors inflation et le montant
 corrigé (`EXG-DEV-014`), la **date prévisionnelle de décaissement**
 (`EXG-MOD-021`) et l'**état d'approvisionnement** (`EXG-MOD-022`). Les deux
 dernières se saisissent et se lisent sans qu'aucun calcul de la v1.0 les
@@ -2291,11 +2374,6 @@ rend indiscernables d'une dépense prévue. La pratique — un devis complet par
 risque, reporté pondéré dans le devis global — supposerait un module de gestion
 des risques, dont l'appartenance à la v1.0 n'est pas acquise. La question reste
 ouverte, y compris sur son périmètre.
-
-**La portée de l'inflation** (question 12) : paramètre global ou attribut du
-projet. Le mécanisme est tranché — année de référence, coefficient cumulatif,
-répartition au prorata du temps — mais pas le niveau auquel ses hypothèses sont
-détenues.
 
 Rien d'autre. L'assistant de saisie des lignes de support, un temps envisagé
 ici, est sorti du périmètre v1.0 et figure au chapitre 23.
@@ -3889,10 +3967,11 @@ rôle de manager dans la configuration livrée (18.6).
 ### 19.1 Ce que Paramètres porte
 
 ```
-EXG-PAR-001 — DOIT — Paramètres porte six référentiels, et eux seuls : l'arbre
+EXG-PAR-001 — DOIT — Paramètres porte cinq référentiels, et eux seuls : l'arbre
 d'organisation, les rôles de ressource, les natures et catégories de coût, les
-taux horaires, les coefficients d'inflation et les calendriers. Aucun n'est
-redéfini au niveau d'un projet.
+taux horaires et les calendriers. Aucun n'est redéfini au niveau d'un projet.
+L'inflation n'en fait pas partie : elle est une hypothèse de projet
+(`EXG-DEV-020`).
   Motif        Un référentiel qu'un projet pourrait redéfinir cesse d'être un
                référentiel : deux projets chiffrés au même rôle ne seraient plus
                comparables, et le plan de charge agrégé additionnerait des heures
@@ -3900,7 +3979,8 @@ redéfini au niveau d'un projet.
                close pour la même raison : tout ce qui s'ajouterait ici sans y
                être nommé échapperait au contrôle de complétude d'`EXG-CYC-015`.
   Vérification Aucun écran de projet ne permet de créer ni de modifier l'un de
-               ces six objets ; tous s'y choisissent dans une liste.
+               ces cinq objets ; tous s'y choisissent dans une liste. Le
+               coefficient d'inflation, lui, se saisit sur le projet.
   Source       EXG-NAV-002, models/resources.py
 ```
 
@@ -3999,16 +4079,14 @@ et dans une devise. Un couple catégorie-année ne porte qu'un taux.
 ```
 
 ```
-EXG-PAR-007 — DOIT — Un coefficient d'inflation est donné par année et vaut pour
-toute l'installation.
-  Motif        L'inflation est une hypothèse économique, non une caractéristique
-               de projet : la saisir deux fois pour la même année ouvrirait deux
-               vérités sur le même fait. Le niveau auquel ces hypothèses sont
-               détenues reste ouvert (question 12) ; ce qui est acquis, c'est
-               qu'une année ne porte qu'un coefficient là où il est détenu.
-  Vérification Une année ne porte qu'un coefficient, et le même s'applique à tous
-               les projets.
-  Source       models/resources.py, question 12
+EXG-PAR-007 — ABANDONNÉE — l'inflation n'est pas un référentiel commun.
+  Motif        Elle plaçait le coefficient dans Paramètres, par année et pour
+               toute l'installation. La question 12 est tranchée dans l'autre
+               sens : l'inflation est une hypothèse d'affaire, portée par le
+               projet, et c'est un coefficient unique et non une série
+               (`EXG-DEV-020`). Ce que cette exigence protégeait — une seule
+               vérité pour un même fait — reste vrai à l'échelle où le fait
+               existe désormais, celle du projet.
 ```
 
 ### 19.5 Les calendriers
@@ -4079,12 +4157,8 @@ EXG-PAR-011 — DOIT — Modifier le référentiel ne modifie aucune révision v
 
 ### 19.7 Ce qui reste ouvert
 
-**La portée de l'inflation** (question 12) : hypothèse détenue par l'installation
-ou par le projet. Le mécanisme est tranché — année de référence, coefficient
-cumulatif, répartition au prorata du temps —, le niveau de détention ne l'est
-pas.
-
-Rien d'autre.
+Rien. La seule question qui portait sur ce chapitre — où l'inflation est détenue
+— est tranchée : elle ne l'est pas ici, mais par le projet (`EXG-DEV-020`).
 
 ---
 
@@ -5319,18 +5393,25 @@ Recensées ici pour ne pas être perdues ; chacune sera reprise dans son chapitr
 
     Question transverse aux chapitres 11, 12 et 14. Remplace EXG-VOC-003 et
     absorbe la question 3.
-12. **Portée de l'inflation** : paramètre global ou attribut du projet ? Elle est
-    aujourd'hui globale. Deux projets chiffrés à deux ans d'écart n'ont pourtant
-    ni la même année de référence ni les mêmes hypothèses, et un paramètre global
-    modifié rétroactivement déplacerait le budget de projets déjà pilotés.
+12. *Tranchée le 2026-09-14 : l'inflation est portée par le projet.* Deux
+    projets chiffrés à deux ans d'écart n'ont ni la même année de référence ni
+    les mêmes perspectives, et certains marchés portent leur propre clause
+    d'indexation ; un paramètre commun interdisait de les distinguer et
+    déplaçait rétroactivement le budget des projets en cours. Le projet porte un
+    **coefficient unique**, non une série annuelle (`EXG-DEV-020`) : une
+    prévision année par année sur dix ans serait une donnée que personne ne tient
+    à jour, dont la précision apparente masquerait qu'elle reste une hypothèse
+    unique. L'inflation quitte en conséquence le référentiel commun
+    (`EXG-PAR-007`, abandonnée).
 13. *Tranchée le 2026-09-12 : le coefficient est cumulatif.* L'année de
     référence d'un chiffrage est son année de création, et l'inflation appliquée
     à une charge est le cumul depuis cette année jusqu'à l'année de consommation
     (`EXG-DEV-005`). Les charges à cheval sur deux années se répartissent au
     prorata du temps (`EXG-DEV-006`), et la grille affiche le montant hors
-    inflation à côté du montant corrigé (`EXG-DEV-014`). La forme de stockage —
-    coefficients annuels composés, ou indice absolu rapporté à l'année de
-    référence — reste un choix d'implémentation, relevant du chapitre 21.
+    inflation à côté du montant corrigé (`EXG-DEV-014`). La forme de stockage ne
+    se pose plus depuis que le projet porte un coefficient unique
+    (`EXG-DEV-020`) : il n'y a qu'un nombre à conserver, et le cumul est un
+    calcul.
 14. **Avenants** : un avenant ajoute du travail au projet — et, hors du
     périmètre v1.0, en modifie le prix de vente. Le principe est simple, la mise
     en œuvre beaucoup moins.
@@ -5506,7 +5587,10 @@ demandent une décision de séquencement avant de pouvoir être livrés.
 | EXG-DEV-005 | Voir la ligne EXG-CYC-016 : le calcul exige un taux par année de consommation et compte l'inflation deux fois (#323). | Même correctif. |
 | EXG-DEV-005 | Le coefficient d'inflation est lu pour la seule année de consommation et appliqué une fois, sans cumul depuis l'année de référence. Une charge consommée deux ans après le chiffrage ne subit donc qu'une année d'inflation. Défaut distinct de celui d'#323, et qui subsisterait après son correctif. | Passage à un cumul. |
 | EXG-DEV-006 | Les heures sont divisées par le **nombre d'années traversées**, non réparties au prorata du temps : une tâche du 20 décembre au 10 janvier est découpée en deux moitiés égales. La règle n'est par ailleurs énoncée nulle part dans le résultat. | Passage au prorata temporel, et restitution de la règle. |
+| EXG-DEV-005, EXG-DEV-019 | Le moteur n'applique **aucune** inflation aux lignes non main-d'œuvre : il fige `inflation_coefficient` à 1 et calcule `quantité × débours unitaire`. Aucune année n'est donc dérivée pour un débours. | Changement de calcul, non d'affichage : les montants produits par la validation d'un devis changent. Les tests qui figent des montants non-MO changeront de valeur attendue, et il faudra vérifier qu'ils sont corrigés dans le bon sens plutôt qu'ajustés jusqu'à repasser au vert. Les devis déjà validés ne sont pas recalculés, leurs lignes étant figées : un devis validé avant et un devis validé après ne sont pas comparables à périmètre égal, ce qui est à acter à la livraison. |
+| EXG-DEV-014 | La grille recalcule elle-même un aperçu de montant, à taux unique, en ne retenant que la première année de la tâche porteuse et sans appliquer l'inflation. Le montant lu à l'écran s'écarte donc de celui que produit la validation, sans que rien ne le signale — l'écart n'a rien de marginal sur une ligne portée par une récapitulative de plusieurs années. | Les deux montants passent par l'API. La logique dupliquée côté grille est retirée, non complétée : la compléter reviendrait à maintenir deux implémentations du même calcul. |
 | EXG-DEV-014 | Un seul montant est affiché ; l'effet de l'inflation est invisible. | Ajout d'une colonne. |
+| EXG-DEV-020 | L'inflation est stockée dans le référentiel commun, sous la forme d'une **série annuelle** — un coefficient par année, unique par année et partagé par tous les projets. La cible est un coefficient unique porté par le projet. | Déplacement de l'attribut vers le projet, et abandon de la dimension annuelle. Les révisions validées figent déjà leur coefficient (`EXG-PAR-011`), donc rien de validé ne bouge. |
 | EXG-RAE-001 à 010 | Rien n'existe : `forecast_remaining` n'est qu'une valeur d'énumération réservée, sans colonne de reste à engager, sans service ni écran. Le chapitre entier décrit une cible. | Périmètre d'E10 (#250), non livré. |
 | EXG-RAE-005 | E10 prévoit un pointeur vers la ligne source ; la cible est l'identité de l'élément de travail, qui seule survit à un remaniement du devis de référence. | Écart entre un EPIC antérieur et la cible : E10 a été écrit avant E14, à reprendre à sa livraison. |
 | EXG-CRE-001 à 010 | Rien n'existe : ni modèle de pièce comptable, ni import, ni écran. Le chapitre entier décrit une cible. | Périmètre d'E11 (#255), non livré. |
