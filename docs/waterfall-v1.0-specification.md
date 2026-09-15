@@ -1,6 +1,6 @@
 # Waterfall — Spécification v1.0
 
-**Statut : tous les chapitres rédigés. Quatre questions ouvertes (annexe B).**
+**Statut : tous les chapitres rédigés. Trois questions ouvertes (annexe B).**
 
 Ce document est la spécification unique de Waterfall. Il a absorbé les
 spécifications partielles produites pendant le cadrage ; aucune d'elles ne fait
@@ -2769,8 +2769,8 @@ imputés ; ils ne sont simplement pas le sujet de la mesure (5.3).
 ```
 EXG-CRE-006 — DOIT — Une ligne de coût peut être sortie du périmètre du devis.
 Elle reste visible, comptée dans le consommé de l'affaire, et son exclusion est
-réversible et motivée par un **texte libre**. Exclure relève d'une permission
-distincte de l'écriture sur le projet.
+réversible et motivée par un **texte libre**. Exclure relève de l'écriture sur
+les **coûts réels**, distincte de l'écriture sur le chiffrage (`EXG-DRO-015`).
   Motif        Ce n'est pas la correction d'une erreur : la ligne est juste. C'est
                une décision de périmètre, et elle doit rester lisible et
                révocable — une exclusion définitive et anonyme serait
@@ -2782,15 +2782,16 @@ distincte de l'écriture sur le projet.
                se lit plus. Ce qu'on perd — des motifs dénombrables — n'a pas
                d'usage identifié.
 
-               La permission est distincte de l'écriture parce que les deux ne se
-               confondent pas : un responsable de service écrit sur le chiffrage
-               pour y porter ses charges (18.6) sans avoir à décider de ce qui
-               entre dans la mesure du projet. Elle est attribuée au chef de
-               projet dans la configuration livrée.
+               Les deux domaines ne se confondent pas : un responsable de
+               service écrit sur le chiffrage pour y porter ses charges (18.6)
+               sans avoir à décider de ce qui entre dans la mesure du projet.
+               L'écriture sur les coûts réels est attribuée au chef de projet
+               dans la configuration livrée.
   Vérification Exclure une ligne ne la retire d'aucune vue de détail ; le motif
                et l'auteur de l'exclusion sont consultables. Un utilisateur
-               disposant de l'écriture sur le projet mais non de cette permission
-               se voit refuser l'exclusion, et le refus la nomme.
+               disposant de l'écriture sur le chiffrage mais non sur les coûts
+               réels se voit refuser l'exclusion, et le refus nomme le domaine
+               manquant.
   Source       arbitrage 2026-09-12, précisé le 2026-09-15
 ```
 
@@ -4077,9 +4078,42 @@ sait dire à quoi il accède et par quelle voie.
   Source       arbitrage 2026-09-13
 ```
 
-### 18.9 Ce qui reste ouvert
+```
+EXG-DRO-015 — DOIT — Une permission porte sur un **domaine** et sur la **lecture
+ou l'écriture** de ce domaine. Aucune ne porte sur un acte isolé : un acte
+irréversible relève de l'écriture sur son domaine, et sa protection est une
+**confirmation explicite** qui nomme ce que l'acte rend définitif et ce qu'il
+fait perdre.
+  Motif        La maille par domaine est ce qui rend le catalogue composable :
+               un rôle se définit en accordant des domaines, non en cochant des
+               gestes. Une permission par action serait complète et
+               incomposable — il faudrait la revoir à chaque geste ajouté, et
+               aucune organisation ne saurait décrire ses rôles avec.
 
-**La granularité du catalogue de permissions** (question 22).
+               Séparer les actes irréversibles de l'écriture ordinaire ne
+               protégerait rien de plus. Qui écrit sur un domaine finit toujours
+               par recevoir le droit d'y conclure, et la combinaison « écrire
+               sans pouvoir clore » n'a pas d'usage identifié ; on aurait doublé
+               le catalogue pour une distinction que personne ne configure.
+
+               Le risque réel n'est pas qu'une personne non autorisée agisse,
+               c'est qu'une personne autorisée agisse sans avoir vu ce qu'elle
+               engageait. C'est une affaire d'écran et non d'habilitation, et la
+               confirmation la traite là où elle se pose — à condition de nommer
+               les conséquences : une question qui se borne à demander si l'on
+               est sûr s'acquitte sans être lue, et ne protège de rien.
+  Vérification Aucune permission du catalogue ne désigne un acte isolé. Chaque
+               acte irréversible — clôture d'un projet, validation d'une
+               révision — demande une confirmation qui énonce ce qui devient
+               définitif.
+  Source       arbitrage 2026-09-15
+```
+
+L'inventaire des domaines se construit **chapitre par chapitre**, chacun sachant
+quels gestes il expose. Il n'est pas dressé ici : une liste posée d'avance serait
+fausse dès le chapitre suivant.
+
+### 18.9 Ce qui reste ouvert
 
 **Les deux points du tableau des rôles** énumérés en 18.6.
 
@@ -5657,14 +5691,17 @@ Recensées ici pour ne pas être perdues ; chacune sera reprise dans son chapitr
     durée, ce qui suffit à arbitrer entre assumer le retard, prendre un
     intérimaire ou recruter. Le motif est consigné dans `EXG-CHA-007` pour que la
     remarque ne soit pas refaite.
-22. **Granularité du catalogue de permissions.** Le principe est acquis
-    (`EXG-DRO-005`) : figé dans le code, combiné par des rôles configurables. La
-    maille se dessine — le tableau des rôles (18.6) raisonne par **domaine** et
-    par **lecture ou écriture**, ce qui écarte d'emblée la permission par action,
-    complète mais incomposable. Restent deux précisions. Les actes
-    irréversibles — clore un projet, valider un chiffrage — méritent-ils d'être
-    séparés de l'écriture ordinaire ? Et l'inventaire lui-même se construira
-    chapitre par chapitre, chacun sachant quels gestes il expose.
+22. *Tranchée le 2026-09-15 : la maille est le domaine et le sens d'accès.*
+    Une permission porte sur un domaine, en lecture ou en écriture, et jamais sur
+    un acte isolé (`EXG-DRO-015`). Les actes irréversibles ne sont donc pas
+    séparés de l'écriture ordinaire : qui écrit sur un domaine finit par recevoir
+    le droit d'y conclure, et « écrire sans pouvoir clore » n'a pas d'usage
+    identifié — on aurait doublé le catalogue pour une distinction que personne
+    ne configure. Le risque qu'ils portent n'est pas qu'une personne non
+    autorisée agisse mais qu'une personne autorisée agisse sans voir ce qu'elle
+    engageait : il se traite par une confirmation qui nomme les conséquences,
+    donc à l'écran et non dans l'habilitation. L'inventaire des domaines se
+    construit chapitre par chapitre, comme la question le prévoyait.
 23. *Close le 2026-09-13 : une convention suffit.* L'administrateur n'est pas
     exclusif par une règle ; on ne lui accorde simplement aucun rôle métier, et
     l'additivité d'`EXG-DRO-001` reste entière. L'objection — un administrateur
