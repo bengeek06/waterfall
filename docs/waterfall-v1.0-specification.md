@@ -1,6 +1,6 @@
 # Waterfall — Spécification v1.0
 
-**Statut : tous les chapitres rédigés. Sept questions ouvertes (annexe B).**
+**Statut : tous les chapitres rédigés. Six questions ouvertes (annexe B).**
 
 Ce document est la spécification unique de Waterfall. Il a absorbé les
 spécifications partielles produites pendant le cadrage ; aucune d'elles ne fait
@@ -2742,14 +2742,29 @@ imputés ; ils ne sont simplement pas le sujet de la mesure (5.3).
 ```
 EXG-CRE-006 — DOIT — Une ligne de coût peut être sortie du périmètre du devis.
 Elle reste visible, comptée dans le consommé de l'affaire, et son exclusion est
-réversible et motivée.
+réversible et motivée par un **texte libre**. Exclure relève d'une permission
+distincte de l'écriture sur le projet.
   Motif        Ce n'est pas la correction d'une erreur : la ligne est juste. C'est
                une décision de périmètre, et elle doit rester lisible et
                révocable — une exclusion définitive et anonyme serait
                indiscernable d'une suppression.
+
+               Le motif est libre parce qu'une liste fermée n'a pas de bonne
+               taille : courte, elle force à ranger sous « autre » les cas qui
+               justifiaient précisément d'écrire quelque chose ; longue, elle ne
+               se lit plus. Ce qu'on perd — des motifs dénombrables — n'a pas
+               d'usage identifié.
+
+               La permission est distincte de l'écriture parce que les deux ne se
+               confondent pas : un responsable de service écrit sur le chiffrage
+               pour y porter ses charges (18.6) sans avoir à décider de ce qui
+               entre dans la mesure du projet. Elle est attribuée au chef de
+               projet dans la configuration livrée.
   Vérification Exclure une ligne ne la retire d'aucune vue de détail ; le motif
-               et l'auteur de l'exclusion sont consultables.
-  Source       arbitrage 2026-09-12
+               et l'auteur de l'exclusion sont consultables. Un utilisateur
+               disposant de l'écriture sur le projet mais non de cette permission
+               se voit refuser l'exclusion, et le refus la nomme.
+  Source       arbitrage 2026-09-12, précisé le 2026-09-15
 ```
 
 ```
@@ -2774,6 +2789,44 @@ l'affaire et consommé du périmètre.
                périmètre.
   Vérification L'écran des coûts réels porte les deux totaux et leur écart.
   Source       arbitrage 2026-09-12
+```
+
+```
+EXG-CRE-013 — DOIT — L'exclusion porte sur **une ligne**. Elle ne se propage
+jamais d'elle-même : aucune règle portant sur un code de sous-projet, une nature
+comptable ou un libellé n'exclut par avance ce qui n'a pas encore été importé.
+  Motif        L'idempotence de l'import (13.3) protège déjà une ligne exclue du
+               ré-import : une pièce déjà connue n'est pas recréée, et son
+               exclusion tient quel que soit le recouvrement des dates d'export.
+               Ce qu'elle ne protège pas, c'est l'arrivée d'une pièce **nouvelle**
+               de même nature — l'imputation des frais généraux du mois suivant
+               porte son propre numéro et n'est le doublon de rien.
+
+               C'est ce cas qu'une règle automatique prétendrait couvrir, et c'est
+               pour cela qu'elle est refusée. Ses deux échecs ne se valent pas :
+               oublier d'exclure laisse une dépense dans les indicateurs, où elle
+               se remarque ; une règle trop large en retire une qui devait y
+               rester, et rien ne le signale jamais. Le geste manuel reste tenable
+               parce qu'`EXG-CRE-014` le rend fiable.
+  Vérification Aucun écran ne permet de définir une règle d'exclusion ; importer
+               une pièce de même nature qu'une pièce exclue la fait entrer dans
+               le périmètre.
+  Source       arbitrage 2026-09-15
+```
+
+```
+EXG-CRE-014 — DOIT — Le résultat d'un import distingue les lignes qu'il vient de
+créer de celles qui étaient déjà connues.
+  Motif        C'est la condition pour que l'exclusion ligne à ligne
+               (`EXG-CRE-013`) ne devienne pas un geste qu'on oublie. Sur un
+               export qui recouvre le mois précédent, la plupart des lignes sont
+               déjà là ; celles qui appellent une décision sont les nouvelles, et
+               les chercher dans la masse est exactement ce que personne ne fait
+               tous les mois.
+  Vérification Après un import recouvrant partiellement le précédent, les lignes
+               créées par ce dernier import sont identifiables sans les comparer
+               à la main à l'état antérieur.
+  Source       arbitrage 2026-09-15
 ```
 
 ### 13.5 Ce que le coût réel n'est pas
@@ -5457,17 +5510,21 @@ Recensées ici pour ne pas être perdues ; chacune sera reprise dans son chapitr
     méritent d'être instruites en se regardant, pas fusionnées.
 
     Question transverse aux chapitres 8, 10, 11, 14 et 15.
-15. **Exclusion d'une ligne de coût du périmètre** : le principe est acquis —
-    une ligne exclue sort de **tous** les indicateurs, et reste comptée dans le
-    consommé de l'affaire. Ce qui reste à décider tient à l'usage. L'exclusion
-    est-elle **reconductible** ? Les frais généraux et les charges affectées par
-    décision externe reviennent à chaque import mensuel ; les exclure ligne à
-    ligne chaque mois est un geste qu'on finit par oublier, et l'oubli dégrade
-    silencieusement les indicateurs. Une règle portant sur un code de
-    sous-projet, ou sur une nature comptable, reporterait l'exclusion
-    automatiquement — au prix d'exclure aussi ce qu'on n'avait pas prévu. Restent
-    ensuite : les deux consommés s'affichent-ils ensemble en permanence, le motif
-    est-il libre ou choisi dans une liste, et qui a le droit d'exclure ?
+15. *Tranchée le 2026-09-15 : l'exclusion porte sur une ligne, et sur elle
+    seule.* La question confondait deux cas. Le **ré-import** d'une pièce déjà
+    connue ne pose rien : l'idempotence la reconnaît par son numéro et ne la
+    recrée pas, de sorte qu'une ligne exclue le reste quel que soit le
+    recouvrement des dates d'export — et l'utilisateur a tout intérêt à faire
+    chevaucher ces dates pour ne rien perdre. Le cas réel est l'arrivée d'une
+    pièce **nouvelle** de même nature, l'imputation des frais généraux du mois
+    suivant portant son propre numéro. Aucune règle automatique ne le couvre :
+    ses deux échecs ne se valent pas, un oubli laissant une dépense visible dans
+    les indicateurs là où une règle trop large en retire une sans que rien ne le
+    signale. Le geste reste manuel et devient fiable parce que l'import distingue
+    ce qu'il vient de créer (`EXG-CRE-013`, `EXG-CRE-014`). Le motif est un texte
+    libre et l'exclusion relève d'une permission distincte de l'écriture,
+    attribuée au chef de projet (`EXG-CRE-006`). L'affichage permanent des deux
+    consommés était déjà tranché par `EXG-CRE-008`.
 16. *Tranchée le 2026-09-12 : la garde est conservée.* Un jalon ne porte pas
     d'enfants — c'est `EXG-PLN-008`. Le module de domaine pur doit donc porter
     cette règle et la couvrir comme ses autres invariants avant que le service
