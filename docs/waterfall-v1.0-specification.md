@@ -1,6 +1,6 @@
 # Waterfall — Spécification v1.0
 
-**Statut : tous les chapitres rédigés. Six questions ouvertes (annexe B).**
+**Statut : tous les chapitres rédigés. Cinq questions ouvertes (annexe B).**
 
 Ce document est la spécification unique de Waterfall. Il a absorbé les
 spécifications partielles produites pendant le cadrage ; aucune d'elles ne fait
@@ -1830,8 +1830,34 @@ crée de nouvelles tâches, portant de nouvelles identités.
   Source       arbitrage 2026-09-12
 ```
 
-Ce que devient **ce qui est rattaché** à une tâche copiée — lignes de coût,
-affectations de rôle — n'est pas tranché : c'est la question 17.
+```
+EXG-PLN-031 — DOIT — Copier une tâche emporte **tout son sous-arbre** : ses
+sous-tâches et ses lignes de coût, avec leurs quantités, leurs heures et leurs
+montants. Chaque nœud créé reçoit une identité nouvelle (`EXG-PLN-018`).
+  Motif        C'est la raison d'être de la commande. Dupliquer un lot de travail
+               récurrent — une campagne d'essais, une phase de qualification qui
+               se répète d'un équipement à l'autre — suppose d'en rapporter le
+               chiffrage : sans lui, il faudrait ressaisir ligne à ligne ce qu'on
+               vient de copier, et la copie ne ferait gagner que l'arborescence,
+               c'est-à-dire la partie la moins coûteuse à refaire.
+
+               Le risque symétrique — un doublement silencieux du chiffrage —
+               est réel, mais il ne justifie pas de vider la commande de son
+               contenu. Il est traité là où il se voit : le montant du projet et
+               celui de chaque sous-projet sont affichés en permanence au-dessus
+               de la grille (`EXG-DEV-017`), et un collage qui double un budget
+               s'y lit dans l'instant.
+
+               Rien de particulier n'est à écrire sur les lignes de coût : elles
+               sont des nœuds de l'arbre au même titre que les tâches
+               (`EXG-MOD-012`), donc des descendants de la tâche copiée.
+               Emporter le sous-arbre les emporte.
+  Vérification Copier une tâche portant deux sous-tâches et trois lignes de coût,
+               puis coller, ajoute six nœuds aux identités distinctes de leurs
+               sources, et augmente le montant du projet de celui du sous-arbre
+               copié.
+  Source       arbitrage 2026-09-15
+```
 
 ```
 EXG-PLN-019 — DOIT — La table tient un historique d'au moins dix actions,
@@ -5530,13 +5556,16 @@ Recensées ici pour ne pas être perdues ; chacune sera reprise dans son chapitr
     cette règle et la couvrir comme ses autres invariants avant que le service
     d'arbre ne soit supprimé. L'agent en charge d'E14 en est informé ; l'issue
     #343 porte la décision.
-17. **Ce qu'emporte une copie de tâche.** Copier-coller crée de nouvelles
-    tâches (`EXG-PLN-018`), mais que devient ce qui pend à la tâche source —
-    lignes de coût, affectations de rôle ? Les emporter fait de la copie un
-    duplicateur de budget, ce qui est parfois exactement l'intention — dupliquer
-    un lot de travail récurrent — et parfois un doublement silencieux du
-    chiffrage. Ne rien emporter rend la copie sûre mais presque sans intérêt.
-    Une troisième voie serait de le demander au moment du collage.
+17. *Tranchée le 2026-09-15 : la copie emporte tout le sous-arbre.* Les
+    sous-tâches et les lignes de coût suivent, avec leurs montants
+    (`EXG-PLN-031`). C'est l'intérêt principal de la commande : dupliquer un lot
+    de travail récurrent sans en rapporter le chiffrage ne ferait gagner que
+    l'arborescence, c'est-à-dire la partie la moins coûteuse à refaire. Le
+    doublement silencieux du budget, qui motivait l'hésitation, est traité par
+    l'affichage permanent des totaux au-dessus de la grille (`EXG-DEV-017`)
+    plutôt qu'en amputant la commande. La troisième voie envisagée — demander au
+    moment du collage — est écartée : une question posée à chaque collage
+    finirait répondue sans être lue.
 18. *Tranchée le 2026-09-12 : la chronologie appartient à la révision.* La
     cohérence entre une composition et l'arbre est ainsi garantie par
     construction (`EXG-PLN-020`, `EXG-PLN-023`). Le seul inconvénient du choix —
