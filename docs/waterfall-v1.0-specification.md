@@ -1086,15 +1086,21 @@ que cet onglet produit.
 
 ```
 EXG-NAV-010 — DOIT — Planning et Devis présentent la même arborescence de
-tâches avec des données de nature différente. Ils partagent leur composant
-d'affichage et restent deux onglets distincts.
+tâches avec des données de nature différente. Ils partagent l'arbre et les
+comportements qui s'y appliquent — sélection, pliage, déplacement, largeur des
+colonnes — et gardent chacun sa table. Ils restent deux onglets distincts.
   Motif        Les fusionner en une grille unique imposerait à chaque écran les
                colonnes de l'autre, et la largeur est la ressource rare de ces
                deux tables. Partager l'arbre sans partager la table est ce qui
-               permet aux deux d'être denses.
+               permet aux deux d'être denses. Partager en outre les comportements
+               est ce qui garantit qu'un même geste produit le même effet des
+               deux côtés — deux implémentations séparées s'accordent tant que
+               personne ne les fait diverger, et divergent sans que rien ne le
+               signale.
   Vérification Les deux onglets rendent le même arbre, dans le même ordre, avec
-               des jeux de colonnes disjoints.
-  Source       IA v0.1, E14-09 (#335)
+               des jeux de colonnes disjoints ; un même geste y produit le même
+               effet sur la structure.
+  Source       IA v0.1, E14-09 (#381)
 ```
 
 ### 7.7 Encodage visuel des statuts
@@ -1636,16 +1642,29 @@ enfants. Elles ne se saisissent pas et ne dépendent d'aucun lien de précédenc
 ```
 
 ```
-EXG-PLN-008 — DOIT — Un jalon ne porte pas d'enfants.
+EXG-PLN-008 — DOIT — Un jalon ne porte aucun enfant, quelle que soit la nature
+de celui-ci : ni sous-tâche, ni ligne de coût.
   Motif        Un jalon marque un instant et n'a pas de durée. Une tâche qui
                porte des enfants tient ses dates de ceux-ci et devient de fait
-               une récapitulative : les deux natures s'excluent.
-  Vérification Déplacer une tâche sous un jalon est refusé.
-  Source       services/planning_tree.py
+               une récapitulative : les deux natures s'excluent. La règle ignore
+               la nature de l'enfant parce que c'est le jalon qui l'interdit, et
+               non ce qu'on tente d'y placer : un jalon porteur de lignes de coût
+               serait une tâche chiffrée sans durée, donc un budget qu'aucun
+               avancement ne pourrait consommer.
+  Vérification Placer un nœud sous un jalon est refusé, qu'il porte une facette
+               de planification ou une facette de coût ; marquer comme jalon une
+               tâche qui porte déjà des enfants l'est aussi.
+  Source       services/planning_tree.py, E14
 ```
 
 Cette règle est un invariant du modèle : elle est vérifiée par le contrôle
 d'invariants, au même titre que l'acyclicité de l'arbre.
+
+Elle mord le plus discrètement à la **désindentation**. Désindenter un nœud le
+rend parent des frères qui le suivaient (`EXG-PLN-027`) : désindenter un jalon
+suivi d'au moins un frère est donc refusé, alors même que l'utilisateur n'a
+désigné aucun parent et ne voit pas de rattachement dans son geste. Le refus
+nomme la règle (`EXG-PLN-017`), sans quoi il serait incompréhensible.
 
 ```
 EXG-PLN-025 — DOIT — Une tâche porte toujours un début, une fin et une durée.
@@ -1774,9 +1793,8 @@ soumis aux mêmes invariants.
                même chemin, sinon trois d'entre eux finissent par accepter ce que
                le quatrième refuse. C'est ainsi qu'un arbre devient incohérent
                sans qu'aucune règle n'ait été violée explicitement.
-  Vérification Les quatre gestes refusent tous de placer une tâche sous
-               elle-même, sous l'un de ses descendants, ou sous un jalon
-               (`EXG-PLN-008`).
+  Vérification Les quatre gestes refusent tous de placer un nœud sous lui-même,
+               sous l'un de ses descendants, ou sous un jalon (`EXG-PLN-008`).
   Source       code existant, arbitrage 2026-09-12
 ```
 
@@ -5507,12 +5525,12 @@ demandent une décision de séquencement avant de pouvoir être livrés.
 | EXG-ADM-010 | Le journal d'import ne porte pas son auteur : on sait quel fichier a été importé, quand et avec quel résultat, jamais par qui. | Ajout d'une colonne. |
 | EXG-DRO-006 | Un projet porte un propriétaire unique, et la liste des projets filtre dessus : nul autre ne le voit. | Remplacement de la propriété par l'appartenance (chapitre 21). |
 | EXG-MOD-023 | Une révision porte un commentaire libre mais aucun nom : elle ne se désigne que par son numéro et sa nature. | Ajout d'un attribut, et de sa proposition par défaut. |
-| EXG-CYC-004 | Le passage en pilotage désigne **deux** références, un planning et un devis, contrôlées séparément. La condition « au moins une tâche » porte sur le planning référencé. | Conséquence directe de la révision unique (chapitre 21) : une seule désignation, portant les deux facettes. |
+| EXG-CYC-004 | Le pointeur de révision unique existe et est écrit, mais le contrôle du passage en pilotage teste toujours les **deux** anciennes références, un planning et un devis. La condition « au moins une tâche » porte sur le planning référencé. | Basculer le contrôle sur la désignation unique, qui porte les deux facettes. |
 | EXG-NFO-016 | L'import s'exécute dans la requête qui le déclenche. Le modèle de lot porte pourtant déjà un statut et des horodatages de début et de fin, donc anticipe une exécution différée. | Passage à une exécution hors requête. |
 | EXG-NFO-018, EXG-NFO-019 | Redis est présent mais ne sert qu'à limiter les tentatives de connexion : aucun cache applicatif n'existe. | Rien à corriger ; les règles s'appliqueront au premier cache posé. |
 | EXG-NFO-010, EXG-NFO-011 | Les refus du serveur sont des phrases rédigées en anglais, que l'interface affiche faute de code reconnu. Tout refus remonté à l'utilisateur est donc en anglais dans une interface française. | Passage à des codes de refus, qui conditionne aussi toute internationalisation. |
 | EXG-MOD-024, EXG-MSP-013 | La note d'une tâche vit à deux endroits : sur l'instantané de version, alimenté par l'import, et sur un enrichissement au niveau projet. L'export préfère le premier. Deux dépôts de la même information, dont un seul survit aux versions. | Fusion sur l'attribut de projet, avec la règle de non-écrasement. |
-| EXG-MOD-007 | Le modèle actuel stocke deux fois le même planning : des tables au niveau du projet et des tables d'instantané au niveau de la version, tenues en parallèle par l'import. Pour les tâches les deux sont écrites ; pour les liens de précédence, seule celle de la version l'est. Sur un fichier de 1170 liens, la table de projet reste vide, et tout code qui la lit voit un planning sans aucune dépendance. | Défaut. Ce doublement est ce qu'E14 supprime (chapitre 21) ; d'ici là il produit des divergences, et celle-ci n'est pas recensée parmi les cinq qu'E14 énumère. |
+| EXG-MOD-007 | Le modèle de révision est livré, mais **de façon additive** : `ms_task` et `wf_planning_task_snapshot` coexistent toujours avec lui. Pour les tâches les deux anciennes tables sont écrites ; pour les liens de précédence, seule celle de la version l'est. Sur un fichier de 1170 liens, la table de projet reste vide, et tout code qui la lit voit un planning sans aucune dépendance. | Retrait des anciennes tables une fois tous leurs consommateurs migrés. Le doublement subsiste jusque-là, et cette divergence n'est pas recensée parmi les cinq qu'E14 énumère. |
 | EXG-PLN-025 | Le calcul du devis écarte silencieusement une tâche sans dates : ses heures ne produisent aucune ligne de coût et manquent au budget de référence. L'état devenant inatteignable, ce chemin doit signaler une erreur plutôt que retourner discrètement un résultat vide. | Transformer un écartement muet en échec explicite. |
 | EXG-PLN-025 | `is_manual` est nullable, au motif qu'un fichier importé pourrait ne pas porter l'indicateur de mode. La mesure ne le confirme pas : aucune des deux mille six cent soixante-six tâches examinées n'en manque, et l'élément ne figure pas au schéma officiel Microsoft mais au seul sous-ensemble canonique de Waterfall. | Nullabilité défensive à réexaminer avec le modèle cible (chapitre 21). |
 | EXG-ANA-001 à 017 | L'onglet d'analyse existant est scopé à un seul devis et n'agrège rien. Le tableau de bord, l'organigramme, les projections et le chemin critique n'existent que dans la maquette. | Cible entière, conditionnée à E10 et E11. |
