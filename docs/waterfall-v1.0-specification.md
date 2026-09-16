@@ -2188,22 +2188,68 @@ jamais recalculés par la grille.
 
 ```
 EXG-DEV-019 — DOIT — Un débours est consommé en **une seule** année : celle du
-début de sa tâche porteuse. Une ligne de coût globale, sans tâche porteuse,
-prend l'année courante.
+début de sa tâche porteuse. Un débours placé à la racine, qui n'a pas de tâche
+porteuse (`EXG-DEV-002`), est consommé l'année du **début du projet**.
   Motif        Un débours est un montant ponctuel, non un effort étalé : il n'y a
                rien à répartir. L'année de début de la tâche porteuse est retenue
                parce qu'elle est toujours définie dès qu'une tâche porte la ligne,
                et parce qu'elle rend le traitement homogène avec la main-d'œuvre,
-               qui tire ses années de la même tâche. La **date prévisionnelle de
-               décaissement** (`EXG-MOD-021`) n'est délibérément **pas** lue : elle
-               existe pour situer une dépense dans le temps, non pour la
-               valoriser, et elle est facultative — la valorisation d'un budget ne
-               peut pas dépendre d'un champ qu'on a le droit de laisser vide.
+               qui tire ses années de la même tâche. À la racine, le projet tient
+               ce rôle : sa date de début est la seule année que la position de la
+               ligne désigne, et elle ne bouge pas. Retenir l'année en cours ferait
+               au contraire changer tout seul, au passage du premier janvier, le
+               montant d'un brouillon que personne n'a touché. La **date
+               prévisionnelle de décaissement** (`EXG-MOD-021`) n'est délibérément
+               **pas** lue : elle existe pour situer une dépense dans le temps, non
+               pour la valoriser, et elle est facultative — la valorisation d'un
+               budget ne peut pas dépendre d'un champ qu'on a le droit de laisser
+               vide.
   Vérification Déplacer une ligne de fourniture sous une tâche commençant une
                année plus tard change son montant corrigé d'une application
                supplémentaire du coefficient ; renseigner ou vider sa date de
-               décaissement ne le change pas.
-  Source       arbitrage 2026-09-14, issue #390
+               décaissement ne le change pas. Une ligne de frais laissée à la
+               racine est valorisée à l'année de début du projet, et son montant
+               est le même avant et après le passage d'une année civile.
+  Source       arbitrage 2026-09-14, issue #390 ; racine précisée le 2026-09-16
+```
+
+```
+EXG-DEV-021 — DOIT — Les **années du projet** sont celles que couvre l'intervalle
+allant de la plus antérieure à la plus tardive des dates portées par sa révision.
+L'**année de début du projet** est la première d'entre elles. Ni l'une ni l'autre
+ne se saisit : elles se déduisent de l'arbre.
+  Motif        Deux exigences de valorisation s'appuient sur ces années et aucune
+               ne les définissait. Les déduire plutôt que les stocker évite la
+               seule chose qui compte ici : qu'un projet porte une date de début
+               déclarée que son propre planning contredit. Le chiffrage lit ainsi
+               les mêmes dates que la table de planning.
+  Vérification Ajouter à la révision une tâche commençant avant toutes les autres
+               recule l'année de début du projet ; l'année de début d'une
+               révision dont aucune tâche n'a été déplacée est celle de sa tâche
+               la plus précoce.
+  Source       arbitrage 2026-09-16
+```
+
+```
+EXG-DEV-022 — DOIT — Une ligne de main-d'œuvre placée à la racine, qui n'a pas de
+tâche porteuse (`EXG-DEV-002`), répartit ses heures sur **les années du projet**,
+selon la même règle de prorata qu'une ligne portée par une tâche
+(`EXG-DEV-006`).
+  Motif        La main-d'œuvre et le débours ne réagissent pas de la même façon à
+               un projet qui s'allonge, et la racine doit le refléter plutôt que
+               de les traiter pareil. Une durée plus longue coûte plus cher en
+               main-d'œuvre : l'encadrement et la coordination se paient au temps
+               écoulé. Un engagement de fourniture ou de sous-traitance n'a pas de
+               raison de croître parce que le planning se décale, d'où l'année
+               unique d'`EXG-DEV-019`. Accrocher une ligne à la racine plutôt qu'à
+               la tâche qu'elle sert reste une mauvaise pratique de chiffrage ;
+               le produit en tire la conséquence arithmétique, il ne la corrige
+               pas.
+  Vérification Une ligne de main-d'œuvre à la racine d'un projet de sept ans
+               étale ses heures sur sept années ; allonger le projet d'un an
+               augmente son montant corrigé, là où celui d'un débours placé à la
+               même racine ne change pas.
+  Source       arbitrage 2026-09-16
 ```
 
 ```
@@ -2228,9 +2274,11 @@ de main-d'œuvre tire ses années de sa tâche porteuse, c'est-à-dire du premie
 ancêtre portant une facette de planification (`EXG-DEV-002`). Accrochée à une
 tâche de trois mois, elle est valorisée sur une seule année ; accrochée à une
 récapitulative courant sur sept ans, ses heures s'étalent sur sept années et
-subissent jusqu'à sept applications du coefficient. **Plus on accroche haut dans
-l'arbre, plus le coût
-se dilue dans le temps** — et plus il augmente, l'inflation étant cumulative.
+subissent jusqu'à sept applications du coefficient ; laissée à la racine, sur
+toutes les années du projet (`EXG-DEV-022`). **Plus on accroche haut dans
+l'arbre, plus le coût se dilue dans le temps** — et plus il augmente, l'inflation
+étant cumulative. Un débours échappe à cette gradation : il vaut une seule année
+où qu'il soit accroché (`EXG-DEV-019`).
 
 Ce n'est pas un défaut : c'est la conséquence exacte de la règle de la tâche
 porteuse, et déplacer une ligne est un geste délibéré. Mais l'effet est invisible
