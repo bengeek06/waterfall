@@ -2164,7 +2164,7 @@ chiffrage, composé autant de fois qu'il y a d'années écoulées.
 EXG-DEV-014 — DOIT — La grille affiche pour chaque ligne le montant **hors
 inflation** et le montant **corrigé**. Le montant hors inflation est calculé au
 taux de l'année de référence, sans inflation et **sans répartition** sur les
-années de la tâche porteuse. Les deux sont produits par le moteur de calcul et
+années de consommation. Les deux sont produits par le moteur de calcul et
 jamais recalculés par la grille.
   Motif        L'inflation est appliquée sans que rien ne le montre, sur des
                années que l'utilisateur n'a pas saisies. Un seul montant à
@@ -2174,8 +2174,9 @@ jamais recalculés par la grille.
 
                La définition du montant hors inflation n'est pas un détail de
                présentation : sans répartition, il ne dépend que de la ligne,
-               tandis que le montant corrigé dépend aussi de la tâche qui la
-               porte. C'est leur écart qui rend visible l'effet décrit plus bas.
+               tandis que le montant corrigé dépend aussi de ce qui la porte —
+               sa tâche, ou le projet lorsqu'elle est à la racine. C'est leur
+               écart qui rend visible l'effet décrit plus bas.
                Et les deux viennent du moteur parce qu'une grille qui
                réimplémenterait le calcul en produirait une approximation
                divergente, sans que rien ne le signale.
@@ -2191,14 +2192,17 @@ EXG-DEV-019 — DOIT — Un débours est consommé en **une seule** année : cel
 début de sa tâche porteuse. Un débours placé à la racine, qui n'a pas de tâche
 porteuse (`EXG-DEV-002`), est consommé l'année du **début du projet**.
   Motif        Un débours est un montant ponctuel, non un effort étalé : il n'y a
-               rien à répartir. L'année de début de la tâche porteuse est retenue
-               parce qu'elle est toujours définie dès qu'une tâche porte la ligne,
-               et parce qu'elle rend le traitement homogène avec la main-d'œuvre,
-               qui tire ses années de la même tâche. À la racine, le projet tient
-               ce rôle : sa date de début est la seule année que la position de la
-               ligne désigne, et elle ne bouge pas. Retenir l'année en cours ferait
-               au contraire changer tout seul, au passage du premier janvier, le
-               montant d'un brouillon que personne n'a touché. La **date
+               rien à répartir. Sous une tâche, l'année de début de la porteuse
+               est retenue parce qu'elle est toujours définie et parce qu'elle
+               rend le traitement homogène avec la main-d'œuvre, qui tire ses
+               années de la même tâche. **À la racine, cette homogénéité cesse, et
+               c'est voulu** : une ligne de main-d'œuvre s'y étale sur toutes les
+               années du projet (`EXG-DEV-022`), un débours n'en prend qu'une. Un
+               projet qui s'allonge coûte plus cher en encadrement ; un engagement
+               de fourniture n'a pas de raison de croître parce que le planning se
+               décale. L'année du début du projet est retenue plutôt que l'année en
+               cours, qui ferait changer tout seul, au passage du premier janvier,
+               le montant d'un brouillon que personne n'a touché. La **date
                prévisionnelle de décaissement** (`EXG-MOD-021`) n'est délibérément
                **pas** lue : elle existe pour situer une dépense dans le temps, non
                pour la valoriser, et elle est facultative — la valorisation d'un
@@ -2207,26 +2211,49 @@ porteuse (`EXG-DEV-002`), est consommé l'année du **début du projet**.
   Vérification Déplacer une ligne de fourniture sous une tâche commençant une
                année plus tard change son montant corrigé d'une application
                supplémentaire du coefficient ; renseigner ou vider sa date de
-               décaissement ne le change pas. Une ligne de frais laissée à la
-               racine est valorisée à l'année de début du projet, et son montant
-               est le même avant et après le passage d'une année civile.
+               décaissement ne le change pas. Le montant d'une ligne de frais
+               laissée à la racine est le même avant et après le passage d'une
+               année civile.
   Source       arbitrage 2026-09-14, issue #390 ; racine précisée le 2026-09-16
 ```
 
 ```
 EXG-DEV-021 — DOIT — Les **années du projet** sont celles que couvre l'intervalle
-allant de la plus antérieure à la plus tardive des dates portées par sa révision.
-L'**année de début du projet** est la première d'entre elles. Ni l'une ni l'autre
-ne se saisit : elles se déduisent de l'arbre.
+allant de la plus antérieure à la plus tardive des **dates de planification**
+portées par une révision. L'**année de début du projet** est la première d'entre
+elles. Ni l'une ni l'autre ne se saisit. Une révision qui ne porte aucune tâche
+n'a pas d'années du projet : ses lignes de racine sont valorisées à l'année de
+référence du chiffrage (`EXG-DEV-005`).
   Motif        Deux exigences de valorisation s'appuient sur ces années et aucune
-               ne les définissait. Les déduire plutôt que les stocker évite la
-               seule chose qui compte ici : qu'un projet porte une date de début
-               déclarée que son propre planning contredit. Le chiffrage lit ainsi
-               les mêmes dates que la table de planning.
-  Vérification Ajouter à la révision une tâche commençant avant toutes les autres
-               recule l'année de début du projet ; l'année de début d'une
-               révision dont aucune tâche n'a été déplacée est celle de sa tâche
-               la plus précoce.
+               ne les définissait. Les déduire plutôt que les stocker évite qu'un
+               projet porte une date de début déclarée que son propre planning
+               contredit, et fait lire au chiffrage les mêmes dates qu'à la table
+               de planning.
+
+               **Seules les dates de planification comptent.** Une ligne de coût
+               est un nœud de la révision au même titre qu'une tâche, et elle peut
+               porter une date prévisionnelle de décaissement (`EXG-MOD-021`).
+               Comptée ici, l'échéance d'une fourniture allongerait le projet de
+               plusieurs années et majorerait toutes les lignes de racine — alors
+               que c'est la date même qu'`EXG-DEV-019` refuse de lire pour
+               valoriser.
+
+               La grandeur se calcule **révision par révision**, et son nom la
+               rapporte au projet parce qu'une révision en est une version
+               complète (`EXG-MOD-001`). Un brouillon qui repousse une tâche de
+               deux ans change ses propres montants de racine, jamais ceux d'une
+               révision validée, qui n'accepte aucune écriture (`EXG-MOD-005`).
+
+               Le repli sur l'année de référence ne concerne qu'un cas : le
+               premier brouillon d'un chiffrage, où une ligne est posée à la
+               racine avant la première tâche. Une révision de revue n'y tombe
+               jamais, descendant d'une référence qui porte au moins une tâche
+               (`EXG-CYC-004`).
+  Vérification Ajouter une tâche commençant avant toutes les autres recule
+               l'année de début du projet ; en ajouter une finissant après toutes
+               les autres ajoute une année au prorata d'`EXG-DEV-022`. Renseigner
+               sur une ligne une date prévisionnelle de décaissement postérieure à
+               la dernière tâche ne déplace aucune des deux bornes.
   Source       arbitrage 2026-09-16
 ```
 
@@ -2246,9 +2273,9 @@ selon la même règle de prorata qu'une ligne portée par une tâche
                le produit en tire la conséquence arithmétique, il ne la corrige
                pas.
   Vérification Une ligne de main-d'œuvre à la racine d'un projet de sept ans
-               étale ses heures sur sept années ; allonger le projet d'un an
-               augmente son montant corrigé, là où celui d'un débours placé à la
-               même racine ne change pas.
+               étale ses heures sur sept années ; allonger le projet d'un an **en
+               repoussant sa dernière date** augmente son montant corrigé, là où
+               celui d'un débours placé à la même racine ne change pas.
   Source       arbitrage 2026-09-16
 ```
 
@@ -2277,11 +2304,13 @@ récapitulative courant sur sept ans, ses heures s'étalent sur sept années et
 subissent jusqu'à sept applications du coefficient ; laissée à la racine, sur
 toutes les années du projet (`EXG-DEV-022`). **Plus on accroche haut dans
 l'arbre, plus le coût se dilue dans le temps** — et plus il augmente, l'inflation
-étant cumulative. Un débours échappe à cette gradation : il vaut une seule année
-où qu'il soit accroché (`EXG-DEV-019`).
+étant cumulative. Un débours ne suit pas cette gradation (`EXG-DEV-019`).
 
-Ce n'est pas un défaut : c'est la conséquence exacte de la règle de la tâche
-porteuse, et déplacer une ligne est un geste délibéré. Mais l'effet est invisible
+La gradation n'est pas un défaut : c'est la conséquence exacte de la règle de la
+tâche porteuse, et déplacer une ligne est un geste délibéré. Ce que le motif
+d'`EXG-DEV-022` déconseille est autre chose — laisser une ligne à la racine
+plutôt que de l'accrocher à la tâche qu'elle sert, qui est un défaut de chiffrage
+et non un effet de la règle. Mais l'effet est invisible
 à la saisie, et c'est ce que les deux montants d'`EXG-DEV-014` rendent lisibles :
 le montant hors inflation ne bouge pas quand la ligne change de porteuse, le
 montant corrigé si.
@@ -3149,8 +3178,10 @@ du périmètre qui, lui, acquiert.
   Vérification Sur un projet dont les tâches feuilles terminées représentent la
                moitié du budget qu'elles portent, ces lignes créditent la moitié
                du leur ; lorsque toutes sont terminées, l'avancement physique
-               atteint cent pour cent. Une ligne portée par une récapitulative est
-               traitée comme une ligne de racine.
+               atteint cent pour cent. Une ligne portée par une récapitulative
+               **acquiert** comme une ligne de racine ; les deux se **valorisent**
+               en revanche différemment, sur les années de la récapitulative pour
+               l'une et sur celles du projet pour l'autre (`EXG-DEV-022`).
   Source       arbitrage 2026-09-15
 ```
 
@@ -3542,14 +3573,20 @@ son ordre par défaut fait remonter ce qui va mal.
 
 ```
 EXG-CHA-005 — DOIT — La charge agrégée provient des heures affectées aux rôles
-dans les chiffrages, ventilées dans le temps au prorata des dates des tâches qui
-les portent.
-  Motif        C'est la même règle de répartition qu'au devis (`EXG-DEV-006`) :
-               deux ventilations temporelles différentes pour la même donnée
-               produiraient deux vérités, et l'écart serait inexplicable.
+dans les chiffrages, ventilées dans le temps selon les **mêmes règles qu'au
+devis** : au prorata des dates de la tâche porteuse (`EXG-DEV-006`), et sur les
+années du projet pour une ligne de racine qui n'en a pas (`EXG-DEV-022`).
+  Motif        Deux ventilations temporelles différentes pour la même donnée
+               produiraient deux vérités, et l'écart serait inexplicable. La
+               ligne de racine n'y échappe pas : l'écarter du plan de charge
+               rendrait fausse l'égalité vérifiée ci-dessous dès qu'une ligne y
+               traîne — cas qu'`EXG-AVA-015` décrit comme fréquent, une ligne de
+               support accrochée haut dans l'arbre étant la règle plutôt que
+               l'exception.
   Vérification La somme des heures d'un projet dans le plan de charge est égale
                à celle du chiffrage affiché pour ce projet — de référence s'il
-               est piloté, courant sinon.
+               est piloté, courant sinon — y compris lorsque des lignes de
+               main-d'œuvre sont à la racine.
   Source       maquette, arbitrage 2026-09-13
 ```
 
@@ -5832,6 +5869,7 @@ demandent une décision de séquencement avant de pouvoir être livrés.
 | EXG-DEV-005, EXG-DEV-019 | Le moteur n'applique **aucune** inflation aux lignes non main-d'œuvre : il fige `inflation_coefficient` à 1 et calcule `quantité × débours unitaire`. Aucune année n'est donc dérivée pour un débours. | Changement de calcul, non d'affichage : les montants produits par la validation d'un devis changent. Les tests qui figent des montants non-MO changeront de valeur attendue, et il faudra vérifier qu'ils sont corrigés dans le bon sens plutôt qu'ajustés jusqu'à repasser au vert. Les devis déjà validés ne sont pas recalculés, leurs lignes étant figées : un devis validé avant et un devis validé après ne sont pas comparables à périmètre égal, ce qui est à acter à la livraison. |
 | EXG-DEV-014 | La grille recalcule elle-même un aperçu de montant, à taux unique, en ne retenant que la première année de la tâche porteuse et sans appliquer l'inflation. Le montant lu à l'écran s'écarte donc de celui que produit la validation, sans que rien ne le signale — l'écart n'a rien de marginal sur une ligne portée par une récapitulative de plusieurs années. | Les deux montants passent par l'API. La logique dupliquée côté grille est retirée, non complétée : la compléter reviendrait à maintenir deux implémentations du même calcul. |
 | EXG-DEV-014 | Un seul montant est affiché ; l'effet de l'inflation est invisible. | Ajout d'une colonne. |
+| EXG-DEV-021, EXG-DEV-022 | Une ligne de coût sans tâche porteuse est datée de l'**année civile courante**, sur une seule année et quelle que soit sa nature (`_bearing_years`, `services/estimate_calculation.py`). Les années du projet ne sont dérivées nulle part. Une facette de coût se replie par ailleurs sur la **date prévisionnelle de décaissement** (`default_breakdown`, `domain/revision/pricing.py`), que la cible refuse de lire pour valoriser. | Dérivation des années du projet depuis les seules dates de planification de la révision ; prorata sur ces années pour la main-d'œuvre de racine, année de début pour le débours. Comme pour l'écart EXG-DEV-005/EXG-DEV-019, les montants produits changent : les tests qui figent un montant de ligne de racine changeront de valeur attendue, et il faudra vérifier qu'ils sont corrigés dans le bon sens plutôt qu'ajustés jusqu'à repasser au vert. |
 | EXG-DEV-020 | L'inflation est stockée dans le référentiel commun, sous la forme d'une **série annuelle** — un coefficient par année, unique par année et partagé par tous les projets. La cible est un coefficient unique porté par le projet. | Déplacement de l'attribut vers le projet, et abandon de la dimension annuelle. Les révisions validées figent déjà leur coefficient (`EXG-PAR-011`), donc rien de validé ne bouge. |
 | EXG-RAE-001 à 010 | Rien n'existe : `forecast_remaining` n'est qu'une valeur d'énumération réservée, sans colonne de reste à engager, sans service ni écran. Le chapitre entier décrit une cible. | Périmètre d'E10 (#250), non livré. |
 | EXG-RAE-005 | E10 prévoit un pointeur vers la ligne source ; la cible est l'identité de l'élément de travail, qui seule survit à un remaniement du devis de référence. | Écart entre un EPIC antérieur et la cible : E10 a été écrit avant E14, à reprendre à sa livraison. |
