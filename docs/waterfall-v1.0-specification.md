@@ -4183,10 +4183,10 @@ fait perdre.
                confirmation la traite là où elle se pose — à condition de nommer
                les conséquences : une question qui se borne à demander si l'on
                est sûr s'acquitte sans être lue, et ne protège de rien.
-  Vérification Aucune permission du catalogue ne désigne un acte isolé. Chaque
-               acte irréversible — clôture d'un projet, validation d'une
-               révision — demande une confirmation qui énonce ce qui devient
-               définitif.
+  Vérification Le catalogue compte quatorze permissions et aucune ne désigne un
+               acte isolé. Chaque acte irréversible — clôture d'un projet,
+               validation d'une révision — demande une confirmation qui énonce ce
+               qui devient définitif.
   Source       arbitrage 2026-09-15
 ```
 
@@ -4205,8 +4205,13 @@ cinq pour les onglets d'un projet.
 | **Coûts réels** | L'import, les pièces et le périmètre | 13 |
 | **Analyse** | Les restitutions du projet | 15 |
 
-Deux domaines ne portent qu'un sens d'accès : **Analyse** ne se lit que — une
-restitution ne se modifie pas —, et son écriture n'existe pas dans le catalogue.
+Deux domaines ne portent qu'un sens d'accès. **Analyse** ne se lit que : une
+restitution ne se modifie pas. **Management** non plus : la section n'agrège que
+ce que les projets produisent et le reprend sans recalcul (`EXG-CHA-003`), et la
+seule donnée propre qu'elle affiche — la capacité d'un rôle — s'écrit aux
+Paramètres (`EXG-PAR-004`). Leur écriture n'existe donc pas dans le catalogue,
+qui compte **quatorze permissions** : huit domaines, deux sens, moins ces deux
+écritures.
 
 **La portée est une dimension distincte de la permission.** Un domaine dit *quoi*,
 la portée dit *sur quels objets* : plateforme, nœud d'organisation, appartenance
